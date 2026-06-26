@@ -1,0 +1,92 @@
+# Workflow-GPS configuration.
+#
+# This file deserializes directly into workflow_gps.config.Settings — the same
+# frozen Pydantic models the engine uses internally, so there is no second schema.
+# Load it with:  Settings.load("config/models.yaml")
+#
+# Deployment-time overrides (applied on top of this file) come from env vars:
+#   WFGPS_API_BASE          - override both tiers' endpoint
+#   WFGPS_FAST_MODEL        - override the fast-tier model string
+#   WFGPS_REASONING_MODEL   - override the reasoning-tier model string
+#   WFGPS_BACKEND           - 'subprocess' | 'docker'
+#   WFGPS_PINNED_INDEX_URL  - Phase-A package index
+#   WFGPS_UV_CACHE_DIR      - host uv cache mounted read-only into containers
+#   WFGPS_CONFIG            - path to this file
+
+# ---------------------------------------------------------------------------
+# Two-tier routing matrix.
+#
+# Both tiers assume a single OpenAI-compatible vLLM server on localhost:8000.
+# In production they usually live on separate endpoints — set api_base per tier.
+#
+# Serve the fast tier with (note the tool-call + reasoning parsers):
+#   vllm serve Qwen/Qwen3.6-35B-A3B \
+#       --enable-auto-tool-choice \
+#       --tool-call-parser qwen3_coder \
+#       --reasoning-parser qwen3 \
+#       --port 8000
+# ---------------------------------------------------------------------------
+routing:
+  fast:
+    tier: fast
+    model: "openai/Qwen/Qwen3.6-35B-A3B"
+    api_base: "http://localhost:8000/v1"
+    base_temperature: 0.1
+    max_temperature: 0.7
+    top_p: 0.8
+    top_k: 20
+    max_tokens: 4096
+    extra_params: {}
+  reasoning:
+    tier: reasoning
+    model: "openai/meta-llama/Llama-3.3-70B-Instruct"
+    api_base: "http://localhost:8000/v1"
+    base_temperature: 0.3
+    max_temperature: 0.7
+    top_p: 0.9
+    top_k: null
+    max_tokens: 4096
+    extra_params: {}
+
+  # Escalation ladder thresholds.
+  max_fast_recalcs: 3         # loop depth that forces Fast -> Reasoning
+  rut_bump_threshold: 2       # identical failures that bump temperature (same tier)
+  rut_escalate_threshold: 3   # identical failures that force escalation
+  rut_temperature_step: 0.15  # added per repeat past the first, capped at max_temperature
+
+# ---------------------------------------------------------------------------
+# Hostile-by-default sandbox resource ceilings, applied to every execution.
+# ---------------------------------------------------------------------------
+limits:
+  cpus: 1.0
+  memory_mb: 512
+  pids_limit: 256             # fork-bomb guard
+  wall_timeout_s: 30.0        # Phase B (execute) hard kill
+  install_timeout_s: 120.0    # Phase A (install) hard kill
+  read_only_rootfs: true
+  writable_scratch_mb: 64     # tmpfs work dir size
+
+# ---------------------------------------------------------------------------
+# Loop control (when to STOP). Distinct from the routing thresholds (which tier).
+# ---------------------------------------------------------------------------
+edges:
+  max_recalcs: 6              # total recalc cycles before halting as 'exhausted'
+  dep_heal_rut_threshold: 2   # repeated missing-dep -> re-synthesize instead of re-install
+
+# ---------------------------------------------------------------------------
+# Execution backend.
+#   subprocess - dev/fallback, NO isolation (shares host kernel + network).
+#   docker     - ephemeral hostile containers (requires the sandbox image).
+# ---------------------------------------------------------------------------
+backend:
+  kind: subprocess
+  image: "workflow-gps-sandbox:latest"
+  network_name: "bridge"
+  uv_cache_dir: null          # e.g. "/var/cache/wfgps-uv" — mounted read-only
+  pinned_index_url: null      # e.g. "https://pypi.org/simple" or a local mirror
+  run_as_user: null           # e.g. "sandbox" — non-root user inside the image
+
+graph:
+  recursion_limit: null       # null => derived from edges.max_recalcs
+
+request_timeout_s: 120.0      # gateway completion timeout

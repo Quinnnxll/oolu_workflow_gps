@@ -1,0 +1,28 @@
+Act as a Principal Staff Engineer. We are initializing the core infrastructure foundation for a commercial-grade workflow navigation system designed for non-technical users. 
+
+Our version target for this foundational scaffold is `v0.1.0-alpha`. Your task is to scaffold the core runtime isolation boundary, model routing configurations, and the crowdsourced knowledge schemas based on strict security and portability constraints.
+
+Please create and implement the following three files. Ensure all code is modular, production-ready, and accompanied by clean documentation.
+
+### 1. File: `runtime/sandbox.py`
+Implement a secure execution runner using the Python Docker SDK.
+- **Enforce a strict isolation contract:** The container must run with `network_mode="none"`, `read_only=True`, `cap_drop=["ALL"]`, a non-root user (e.g., `sandboxuser`), memory limits (`512m`), CPU limits (`1.0`), and an ephemeral `tmpfs` for `/tmp`.
+- **Future-proofing:** Provide a clear, commented-out option or toggle for `runtime="runsc"` so we can drop in gVisor later without modifying execution logic.
+- Include a function `execute_in_sandbox(script_content: str) -> dict` that handles container creation, execution, error trapping, and log retrieval.
+
+### 2. File: `config/models.yaml`
+Create a standard OpenAI-compatible configuration file targeting a local or remote vLLM backend.
+- Do not reference hardware quants or GPU split logic here; keep it agnostic.
+- Implement a two-tier configuration system: `fast_tier` (defaulting to Qwen/Qwen3.6-35B-A3B-Instruct) and `reasoning_tier` (defaulting to meta-llama/Llama-3.3-70B-Instruct).
+- Use environment variables with sensible local fallback defaults for `api_base` (e.g., `http://localhost:8000/v1` and `http://localhost:8001/v1`) and `api_key`.
+
+### 3. File: `schema/knowledge_entry.json`
+Write a strict JSON Schema (Draft-07) for our v0 crowd-shared data model.
+- **Scope Limit:** Exclude raw route templates or execution scripts entirely to prevent prompt injection and abuse vectors.
+- **Focus:** Maximize abstracted application intelligence. The schema must cleanly capture:
+  1. `app_domain` and `context_path`.
+  2. `semantic_mappings` (mapping dynamic DOM clues and visual selectors to logical intents like `export_button`).
+  3. `behavioral_quirks` (documenting application anomalies like `delayed_dom_render` and recommended mitigation strategies like `poll_for_element`).
+
+### 4. Verification & Testing
+Once you have generated these files, write a basic suite of unit tests using `pytest` inside `tests/test_sandbox.py` to verify that `runtime/sandbox.py` correctly catches execution timeouts and respects the network/filesystem boundaries. Run the tests to confirm they pass.

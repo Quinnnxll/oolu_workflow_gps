@@ -1,0 +1,32 @@
+[project]
+name = "workflow-gps"
+version = "0.0.1"
+description = "A real-time navigation engine for local LLM agentic workflows."
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.6",
+    "rich>=13.7",
+]
+
+# Layer dependencies (LangGraph, LiteLLM, docker SDK) are added as each module
+# is built, to keep the install surface honest about what is actually wired up.
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "mypy>=1.8", "ruff>=0.3"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/workflow_gps"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q --strict-markers"
+markers = [
+    "slow: tests that run real subprocess installs or the compiled graph",
+    "needs_uv: requires the uv binary on PATH",
+    "needs_langgraph: requires langgraph installed",
+    "needs_docker: requires a reachable Docker daemon",
+]

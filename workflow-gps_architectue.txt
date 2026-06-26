@@ -1,0 +1,48 @@
+workflow-gps/
+├── docker/
+│   ├── sandbox.Dockerfile         # minimal base: python + uv, no extras
+│   └── entrypoint.py              # in-container: enforces contract, exit codes
+├── config/
+│   ├── models.yaml                # vLLM endpoints + tool-call flags (concrete now)
+│   └── settings.py
+├── src/workflow_gps/
+│   ├── models/                    # shared Pydantic vocab — built FIRST
+│   │   ├── state.py
+│   │   ├── results.py
+│   │   └── errors.py
+│   ├── runtime/
+│   │   ├── backend.py             # ExecutionBackend Protocol (Docker | gVisor | fake)
+│   │   ├── isolation.py           # container lifecycle: pool, two-phase network
+│   │   ├── pool.py                # warm container pool manager
+│   │   ├── sandbox.py             # orchestrates: synthesize→isolate→exec→capture
+│   │   ├── contract.py            # sentinel-JSON script<->runtime protocol
+│   │   └── dependency.py          # import->package resolution + Phase-A install
+│   ├── routing/
+│   │   ├── gateway.py             # LiteLLM wrapper over vLLM
+│   │   ├── matrix.py              # 2-tier ladder + loop-depth escalation
+│   │   └── prompting.py           # cache-safe assembly (frozen prefix / volatile tail)
+│   ├── graph/
+│   │   ├── builder.py
+│   │   ├── nodes.py
+│   │   └── edges.py
+│   ├── telemetry/
+│   │   └── logging.py             # rich
+│     src/workflow_gps/
+│   ├── knowledge/
+│   │   ├── client.py        # KnowledgeClient Protocol: noop | local(SQLite) | remote(HTTP, later)
+│   │   ├── signature.py     # task/error -> stable signature hashing (cache keys)
+│   │   └── scrubbing.py     # strip secrets/PII/literals BEFORE anything is stored or uploaded
+│   ├── models/
+│   │   ├── ...
+│   │   └── knowledge.py     # DependencyHint, RouteKnowledge, ErrorPattern (+ trust/success fields)
+│   └── cli.py
+└── tests/
+    ├── conftest.py                # provides a FakeExecutionBackend
+    ├── unit/
+    │   ├── test_sandbox.py
+    │   ├── test_isolation_network_phases.py   # asserts Phase-B has no egress
+    │   ├── test_dependency_resolution.py
+    │   ├── test_error_classification.py
+    │   └── test_prompt_caching.py
+    └── integration/
+        └── test_self_healing_missing_dep.py   # deliverable 4
