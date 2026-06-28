@@ -33,6 +33,7 @@ the goal.
 | Runtime sandbox | `runtime/` | `ExecutionBackend` protocol, container lifecycle, two-phase install→sever→execute, error classification, dependency resolution |
 | Knowledge | `knowledge/` | Optional crowd-intelligence layer: learned import→package hints and error patterns (noop / local SQLite / remote HTTP) |
 | Telemetry | `telemetry/` | Rich console logging, run summaries, token/latency metrics |
+| Replies | `replies/` | Deterministic private-chat rules plus pluggable Telegram/LINE-style channel adapters |
 | Models | `models/` | Shared frozen Pydantic vocabulary (state, results, errors, knowledge) |
 
 ```
@@ -49,6 +50,84 @@ config/               # models.yaml (local vLLM), openai.yaml, openai-docker.yam
 docker/               # sandbox.Dockerfile, entrypoint.py
 tests/                # unit + integration tests
 ```
+
+## Deterministic Telegram replies
+
+Workflow-GPS can learn repetitive private-chat replies locally and reuse them without
+calling a model. Static rules remain available as optional seeds, but the example starts
+empty and the primary path is demonstration-based learning.
+
+1. Create a Telegram bot with BotFather and keep its token out of the rules file.
+2. For replies on behalf of your account, connect the bot to Telegram Business and grant
+   it permission to reply to messages. A normal bot can only reply as itself.
+3. Start long polling:
+
+```bash
+export TELEGRAM_BOT_TOKEN="..."
+wfgps telegram --reply-config config/replies.example.json
+
+# Poll once, useful for a smoke test:
+wfgps telegram --reply-config config/replies.example.json --once
+```
+
+Only private text messages are considered. When a new Business message has no known
+reply, it is remembered but not answered. Reply manually from the Business account within
+ten minutes; Workflow-GPS stores that prompt/reply pair in
+`~/.workflow-gps/learned-replies.db`. The next exact normalized prompt is answered on
+behalf of the same Business connection. Replying directly to the message gives the most
+reliable pairing. Bot-generated replies are never learned, which prevents feedback loops.
+
+Use `--reply-memory none` to disable learning or `--reply-memory-db PATH` to choose the
+local SQLite file. `ReplyFallback` remains the extension point for a future model or
+human-review path; learned matches never invoke it.
+
+Channels that do not expose the account owner's outgoing messages can still be taught
+explicitly. This stores the pair in the same local database—no rule-file edit or model
+call is involved:
+
+```bash
+wfgps reply-teach "Have you arrived?" "I have arrived."
+```
+
+This integration uses the official Bot API, so personal-account replies require a bot
+connected to a Telegram Business account; it does not automate a normal user session.
+The channel-neutral `ChannelAdapter` protocol is the port intended for LINE and other
+apps, including a future first-party conversation gateway.
+
+The polling cursor is persisted at `~/.workflow-gps/telegram-offset.json` by default so
+confirmed updates are not replayed on an ordinary restart. Override it with
+`--offset-file`; each file is scoped to a non-secret fingerprint of the bot token.
+
+## Record and replay an exact CLI skill
+
+The first operational-skill vertical slice records one trusted local command, captures
+workspace state and output artifacts, and compiles an exact reusable skill. Recording
+never guesses parameters from a single demonstration.
+
+```bash
+wfgps skill-record \
+  --name "Normalize report" \
+  --workspace ./work/example \
+  --allow-executable python \
+  --approve-write \
+  -- python normalize.py input.txt output.txt
+
+wfgps skill-list
+wfgps skill-inspect SKILL_ID
+wfgps skill-replay SKILL_ID --dry-run
+
+# Delete/reset the demonstrated output first, then run against the same input state:
+wfgps skill-run SKILL_ID \
+  --workspace ./work/example \
+  --allow-executable python \
+  --approve-write
+```
+
+Replay is blocked when the demonstrated input fingerprint changes, write approval is
+absent, an executor capability is missing, the command fails, or expected artifact hashes
+do not match. The local CLI adapter uses `shell=False`, but it is not an OS sandbox;
+allow-listed commands must still be trusted. Untrusted execution belongs in the Docker or
+future restricted-worker composition.
 
 ## Requirements
 

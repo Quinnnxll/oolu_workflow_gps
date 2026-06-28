@@ -24,15 +24,17 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
-from .graph.builder import WorkflowGPS
 from .graph.edges import EdgePolicy
 from .routing.matrix import RoutingConfig, RoutingMatrix, default_routing_config
 from .runtime.backend import ResourceLimits
+
+if TYPE_CHECKING:
+    from .graph.builder import WorkflowGPS
 
 # Environment overrides — the deployment-time knobs, applied after YAML.
 ENV_CONFIG_PATH = "WFGPS_CONFIG"
@@ -78,11 +80,15 @@ class Settings(BaseModel):
     edges: EdgePolicy = Field(default_factory=EdgePolicy)
     backend: BackendSettings = Field(default_factory=BackendSettings)
     graph: GraphSettings = Field(default_factory=GraphSettings)
-    request_timeout_s: float = Field(default=120.0, description="Gateway completion timeout.")
+    request_timeout_s: float = Field(
+        default=120.0, description="Gateway completion timeout."
+    )
 
     # --- loading ------------------------------------------------------ #
     @classmethod
-    def load(cls, path: str | Path | None = None, *, apply_env: bool = True) -> "Settings":
+    def load(
+        cls, path: str | Path | None = None, *, apply_env: bool = True
+    ) -> "Settings":
         """Load from YAML (explicit path, then $WFGPS_CONFIG, else defaults), then
         layer environment overrides on top."""
         resolved = path or os.environ.get(ENV_CONFIG_PATH)
@@ -102,11 +108,15 @@ class Settings(BaseModel):
         fast_model = env.get(ENV_FAST_MODEL)
         reasoning_model = env.get(ENV_REASONING_MODEL)
         if api_base or fast_model or reasoning_model:
-            fast = self.routing.fast.model_copy(update=_tier_overrides(api_base, fast_model))
+            fast = self.routing.fast.model_copy(
+                update=_tier_overrides(api_base, fast_model)
+            )
             reasoning = self.routing.reasoning.model_copy(
                 update=_tier_overrides(api_base, reasoning_model)
             )
-            updates["routing"] = self.routing.model_copy(update={"fast": fast, "reasoning": reasoning})
+            updates["routing"] = self.routing.model_copy(
+                update={"fast": fast, "reasoning": reasoning}
+            )
 
         backend_changes: dict = {}
         if env.get(ENV_BACKEND):
@@ -140,11 +150,14 @@ def build_workflow_gps(
     backend=None,
     knowledge=None,
     hint_provider=None,
-) -> WorkflowGPS:
+    script_cache=None,
+) -> "WorkflowGPS":
     """Construct a ready engine from settings. Inject ``gateway``/``backend`` to
     bypass the real LiteLLM/Docker components (tests, dev, custom wiring); pass
     ``knowledge`` to wire in the crowd-intelligence layer (local/remote cache)."""
     settings = settings or Settings()
+
+    from .graph.builder import WorkflowGPS
 
     if backend is None:
         backend = _build_backend(settings.backend)
@@ -163,6 +176,11 @@ def build_workflow_gps(
         knowledge=knowledge,
         hint_provider=hint_provider,
         recursion_limit=settings.graph.recursion_limit,
+        script_cache=script_cache,
+        backend_kind=settings.backend.kind,
+        backend_image=settings.backend.image
+        if settings.backend.kind == "docker"
+        else None,
     )
 
 
@@ -171,8 +189,11 @@ def _build_backend(bs: BackendSettings):
         from .runtime.isolation import LocalDockerBackend  # lazy: docker optional
 
         return LocalDockerBackend(
-            image=bs.image, network_name=bs.network_name, uv_cache_dir=bs.uv_cache_dir,
-            default_index_url=bs.pinned_index_url, run_as_user=bs.run_as_user,
+            image=bs.image,
+            network_name=bs.network_name,
+            uv_cache_dir=bs.uv_cache_dir,
+            default_index_url=bs.pinned_index_url,
+            run_as_user=bs.run_as_user,
         )
     from .runtime.isolation import SubprocessBackend
 

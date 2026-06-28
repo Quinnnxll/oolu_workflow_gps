@@ -1,0 +1,50 @@
+# Threat model
+
+Workflow-GPS synthesizes and executes code. Generated scripts and cached scripts must therefore be treated as untrusted input, even when they previously succeeded.
+
+## Generated code
+
+Model output can be destructive, deceptive, resource-intensive, or simply wrong. The execution contract limits the accepted result channel, but does not make code safe. Production use should select the Docker backend, enforce CPU, memory, time, filesystem, and process limits, and avoid mounting host paths.
+
+## Dependency supply chain
+
+Automatic installation can select malicious, compromised, or typo-squatted packages. Installations should use a pinned, allow-listed index or mirror, locked versions and hashes where possible, and auditable dependency policy. Package installation remains a privileged trust decision even though it is separated from execution.
+
+## Docker isolation
+
+Containers reduce exposure but are not a perfect security boundary. Images should be minimal, patched, pinned by digest, run as a non-root user, use a read-only root filesystem, drop Linux capabilities, and expose no Docker socket or host credentials.
+
+## Network severance
+
+Dependency installation may temporarily require network access. Synthesized code must run only after that access is severed. Operators should verify enforcement outside the process itself and deny access to metadata services, local networks, and control-plane endpoints.
+
+## Cache poisoning
+
+A successful run is not proof that a script is benign for every equivalent-looking task. Cache keys include intent, engine and cache-schema versions, prompt policy, routing models, backend identity, and package index. Cached scripts are bypassed after two recorded failures. Local database permissions, provenance, integrity checks, inspection, expiry, and revocation should be strengthened before shared caches are introduced.
+
+## Secret leakage
+
+Prompts, generated code, logs, exception text, cached scripts, and result payloads can retain secrets. Secrets should not be placed in intents, environment variables exposed to the sandbox, mounted files, telemetry, or cache metadata. Logs and cache databases need restrictive permissions and an explicit retention policy.
+
+Messaging credentials such as Telegram bot tokens must be supplied through a protected
+environment or secret manager, never committed in reply-rule files. Reply templates and
+trusted context can disclose location or operational status; keep them local, restrict
+file permissions, and use exact context-gated rules for sensitive statements. A matched
+rule sends immediately, so rule changes require the same review as application code.
+
+Learned replies can preserve personal or sensitive conversation text and can be poisoned
+by an incorrect manual demonstration. Learning is therefore local, scoped per account
+connection, limited to a short inbound/outbound pairing window, and excludes replies sent
+by the bot itself. Operators should protect, inspect, and periodically remove the learned
+reply database. High-impact statements such as payments, identity claims, or emergency
+instructions should not be auto-replied without an additional approval policy.
+
+## Local CLI skills
+
+The initial CLI skill adapter runs an explicitly allow-listed local executable with
+`shell=False`, a reduced environment, workspace state guards, timeouts, and write
+approval. These controls do not create an operating-system sandbox: an approved
+executable or interpreter can still access resources outside its working directory by
+its own behavior. Treat recorded commands as trusted local code. Production execution of
+untrusted skills requires the Docker or future restricted-worker composition, and CLI
+output must be treated as potentially sensitive audit data.

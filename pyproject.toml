@@ -1,11 +1,13 @@
 [project]
 name = "workflow-gps"
-version = "0.0.1"
+version = "0.1.0"
 description = "A real-time navigation engine for local LLM agentic workflows."
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.6",
+    "PyYAML>=6.0",
     "rich>=13.7",
+    "truststore>=0.10.4",
 ]
 
 # Layer dependencies (LangGraph, LiteLLM, docker SDK) are added as each module

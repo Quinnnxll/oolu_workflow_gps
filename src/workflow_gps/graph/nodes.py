@@ -20,12 +20,14 @@ from __future__ import annotations
 
 import logging
 
+from ..cache import NoopScriptCache, ScriptCache, ScriptCacheSignature, make_script_cache_key
 from ..models import (
     ErrorClass,
     ErrorRecord,
     ExecutionPlan,
     GraphState,
     GraphStatus,
+    ModelTier,
 )
 from ..routing.gateway import Gateway, GatewayError
 from ..routing.matrix import RoutingMatrix
@@ -51,6 +53,9 @@ class GraphNodes:
         limits: ResourceLimits | None = None,
         pinned_index_url: str | None = None,
         knowledge: KnowledgeClient | None = None,
+        script_cache: ScriptCache | None = None,
+        backend_kind: str | None = None,
+        backend_image: str | None = None,
     ):
         self._gateway = gateway
         self._backend = backend
@@ -59,6 +64,12 @@ class GraphNodes:
         self._limits = limits or ResourceLimits()
         self._pinned_index_url = pinned_index_url
         self._knowledge = knowledge or NoopKnowledgeClient()
+        self._script_cache = script_cache or NoopScriptCache()
+        self._script_cache_enabled = script_cache is not None and not isinstance(
+            script_cache, NoopScriptCache
+        )
+        self._backend_kind = backend_kind or type(backend).__name__
+        self._backend_image = backend_image
 
     # --- plan: seed state, load any dependency hints ------------------ #
     def plan(self, state: GraphState) -> dict:
@@ -70,13 +81,53 @@ class GraphNodes:
         decision = self._matrix.decide(state)
         prompt = self._assembler.build(state)
 
+        cache_key = make_script_cache_key(ScriptCacheSignature(
+            intent=state.intent,
+            prompt_fingerprint=self._assembler.system_prompt_fingerprint,
+            routing_models=(self._matrix.config.fast.model, self._matrix.config.reasoning.model),
+            backend_kind=self._backend_kind,
+            backend_image=self._backend_image,
+            pinned_index_url=self._pinned_index_url,
+        ))
+
         updates: dict = {
             "current_tier": decision.tier,
             "synthesis_temperature": decision.temperature,
+            "cache_key": cache_key if self._script_cache_enabled else None,
         }
         if decision.escalated:
             updates["tier_escalations"] = state.tier_escalations + 1
         logger.info("synthesize: %s", decision.reason)
+
+        # Once a cached script fails, synthesize afresh for the rest of this run.
+        cached = (
+            self._script_cache.get(cache_key)
+            if self._script_cache_enabled and state.cache_status != "failed"
+            else None
+        )
+        if cached is not None:
+            try:
+                cached_tier = ModelTier(cached.tier)
+            except ValueError:
+                cached_tier = decision.tier
+            updates.update({
+                "current_tier": cached_tier,
+                "plan": ExecutionPlan(
+                    intent=state.intent,
+                    script=cached.script,
+                    required_dependencies=list(cached.dependencies),
+                    tier=cached_tier,
+                ),
+                "status": GraphStatus.EXECUTING,
+                "cache_hit": True,
+                "cache_kind": "script",
+                "cache_status": "hit",
+            })
+            return updates
+        if not self._script_cache_enabled:
+            updates["cache_status"] = "disabled"
+        else:
+            updates["cache_status"] = "bypassed" if state.cache_status == "failed" else "miss"
 
         try:
             result = self._gateway.complete(decision, prompt)
@@ -151,7 +202,11 @@ class GraphNodes:
         record = classify_result(result, iteration=state.iteration)
         if record is None:
             return {}  # success — finalize sets the final answer
-        return {"error_history": [record], "status": GraphStatus.RECALCULATING}
+        updates = {"error_history": [record], "status": GraphStatus.RECALCULATING}
+        if state.cache_hit and state.cache_kind == "script" and state.cache_key:
+            self._script_cache.record_failure(state.cache_key)
+            updates["cache_status"] = "failed"
+        return updates
 
     # --- recalculate: resolve a dep, bump counters -------------------- #
     def recalculate(self, state: GraphState) -> dict:
@@ -177,7 +232,18 @@ class GraphNodes:
     def finalize(self, state: GraphState) -> dict:
         payload = state.last_result.contract_payload if state.last_result else None
         self._learn_from_success(state)
-        return {"final_answer": payload, "status": GraphStatus.COMPLETED}
+        updates = {"final_answer": payload, "status": GraphStatus.COMPLETED}
+        if self._script_cache_enabled and state.cache_key and state.plan and state.plan.script:
+            model = self._matrix.config.tier_config(state.plan.tier).model
+            self._script_cache.store_success(
+                state.cache_key,
+                script=state.plan.script,
+                dependencies=list(state.plan.required_dependencies),
+                tier=state.plan.tier.value,
+                model=model,
+            )
+            updates["cache_status"] = "hit" if state.cache_hit else "stored"
+        return updates
 
     def _learn_from_success(self, state: GraphState) -> None:
         """Record the import->package mappings that ultimately led to success, so the

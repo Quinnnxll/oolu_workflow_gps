@@ -100,6 +100,12 @@ class GraphState(BaseModel):
     # --- Knowledge consulted read-only at plan time (from KnowledgeClient) ---
     dependency_hints: list[DependencyHint] = Field(default_factory=list)
 
+    # --- Optional script-cache telemetry (never enters the model prompt) ---
+    cache_key: str | None = None
+    cache_hit: bool = False
+    cache_kind: str | None = None
+    cache_status: str | None = None
+
     # --- Per-run telemetry. Sum-reduced so each node contributes its delta; volatile
     # (never enters the prompt, so the cacheable prefix is unaffected). ---
     gateway_calls: Annotated[int, operator.add] = 0

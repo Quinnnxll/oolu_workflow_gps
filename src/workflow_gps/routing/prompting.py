@@ -111,6 +111,11 @@ class PromptAssembler:
         self._system = system_prompt if system_prompt is not None else DEFAULT_SYSTEM_PROMPT
         self._verify = verify_cache_safety
 
+    @property
+    def system_prompt_fingerprint(self) -> str:
+        """Hash of synthesis policy; changing it invalidates cached scripts."""
+        return hashlib.sha256(self._system.encode("utf-8")).hexdigest()
+
     # --- public API ---------------------------------------------------- #
     def build(self, state: GraphState, *, result_schema: dict | None = None) -> AssembledPrompt:
         messages = [

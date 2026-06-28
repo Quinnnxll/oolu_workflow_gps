@@ -25,6 +25,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..cache import ScriptCache
 from ..models import GraphState, GraphStatus, ModelTier
 from ..routing.gateway import Gateway
 from ..routing.matrix import RoutingMatrix
@@ -64,6 +65,10 @@ class WorkflowResult(BaseModel):
     tier_escalations: int
     attempts: int
     metrics: RunMetrics = Field(default_factory=RunMetrics)
+    cache_key: str | None = None
+    cache_hit: bool = False
+    cache_kind: str | None = None
+    cache_status: str | None = None
 
 
 class WorkflowGPS:
@@ -83,11 +88,15 @@ class WorkflowGPS:
         knowledge=None,
         recursion_limit: int | None = None,
         checkpointer=None,
+        script_cache: ScriptCache | None = None,
+        backend_kind: str | None = None,
+        backend_image: str | None = None,
     ):
         # hint_provider retained for backward compatibility; knowledge supersedes it.
         self._nodes = GraphNodes(
             gateway=gateway, backend=backend, matrix=matrix, assembler=assembler,
             limits=limits, pinned_index_url=pinned_index_url, knowledge=knowledge,
+            script_cache=script_cache, backend_kind=backend_kind, backend_image=backend_image,
         )
         self._router = EdgeRouter(edge_policy)
         # Backstop comfortably above the semantic ceiling (~4 supersteps per recalc).
@@ -139,6 +148,10 @@ class WorkflowGPS:
             recalc_count=final.recalc_count,
             tier_escalations=final.tier_escalations,
             attempts=final.iteration + 1,
+            cache_key=final.cache_key,
+            cache_hit=final.cache_hit,
+            cache_kind=final.cache_kind,
+            cache_status=final.cache_status,
             metrics=RunMetrics(
                 gateway_calls=final.gateway_calls,
                 prompt_tokens=final.prompt_tokens,
