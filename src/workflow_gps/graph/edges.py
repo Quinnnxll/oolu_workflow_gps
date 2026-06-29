@@ -97,13 +97,17 @@ class EdgeRouter:
     # --- after recalculate: rewrite the code, or just re-run it? ------- #
     def after_recalculate(self, state: GraphState) -> str:
         err = state.latest_error
-        is_missing_dep = err is not None and err.error_class is ErrorClass.MISSING_DEPENDENCY
-        has_queued_dep = state.plan is not None and bool(state.plan.required_dependencies)
+        is_missing_dep = (
+            err is not None and err.error_class is ErrorClass.MISSING_DEPENDENCY
+        )
+        has_queued_dep = state.plan is not None and bool(
+            state.plan.required_dependencies
+        )
         not_a_rut = state.repeated_failure_count() < self._policy.dep_heal_rut_threshold
 
         if is_missing_dep and has_queued_dep and not_a_rut:
             return NODE_EXECUTE  # re-run the same script; the import will now resolve
-        return NODE_SYNTHESIZE   # need fresh code (or the dep approach keeps failing)
+        return NODE_SYNTHESIZE  # need fresh code (or the dep approach keeps failing)
 
     # --- the shared stop/continue decision ---------------------------- #
     def _route_on_failure(self, state: GraphState) -> str:

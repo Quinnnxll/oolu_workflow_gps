@@ -94,8 +94,13 @@ class OAuth2PKCETokenProvider:
 
     @staticmethod
     def build_authorization_url(
-        auth_url: str, *, client_id: str, redirect_uri: str, code_challenge: str,
-        state: str, scope: str | None = None,
+        auth_url: str,
+        *,
+        client_id: str,
+        redirect_uri: str,
+        code_challenge: str,
+        state: str,
+        scope: str | None = None,
     ) -> str:
         params = {
             "response_type": "code",
@@ -109,7 +114,9 @@ class OAuth2PKCETokenProvider:
             params["scope"] = scope
         return f"{auth_url}?{urlencode(params)}"
 
-    def exchange_code(self, *, code: str, code_verifier: str, redirect_uri: str) -> None:
+    def exchange_code(
+        self, *, code: str, code_verifier: str, redirect_uri: str
+    ) -> None:
         """One-time exchange of an authorization code for tokens."""
         form = {
             "grant_type": "authorization_code",
@@ -118,13 +125,20 @@ class OAuth2PKCETokenProvider:
             "code_verifier": code_verifier,
             "redirect_uri": redirect_uri,
         }
-        self._apply_token_response(self._transport.post_form(self._token_url, form, timeout=15.0))
+        self._apply_token_response(
+            self._transport.post_form(self._token_url, form, timeout=15.0)
+        )
 
     def get_token(self) -> str:
-        if self._access_token and time.monotonic() < self._expires_at - self._EXPIRY_SKEW_S:
+        if (
+            self._access_token
+            and time.monotonic() < self._expires_at - self._EXPIRY_SKEW_S
+        ):
             return self._access_token
         if not self._refresh_token:
-            raise RuntimeError("no valid access token and no refresh token; run exchange_code first")
+            raise RuntimeError(
+                "no valid access token and no refresh token; run exchange_code first"
+            )
         self._refresh()
         assert self._access_token is not None
         return self._access_token
@@ -137,7 +151,9 @@ class OAuth2PKCETokenProvider:
         }
         if self._scope:
             form["scope"] = self._scope
-        self._apply_token_response(self._transport.post_form(self._token_url, form, timeout=15.0))
+        self._apply_token_response(
+            self._transport.post_form(self._token_url, form, timeout=15.0)
+        )
 
     def _apply_token_response(self, data: dict) -> None:
         self._access_token = data["access_token"]

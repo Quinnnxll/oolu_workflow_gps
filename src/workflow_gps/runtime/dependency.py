@@ -150,7 +150,8 @@ def _classify_install(result: ExecutionResult, iteration: int) -> ErrorRecord:
         return ErrorRecord.create(
             error_class=ErrorClass.TIMEOUT,
             message="dependency install exceeded its time budget",
-            raw_stderr=result.stderr, iteration=iteration,
+            raw_stderr=result.stderr,
+            iteration=iteration,
         )
     if any(m in low for m in _INSTALL_NETWORK_MARKERS):
         cls = ErrorClass.NETWORK_DENIED
@@ -160,8 +161,9 @@ def _classify_install(result: ExecutionResult, iteration: int) -> ErrorRecord:
         msg = "package could not be installed"
         if any(m in low for m in _INSTALL_NODIST_MARKERS):
             msg = "no installable distribution for requested package"
-    return ErrorRecord.create(error_class=cls, message=msg,
-                              raw_stderr=result.stderr, iteration=iteration)
+    return ErrorRecord.create(
+        error_class=cls, message=msg, raw_stderr=result.stderr, iteration=iteration
+    )
 
 
 def classify(result: ExecutionResult, *, iteration: int = 0) -> ErrorRecord | None:
@@ -181,7 +183,8 @@ def classify(result: ExecutionResult, *, iteration: int = 0) -> ErrorRecord | No
         return ErrorRecord.create(
             error_class=ErrorClass.TIMEOUT,
             message="execution exceeded the wall-clock limit",
-            raw_stderr=result.stderr, iteration=iteration,
+            raw_stderr=result.stderr,
+            iteration=iteration,
         )
 
     # A script can self-report a STRUCTURED error envelope on stdout even when it
@@ -195,10 +198,16 @@ def classify(result: ExecutionResult, *, iteration: int = 0) -> ErrorRecord | No
         kind = contract.error_kind
         message = contract.error_message or "script reported an error"
         cls = _type_to_class(kind, message) or ErrorClass.RUNTIME_EXCEPTION
-        module = _extract_module(message) if cls is ErrorClass.MISSING_DEPENDENCY else None
+        module = (
+            _extract_module(message) if cls is ErrorClass.MISSING_DEPENDENCY else None
+        )
         return ErrorRecord.create(
-            error_class=cls, message=message, exception_type=kind,
-            missing_module=module, raw_stderr=result.stderr, iteration=iteration,
+            error_class=cls,
+            message=message,
+            exception_type=kind,
+            missing_module=module,
+            raw_stderr=result.stderr,
+            iteration=iteration,
         )
 
     exc_type, exc_msg = _extract_exception(result.stderr)
@@ -206,14 +215,18 @@ def classify(result: ExecutionResult, *, iteration: int = 0) -> ErrorRecord | No
 
     # Missing dependency is the highest-value branch — extract the module so the
     # resolver can act on it.
-    if exc_type in ("ModuleNotFoundError", "ImportError") or "no module named" in stderr_low:
+    if (
+        exc_type in ("ModuleNotFoundError", "ImportError")
+        or "no module named" in stderr_low
+    ):
         module = _extract_module(result.stderr)
         return ErrorRecord.create(
             error_class=ErrorClass.MISSING_DEPENDENCY,
             message=f"No module named '{module}'" if module else "missing dependency",
             exception_type=exc_type or "ModuleNotFoundError",
             missing_module=module,
-            raw_stderr=result.stderr, iteration=iteration,
+            raw_stderr=result.stderr,
+            iteration=iteration,
         )
 
     # Other recognizable exception types / message signals.
@@ -223,7 +236,8 @@ def classify(result: ExecutionResult, *, iteration: int = 0) -> ErrorRecord | No
             error_class=mapped,
             message=exc_msg or mapped.value.replace("_", " "),
             exception_type=exc_type,
-            raw_stderr=result.stderr, iteration=iteration,
+            raw_stderr=result.stderr,
+            iteration=iteration,
         )
 
     # A non-zero exit with a traceback we couldn't pin down => generic runtime fault.
@@ -233,18 +247,21 @@ def classify(result: ExecutionResult, *, iteration: int = 0) -> ErrorRecord | No
                 error_class=ErrorClass.RUNTIME_EXCEPTION,
                 message=exc_msg or f"{exc_type} raised",
                 exception_type=exc_type,
-                raw_stderr=result.stderr, iteration=iteration,
+                raw_stderr=result.stderr,
+                iteration=iteration,
             )
         if result.stderr.strip():
             return ErrorRecord.create(
                 error_class=ErrorClass.RUNTIME_EXCEPTION,
                 message=_stderr_tail(result.stderr),
-                raw_stderr=result.stderr, iteration=iteration,
+                raw_stderr=result.stderr,
+                iteration=iteration,
             )
         return ErrorRecord.create(
             error_class=ErrorClass.UNKNOWN,
             message=f"non-zero exit ({result.exit_code}) with no diagnostics",
-            raw_stderr=result.stderr, iteration=iteration,
+            raw_stderr=result.stderr,
+            iteration=iteration,
         )
 
     # Not a success, and no structured error envelope (handled above) and no usable
@@ -254,7 +271,8 @@ def classify(result: ExecutionResult, *, iteration: int = 0) -> ErrorRecord | No
     return ErrorRecord.create(
         error_class=ErrorClass.CONTRACT_VIOLATION,
         message=f"no valid result emitted ({reason})",
-        raw_stderr=result.stderr, iteration=iteration,
+        raw_stderr=result.stderr,
+        iteration=iteration,
     )
 
 
@@ -316,11 +334,14 @@ class DependencyResolution(BaseModel):
     pinned_version: str | None = None
     confidence: float = Field(..., ge=0.0, le=1.0)
     is_fallback: bool = Field(
-        default=False, description="True when we simply assumed package == import (no known mapping)."
+        default=False,
+        description="True when we simply assumed package == import (no known mapping).",
     )
 
 
-def resolve(import_name: str, hints: tuple[DependencyHint, ...] = ()) -> DependencyResolution:
+def resolve(
+    import_name: str, hints: tuple[DependencyHint, ...] = ()
+) -> DependencyResolution:
     """Map a Python import name to the package to install.
 
     Priority: curated builtin map (authoritative) > trusted learned/crowd hint >
@@ -333,27 +354,35 @@ def resolve(import_name: str, hints: tuple[DependencyHint, ...] = ()) -> Depende
     for key in (name, top):
         if key in _BUILTIN_IMPORT_TO_PACKAGE:
             return DependencyResolution(
-                import_name=name, package_name=_BUILTIN_IMPORT_TO_PACKAGE[key],
-                source=KnowledgeSource.BUILTIN, confidence=0.95,
+                import_name=name,
+                package_name=_BUILTIN_IMPORT_TO_PACKAGE[key],
+                source=KnowledgeSource.BUILTIN,
+                confidence=0.95,
             )
 
     # 2. Learned / crowd hints, best trust first, above the floor.
     matching = sorted(
         (h for h in hints if h.import_name in (name, top)),
-        key=lambda h: h.trust_score, reverse=True,
+        key=lambda h: h.trust_score,
+        reverse=True,
     )
     for hint in matching:
         if hint.trust_score >= _HINT_TRUST_FLOOR:
             return DependencyResolution(
-                import_name=name, package_name=hint.package_name,
-                source=hint.source, pinned_version=hint.pinned_version,
+                import_name=name,
+                package_name=hint.package_name,
+                source=hint.source,
+                pinned_version=hint.pinned_version,
                 confidence=hint.trust_score,
             )
 
     # 3. Identity fallback — correct for the common case (requests, numpy, ...).
     return DependencyResolution(
-        import_name=name, package_name=top, source=KnowledgeSource.LOCAL,
-        confidence=0.4, is_fallback=True,
+        import_name=name,
+        package_name=top,
+        source=KnowledgeSource.LOCAL,
+        confidence=0.4,
+        is_fallback=True,
     )
 
 
@@ -361,6 +390,9 @@ def plan_dependency_fix(
     record: ErrorRecord, hints: tuple[DependencyHint, ...] = ()
 ) -> DependencyResolution | None:
     """Bridge classifier -> resolver: the package to install for a missing-dep record."""
-    if record.error_class is not ErrorClass.MISSING_DEPENDENCY or not record.missing_module:
+    if (
+        record.error_class is not ErrorClass.MISSING_DEPENDENCY
+        or not record.missing_module
+    ):
         return None
     return resolve(record.missing_module, hints)

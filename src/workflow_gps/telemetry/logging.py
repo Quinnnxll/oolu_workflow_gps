@@ -73,7 +73,9 @@ def _make_handler(*, show_path: bool, rich_tracebacks: bool) -> logging.Handler:
     except ImportError:
         handler = logging.StreamHandler()
         handler.setFormatter(
-            logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s", "%H:%M:%S")
+            logging.Formatter(
+                "%(asctime)s %(levelname)-7s %(name)s: %(message)s", "%H:%M:%S"
+            )
         )
         return handler
 
@@ -103,10 +105,18 @@ def render_result(result, *, console=None) -> None:
 
     metrics = getattr(result, "metrics", None)
     if metrics is not None and getattr(metrics, "gateway_calls", 0):
-        rows.append(("tokens (p+c)",
-                     f"{metrics.prompt_tokens}+{metrics.completion_tokens}={metrics.total_tokens}"))
-        rows.append(("model / sandbox time",
-                     f"{metrics.gateway_seconds:.2f}s / {metrics.backend_seconds:.2f}s"))
+        rows.append(
+            (
+                "tokens (p+c)",
+                f"{metrics.prompt_tokens}+{metrics.completion_tokens}={metrics.total_tokens}",
+            )
+        )
+        rows.append(
+            (
+                "model / sandbox time",
+                f"{metrics.gateway_seconds:.2f}s / {metrics.backend_seconds:.2f}s",
+            )
+        )
 
     try:
         from rich.console import Console
@@ -119,7 +129,9 @@ def render_result(result, *, console=None) -> None:
         for key, val in rows:
             table.add_row(key, val)
         title = "[green]✓ completed[/green]" if success else "[red]✗ halted[/red]"
-        (console or Console()).print(Panel(table, title=f"Workflow-GPS · {title}", expand=False))
+        (console or Console()).print(
+            Panel(table, title=f"Workflow-GPS · {title}", expand=False)
+        )
     except ImportError:
         line = " | ".join(f"{k}={v}" for k, v in rows)
         print(f"Workflow-GPS [{'OK' if success else 'FAIL'}] {line}")
@@ -167,7 +179,10 @@ class MetricsCollector:
         m = self._m
         rows = [
             ("gateway calls", str(m.gateway_calls)),
-            ("prompt / completion tokens", f"{m.prompt_tokens} / {m.completion_tokens}"),
+            (
+                "prompt / completion tokens",
+                f"{m.prompt_tokens} / {m.completion_tokens}",
+            ),
             ("total tokens", str(m.total_tokens)),
             ("gateway time", f"{m.gateway_seconds:.2f}s"),
             ("backend calls", str(m.backend_calls)),

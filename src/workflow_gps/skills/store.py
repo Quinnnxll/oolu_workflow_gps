@@ -6,7 +6,47 @@ import sqlite3
 import threading
 from pathlib import Path
 
-from .models import ExecutionOutcome, SKILL_SCHEMA_VERSION, ReusableSkill
+from ..persistence import Migration, migrate
+from .models import SKILL_SCHEMA_VERSION, ExecutionOutcome, ReusableSkill
+
+
+def _create_skill_db(conn: sqlite3.Connection) -> None:
+    # The skill catalog and the idempotency ledger share one physical database
+    # file (see ``--skill-db``), so they share one ``user_version`` history and
+    # are created together in a single step.
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS skills (
+               skill_id TEXT PRIMARY KEY,
+               schema_version INTEGER NOT NULL,
+               name TEXT NOT NULL,
+               application TEXT NOT NULL,
+               adapter TEXT NOT NULL,
+               payload_json TEXT NOT NULL,
+               updated_at TEXT NOT NULL
+           )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS skill_outcomes (
+               skill_id TEXT NOT NULL,
+               idempotency_key TEXT NOT NULL,
+               status TEXT NOT NULL,
+               payload_json TEXT NOT NULL,
+               completed_at TEXT,
+               PRIMARY KEY (skill_id, idempotency_key)
+           )"""
+    )
+
+
+def _drop_skill_db(conn: sqlite3.Connection) -> None:
+    conn.execute("DROP TABLE IF EXISTS skill_outcomes")
+    conn.execute("DROP TABLE IF EXISTS skills")
+
+
+# Ordered schema history for the local skill database (catalog + idempotency
+# ledger). Append-only: add new steps, never edit a released one.
+SKILL_MIGRATIONS: tuple[Migration, ...] = (
+    Migration(up=_create_skill_db, down=_drop_skill_db),
+)
 
 
 class InMemorySkillStore:
@@ -101,37 +141,8 @@ class LocalSkillStore:
         self._lock = threading.RLock()
         self._db = sqlite3.connect(db_path, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
-        self._migrate()
-
-    def _migrate(self) -> None:
-        with self._lock, self._db:
-            self._db.execute(
-                "CREATE TABLE IF NOT EXISTS skill_store_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
-            )
-            row = self._db.execute(
-                "SELECT value FROM skill_store_meta WHERE key = 'schema_version'"
-            ).fetchone()
-            version = int(row["value"]) if row else 0
-            if version > SKILL_SCHEMA_VERSION:
-                raise RuntimeError(
-                    f"skill database schema {version} is newer than supported {SKILL_SCHEMA_VERSION}"
-                )
-            if version < 1:
-                self._db.execute(
-                    """CREATE TABLE skills (
-                           skill_id TEXT PRIMARY KEY,
-                           schema_version INTEGER NOT NULL,
-                           name TEXT NOT NULL,
-                           application TEXT NOT NULL,
-                           adapter TEXT NOT NULL,
-                           payload_json TEXT NOT NULL,
-                           updated_at TEXT NOT NULL
-                       )"""
-                )
-                self._db.execute(
-                    """INSERT INTO skill_store_meta (key, value) VALUES ('schema_version', '1')
-                       ON CONFLICT(key) DO UPDATE SET value = excluded.value"""
-                )
+        with self._lock:
+            migrate(self._db, SKILL_MIGRATIONS, label="skills")
 
     def save(self, skill: ReusableSkill) -> None:
         if skill.schema_version != SKILL_SCHEMA_VERSION:
@@ -199,17 +210,8 @@ class LocalExecutionStore:
         self._lock = threading.RLock()
         self._db = sqlite3.connect(db_path, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
-        with self._db:
-            self._db.execute(
-                """CREATE TABLE IF NOT EXISTS skill_outcomes (
-                       skill_id TEXT NOT NULL,
-                       idempotency_key TEXT NOT NULL,
-                       status TEXT NOT NULL,
-                       payload_json TEXT NOT NULL,
-                       completed_at TEXT,
-                       PRIMARY KEY (skill_id, idempotency_key)
-                   )"""
-            )
+        with self._lock:
+            migrate(self._db, SKILL_MIGRATIONS, label="skills")
 
     def save(self, outcome: ExecutionOutcome) -> None:
         with self._lock, self._db:

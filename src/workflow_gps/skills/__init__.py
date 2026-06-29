@@ -1,5 +1,7 @@
 """Portable skill learning, storage, requirements, and execution contracts."""
 
+from .cli_adapter import CliActionExecutor, CliExecutionPolicy
+from .compiler import DemonstrationCompiler
 from .models import (
     SKILL_SCHEMA_VERSION,
     ActionEvent,
@@ -40,8 +42,6 @@ from .requirements import (
     RequirementConstraintCompiler,
     RequirementParameter,
 )
-from .cli_adapter import CliActionExecutor, CliExecutionPolicy
-from .compiler import DemonstrationCompiler
 from .runtime import (
     CliSkillRecorder,
     InMemoryEventSink,

@@ -79,8 +79,12 @@ class AssembledPrompt(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    messages: list[dict] = Field(..., description="OpenAI-style [{role, content}, ...].")
-    prefix_len: int = Field(..., description="Count of leading messages that are volatile-free.")
+    messages: list[dict] = Field(
+        ..., description="OpenAI-style [{role, content}, ...]."
+    )
+    prefix_len: int = Field(
+        ..., description="Count of leading messages that are volatile-free."
+    )
 
     @property
     def cacheable_messages(self) -> list[dict]:
@@ -107,8 +111,12 @@ class PromptAssembler:
     values — useful in dev, off by default.
     """
 
-    def __init__(self, *, system_prompt: str | None = None, verify_cache_safety: bool = False):
-        self._system = system_prompt if system_prompt is not None else DEFAULT_SYSTEM_PROMPT
+    def __init__(
+        self, *, system_prompt: str | None = None, verify_cache_safety: bool = False
+    ):
+        self._system = (
+            system_prompt if system_prompt is not None else DEFAULT_SYSTEM_PROMPT
+        )
         self._verify = verify_cache_safety
 
     @property
@@ -117,7 +125,9 @@ class PromptAssembler:
         return hashlib.sha256(self._system.encode("utf-8")).hexdigest()
 
     # --- public API ---------------------------------------------------- #
-    def build(self, state: GraphState, *, result_schema: dict | None = None) -> AssembledPrompt:
+    def build(
+        self, state: GraphState, *, result_schema: dict | None = None
+    ) -> AssembledPrompt:
         messages = [
             {"role": "system", "content": self._system},
             {"role": "user", "content": self._render_task(state.intent, result_schema)},
@@ -134,10 +144,7 @@ class PromptAssembler:
         task = f"Task:\n{intent.strip()}"
         if result_schema:
             schema = json.dumps(result_schema, indent=2, sort_keys=True)
-            task += (
-                "\n\nThe emit_result payload should match this shape:\n"
-                f"{schema}"
-            )
+            task += f"\n\nThe emit_result payload should match this shape:\n{schema}"
         return task
 
     def _render_action(self, state: GraphState) -> str:
@@ -160,7 +167,9 @@ class PromptAssembler:
 
             if state.plan and state.plan.required_dependencies:
                 pkgs = ", ".join(state.plan.required_dependencies)
-                lines.append(f"- These packages are now installed and importable: {pkgs}.")
+                lines.append(
+                    f"- These packages are now installed and importable: {pkgs}."
+                )
 
         lines.append("")
         lines.append(_ACTION_DIRECTIVE)
@@ -183,4 +192,6 @@ class PromptAssembler:
                 suspects.append(state.latest_error.message)
         leaked = [s for s in suspects if s and s in prefix_blob]
         if leaked:
-            raise AssertionError(f"volatile value leaked into cacheable prefix: {leaked!r}")
+            raise AssertionError(
+                f"volatile value leaked into cacheable prefix: {leaked!r}"
+            )

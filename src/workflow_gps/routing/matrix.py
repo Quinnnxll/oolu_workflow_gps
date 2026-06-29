@@ -39,14 +39,18 @@ class TierConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     tier: ModelTier
-    model: str = Field(..., description="LiteLLM model string, e.g. 'openai/Qwen/Qwen3.6-35B-A3B'.")
+    model: str = Field(
+        ..., description="LiteLLM model string, e.g. 'openai/Qwen/Qwen3.6-35B-A3B'."
+    )
     api_base: str | None = _DEFAULT_API_BASE
     base_temperature: float = Field(default=0.1, ge=0.0)
     max_temperature: float = Field(default=0.7, ge=0.0)
     top_p: float = 0.8
     top_k: int | None = None
     max_tokens: int = 4096
-    extra_params: dict = Field(default_factory=dict, description="Passed through as extra_body.")
+    extra_params: dict = Field(
+        default_factory=dict, description="Passed through as extra_body."
+    )
 
 
 class RoutingConfig(BaseModel):
@@ -57,10 +61,18 @@ class RoutingConfig(BaseModel):
     fast: TierConfig
     reasoning: TierConfig
 
-    max_fast_recalcs: int = Field(default=3, description="Loop depth that forces escalation.")
-    rut_bump_threshold: int = Field(default=2, description="Identical failures that bump temperature.")
-    rut_escalate_threshold: int = Field(default=3, description="Identical failures that force escalation.")
-    rut_temperature_step: float = Field(default=0.15, description="Temperature added per repeat past the first.")
+    max_fast_recalcs: int = Field(
+        default=3, description="Loop depth that forces escalation."
+    )
+    rut_bump_threshold: int = Field(
+        default=2, description="Identical failures that bump temperature."
+    )
+    rut_escalate_threshold: int = Field(
+        default=3, description="Identical failures that force escalation."
+    )
+    rut_temperature_step: float = Field(
+        default=0.15, description="Temperature added per repeat past the first."
+    )
 
     def tier_config(self, tier: ModelTier) -> TierConfig:
         return self.fast if tier is ModelTier.FAST else self.reasoning
@@ -75,13 +87,13 @@ def default_routing_config() -> RoutingConfig:
             base_temperature=0.1,
             max_temperature=0.7,
             top_p=0.8,
-            top_k=20,           # Qwen model card recommendation
+            top_k=20,  # Qwen model card recommendation
             max_tokens=4096,
         ),
         reasoning=TierConfig(
             tier=ModelTier.REASONING,
             model="openai/meta-llama/Llama-3.3-70B-Instruct",
-            base_temperature=0.3,   # a touch more exploratory for re-planning
+            base_temperature=0.3,  # a touch more exploratory for re-planning
             max_temperature=0.7,
             top_p=0.9,
             top_k=None,
@@ -103,7 +115,9 @@ class RoutingDecision(BaseModel):
     top_k: int | None
     max_tokens: int
     extra_params: dict = Field(default_factory=dict)
-    escalated: bool = Field(default=False, description="True only on the step we cross Fast -> Reasoning.")
+    escalated: bool = Field(
+        default=False, description="True only on the step we cross Fast -> Reasoning."
+    )
     reason: str = ""
 
     def to_completion_kwargs(self) -> dict:
@@ -167,7 +181,9 @@ class RoutingMatrix:
         )
 
     # --- decision components ------------------------------------------ #
-    def _select_tier(self, state: GraphState, repeats: int) -> tuple[ModelTier, bool, str]:
+    def _select_tier(
+        self, state: GraphState, repeats: int
+    ) -> tuple[ModelTier, bool, str]:
         cfg = self._config
 
         # Already escalated: stay on Reasoning, never demote within a session.
@@ -176,7 +192,11 @@ class RoutingMatrix:
 
         # Loop depth: a genuinely multi-step task — exactly where the Fast MoE drifts.
         if state.recalc_count >= cfg.max_fast_recalcs:
-            return ModelTier.REASONING, True, f"{state.recalc_count} recalc cycles >= depth limit"
+            return (
+                ModelTier.REASONING,
+                True,
+                f"{state.recalc_count} recalc cycles >= depth limit",
+            )
 
         # Persistent rut: the temperature bump didn't shake it loose.
         if repeats >= cfg.rut_escalate_threshold:

@@ -26,19 +26,19 @@ class ErrorClass(str, Enum):
     """How the runtime should *react* to a failure, not merely what it was."""
 
     # --- Recalculable: the engine can alter its route and keep moving ---
-    MISSING_DEPENDENCY = "missing_dependency"   # ModuleNotFoundError -> Phase-A install
-    SYNTAX_ERROR = "syntax_error"               # malformed generated code -> rewrite
-    RUNTIME_EXCEPTION = "runtime_exception"     # generic raise at exec time -> rewrite
-    CONTRACT_VIOLATION = "contract_violation"   # no / invalid sentinel JSON -> rewrite
-    TIMEOUT = "timeout"                         # wall-clock exceeded -> rewrite (cautiously)
-    SYNTHESIS_FAILED = "synthesis_failed"       # model returned no usable code -> re-prompt
+    MISSING_DEPENDENCY = "missing_dependency"  # ModuleNotFoundError -> Phase-A install
+    SYNTAX_ERROR = "syntax_error"  # malformed generated code -> rewrite
+    RUNTIME_EXCEPTION = "runtime_exception"  # generic raise at exec time -> rewrite
+    CONTRACT_VIOLATION = "contract_violation"  # no / invalid sentinel JSON -> rewrite
+    TIMEOUT = "timeout"  # wall-clock exceeded -> rewrite (cautiously)
+    SYNTHESIS_FAILED = "synthesis_failed"  # model returned no usable code -> re-prompt
 
     # --- Halt-and-surface: looping here is harmful, never helpful ---
-    INSTALL_FAILED = "install_failed"           # Phase A: package won't install (no such dist)
-    PERMISSION_DENIED = "permission_denied"     # PermissionError on fs / device
-    AUTH_FAILURE = "auth_failure"               # 401 / 403 from a called API
-    RESOURCE_EXHAUSTED = "resource_exhausted"   # OOM, disk full, fork bomb guard
-    NETWORK_DENIED = "network_denied"           # egress blocked — expected in Phase B
+    INSTALL_FAILED = "install_failed"  # Phase A: package won't install (no such dist)
+    PERMISSION_DENIED = "permission_denied"  # PermissionError on fs / device
+    AUTH_FAILURE = "auth_failure"  # 401 / 403 from a called API
+    RESOURCE_EXHAUSTED = "resource_exhausted"  # OOM, disk full, fork bomb guard
+    NETWORK_DENIED = "network_denied"  # egress blocked — expected in Phase B
 
     # --- Unknown: treat conservatively (baseline = do not loop blindly) ---
     UNKNOWN = "unknown"
@@ -84,11 +84,11 @@ _HALTING_CLASSES: frozenset[ErrorClass] = frozenset(
 # the abstracted, scrub-safe error signatures we are allowed to centralise.
 # Order matters — most specific patterns first, blanket digit-strip last.
 _SIGNATURE_NORMALISERS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"0x[0-9a-fA-F]+"), "0xADDR"),         # memory addresses
-    (re.compile(r"line\s+\d+"), "line N"),             # traceback line numbers
-    (re.compile(r"'[^']*\.py'"), "'FILE.py'"),         # quoted file paths
-    (re.compile(r"/[^\s'\"]+"), "PATH"),               # bare absolute paths
-    (re.compile(r"\b\d+\b"), "N"),                      # residual integers
+    (re.compile(r"0x[0-9a-fA-F]+"), "0xADDR"),  # memory addresses
+    (re.compile(r"line\s+\d+"), "line N"),  # traceback line numbers
+    (re.compile(r"'[^']*\.py'"), "'FILE.py'"),  # quoted file paths
+    (re.compile(r"/[^\s'\"]+"), "PATH"),  # bare absolute paths
+    (re.compile(r"\b\d+\b"), "N"),  # residual integers
 ]
 
 
@@ -104,7 +104,9 @@ def normalise_message(message: str) -> str:
     return out
 
 
-def compute_signature(error_class: ErrorClass, exception_type: str | None, message: str) -> str:
+def compute_signature(
+    error_class: ErrorClass, exception_type: str | None, message: str
+) -> str:
     """Stable 16-char hash identifying 'the same failure' for dedup / escalation."""
     basis = f"{error_class.value}|{exception_type or ''}|{normalise_message(message)}"
     return hashlib.sha1(basis.encode("utf-8")).hexdigest()[:16]
@@ -121,7 +123,9 @@ class ErrorRecord(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     error_class: ErrorClass
-    message: str = Field(..., description="Cleaned, human-readable summary of the failure.")
+    message: str = Field(
+        ..., description="Cleaned, human-readable summary of the failure."
+    )
     exception_type: str | None = Field(
         default=None, description="Python exception name, e.g. 'ModuleNotFoundError'."
     )
@@ -129,15 +133,21 @@ class ErrorRecord(BaseModel):
         default=None,
         description="Import name extracted for dependency healing, e.g. 'cv2' (NOT the pip name).",
     )
-    iteration: int = Field(default=0, description="Which recalc cycle produced this record.")
-    signature: str = Field(..., description="Stable hash of (class, type, normalised message).")
+    iteration: int = Field(
+        default=0, description="Which recalc cycle produced this record."
+    )
+    signature: str = Field(
+        ..., description="Stable hash of (class, type, normalised message)."
+    )
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     # Local-only forensic detail. Never leaves the machine: it routinely contains
     # absolute paths, tokens and internal endpoints. The scrubbing layer reads
     # `signature`/`message`, never this field, when deciding what may be shared.
     raw_stderr: str | None = Field(
-        default=None, exclude=True, description="Full stderr — local diagnostics only, never uploaded."
+        default=None,
+        exclude=True,
+        description="Full stderr — local diagnostics only, never uploaded.",
     )
 
     @classmethod

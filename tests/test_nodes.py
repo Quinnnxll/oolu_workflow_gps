@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
-from conftest import drive, missing_dep_result
+from conftest import drive
 
-from workflow_gps.graph.edges import EdgePolicy, EdgeRouter
+from workflow_gps.graph.edges import EdgeRouter
 from workflow_gps.graph.nodes import GraphNodes
-from workflow_gps.models import ErrorClass, ErrorRecord, GraphState, GraphStatus, ModelTier
+from workflow_gps.models import (
+    ErrorClass,
+    ErrorRecord,
+    GraphState,
+    GraphStatus,
+    ModelTier,
+)
 from workflow_gps.routing.gateway import FakeGateway, GatewayError
-from workflow_gps.runtime.backend import ExecutionRequest, StubBackend, make_failure, make_success
+from workflow_gps.runtime.backend import (
+    StubBackend,
+    make_failure,
+)
 
 ROUTER = EdgeRouter()
 PY = "```python\nimport cowsay\n```"
@@ -34,8 +43,9 @@ def test_exhaustion_escalates_then_halts():
 
 
 def test_halting_class_immediate_halt():
-    auth = ErrorRecord.create(error_class=ErrorClass.AUTH_FAILURE, message="401",
-                              exception_type="HTTPError")
+    auth = ErrorRecord.create(
+        error_class=ErrorClass.AUTH_FAILURE, message="401", exception_type="HTTPError"
+    )
     be = StubBackend([make_failure(stderr="HTTPError: 401 Unauthorized", error=auth)])
     final, terminal, _ = _run(FakeGateway([PY]), be)
     assert terminal == "halt" and final.recalc_count == 0

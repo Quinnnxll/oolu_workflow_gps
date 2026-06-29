@@ -114,7 +114,9 @@ class _TwoPhaseBackend(ABC):
         except BackendError:
             raise  # infrastructure failure — surface, never recalc
         except Exception as exc:  # noqa: BLE001 - convert anything unexpected to BackendError
-            raise BackendError(f"{self.name}: unexpected isolation failure: {exc}") from exc
+            raise BackendError(
+                f"{self.name}: unexpected isolation failure: {exc}"
+            ) from exc
 
     # --- result assembly ---------------------------------------------- #
     @staticmethod
@@ -147,7 +149,9 @@ class _TwoPhaseBackend(ABC):
 # --------------------------------------------------------------------------- #
 # SubprocessBackend — dev / fallback, NOT isolation.                          #
 # --------------------------------------------------------------------------- #
-def _run_command(cmd: list[str], *, cwd: str, env: dict[str, str], timeout: float) -> _RawRun:
+def _run_command(
+    cmd: list[str], *, cwd: str, env: dict[str, str], timeout: float
+) -> _RawRun:
     """Run a command in its own process group; on timeout, kill the whole group.
 
     ``start_new_session=True`` puts the child in a fresh process group so a hung
@@ -156,8 +160,12 @@ def _run_command(cmd: list[str], *, cwd: str, env: dict[str, str], timeout: floa
     """
     start = time.monotonic()
     proc = subprocess.Popen(
-        cmd, cwd=cwd, env=env,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        cmd,
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
         start_new_session=True,
     )
     timed_out = False
@@ -172,14 +180,24 @@ def _run_command(cmd: list[str], *, cwd: str, env: dict[str, str], timeout: floa
         out, err = proc.communicate()
     duration = time.monotonic() - start
     exit_code = _TIMEOUT_EXIT_CODE if timed_out else (proc.returncode or 0)
-    return _RawRun(exit_code=exit_code, stdout=out or "", stderr=err or "",
-                   duration_s=duration, timed_out=timed_out)
+    return _RawRun(
+        exit_code=exit_code,
+        stdout=out or "",
+        stderr=err or "",
+        duration_s=duration,
+        timed_out=timed_out,
+    )
 
 
 class SubprocessBackend(_TwoPhaseBackend):
     """Runs the real pipeline locally. Dev/fallback only — provides NO isolation."""
 
-    def __init__(self, *, python_executable: str = sys.executable, default_index_url: str | None = None):
+    def __init__(
+        self,
+        *,
+        python_executable: str = sys.executable,
+        default_index_url: str | None = None,
+    ):
         self._python = python_executable
         self._default_index_url = default_index_url
         self._uv = shutil.which("uv")
@@ -189,7 +207,9 @@ class SubprocessBackend(_TwoPhaseBackend):
         return "subprocess"
 
     def health_check(self) -> bool:
-        return bool(self._python) and (self._uv is not None or shutil.which("pip") is not None)
+        return bool(self._python) and (
+            self._uv is not None or shutil.which("pip") is not None
+        )
 
     @contextmanager
     def _workspace(self, request: ExecutionRequest) -> Iterator[str]:
@@ -215,26 +235,46 @@ class SubprocessBackend(_TwoPhaseBackend):
         if self._uv:
             cmd = [self._uv, "pip", "install", "--target", target]
         else:
-            cmd = [self._python, "-m", "pip", "install", "--target", target, "--no-warn-script-location"]
+            cmd = [
+                self._python,
+                "-m",
+                "pip",
+                "install",
+                "--target",
+                target,
+                "--no-warn-script-location",
+            ]
         if index:
             cmd += ["--index-url", index]
         cmd += list(request.dependencies)
         logger.info("subprocess Phase A install: %s", " ".join(request.dependencies))
-        return _run_command(cmd, cwd=str(ws), env=self._base_env(request),
-                            timeout=request.limits.install_timeout_s)
+        return _run_command(
+            cmd,
+            cwd=str(ws),
+            env=self._base_env(request),
+            timeout=request.limits.install_timeout_s,
+        )
 
     def _sever_network(self, ws: object) -> None:
         # Cannot sever network for a plain subprocess. This is the entire reason the
         # backend is dev-only; we log loudly rather than pretend otherwise.
-        logger.warning("SubprocessBackend cannot sever network — Phase B runs WITHOUT isolation")
+        logger.warning(
+            "SubprocessBackend cannot sever network — Phase B runs WITHOUT isolation"
+        )
 
     def _execute(self, ws: object, request: ExecutionRequest) -> _RawRun:
         env = self._base_env(request)
         env["PYTHONPATH"] = os.path.join(str(ws), "site-packages")
         env["PYTHONDONTWRITEBYTECODE"] = "1"
-        logger.info("subprocess Phase B execute (timeout=%.0fs)", request.limits.wall_timeout_s)
-        return _run_command([self._python, "user_script.py"], cwd=str(ws), env=env,
-                            timeout=request.limits.wall_timeout_s)
+        logger.info(
+            "subprocess Phase B execute (timeout=%.0fs)", request.limits.wall_timeout_s
+        )
+        return _run_command(
+            [self._python, "user_script.py"],
+            cwd=str(ws),
+            env=env,
+            timeout=request.limits.wall_timeout_s,
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -262,7 +302,9 @@ class LocalDockerBackend(_TwoPhaseBackend):
         try:
             import docker  # lazy: the package must not hard-require docker to import
         except ImportError as exc:
-            raise BackendUnavailable("docker SDK not installed (`pip install docker`)") from exc
+            raise BackendUnavailable(
+                "docker SDK not installed (`pip install docker`)"
+            ) from exc
         try:
             self._client = docker.from_env()
         except Exception as exc:  # noqa: BLE001
@@ -314,7 +356,9 @@ class LocalDockerBackend(_TwoPhaseBackend):
                 command=["sleep", str(int(keepalive))],
                 detach=True,
                 read_only=limits.read_only_rootfs,
-                tmpfs={"/sandbox": f"size={limits.writable_scratch_mb}m,exec,mode=1777"},
+                tmpfs={
+                    "/sandbox": f"size={limits.writable_scratch_mb}m,exec,mode=1777"
+                },
                 mem_limit=f"{limits.memory_mb}m",
                 nano_cpus=int(limits.cpus * 1_000_000_000),
                 pids_limit=limits.pids_limit,
@@ -340,7 +384,9 @@ class LocalDockerBackend(_TwoPhaseBackend):
             try:
                 container.remove(force=True)  # ephemeral: one container, one intent
             except Exception:  # noqa: BLE001
-                logger.warning("failed to remove sandbox container %s", container.id[:12])
+                logger.warning(
+                    "failed to remove sandbox container %s", container.id[:12]
+                )
 
     def _put_files(self, container: object, request: ExecutionRequest) -> None:
         # NOTE: we cannot use Docker's put_archive here. With a read-only rootfs the
@@ -353,7 +399,13 @@ class LocalDockerBackend(_TwoPhaseBackend):
         # install target, uv cache, temp. They mirror UV_CACHE_DIR / TMPDIR.
         self._stage_exec(
             container,
-            ["mkdir", "-p", "/sandbox/site-packages", "/sandbox/tmp", "/sandbox/.cache/uv"],
+            [
+                "mkdir",
+                "-p",
+                "/sandbox/site-packages",
+                "/sandbox/tmp",
+                "/sandbox/.cache/uv",
+            ],
         )
         files = {
             f"{SHIM_MODULE_NAME}.py": shim_source_path().read_bytes(),
@@ -370,7 +422,9 @@ class LocalDockerBackend(_TwoPhaseBackend):
     def _stage_exec(self, container: object, cmd: list[str]) -> None:
         """Run a staging command inside the container, raising on failure."""
         exit_code, output = container.exec_run(  # type: ignore[attr-defined]
-            cmd, demux=True, workdir="/sandbox",
+            cmd,
+            demux=True,
+            workdir="/sandbox",
         )
         if exit_code not in (0, None):
             out_b, err_b = output if output else (b"", b"")
@@ -380,11 +434,16 @@ class LocalDockerBackend(_TwoPhaseBackend):
             )
 
     # --- phases ------------------------------------------------------- #
-    def _exec(self, container: object, cmd: list[str], env: dict[str, str], timeout: float) -> _RawRun:
+    def _exec(
+        self, container: object, cmd: list[str], env: dict[str, str], timeout: float
+    ) -> _RawRun:
         wrapped = ["timeout", "-s", "KILL", str(int(timeout)), *cmd]
         start = time.monotonic()
         exit_code, output = container.exec_run(  # type: ignore[attr-defined]
-            wrapped, demux=True, environment=env, workdir="/sandbox",
+            wrapped,
+            demux=True,
+            environment=env,
+            workdir="/sandbox",
         )
         duration = time.monotonic() - start
         out_b, err_b = output if output else (b"", b"")
@@ -415,13 +474,17 @@ class LocalDockerBackend(_TwoPhaseBackend):
         except self._docker.errors.NotFound:
             pass  # not connected to that network — fine
         except Exception as exc:  # noqa: BLE001
-            raise BackendError(f"could not sever network before Phase B: {exc}") from exc
+            raise BackendError(
+                f"could not sever network before Phase B: {exc}"
+            ) from exc
 
         container.reload()  # type: ignore[attr-defined]
         attached = container.attrs.get("NetworkSettings", {}).get("Networks", {})  # type: ignore[attr-defined]
         if attached:
             # We refuse to run untrusted code while any network remains attached.
-            raise BackendError(f"network still attached after sever attempt: {list(attached)}")
+            raise BackendError(
+                f"network still attached after sever attempt: {list(attached)}"
+            )
 
     def _execute(self, ws: object, request: ExecutionRequest) -> _RawRun:
         env = {

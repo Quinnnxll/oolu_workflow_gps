@@ -27,12 +27,19 @@ _SCRUBBERS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\b(?:ghp|gho|ghs|ghr|github_pat)_[A-Za-z0-9_]{20,}\b"), "<GH_TOKEN>"),
     (re.compile(r"\beyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\b"), "<JWT>"),
     (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._\-]{8,}"), "bearer <TOKEN>"),
-    (re.compile(r"[A-Za-z]:\\(?:[^\\\s\"']+\\?)+"), "<PATH>"),                       # windows
-    (re.compile(r"/(?:home|Users|root|var|etc|tmp|opt|mnt|srv)/[^\s\"':]+"), "<PATH>"),  # unix
+    (re.compile(r"[A-Za-z]:\\(?:[^\\\s\"']+\\?)+"), "<PATH>"),  # windows
+    (
+        re.compile(r"/(?:home|Users|root|var|etc|tmp|opt|mnt|srv)/[^\s\"':]+"),
+        "<PATH>",
+    ),  # unix
     (re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"), "<IP>"),
-    (re.compile(r"://[^/\s:@]+:[^/\s:@]+@"), "://<CREDS>@"),                          # url creds
-    (re.compile(r"(?i)\b([A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PWD))\s*[=:]\s*\S+"),
-     r"\1=<REDACTED>"),
+    (re.compile(r"://[^/\s:@]+:[^/\s:@]+@"), "://<CREDS>@"),  # url creds
+    (
+        re.compile(
+            r"(?i)\b([A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PWD))\s*[=:]\s*\S+"
+        ),
+        r"\1=<REDACTED>",
+    ),
 ]
 
 # PyPI / import identifier shape: starts and ends alphanumeric, dots/dashes/underscores
@@ -57,4 +64,8 @@ def is_safe_to_store(text: str) -> bool:
 def is_safe_identifier(name: str) -> bool:
     """True for clean PyPI/import-style names only — the strict gate for the fields
     we store verbatim (import_name, package_name)."""
-    return bool(name) and len(name) <= _MAX_IDENTIFIER_LEN and bool(_IDENTIFIER_RE.match(name))
+    return (
+        bool(name)
+        and len(name) <= _MAX_IDENTIFIER_LEN
+        and bool(_IDENTIFIER_RE.match(name))
+    )

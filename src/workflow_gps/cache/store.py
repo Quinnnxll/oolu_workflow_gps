@@ -9,7 +9,36 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from ..persistence import Migration, migrate
 from .models import ScriptCacheEntry
+
+
+def _create_script_cache(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS script_cache (
+            cache_key TEXT PRIMARY KEY,
+            script TEXT NOT NULL,
+            dependencies TEXT NOT NULL,
+            tier TEXT NOT NULL,
+            model TEXT NOT NULL,
+            success_count INTEGER NOT NULL DEFAULT 0,
+            failure_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+
+
+# Ordered schema history for the local script cache. Append new steps; never edit
+# a released one. Version N == len(MIGRATIONS[:N]) applied.
+MIGRATIONS: tuple[Migration, ...] = (
+    Migration(
+        up=_create_script_cache,
+        down=lambda conn: conn.execute("DROP TABLE IF EXISTS script_cache"),
+    ),
+)
 
 
 @runtime_checkable
@@ -53,22 +82,8 @@ class LocalScriptCache:
         self._lock = threading.RLock()
         self._db = sqlite3.connect(db_path, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
-        with self._db:
-            self._db.execute(
-                """
-                CREATE TABLE IF NOT EXISTS script_cache (
-                    cache_key TEXT PRIMARY KEY,
-                    script TEXT NOT NULL,
-                    dependencies TEXT NOT NULL,
-                    tier TEXT NOT NULL,
-                    model TEXT NOT NULL,
-                    success_count INTEGER NOT NULL DEFAULT 0,
-                    failure_count INTEGER NOT NULL DEFAULT 0,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-                """
-            )
+        with self._lock:
+            migrate(self._db, MIGRATIONS, label="script_cache")
 
     def get(self, key: str) -> ScriptCacheEntry | None:
         with self._lock:

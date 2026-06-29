@@ -32,9 +32,9 @@ class KnowledgeSource(str, Enum):
     """Provenance — drives the trust prior. Crowd knowledge is never trusted on
     arrival; it must earn its score through observed local success."""
 
-    BUILTIN = "builtin"   # shipped static map — highest baseline trust
-    LOCAL = "local"       # learned on this machine — earned, trusted
-    CROWD = "crowd"       # centralised + abstracted + scrubbed — lowest prior
+    BUILTIN = "builtin"  # shipped static map — highest baseline trust
+    LOCAL = "local"  # learned on this machine — earned, trusted
+    CROWD = "crowd"  # centralised + abstracted + scrubbed — lowest prior
 
 
 class RecalcStrategy(str, Enum):
@@ -43,7 +43,9 @@ class RecalcStrategy(str, Enum):
 
     INSTALL_DEPENDENCY = "install_dependency"
     REWRITE_CODE = "rewrite_code"
-    BUMP_TEMPERATURE = "bump_temperature"   # trap #5: break out of the identical-broken-code rut
+    BUMP_TEMPERATURE = (
+        "bump_temperature"  # trap #5: break out of the identical-broken-code rut
+    )
     ESCALATE_TIER = "escalate_tier"
     HALT = "halt"
 
@@ -67,19 +69,29 @@ class DependencyHint(BaseModel):
     """#1 — import-name -> package-name. Crowd-shareable; contains zero user data."""
 
     import_name: str = Field(..., description="What the code imports, e.g. 'cv2'.")
-    package_name: str = Field(..., description="What pip/uv must install, e.g. 'opencv-python'.")
-    pinned_version: str | None = Field(default=None, description="Reproducible pin, if known.")
+    package_name: str = Field(
+        ..., description="What pip/uv must install, e.g. 'opencv-python'."
+    )
+    pinned_version: str | None = Field(
+        default=None, description="Reproducible pin, if known."
+    )
     source: KnowledgeSource = KnowledgeSource.LOCAL
     success_count: int = 0
     failure_count: int = 0
     last_seen: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    _BASE_PRIOR = {KnowledgeSource.BUILTIN: 0.95, KnowledgeSource.LOCAL: 0.60, KnowledgeSource.CROWD: 0.50}
+    _BASE_PRIOR = {
+        KnowledgeSource.BUILTIN: 0.95,
+        KnowledgeSource.LOCAL: 0.60,
+        KnowledgeSource.CROWD: 0.50,
+    }
 
     @computed_field  # type: ignore[prop-decorator]
     @property
     def trust_score(self) -> float:
-        return _trust(self.success_count, self.failure_count, self._BASE_PRIOR[self.source])
+        return _trust(
+            self.success_count, self.failure_count, self._BASE_PRIOR[self.source]
+        )
 
 
 class ErrorPattern(BaseModel):
@@ -97,9 +109,15 @@ class ErrorPattern(BaseModel):
     failure_count: int = 0
     last_seen: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    _BASE_PRIOR = {KnowledgeSource.BUILTIN: 0.90, KnowledgeSource.LOCAL: 0.55, KnowledgeSource.CROWD: 0.45}
+    _BASE_PRIOR = {
+        KnowledgeSource.BUILTIN: 0.90,
+        KnowledgeSource.LOCAL: 0.55,
+        KnowledgeSource.CROWD: 0.45,
+    }
 
     @computed_field  # type: ignore[prop-decorator]
     @property
     def trust_score(self) -> float:
-        return _trust(self.success_count, self.failure_count, self._BASE_PRIOR[self.source])
+        return _trust(
+            self.success_count, self.failure_count, self._BASE_PRIOR[self.source]
+        )

@@ -62,16 +62,28 @@ class ResourceLimits(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     cpus: float = Field(default=1.0, gt=0, description="Fractional CPU quota.")
-    memory_mb: int = Field(default=512, gt=0, description="Hard memory cap (OOM-kill above).")
-    pids_limit: int = Field(default=256, gt=0, description="Process cap — fork-bomb guard.")
-    wall_timeout_s: float = Field(default=30.0, gt=0, description="Hard wall-clock kill for Phase B.")
-    install_timeout_s: float = Field(default=120.0, gt=0, description="Hard wall-clock kill for Phase A.")
+    memory_mb: int = Field(
+        default=512, gt=0, description="Hard memory cap (OOM-kill above)."
+    )
+    pids_limit: int = Field(
+        default=256, gt=0, description="Process cap — fork-bomb guard."
+    )
+    wall_timeout_s: float = Field(
+        default=30.0, gt=0, description="Hard wall-clock kill for Phase B."
+    )
+    install_timeout_s: float = Field(
+        default=120.0, gt=0, description="Hard wall-clock kill for Phase A."
+    )
 
     # Read-only rootfs is the baseline; the script still needs *somewhere* to write,
     # so a small tmpfs scratch is mounted as the working directory. Both together:
     # the code can scribble in its sandbox but cannot mutate the image or the host.
-    read_only_rootfs: bool = Field(default=True, description="Mount the container rootfs read-only.")
-    writable_scratch_mb: int = Field(default=64, gt=0, description="Size of the tmpfs work dir.")
+    read_only_rootfs: bool = Field(
+        default=True, description="Mount the container rootfs read-only."
+    )
+    writable_scratch_mb: int = Field(
+        default=64, gt=0, description="Size of the tmpfs work dir."
+    )
 
 
 class ExecutionRequest(BaseModel):
@@ -81,7 +93,9 @@ class ExecutionRequest(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    script: str = Field(..., description="The synthesized Python to execute in Phase B.")
+    script: str = Field(
+        ..., description="The synthesized Python to execute in Phase B."
+    )
     dependencies: list[str] = Field(
         default_factory=list,
         description="Resolved PACKAGE names to install in Phase A. Empty => Phase A skipped.",
@@ -159,7 +173,9 @@ class StubBackend:
     was requested with the resolved package on attempt 2).
     """
 
-    def __init__(self, results: list[ResultFactory], *, name: str = "stub", healthy: bool = True):
+    def __init__(
+        self, results: list[ResultFactory], *, name: str = "stub", healthy: bool = True
+    ):
         self._results: list[ResultFactory] = list(results)
         self._name = name
         self._healthy = healthy
@@ -178,7 +194,9 @@ class StubBackend:
         if not self._healthy:
             raise BackendUnavailable(f"stub backend '{self._name}' marked unhealthy")
         if not self._results:
-            raise BackendUnavailable(f"stub backend '{self._name}' has no scripted results left")
+            raise BackendUnavailable(
+                f"stub backend '{self._name}' has no scripted results left"
+            )
         nxt = self._results.pop(0)
         return nxt(request) if callable(nxt) else nxt
 
@@ -190,8 +208,11 @@ class StubBackend:
 def make_success(payload: dict, *, duration_s: float = 0.01) -> ExecutionResult:
     """A clean Phase-B result carrying a contract payload."""
     return ExecutionResult(
-        phase=Phase.EXECUTE, exit_code=0, contract_ok=True,
-        contract_payload=payload, duration_s=duration_s,
+        phase=Phase.EXECUTE,
+        exit_code=0,
+        contract_ok=True,
+        contract_payload=payload,
+        duration_s=duration_s,
     )
 
 
@@ -207,6 +228,11 @@ def make_failure(
     """A failed result. ``error`` (an ErrorRecord) is attached once the classifier
     has run; ``stderr`` is the raw text it will classify."""
     return ExecutionResult(
-        phase=phase, exit_code=exit_code, stderr=stderr,
-        timed_out=timed_out, contract_ok=False, error=error, duration_s=duration_s,
+        phase=phase,
+        exit_code=exit_code,
+        stderr=stderr,
+        timed_out=timed_out,
+        contract_ok=False,
+        error=error,
+        duration_s=duration_s,
     )

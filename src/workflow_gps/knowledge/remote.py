@@ -35,16 +35,50 @@ import threading
 import urllib.error
 import urllib.request
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Protocol, runtime_checkable
 
-from ..models import DependencyHint, ErrorClass, ErrorPattern, KnowledgeSource, RecalcStrategy
+from ..models import (
+    DependencyHint,
+    ErrorClass,
+    ErrorPattern,
+    KnowledgeSource,
+    RecalcStrategy,
+)
+from ..persistence import Migration, migrate
 from .auth import TokenProvider
-from .client import KnowledgeClient, LocalKnowledgeClient
+from .client import LocalKnowledgeClient
 from .scrubbing import is_safe_identifier, is_safe_to_store, scrub
 
 _log = logging.getLogger("workflow_gps.knowledge.remote")
+
+
+def _create_quarantine_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS crowd_quarantine (
+            import_name          TEXT NOT NULL,
+            package_name         TEXT NOT NULL,
+            server_success       INTEGER NOT NULL DEFAULT 0,
+            server_total         INTEGER NOT NULL DEFAULT 0,
+            local_corroborations INTEGER NOT NULL DEFAULT 0,
+            promoted             INTEGER NOT NULL DEFAULT 0,
+            first_seen           TEXT NOT NULL,
+            last_seen            TEXT NOT NULL,
+            PRIMARY KEY (import_name, package_name)
+        )
+        """
+    )
+
+
+# Ordered schema history for the crowd-quarantine ledger. Append-only.
+QUARANTINE_MIGRATIONS: tuple[Migration, ...] = (
+    Migration(
+        up=_create_quarantine_table,
+        down=lambda conn: conn.execute("DROP TABLE IF EXISTS crowd_quarantine"),
+    ),
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -56,15 +90,23 @@ class TransportError(Exception):
 
 @runtime_checkable
 class Transport(Protocol):
-    def request_json(self, method: str, url: str, *, headers: dict | None = None,
-                     json_body: dict | None = None, timeout: float = 10.0) -> dict:
-        ...
+    def request_json(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict | None = None,
+        json_body: dict | None = None,
+        timeout: float = 10.0,
+    ) -> dict: ...
 
 
 class UrllibTransport:
     """Real HTTP transport on the standard library (no third-party deps)."""
 
-    def request_json(self, method, url, *, headers=None, json_body=None, timeout=10.0) -> dict:
+    def request_json(
+        self, method, url, *, headers=None, json_body=None, timeout=10.0
+    ) -> dict:
         data = json.dumps(json_body).encode("utf-8") if json_body is not None else None
         req = urllib.request.Request(url, data=data, method=method)
         req.add_header("Accept", "application/json")
@@ -106,20 +148,6 @@ def _now() -> str:
 class RemoteKnowledgeClient:
     """Crowd-aware knowledge client. Satisfies the KnowledgeClient Protocol."""
 
-    _QUARANTINE_SCHEMA = """
-    CREATE TABLE IF NOT EXISTS crowd_quarantine (
-        import_name          TEXT NOT NULL,
-        package_name         TEXT NOT NULL,
-        server_success       INTEGER NOT NULL DEFAULT 0,
-        server_total         INTEGER NOT NULL DEFAULT 0,
-        local_corroborations INTEGER NOT NULL DEFAULT 0,
-        promoted             INTEGER NOT NULL DEFAULT 0,
-        first_seen           TEXT NOT NULL,
-        last_seen            TEXT NOT NULL,
-        PRIMARY KEY (import_name, package_name)
-    );
-    """
-
     def __init__(
         self,
         config: RemoteConfig,
@@ -140,8 +168,7 @@ class RemoteKnowledgeClient:
         self._qconn = sqlite3.connect(quarantine_db_path, check_same_thread=False)
         self._qconn.row_factory = sqlite3.Row
         with self._qlock:
-            self._qconn.executescript(self._QUARANTINE_SCHEMA)
-            self._qconn.commit()
+            migrate(self._qconn, QUARANTINE_MIGRATIONS, label="crowd_quarantine")
 
         self._upload_q: deque[dict] = deque()
         self._uplock = threading.Lock()
@@ -156,7 +183,9 @@ class RemoteKnowledgeClient:
         if self._thread and self._thread.is_alive():
             return
         self._stop.clear()
-        self._thread = threading.Thread(target=self._loop, name="wfgps-knowledge-sync", daemon=True)
+        self._thread = threading.Thread(
+            target=self._loop, name="wfgps-knowledge-sync", daemon=True
+        )
         self._thread.start()
 
     def _loop(self) -> None:
@@ -175,23 +204,55 @@ class RemoteKnowledgeClient:
         return self._local.get_error_patterns(error_class)
 
     # --- KnowledgeClient: writes (local now, upload best-effort) ------- #
-    def record_dependency_success(self, import_name: str, package_name: str, *, version: str | None = None) -> None:
-        self._local.record_dependency_success(import_name, package_name, version=version)
+    def record_dependency_success(
+        self, import_name: str, package_name: str, *, version: str | None = None
+    ) -> None:
+        self._local.record_dependency_success(
+            import_name, package_name, version=version
+        )
         self._corroborate(import_name, package_name)
-        self._enqueue({"type": "dependency", "import_name": import_name,
-                       "package_name": package_name, "outcome": "success", "version": version})
+        self._enqueue(
+            {
+                "type": "dependency",
+                "import_name": import_name,
+                "package_name": package_name,
+                "outcome": "success",
+                "version": version,
+            }
+        )
 
     def record_dependency_failure(self, import_name: str, package_name: str) -> None:
         self._local.record_dependency_failure(import_name, package_name)
-        self._enqueue({"type": "dependency", "import_name": import_name,
-                       "package_name": package_name, "outcome": "failure", "version": None})
+        self._enqueue(
+            {
+                "type": "dependency",
+                "import_name": import_name,
+                "package_name": package_name,
+                "outcome": "failure",
+                "version": None,
+            }
+        )
 
-    def record_error_pattern(self, error_class: ErrorClass, error_signature: str,
-                             strategy: RecalcStrategy, *, success: bool = True) -> None:
-        self._local.record_error_pattern(error_class, error_signature, strategy, success=success)
-        self._enqueue({"type": "error_pattern", "error_class": error_class.value,
-                       "error_signature": scrub(error_signature), "strategy": strategy.value,
-                       "outcome": "success" if success else "failure"})
+    def record_error_pattern(
+        self,
+        error_class: ErrorClass,
+        error_signature: str,
+        strategy: RecalcStrategy,
+        *,
+        success: bool = True,
+    ) -> None:
+        self._local.record_error_pattern(
+            error_class, error_signature, strategy, success=success
+        )
+        self._enqueue(
+            {
+                "type": "error_pattern",
+                "error_class": error_class.value,
+                "error_signature": scrub(error_signature),
+                "strategy": strategy.value,
+                "outcome": "success" if success else "failure",
+            }
+        )
 
     # --- promotion: local corroboration of a quarantined crowd hint --- #
     def _corroborate(self, import_name: str, package_name: str) -> None:
@@ -227,10 +288,15 @@ class RemoteKnowledgeClient:
                 failure = max(r["server_total"] - r["server_success"], 0)
             else:
                 continue  # quarantined and not opted-in => invisible to the resolver
-            hints.append(DependencyHint(
-                import_name=r["import_name"], package_name=r["package_name"],
-                source=KnowledgeSource.CROWD, success_count=success, failure_count=failure,
-            ))
+            hints.append(
+                DependencyHint(
+                    import_name=r["import_name"],
+                    package_name=r["package_name"],
+                    source=KnowledgeSource.CROWD,
+                    success_count=success,
+                    failure_count=failure,
+                )
+            )
         return hints
 
     # --- upload queue ------------------------------------------------- #
@@ -265,11 +331,13 @@ class RemoteKnowledgeClient:
         headers = self._auth_headers()
         if headers is None:
             return  # keep queue for a later cycle
-        clean = [l for l in pending if self._lesson_is_safe(l)]
+        clean = [lesson for lesson in pending if self._lesson_is_safe(lesson)]
         if clean:
             self._transport.request_json(
-                "POST", f"{self._cfg.base_url}/v1/lessons",
-                headers=headers, json_body={"lessons": clean},
+                "POST",
+                f"{self._cfg.base_url}/v1/lessons",
+                headers=headers,
+                json_body={"lessons": clean},
                 timeout=self._cfg.request_timeout_s,
             )
         # Success (or nothing safe to send): drop exactly what we took.
@@ -281,8 +349,9 @@ class RemoteKnowledgeClient:
     @staticmethod
     def _lesson_is_safe(lesson: dict) -> bool:
         if lesson.get("type") == "dependency":
-            return is_safe_identifier(lesson.get("import_name", "")) and \
-                   is_safe_identifier(lesson.get("package_name", ""))
+            return is_safe_identifier(
+                lesson.get("import_name", "")
+            ) and is_safe_identifier(lesson.get("package_name", ""))
         if lesson.get("type") == "error_pattern":
             return is_safe_to_store(lesson.get("error_signature", ""))
         return False
@@ -292,8 +361,10 @@ class RemoteKnowledgeClient:
         if headers is None:
             return
         data = self._transport.request_json(
-            "GET", f"{self._cfg.base_url}/v1/dependency-hints",
-            headers=headers, timeout=self._cfg.request_timeout_s,
+            "GET",
+            f"{self._cfg.base_url}/v1/dependency-hints",
+            headers=headers,
+            timeout=self._cfg.request_timeout_s,
         )
         for raw in data.get("hints", []):
             self._ingest_crowd_hint(raw)

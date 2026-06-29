@@ -20,7 +20,13 @@ from __future__ import annotations
 
 import logging
 
-from ..cache import NoopScriptCache, ScriptCache, ScriptCacheSignature, make_script_cache_key
+from ..cache import (
+    NoopScriptCache,
+    ScriptCache,
+    ScriptCacheSignature,
+    make_script_cache_key,
+)
+from ..knowledge import KnowledgeClient, NoopKnowledgeClient
 from ..models import (
     ErrorClass,
     ErrorRecord,
@@ -32,8 +38,12 @@ from ..models import (
 from ..routing.gateway import Gateway, GatewayError
 from ..routing.matrix import RoutingMatrix
 from ..routing.prompting import PromptAssembler
-from ..knowledge import KnowledgeClient, NoopKnowledgeClient
-from ..runtime.backend import BackendError, ExecutionBackend, ExecutionRequest, ResourceLimits
+from ..runtime.backend import (
+    BackendError,
+    ExecutionBackend,
+    ExecutionRequest,
+    ResourceLimits,
+)
 from ..runtime.dependency import classify as classify_result
 from ..runtime.dependency import plan_dependency_fix, resolve
 
@@ -81,14 +91,19 @@ class GraphNodes:
         decision = self._matrix.decide(state)
         prompt = self._assembler.build(state)
 
-        cache_key = make_script_cache_key(ScriptCacheSignature(
-            intent=state.intent,
-            prompt_fingerprint=self._assembler.system_prompt_fingerprint,
-            routing_models=(self._matrix.config.fast.model, self._matrix.config.reasoning.model),
-            backend_kind=self._backend_kind,
-            backend_image=self._backend_image,
-            pinned_index_url=self._pinned_index_url,
-        ))
+        cache_key = make_script_cache_key(
+            ScriptCacheSignature(
+                intent=state.intent,
+                prompt_fingerprint=self._assembler.system_prompt_fingerprint,
+                routing_models=(
+                    self._matrix.config.fast.model,
+                    self._matrix.config.reasoning.model,
+                ),
+                backend_kind=self._backend_kind,
+                backend_image=self._backend_image,
+                pinned_index_url=self._pinned_index_url,
+            )
+        )
 
         updates: dict = {
             "current_tier": decision.tier,
@@ -110,24 +125,28 @@ class GraphNodes:
                 cached_tier = ModelTier(cached.tier)
             except ValueError:
                 cached_tier = decision.tier
-            updates.update({
-                "current_tier": cached_tier,
-                "plan": ExecutionPlan(
-                    intent=state.intent,
-                    script=cached.script,
-                    required_dependencies=list(cached.dependencies),
-                    tier=cached_tier,
-                ),
-                "status": GraphStatus.EXECUTING,
-                "cache_hit": True,
-                "cache_kind": "script",
-                "cache_status": "hit",
-            })
+            updates.update(
+                {
+                    "current_tier": cached_tier,
+                    "plan": ExecutionPlan(
+                        intent=state.intent,
+                        script=cached.script,
+                        required_dependencies=list(cached.dependencies),
+                        tier=cached_tier,
+                    ),
+                    "status": GraphStatus.EXECUTING,
+                    "cache_hit": True,
+                    "cache_kind": "script",
+                    "cache_status": "hit",
+                }
+            )
             return updates
         if not self._script_cache_enabled:
             updates["cache_status"] = "disabled"
         else:
-            updates["cache_status"] = "bypassed" if state.cache_status == "failed" else "miss"
+            updates["cache_status"] = (
+                "bypassed" if state.cache_status == "failed" else "miss"
+            )
 
         try:
             result = self._gateway.complete(decision, prompt)
@@ -146,16 +165,20 @@ class GraphNodes:
         carry_deps = list(state.plan.required_dependencies) if state.plan else []
         if result.has_script:
             updates["plan"] = ExecutionPlan(
-                intent=state.intent, script=result.script,
-                required_dependencies=carry_deps, tier=decision.tier,
+                intent=state.intent,
+                script=result.script,
+                required_dependencies=carry_deps,
+                tier=decision.tier,
             )
             updates["status"] = GraphStatus.EXECUTING
         else:
             # No usable code: keep deps, clear the script so the edge routes to recalc,
             # and record a recalculable SYNTHESIS_FAILED (counts toward depth + rut).
             updates["plan"] = ExecutionPlan(
-                intent=state.intent, script=None,
-                required_dependencies=carry_deps, tier=decision.tier,
+                intent=state.intent,
+                script=None,
+                required_dependencies=carry_deps,
+                tier=decision.tier,
             )
             updates["error_history"] = [
                 ErrorRecord.create(
@@ -171,8 +194,10 @@ class GraphNodes:
     def execute(self, state: GraphState) -> dict:
         plan = state.plan
         if plan is None or not plan.script:
-            return {"status": GraphStatus.FAILED,
-                    "failure_reason": "execute reached with no script (routing bug)"}
+            return {
+                "status": GraphStatus.FAILED,
+                "failure_reason": "execute reached with no script (routing bug)",
+            }
 
         request = ExecutionRequest(
             script=plan.script,
@@ -186,10 +211,16 @@ class GraphNodes:
             result = self._backend.run(request)
         except BackendError as exc:  # fatal infrastructure failure -> halt
             logger.error("backend failure: %s", exc)
-            return {"status": GraphStatus.FAILED,
-                    "failure_reason": f"execution backend error: {exc}",
-                    "last_result": None}
-        return {"last_result": result, "backend_calls": 1, "backend_seconds": result.duration_s}
+            return {
+                "status": GraphStatus.FAILED,
+                "failure_reason": f"execution backend error: {exc}",
+                "last_result": None,
+            }
+        return {
+            "last_result": result,
+            "backend_calls": 1,
+            "backend_seconds": result.duration_s,
+        }
 
     # --- classify: label a failure, or pass a success through --------- #
     def classify(self, state: GraphState) -> dict:
@@ -197,8 +228,10 @@ class GraphNodes:
             return {}  # infrastructure failure already terminal; let the edge halt
         result = state.last_result
         if result is None:
-            return {"status": GraphStatus.FAILED,
-                    "failure_reason": "no execution result to classify"}
+            return {
+                "status": GraphStatus.FAILED,
+                "failure_reason": "no execution result to classify",
+            }
         record = classify_result(result, iteration=state.iteration)
         if record is None:
             return {}  # success — finalize sets the final answer
@@ -216,7 +249,11 @@ class GraphNodes:
             "status": GraphStatus.RECALCULATING,
         }
         err = state.latest_error
-        if err is not None and err.error_class is ErrorClass.MISSING_DEPENDENCY and state.plan is not None:
+        if (
+            err is not None
+            and err.error_class is ErrorClass.MISSING_DEPENDENCY
+            and state.plan is not None
+        ):
             resolution = plan_dependency_fix(err, tuple(state.dependency_hints))
             if resolution is not None:
                 deps = list(state.plan.required_dependencies)
@@ -225,7 +262,11 @@ class GraphNodes:
                 updates["plan"] = state.plan.model_copy(
                     update={"required_dependencies": deps, "phase_a_needed": True}
                 )
-                logger.info("recalculate: queued '%s' for %s", resolution.package_name, err.missing_module)
+                logger.info(
+                    "recalculate: queued '%s' for %s",
+                    resolution.package_name,
+                    err.missing_module,
+                )
         return updates
 
     # --- finalize: success ------------------------------------------- #
@@ -233,7 +274,12 @@ class GraphNodes:
         payload = state.last_result.contract_payload if state.last_result else None
         self._learn_from_success(state)
         updates = {"final_answer": payload, "status": GraphStatus.COMPLETED}
-        if self._script_cache_enabled and state.cache_key and state.plan and state.plan.script:
+        if (
+            self._script_cache_enabled
+            and state.cache_key
+            and state.plan
+            and state.plan.script
+        ):
             model = self._matrix.config.tier_config(state.plan.tier).model
             self._script_cache.store_success(
                 state.cache_key,
@@ -254,7 +300,10 @@ class GraphNodes:
         installed = set(state.plan.required_dependencies)
         seen: set[str] = set()
         for record in state.error_history:
-            if record.error_class is not ErrorClass.MISSING_DEPENDENCY or not record.missing_module:
+            if (
+                record.error_class is not ErrorClass.MISSING_DEPENDENCY
+                or not record.missing_module
+            ):
                 continue
             module = record.missing_module
             if module in seen:
@@ -262,7 +311,9 @@ class GraphNodes:
             seen.add(module)
             resolution = resolve(module, tuple(state.dependency_hints))
             if resolution.package_name in installed:
-                self._knowledge.record_dependency_success(module, resolution.package_name)
+                self._knowledge.record_dependency_success(
+                    module, resolution.package_name
+                )
 
     # --- halt: terminal failure with a clear reason ------------------- #
     def halt(self, state: GraphState) -> dict:

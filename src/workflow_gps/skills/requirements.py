@@ -8,10 +8,10 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .models import (
+    SKILL_SCHEMA_VERSION,
     ConstraintSeverity,
     ConstraintSpec,
     ConstraintStatus,
-    SKILL_SCHEMA_VERSION,
 )
 
 

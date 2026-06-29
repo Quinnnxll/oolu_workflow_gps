@@ -139,14 +139,19 @@ future restricted-worker composition.
 
 ## Installation
 
-From the repository root (editable install recommended for development):
+There is one supported install path — an editable install from the repository
+root (a single `pyproject.toml` is canonical; there is no longer a second one
+under `src/`):
 
 ```bash
-pip install -e "src[engine]"
-# add the Docker backend support:
-pip install -e "src[engine,docker]"
-# add dev tooling (pytest, mypy, ruff):
-pip install -e "src[engine,dev]"
+pip install -e ".[engine]"
+```
+
+Optional extras layer on top of the same command:
+
+```bash
+pip install -e ".[engine,docker]"   # add Docker backend support
+pip install -e ".[engine,dev]"      # add dev tooling (pytest, mypy, ruff)
 ```
 
 This exposes the `wfgps` command (equivalent to `python -m workflow_gps.cli`).
@@ -231,10 +236,20 @@ wfgps run "..." --knowledge remote                       # needs WFGPS_KNOWLEDGE
 
 Stored data is scrubbed of secrets/PII before it is ever persisted or uploaded.
 
+## Adapter maturity
+
+Each swappable seam ships several implementations. Which ones are
+production-capable today versus experimental or test-only is documented in
+[docs/ADAPTER_MATURITY.md](docs/ADAPTER_MATURITY.md). In short: the Docker
+backend, the LiteLLM gateway, and the local SQLite stores are the
+production-capable local-alpha path; the subprocess backend, remote knowledge
+client, Telegram channel, and CLI action executor are experimental; in-memory
+and remote-mock stores are test-only.
+
 ## Testing
 
 ```bash
-pip install -e "src[engine,dev]"
+pip install -e ".[engine,dev]"
 pytest
 ```
 

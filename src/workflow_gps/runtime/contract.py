@@ -35,11 +35,13 @@ def shim_source_path() -> Path:
 
 # One compiled matcher for the full BEGIN..END block (non-greedy, dot-matches-newline
 # so multi-line payloads are captured whole).
-_BLOCK_RE = re.compile(re.escape(RESULT_BEGIN) + r"(.*?)" + re.escape(RESULT_END), re.DOTALL)
+_BLOCK_RE = re.compile(
+    re.escape(RESULT_BEGIN) + r"(.*?)" + re.escape(RESULT_END), re.DOTALL
+)
 
 
 class ContractStatus(str, Enum):
-    OK = "ok"        # script delivered an answer
+    OK = "ok"  # script delivered an answer
     ERROR = "error"  # script reported a structured failure (contract still satisfied)
 
 
@@ -48,9 +50,9 @@ class ContractViolation(str, Enum):
     different recalc routes — a truncated block usually means a kill/timeout, while
     invalid JSON usually means the model emitted something it shouldn't have."""
 
-    NO_RESULT_BLOCK = "no_result_block"       # script never called emit_* at all
-    TRUNCATED_BLOCK = "truncated_block"        # BEGIN seen, END missing (killed mid-emit?)
-    INVALID_JSON = "invalid_json"              # block present but not parseable JSON
+    NO_RESULT_BLOCK = "no_result_block"  # script never called emit_* at all
+    TRUNCATED_BLOCK = "truncated_block"  # BEGIN seen, END missing (killed mid-emit?)
+    INVALID_JSON = "invalid_json"  # block present but not parseable JSON
     MALFORMED_ENVELOPE = "malformed_envelope"  # parsed, but wrong shape/version
 
 
@@ -68,7 +70,9 @@ class ContractResult(BaseModel):
     violation: ContractViolation | None = Field(
         default=None, description="Set when found is False; the reason it failed."
     )
-    block_count: int = Field(default=0, description="How many complete blocks were seen.")
+    block_count: int = Field(
+        default=0, description="How many complete blocks were seen."
+    )
     protocol_version: int | None = None
 
     @property
@@ -79,7 +83,9 @@ class ContractResult(BaseModel):
     # --- constructors -------------------------------------------------- #
 
     @classmethod
-    def _violation(cls, reason: ContractViolation, *, block_count: int = 0) -> "ContractResult":
+    def _violation(
+        cls, reason: ContractViolation, *, block_count: int = 0
+    ) -> "ContractResult":
         return cls(found=False, violation=reason, block_count=block_count)
 
     @classmethod
@@ -87,29 +93,40 @@ class ContractResult(BaseModel):
         # Shape/version validation. The shim always writes a well-formed envelope, so
         # any failure here means corruption or a version skew, not a normal outcome.
         if env.get("v") != PROTOCOL_VERSION or "status" not in env:
-            return cls._violation(ContractViolation.MALFORMED_ENVELOPE, block_count=block_count)
+            return cls._violation(
+                ContractViolation.MALFORMED_ENVELOPE, block_count=block_count
+            )
         try:
             status = ContractStatus(env["status"])
         except ValueError:
-            return cls._violation(ContractViolation.MALFORMED_ENVELOPE, block_count=block_count)
+            return cls._violation(
+                ContractViolation.MALFORMED_ENVELOPE, block_count=block_count
+            )
 
         if status is ContractStatus.OK:
             payload = env.get("payload")
             if not isinstance(payload, dict):
-                return cls._violation(ContractViolation.MALFORMED_ENVELOPE, block_count=block_count)
+                return cls._violation(
+                    ContractViolation.MALFORMED_ENVELOPE, block_count=block_count
+                )
             return cls(
-                found=True, status=status, payload=payload,
-                block_count=block_count, protocol_version=PROTOCOL_VERSION,
+                found=True,
+                status=status,
+                payload=payload,
+                block_count=block_count,
+                protocol_version=PROTOCOL_VERSION,
             )
 
         # status == ERROR: a satisfied contract carrying a structured failure.
         err = env.get("error") or {}
         return cls(
-            found=True, status=status,
+            found=True,
+            status=status,
             error_message=err.get("message"),
             error_kind=err.get("kind"),
             error_details=err.get("details"),
-            block_count=block_count, protocol_version=PROTOCOL_VERSION,
+            block_count=block_count,
+            protocol_version=PROTOCOL_VERSION,
         )
 
 
@@ -133,9 +150,13 @@ def parse_stdout(stdout: str) -> ContractResult:
     try:
         env = json.loads(raw)
     except json.JSONDecodeError:
-        return ContractResult._violation(ContractViolation.INVALID_JSON, block_count=block_count)
+        return ContractResult._violation(
+            ContractViolation.INVALID_JSON, block_count=block_count
+        )
     if not isinstance(env, dict):
-        return ContractResult._violation(ContractViolation.MALFORMED_ENVELOPE, block_count=block_count)
+        return ContractResult._violation(
+            ContractViolation.MALFORMED_ENVELOPE, block_count=block_count
+        )
     return ContractResult._from_envelope(env, block_count=block_count)
 
 

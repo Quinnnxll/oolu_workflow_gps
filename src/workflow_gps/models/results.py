@@ -30,8 +30,8 @@ class Phase(str, Enum):
     code runs.
     """
 
-    INSTALL = "install"   # Phase A: network-enabled, pinned index ONLY
-    EXECUTE = "execute"   # Phase B: network fully severed
+    INSTALL = "install"  # Phase A: network-enabled, pinned index ONLY
+    EXECUTE = "execute"  # Phase B: network fully severed
 
 
 class ExecutionResult(BaseModel):
@@ -48,8 +48,12 @@ class ExecutionResult(BaseModel):
 
     # The runtime<->script contract. `contract_payload` is the parsed sentinel JSON
     # block; everything else in stdout is treated as diagnostic noise.
-    contract_ok: bool = Field(default=False, description="A valid sentinel JSON block was parsed.")
-    contract_payload: dict | None = Field(default=None, description="Parsed result block, if any.")
+    contract_ok: bool = Field(
+        default=False, description="A valid sentinel JSON block was parsed."
+    )
+    contract_payload: dict | None = Field(
+        default=None, description="Parsed result block, if any."
+    )
 
     # Populated by the classifier when the run failed. None on a clean run.
     error: ErrorRecord | None = None

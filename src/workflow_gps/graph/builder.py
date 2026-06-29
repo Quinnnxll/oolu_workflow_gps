@@ -94,13 +94,22 @@ class WorkflowGPS:
     ):
         # hint_provider retained for backward compatibility; knowledge supersedes it.
         self._nodes = GraphNodes(
-            gateway=gateway, backend=backend, matrix=matrix, assembler=assembler,
-            limits=limits, pinned_index_url=pinned_index_url, knowledge=knowledge,
-            script_cache=script_cache, backend_kind=backend_kind, backend_image=backend_image,
+            gateway=gateway,
+            backend=backend,
+            matrix=matrix,
+            assembler=assembler,
+            limits=limits,
+            pinned_index_url=pinned_index_url,
+            knowledge=knowledge,
+            script_cache=script_cache,
+            backend_kind=backend_kind,
+            backend_image=backend_image,
         )
         self._router = EdgeRouter(edge_policy)
         # Backstop comfortably above the semantic ceiling (~4 supersteps per recalc).
-        self._recursion_limit = recursion_limit or (self._router.policy.max_recalcs * 6 + 12)
+        self._recursion_limit = recursion_limit or (
+            self._router.policy.max_recalcs * 6 + 12
+        )
         self._checkpointer = checkpointer if checkpointer is not None else MemorySaver()
         self._graph = self._build()
 
@@ -120,10 +129,18 @@ class WorkflowGPS:
         r = self._router
         g.add_edge(START, NODE_PLAN)
         g.add_edge(NODE_PLAN, NODE_SYNTHESIZE)
-        g.add_conditional_edges(NODE_SYNTHESIZE, r.after_synthesis, _identity_map(AFTER_SYNTHESIS_DESTS))
+        g.add_conditional_edges(
+            NODE_SYNTHESIZE, r.after_synthesis, _identity_map(AFTER_SYNTHESIS_DESTS)
+        )
         g.add_edge(NODE_EXECUTE, NODE_CLASSIFY)
-        g.add_conditional_edges(NODE_CLASSIFY, r.after_classify, _identity_map(AFTER_CLASSIFY_DESTS))
-        g.add_conditional_edges(NODE_RECALCULATE, r.after_recalculate, _identity_map(AFTER_RECALCULATE_DESTS))
+        g.add_conditional_edges(
+            NODE_CLASSIFY, r.after_classify, _identity_map(AFTER_CLASSIFY_DESTS)
+        )
+        g.add_conditional_edges(
+            NODE_RECALCULATE,
+            r.after_recalculate,
+            _identity_map(AFTER_RECALCULATE_DESTS),
+        )
         g.add_edge(NODE_FINALIZE, END)
         g.add_edge(NODE_HALT, END)
 

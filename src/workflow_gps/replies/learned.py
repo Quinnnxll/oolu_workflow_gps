@@ -8,12 +8,51 @@ import time
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from ..persistence import Migration, migrate
 from .engine import normalize_message
 from .models import MessageEnvelope
 
 
 def _scope(message: MessageEnvelope) -> str:
     return str(message.metadata.get("reply_scope") or message.channel)
+
+
+def _create_learned_reply_tables(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS learned_replies (
+            scope TEXT NOT NULL,
+            normalized_prompt TEXT NOT NULL,
+            prompt_text TEXT NOT NULL,
+            reply_text TEXT NOT NULL,
+            learned_count INTEGER NOT NULL DEFAULT 1,
+            use_count INTEGER NOT NULL DEFAULT 0,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            PRIMARY KEY (scope, normalized_prompt)
+        );
+        CREATE TABLE IF NOT EXISTS pending_messages (
+            scope TEXT NOT NULL,
+            conversation_id TEXT NOT NULL,
+            normalized_prompt TEXT NOT NULL,
+            prompt_text TEXT NOT NULL,
+            received_at REAL NOT NULL,
+            PRIMARY KEY (scope, conversation_id)
+        );
+        """
+    )
+
+
+def _drop_learned_reply_tables(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        "DROP TABLE IF EXISTS pending_messages; DROP TABLE IF EXISTS learned_replies;"
+    )
+
+
+# Ordered schema history for local learned replies. Append-only.
+MIGRATIONS: tuple[Migration, ...] = (
+    Migration(up=_create_learned_reply_tables, down=_drop_learned_reply_tables),
+)
 
 
 @runtime_checkable
@@ -52,30 +91,8 @@ class LocalLearnedReplyStore:
         self._lock = threading.RLock()
         self._db = sqlite3.connect(db_path, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
-        with self._db:
-            self._db.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS learned_replies (
-                    scope TEXT NOT NULL,
-                    normalized_prompt TEXT NOT NULL,
-                    prompt_text TEXT NOT NULL,
-                    reply_text TEXT NOT NULL,
-                    learned_count INTEGER NOT NULL DEFAULT 1,
-                    use_count INTEGER NOT NULL DEFAULT 0,
-                    created_at REAL NOT NULL,
-                    updated_at REAL NOT NULL,
-                    PRIMARY KEY (scope, normalized_prompt)
-                );
-                CREATE TABLE IF NOT EXISTS pending_messages (
-                    scope TEXT NOT NULL,
-                    conversation_id TEXT NOT NULL,
-                    normalized_prompt TEXT NOT NULL,
-                    prompt_text TEXT NOT NULL,
-                    received_at REAL NOT NULL,
-                    PRIMARY KEY (scope, conversation_id)
-                );
-                """
-            )
+        with self._lock:
+            migrate(self._db, MIGRATIONS, label="learned_replies")
 
     def lookup(self, message: MessageEnvelope) -> str | None:
         prompt = normalize_message(message.text)

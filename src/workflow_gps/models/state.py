@@ -35,7 +35,7 @@ from .results import ExecutionResult
 class ModelTier(str, Enum):
     """The two-tier routing matrix."""
 
-    FAST = "fast"            # Qwen3.6-35B-A3B — snappy UI, short *stateless* loops
+    FAST = "fast"  # Qwen3.6-35B-A3B — snappy UI, short *stateless* loops
     REASONING = "reasoning"  # Llama 3.3 70B — re-planning when the route breaks
 
 
@@ -58,10 +58,12 @@ class ExecutionPlan(BaseModel):
     script: str | None = None
     rationale: str | None = None
     required_dependencies: list[str] = Field(
-        default_factory=list, description="Package names (already resolved from import names)."
+        default_factory=list,
+        description="Package names (already resolved from import names).",
     )
     phase_a_needed: bool = Field(
-        default=False, description="Whether a network-enabled install window is required first."
+        default=False,
+        description="Whether a network-enabled install window is required first.",
     )
     tier: ModelTier = ModelTier.FAST
 
@@ -87,7 +89,9 @@ class GraphState(BaseModel):
     last_result: ExecutionResult | None = None
 
     # --- Append-only telemetry (trap #4). Reducer = list concatenation. ---
-    error_history: Annotated[list[ErrorRecord], operator.add] = Field(default_factory=list)
+    error_history: Annotated[list[ErrorRecord], operator.add] = Field(
+        default_factory=list
+    )
 
     # --- Loop control: escalation + rut detection ---
     recalc_count: int = 0
@@ -142,7 +146,9 @@ class GraphState(BaseModel):
         latest = self.latest_error
         if latest is None:
             return 0
-        return sum(1 for record in self.error_history if record.signature == latest.signature)
+        return sum(
+            1 for record in self.error_history if record.signature == latest.signature
+        )
 
     def should_escalate(self, max_fast_recalcs: int = 3) -> bool:
         """Promote FAST -> REASONING on loop depth OR a detected rut.
@@ -153,4 +159,6 @@ class GraphState(BaseModel):
         """
         if self.current_tier is ModelTier.REASONING:
             return False
-        return self.recalc_count >= max_fast_recalcs or self.repeated_failure_count() >= 2
+        return (
+            self.recalc_count >= max_fast_recalcs or self.repeated_failure_count() >= 2
+        )

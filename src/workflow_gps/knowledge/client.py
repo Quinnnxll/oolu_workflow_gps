@@ -29,9 +29,55 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from ..models import DependencyHint, ErrorClass, ErrorPattern, KnowledgeSource, RecalcStrategy
+from ..models import (
+    DependencyHint,
+    ErrorClass,
+    ErrorPattern,
+    KnowledgeSource,
+    RecalcStrategy,
+)
+from ..persistence import Migration, migrate
 from .scrubbing import is_safe_identifier, is_safe_to_store, scrub
 from .signature import error_pattern_key
+
+
+def _create_knowledge_tables(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS dependency_hints (
+            import_name    TEXT NOT NULL,
+            package_name   TEXT NOT NULL,
+            pinned_version TEXT,
+            success_count  INTEGER NOT NULL DEFAULT 0,
+            failure_count  INTEGER NOT NULL DEFAULT 0,
+            source         TEXT NOT NULL DEFAULT 'local',
+            last_seen      TEXT NOT NULL,
+            PRIMARY KEY (import_name, package_name)
+        );
+        CREATE TABLE IF NOT EXISTS error_patterns (
+            key            TEXT PRIMARY KEY,
+            error_class    TEXT NOT NULL,
+            error_signature TEXT NOT NULL,
+            strategy       TEXT NOT NULL,
+            success_count  INTEGER NOT NULL DEFAULT 0,
+            failure_count  INTEGER NOT NULL DEFAULT 0,
+            source         TEXT NOT NULL DEFAULT 'local',
+            last_seen      TEXT NOT NULL
+        );
+        """
+    )
+
+
+def _drop_knowledge_tables(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        "DROP TABLE IF EXISTS error_patterns; DROP TABLE IF EXISTS dependency_hints;"
+    )
+
+
+# Ordered schema history for the local knowledge store. Append-only.
+KNOWLEDGE_MIGRATIONS: tuple[Migration, ...] = (
+    Migration(up=_create_knowledge_tables, down=_drop_knowledge_tables),
+)
 
 
 @runtime_checkable
@@ -40,11 +86,21 @@ class KnowledgeClient(Protocol):
 
     def all_dependency_hints(self) -> list[DependencyHint]: ...
     def get_dependency_hints(self, import_name: str) -> list[DependencyHint]: ...
-    def record_dependency_success(self, import_name: str, package_name: str, *, version: str | None = None) -> None: ...
-    def record_dependency_failure(self, import_name: str, package_name: str) -> None: ...
+    def record_dependency_success(
+        self, import_name: str, package_name: str, *, version: str | None = None
+    ) -> None: ...
+    def record_dependency_failure(
+        self, import_name: str, package_name: str
+    ) -> None: ...
     def get_error_patterns(self, error_class: ErrorClass) -> list[ErrorPattern]: ...
-    def record_error_pattern(self, error_class: ErrorClass, error_signature: str,
-                             strategy: RecalcStrategy, *, success: bool = True) -> None: ...
+    def record_error_pattern(
+        self,
+        error_class: ErrorClass,
+        error_signature: str,
+        strategy: RecalcStrategy,
+        *,
+        success: bool = True,
+    ) -> None: ...
     def close(self) -> None: ...
 
 
@@ -57,7 +113,9 @@ class NoopKnowledgeClient:
     def get_dependency_hints(self, import_name: str) -> list[DependencyHint]:
         return []
 
-    def record_dependency_success(self, import_name: str, package_name: str, *, version: str | None = None) -> None:
+    def record_dependency_success(
+        self, import_name: str, package_name: str, *, version: str | None = None
+    ) -> None:
         return None
 
     def record_dependency_failure(self, import_name: str, package_name: str) -> None:
@@ -66,8 +124,14 @@ class NoopKnowledgeClient:
     def get_error_patterns(self, error_class: ErrorClass) -> list[ErrorPattern]:
         return []
 
-    def record_error_pattern(self, error_class: ErrorClass, error_signature: str,
-                             strategy: RecalcStrategy, *, success: bool = True) -> None:
+    def record_error_pattern(
+        self,
+        error_class: ErrorClass,
+        error_signature: str,
+        strategy: RecalcStrategy,
+        *,
+        success: bool = True,
+    ) -> None:
         return None
 
     def close(self) -> None:
@@ -88,36 +152,12 @@ def _parse_ts(value: str) -> datetime:
 class LocalKnowledgeClient:
     """SQLite-backed local memory. Persists across sessions; safe even single-user."""
 
-    _SCHEMA = """
-    CREATE TABLE IF NOT EXISTS dependency_hints (
-        import_name    TEXT NOT NULL,
-        package_name   TEXT NOT NULL,
-        pinned_version TEXT,
-        success_count  INTEGER NOT NULL DEFAULT 0,
-        failure_count  INTEGER NOT NULL DEFAULT 0,
-        source         TEXT NOT NULL DEFAULT 'local',
-        last_seen      TEXT NOT NULL,
-        PRIMARY KEY (import_name, package_name)
-    );
-    CREATE TABLE IF NOT EXISTS error_patterns (
-        key            TEXT PRIMARY KEY,
-        error_class    TEXT NOT NULL,
-        error_signature TEXT NOT NULL,
-        strategy       TEXT NOT NULL,
-        success_count  INTEGER NOT NULL DEFAULT 0,
-        failure_count  INTEGER NOT NULL DEFAULT 0,
-        source         TEXT NOT NULL DEFAULT 'local',
-        last_seen      TEXT NOT NULL
-    );
-    """
-
     def __init__(self, db_path: str | Path = ":memory:"):
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         with self._lock:
-            self._conn.executescript(self._SCHEMA)
-            self._conn.commit()
+            migrate(self._conn, KNOWLEDGE_MIGRATIONS, label="knowledge")
 
     # --- dependency hints --------------------------------------------- #
     def all_dependency_hints(self) -> list[DependencyHint]:
@@ -132,13 +172,19 @@ class LocalKnowledgeClient:
             ).fetchall()
         return [self._row_to_hint(r) for r in rows]
 
-    def record_dependency_success(self, import_name: str, package_name: str, *, version: str | None = None) -> None:
-        self._record_dependency(import_name, package_name, version=version, success=True)
+    def record_dependency_success(
+        self, import_name: str, package_name: str, *, version: str | None = None
+    ) -> None:
+        self._record_dependency(
+            import_name, package_name, version=version, success=True
+        )
 
     def record_dependency_failure(self, import_name: str, package_name: str) -> None:
         self._record_dependency(import_name, package_name, version=None, success=False)
 
-    def _record_dependency(self, import_name: str, package_name: str, *, version: str | None, success: bool) -> None:
+    def _record_dependency(
+        self, import_name: str, package_name: str, *, version: str | None, success: bool
+    ) -> None:
         # Strict identifier gate: a mapping field can never carry a path or secret.
         if not (is_safe_identifier(import_name) and is_safe_identifier(package_name)):
             return
@@ -157,7 +203,16 @@ class LocalKnowledgeClient:
                     pinned_version = COALESCE(excluded.pinned_version, pinned_version),
                     last_seen = excluded.last_seen
                 """,
-                (import_name, package_name, version, s_inc, f_inc, _now(), s_inc, f_inc),
+                (
+                    import_name,
+                    package_name,
+                    version,
+                    s_inc,
+                    f_inc,
+                    _now(),
+                    s_inc,
+                    f_inc,
+                ),
             )
             self._conn.commit()
 
@@ -177,12 +232,19 @@ class LocalKnowledgeClient:
     def get_error_patterns(self, error_class: ErrorClass) -> list[ErrorPattern]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM error_patterns WHERE error_class = ?", (error_class.value,)
+                "SELECT * FROM error_patterns WHERE error_class = ?",
+                (error_class.value,),
             ).fetchall()
         return [self._row_to_pattern(r) for r in rows]
 
-    def record_error_pattern(self, error_class: ErrorClass, error_signature: str,
-                             strategy: RecalcStrategy, *, success: bool = True) -> None:
+    def record_error_pattern(
+        self,
+        error_class: ErrorClass,
+        error_signature: str,
+        strategy: RecalcStrategy,
+        *,
+        success: bool = True,
+    ) -> None:
         # Error signatures are already normalized, but scrub again as a hard gate and
         # refuse to store anything that still looks secret-bearing.
         signature = scrub(error_signature)
@@ -202,7 +264,17 @@ class LocalKnowledgeClient:
                     strategy = excluded.strategy,
                     last_seen = excluded.last_seen
                 """,
-                (key, error_class.value, signature, strategy.value, s_inc, f_inc, _now(), s_inc, f_inc),
+                (
+                    key,
+                    error_class.value,
+                    signature,
+                    strategy.value,
+                    s_inc,
+                    f_inc,
+                    _now(),
+                    s_inc,
+                    f_inc,
+                ),
             )
             self._conn.commit()
 

@@ -11,9 +11,14 @@ import shutil
 
 import pytest
 
-from workflow_gps.models import ErrorClass, ErrorRecord, ExecutionResult, Phase
-from workflow_gps.runtime.backend import ExecutionRequest, StubBackend, make_failure, make_success
+from workflow_gps.models import ErrorClass, ErrorRecord, ExecutionResult
 from workflow_gps.routing.gateway import FakeGateway
+from workflow_gps.runtime.backend import (
+    ExecutionRequest,
+    StubBackend,
+    make_failure,
+    make_success,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -67,7 +72,9 @@ def missing_dep_result(module: str) -> ExecutionResult:
         exception_type="ModuleNotFoundError",
         missing_module=module,
     )
-    return make_failure(stderr=f"ModuleNotFoundError: No module named '{module}'", error=rec)
+    return make_failure(
+        stderr=f"ModuleNotFoundError: No module named '{module}'", error=rec
+    )
 
 
 @pytest.fixture
@@ -83,7 +90,9 @@ def heal_backend():
     """A StubBackend factory: fails with `module` missing until `package` is in the
     request's dependencies, then succeeds. Returns (backend, builder)."""
 
-    def build(module: str, package: str, *, payload=None, attempts: int = 4) -> StubBackend:
+    def build(
+        module: str, package: str, *, payload=None, attempts: int = 4
+    ) -> StubBackend:
         def factory(req: ExecutionRequest) -> ExecutionResult:
             if package in req.dependencies:
                 return make_success(payload or {"ok": True})

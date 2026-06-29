@@ -12,7 +12,6 @@ import pytest
 
 from workflow_gps.config import Settings, build_workflow_gps
 from workflow_gps.routing.gateway import FakeGateway
-from workflow_gps.runtime.backend import ResourceLimits
 from workflow_gps.runtime.isolation import SubprocessBackend
 
 pytestmark = [pytest.mark.slow, pytest.mark.needs_uv, pytest.mark.needs_langgraph]
@@ -27,8 +26,10 @@ emit_result({"slug": slugify.slugify("Hello, World!  Workflow-GPS rocks")})
 def test_real_dependency_self_heal():
     engine = build_workflow_gps(
         Settings(),
-        gateway=FakeGateway([SCRIPT]),          # one synthesis; heal must re-run, not re-synthesize
-        backend=SubprocessBackend(),            # real uv install + execution
+        gateway=FakeGateway(
+            [SCRIPT]
+        ),  # one synthesis; heal must re-run, not re-synthesize
+        backend=SubprocessBackend(),  # real uv install + execution
     )
     # Tighten timeouts a touch via a fresh limits object on the settings path is
     # unnecessary here; defaults (120s install / 30s exec) are plenty.

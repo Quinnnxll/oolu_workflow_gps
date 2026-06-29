@@ -1,6 +1,6 @@
 [project]
 name = "workflow-gps"
-version = "0.1.0"
+version = "0.2.0"
 description = "A real-time navigation engine for local LLM agentic workflows."
 requires-python = ">=3.11"
 dependencies = [
@@ -10,10 +10,15 @@ dependencies = [
     "truststore>=0.10.4",
 ]
 
-# Layer dependencies (LangGraph, LiteLLM, docker SDK) are added as each module
-# is built, to keep the install surface honest about what is actually wired up.
+# Layer dependencies (LangGraph, LiteLLM, docker SDK) live behind extras so the
+# base install stays honest about what is actually wired up.
 [project.optional-dependencies]
+engine = ["langgraph>=0.2", "litellm>=1.40"]
+docker = ["docker>=7.0"]
 dev = ["pytest>=8.0", "mypy>=1.8", "ruff>=0.3"]
+
+[project.scripts]
+wfgps = "workflow_gps.cli:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -21,6 +26,16 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/workflow_gps"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+extend-exclude = ["docker"]
+
+[tool.ruff.lint]
+# Correctness lints (pyflakes/pycodestyle) plus import sorting. Line-length style
+# is owned by `ruff format`, so E501 is intentionally not enforced here.
+select = ["E4", "E7", "E9", "F", "W", "I"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
