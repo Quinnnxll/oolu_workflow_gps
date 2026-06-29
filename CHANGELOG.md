@@ -4,6 +4,28 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Durable runtime (`codex/durable-runtime`).
+
+- Added `workflow_gps.durable`: a restart-safe, multi-process workflow runtime
+  behind deployment-neutral ports, with a versioned local SQLite adapter (the same
+  table/lease/idempotency contract a PostgreSQL deployment implements).
+- Added a durable task queue with leases, heartbeats, cancellation, retry with
+  backoff, dead-lettering, and expired-lease reclaim; idempotent enqueue.
+- Added an idempotency ledger so every externally visible mutation runs at most
+  once, a transactional outbox (events/notifications staged in the same
+  transaction as the state change) with an at-least-once relay, and a hash-linked,
+  tamper-evident audit log that implements the `EventSink` port.
+- Added durable run-state checkpoints and domain record stores (routes, accounts,
+  approvals, incidents, semantic evidence, execution outcomes), content-addressed
+  filesystem object storage for large artifacts, and backup/restore/retention/
+  deletion workflows.
+- Added `DurableWorkflowService` tying it together: a checkpoint and its
+  announcement commit atomically; a crashed worker's task is reclaimed and
+  re-driven from the last checkpoint without duplicating effects.
+- Added tests proving restart loses or duplicates nothing (lease reclaim plus
+  idempotent re-drive) and that approval/incident/audit records reconstruct the
+  complete, verifiable execution history from storage alone.
+
 Unified orchestrator (`codex/unified-orchestrator`). See ADR-0002.
 
 - Added `workflow_gps.orchestrator`: one deterministic, resumable runtime that

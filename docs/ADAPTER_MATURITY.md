@@ -72,6 +72,23 @@ ADR-0002); each is the seam where a richer implementation lands on a later branc
 | `StaticIntaker` | `orchestrator/adapters.py` | Test-only | Returns a pre-built brief. Natural-language intake is a model-backed adapter on a later branch. |
 | `InMemoryRunStateStore` | `orchestrator/store.py` | Test-only | Non-durable (still serializes through JSON). |
 
+## Durable runtime (`durable/`)
+
+The durability *semantics* — leased queue, idempotency ledger, transactional
+outbox, hash-linked audit, content-addressed artifacts — are contract-tested and
+production-shaped. They ship today as a **local SQLite + filesystem** adapter,
+which is genuinely restart-safe for a single-host deployment; the multi-process,
+multi-host production target is a PostgreSQL + object-store adapter implementing
+the same ports.
+
+| Adapter | Module | Maturity | Notes |
+| --- | --- | --- | --- |
+| `DurableConnection` / `DurableTaskQueue` / `IdempotencyLedger` / `TransactionalOutbox` / `DurableAuditLog` | `durable/` | Production-capable (single host) | Versioned SQLite; leases/heartbeats/retry; exactly-once effects; tamper-evident audit. Single-writer concurrency only. |
+| `DurableRunStateStore` / `DurableRecordStore` | `durable/records.py` | Production-capable (single host) | Durable checkpoints and domain records for history reconstruction. |
+| `FilesystemArtifactStore` | `durable/artifacts.py` | Production-capable (single host) | Content-addressed local object storage; an S3/GCS adapter is the multi-host target. |
+| `DurableWorkflowService` | `durable/service.py` | Experimental | Restart-safe orchestration wrapper; sync and queue-driven modes are tested, but production hardening (back-pressure, multi-worker fairness) is pending. |
+| PostgreSQL + object-store adapter | — | Not implemented | The multi-process production target for every port above; scoped to deployment. |
+
 ## Provider credential adapters
 
 There are **no production provider authorization adapters yet** (Google OIDC,

@@ -161,6 +161,28 @@ wfgps workflow-status RUN_ID              # phase, pending pause, and history
 wfgps workflow-status RUN_ID --json       # the full serialized run state
 ```
 
+## Durable runtime
+
+`workflow_gps.durable` makes long-running workflows safe across restarts and
+multiple workers. It is built from deployment-neutral ports with a versioned local
+SQLite + filesystem adapter today; the same contract is what a PostgreSQL +
+object-store deployment implements in production.
+
+- **Durable task queue** — leases, heartbeats, cancellation, retry with backoff,
+  dead-lettering, and expired-lease reclaim. Idempotent enqueue.
+- **Idempotency ledger** — every externally visible mutation runs at most once, so
+  re-driving a task after a crash never duplicates its effects.
+- **Transactional outbox** — events/notifications are staged in the *same*
+  transaction as the state change and delivered at-least-once by a relay.
+- **Hash-linked audit log** — append-only and tamper-evident; reconstructs and
+  verifies the complete execution history.
+- **Object storage** — content-addressed local blobs for large evidence/artifacts.
+- **Backup, restore, retention, deletion** — operational data workflows.
+
+`DurableWorkflowService` ties these to the orchestrator: a run-state checkpoint and
+its announcement commit atomically, and a crashed worker's task is reclaimed and
+re-driven from the last checkpoint without losing or duplicating work.
+
 ## Requirements
 
 - Python **3.11+**
