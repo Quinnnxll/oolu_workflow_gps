@@ -4,6 +4,25 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Identity and RBAC (`codex/identity-rbac`).
+
+- Added `workflow_gps.identity`: enforceable identity and authority replacing the
+  simulation-only seams.
+- Validate OIDC assertions against configured providers (issuer, audience, expiry,
+  not-before; `alg: none` and algorithm-confusion rejected) behind a pluggable
+  `SignatureVerifier` port — a stdlib HMAC verifier ships for local/test use; a
+  JWKS-backed asymmetric verifier is the production adapter.
+- Added tenant, organization, membership, group, role, and authority-grant records
+  in a versioned, tenant-isolated SQLite store; every query is tenant-scoped.
+- Derive reviewer/approver authority from stored grants and group roles, never from
+  token text; `IdentityApprovalAuthority` mints an `ApprovalRecord` only from an
+  authorized, verified session.
+- Added service and device identities, server-issued sessions with expiry and
+  revocation, and step-up authentication via authentication-assurance levels.
+- Added policy tests for cross-tenant access, expired grants, self-approval,
+  confused-deputy scope mismatch, step-up, and session expiry/revocation — proving
+  no caller can self-verify an identity, self-assign a role, or reach another tenant.
+
 Durable runtime (`codex/durable-runtime`).
 
 - Added `workflow_gps.durable`: a restart-safe, multi-process workflow runtime

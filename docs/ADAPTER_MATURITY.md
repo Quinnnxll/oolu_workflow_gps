@@ -89,6 +89,21 @@ the same ports.
 | `DurableWorkflowService` | `durable/service.py` | Experimental | Restart-safe orchestration wrapper; sync and queue-driven modes are tested, but production hardening (back-pressure, multi-worker fairness) is pending. |
 | PostgreSQL + object-store adapter | — | Not implemented | The multi-process production target for every port above; scoped to deployment. |
 
+## Identity and RBAC (`identity/`)
+
+Identity is established only from a signature-verified OIDC assertion turned into
+an expiring, revocable session; authority is derived from stored tenant/role/grant
+records (never token text); every store query is tenant-scoped. The model and
+policy engine are contract-tested. The token *signature* verifier is the seam where
+production crypto lands.
+
+| Adapter | Module | Maturity | Notes |
+| --- | --- | --- | --- |
+| `OidcValidator` / `SessionManager` / `AuthorityResolver` / `IdentityStore` | `identity/` | Production-capable (logic) | Claim validation, tenant isolation, role/grant resolution, step-up, expiry/revocation — all tested. |
+| `IdentityApprovalAuthority` | `identity/service.py` | Production-capable (local) | Mints an `ApprovalRecord` only from an authorized, verified session. |
+| `Hs256Verifier` / `Hs256Signer` | `identity/tokens.py` | Test-only / local-symmetric | Stdlib HMAC. Real IdPs sign asymmetrically; do not use HS256 for production identity. |
+| JWKS asymmetric verifier (RS256/ES256) | — | Not implemented | The production `SignatureVerifier` adapter (optional crypto dependency); the validation logic is unchanged. |
+
 ## Provider credential adapters
 
 There are **no production provider authorization adapters yet** (Google OIDC,

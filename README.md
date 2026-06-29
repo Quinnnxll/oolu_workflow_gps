@@ -183,6 +183,27 @@ object-store deployment implements in production.
 its announcement commit atomically, and a crashed worker's task is reclaimed and
 re-driven from the last checkpoint without losing or duplicating work.
 
+## Identity and RBAC
+
+`workflow_gps.identity` makes identity and authority enforceable rather than
+simulated. Three rules are structural:
+
+- **Identity comes only from a verified assertion.** An OIDC token is validated
+  against a configured provider (issuer, audience, expiry, not-before; `alg: none`
+  and algorithm confusion rejected) and turned into an expiring, revocable session.
+  A caller cannot self-verify by asserting claims.
+- **Authority comes from stored grants, not token text.** Reviewer/approver
+  permissions are derived from tenant-scoped role and authority-grant records. A
+  token that claims a role grants nothing without a stored grant.
+- **Tenants are isolated.** Every store query is tenant-scoped; cross-tenant access
+  raises `CrossTenantError`.
+
+Approvals are minted only from an authorized session (`IdentityApprovalAuthority`),
+with self-approval, expired grants, confused-deputy scope mismatches, and step-up
+(authentication-assurance) all enforced. The token signature verifier is pluggable:
+a stdlib HMAC verifier ships for local/test use, and a JWKS-backed asymmetric
+verifier is the production adapter.
+
 ## Requirements
 
 - Python **3.11+**

@@ -14,6 +14,7 @@ import pytest
 from workflow_gps.cache.store import MIGRATIONS as CACHE_MIGRATIONS
 from workflow_gps.cache.store import LocalScriptCache
 from workflow_gps.durable.connection import DURABLE_MIGRATIONS
+from workflow_gps.identity.store import IDENTITY_MIGRATIONS
 from workflow_gps.knowledge.client import KNOWLEDGE_MIGRATIONS, LocalKnowledgeClient
 from workflow_gps.knowledge.remote import QUARANTINE_MIGRATIONS
 from workflow_gps.orchestrator.store import RUN_STATE_MIGRATIONS
@@ -37,6 +38,7 @@ ALL_SCHEMAS = [
     pytest.param(SKILL_MIGRATIONS, "skills", id="skills"),
     pytest.param(RUN_STATE_MIGRATIONS, "workflow_runs", id="workflow_runs"),
     pytest.param(DURABLE_MIGRATIONS, "durable", id="durable"),
+    pytest.param(IDENTITY_MIGRATIONS, "identity", id="identity"),
 ]
 
 
