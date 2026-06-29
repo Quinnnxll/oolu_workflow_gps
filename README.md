@@ -267,6 +267,30 @@ approvals only through an authorized identity session, so the UI cannot bypass
 backend policy; and no view ever carries a provider secret. The GUI and the
 loopback transport are the remaining product layer built on this service.
 
+## HTTP gateway
+
+`workflow_gps.gateway` is a private, tenant-aware HTTP control-plane prototype,
+written as a transport-agnostic application over `Request`/`Response` (a WSGI/ASGI
+binding is the production seam) on top of the durable runtime:
+
+```text
+HTTP API -> OIDC auth + tenant RBAC -> durable transaction/outbox + queue
+-> isolated worker -> event stream / status + SSE API
+```
+
+- Versioned REST surface (`/v1`) for runs, questions, routes, approvals, incidents,
+  provider connections, and feedback, with a served OpenAPI document.
+- OIDC bearer auth, tenant-aware RBAC, per-tenant quotas and rate limits, and
+  request idempotency (a duplicate submission returns the same run).
+- **Asynchronous submission** — `POST /v1/runs` returns `202` with a run id;
+  progress is read via status, the SSE event stream, or the audit export, so a long
+  run is never a synchronous request.
+- Verified, replay-protected webhooks (HMAC + timestamp tolerance + delivery-id
+  dedupe), pagination, cancellation, security headers, CORS, and metrics.
+
+Because it runs on the durable runtime, two gateway processes over the same
+database share one consistent set of runs, and cross-tenant access is refused.
+
 ## Requirements
 
 - Python **3.11+**

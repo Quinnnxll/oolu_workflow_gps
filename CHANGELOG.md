@@ -4,6 +4,24 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+HTTP gateway (`codex/http-gateway`).
+
+- Added `workflow_gps.gateway`: a private, tenant-aware HTTP control-plane prototype
+  as a transport-agnostic application over `Request`/`Response` (a WSGI/ASGI binding
+  is the production seam), sitting on the durable runtime.
+- Versioned REST surface (`/v1`) for runs/contracts, questions, routes, approvals,
+  incidents, provider connections, and feedback, with a served OpenAPI document.
+- OIDC bearer authentication, tenant-aware RBAC, per-tenant quotas and token-bucket
+  rate limits, and request idempotency (duplicate submissions return one run).
+- Asynchronous run submission (`202` + run id; progress via status, SSE event
+  stream, or audit export) — never a long synchronous request.
+- Verified, replay-protected webhooks (HMAC + timestamp tolerance + delivery-id
+  dedupe), pagination, cancellation, security headers, and CORS; operational
+  metrics endpoint.
+- Added tests for multi-process and cross-tenant behaviour, restart, duplicate
+  submission, rate-limit/quota, RBAC, the full clarification/confirmation/approval
+  flow, and webhook replay.
+
 Desktop shell (`codex/desktop-shell`).
 
 - Added `workflow_gps.desktop`: the local single-user application service

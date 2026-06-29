@@ -121,6 +121,22 @@ the `WorkerExecutor` (a runtime-backend wrapper).
 | `Worker` + `WorkerExecutor` | `worker/worker.py` | Experimental | Verifies, enforces isolation, runs under a timeout. `StubWorkerExecutor` is test-only; a real executor wraps a runtime `ExecutionBackend`. |
 | HMAC lease signing | `worker/leases.py` | Production-capable (first-party) | Symmetric keys are appropriate between a control plane and its own workers; per-worker keys are a natural extension. |
 
+## HTTP gateway (`gateway/`)
+
+A private, tenant-aware control-plane prototype written as a transport-agnostic
+application over `Request`/`Response`, on the durable runtime. Auth, RBAC, quotas,
+rate limits, idempotency, pagination, webhook verification, and the versioned
+contract are contract-tested; the live HTTP server binding and a streaming event
+transport are the production seams.
+
+| Adapter | Module | Maturity | Notes |
+| --- | --- | --- | --- |
+| `GatewayApp` | `gateway/app.py` | Experimental (prototype) | OIDC auth, tenant-scoped RBAC, per-tenant quotas/rate limits, idempotent async submission, pagination, SSE, audit export. Not yet load-hardened. |
+| `WebhookSigner` / `WebhookVerifier` | `gateway/webhooks.py` | Production-capable (logic) | HMAC signing with timestamp tolerance and delivery-id replay protection. |
+| OpenAPI document | `gateway/openapi.py` | Production-capable | Versioned `/v1` contract served at `/v1/openapi.json`. |
+| WSGI/ASGI binding + live SSE transport | — | Not implemented | The production server adapter that maps real HTTP onto `Request`/`Response` and streams events. |
+| PostgreSQL durable backend | — | Not implemented | The gateway runs on the durable runtime; the multi-host production store is the Postgres adapter (see Durable runtime). |
+
 ## Desktop shell (`desktop/`)
 
 `DesktopService` is the local loopback boundary a desktop UI binds to. It exposes
