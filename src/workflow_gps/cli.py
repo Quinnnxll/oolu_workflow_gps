@@ -29,6 +29,7 @@ _DEFAULT_SCRIPT_CACHE_DB = os.path.expanduser("~/.workflow-gps/script-cache.db")
 _DEFAULT_TELEGRAM_OFFSET = os.path.expanduser("~/.workflow-gps/telegram-offset.json")
 _DEFAULT_REPLY_MEMORY_DB = os.path.expanduser("~/.workflow-gps/learned-replies.db")
 _DEFAULT_SKILL_DB = os.path.expanduser("~/.workflow-gps/skills.db")
+_DEFAULT_WORKFLOW_DB = os.path.expanduser("~/.workflow-gps/workflows.db")
 
 
 class _CliError(Exception):
@@ -200,6 +201,23 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="approve this skill's workspace writes",
     )
+
+    workflow_list = sub.add_parser(
+        "workflow-list", help="list orchestrator runs and their phase/pause"
+    )
+    workflow_list.add_argument(
+        "--workflow-db", default=_DEFAULT_WORKFLOW_DB, metavar="PATH"
+    )
+    workflow_list.add_argument("--json", action="store_true")
+
+    workflow_status = sub.add_parser(
+        "workflow-status", help="show one orchestrator run's state and history"
+    )
+    workflow_status.add_argument("run_id")
+    workflow_status.add_argument(
+        "--workflow-db", default=_DEFAULT_WORKFLOW_DB, metavar="PATH"
+    )
+    workflow_status.add_argument("--json", action="store_true")
 
     sub.add_parser("show-config", help="print the effective settings").add_argument(
         "--config", metavar="PATH", help="path to a models.yaml settings file"
@@ -571,6 +589,67 @@ def _cmd_skill_run(args, out) -> int:
     return 0 if outcome.status.value == "succeeded" else 1
 
 
+def _cmd_workflow_list(args, out) -> int:
+    from .orchestrator import LocalRunStateStore
+
+    store = LocalRunStateStore(args.workflow_db)
+    try:
+        runs = store.list()
+    finally:
+        store.close()
+    if args.json:
+        out.write(
+            json.dumps(
+                [
+                    {
+                        "run_id": run.run_id,
+                        "intent": run.intent,
+                        "phase": run.phase.value,
+                        "paused": run.pause.kind.value if run.pause else None,
+                        "updated_at": run.updated_at.isoformat(),
+                    }
+                    for run in runs
+                ],
+                indent=2,
+            )
+            + "\n"
+        )
+    elif not runs:
+        out.write("No workflow runs.\n")
+    else:
+        for run in runs:
+            waiting = f" (paused: {run.pause.kind.value})" if run.pause else ""
+            out.write(f"{run.run_id}  {run.phase.value}{waiting}  {run.intent}\n")
+    return 0
+
+
+def _cmd_workflow_status(args, out) -> int:
+    from .orchestrator import LocalRunStateStore
+
+    store = LocalRunStateStore(args.workflow_db)
+    try:
+        run = store.get(args.run_id)
+    finally:
+        store.close()
+    if run is None:
+        raise _CliError(f"workflow run not found: {args.run_id}")
+    if args.json:
+        out.write(run.model_dump_json(indent=2) + "\n")
+        return 0
+    out.write(f"run    : {run.run_id}\n")
+    out.write(f"intent : {run.intent}\n")
+    out.write(f"phase  : {run.phase.value}\n")
+    if run.pause is not None:
+        out.write(f"paused : {run.pause.kind.value} — {run.pause.prompt}\n")
+    out.write("history:\n")
+    for transition in run.history:
+        out.write(
+            f"  {transition.from_phase.value} -> {transition.to_phase.value}"
+            f"  ({transition.note})\n"
+        )
+    return 0
+
+
 def _version() -> str:
     return __version__
 
@@ -604,6 +683,10 @@ def main(argv: list[str] | None = None, *, builder=None, out=None) -> int:
             return _cmd_skill_record(args, out)
         if args.command == "skill-run":
             return _cmd_skill_run(args, out)
+        if args.command == "workflow-list":
+            return _cmd_workflow_list(args, out)
+        if args.command == "workflow-status":
+            return _cmd_workflow_status(args, out)
         if args.command == "version":
             out.write(f"workflow-gps {_version()}\n")
             return 0

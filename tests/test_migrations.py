@@ -15,6 +15,7 @@ from workflow_gps.cache.store import MIGRATIONS as CACHE_MIGRATIONS
 from workflow_gps.cache.store import LocalScriptCache
 from workflow_gps.knowledge.client import KNOWLEDGE_MIGRATIONS, LocalKnowledgeClient
 from workflow_gps.knowledge.remote import QUARANTINE_MIGRATIONS
+from workflow_gps.orchestrator.store import RUN_STATE_MIGRATIONS
 from workflow_gps.persistence import Migration, SchemaError, migrate, schema_version
 from workflow_gps.replies.learned import MIGRATIONS as REPLY_MIGRATIONS
 from workflow_gps.replies.learned import LocalLearnedReplyStore
@@ -33,6 +34,7 @@ ALL_SCHEMAS = [
     pytest.param(KNOWLEDGE_MIGRATIONS, "knowledge", id="knowledge"),
     pytest.param(QUARANTINE_MIGRATIONS, "crowd_quarantine", id="crowd_quarantine"),
     pytest.param(SKILL_MIGRATIONS, "skills", id="skills"),
+    pytest.param(RUN_STATE_MIGRATIONS, "workflow_runs", id="workflow_runs"),
 ]
 
 

@@ -64,7 +64,7 @@ def test_module_invocation_reports_version():
 def test_module_help_lists_core_commands():
     proc = _run([sys.executable, "-m", "workflow_gps.cli", "--help"])
     assert proc.returncode == 0
-    for command in ("run", "show-config", "version", "skill-list"):
+    for command in ("run", "show-config", "version", "skill-list", "workflow-list"):
         assert command in proc.stdout
 
 

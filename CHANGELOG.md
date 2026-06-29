@@ -2,6 +2,32 @@
 
 All notable changes to Workflow-GPS are documented here.
 
+## Unreleased
+
+Unified orchestrator (`codex/unified-orchestrator`). See ADR-0002.
+
+- Added `workflow_gps.orchestrator`: one deterministic, resumable runtime that
+  drives a workflow through intake, guided clarification, semantic grounding,
+  route optimization, human-control evaluation, confirmation/approval waits,
+  execution, outcome monitoring, automatic recovery or incident escalation, and
+  finalization with route learning.
+- Defined one versioned, serializable run state (`RunState`,
+  `ORCHESTRATOR_SCHEMA_VERSION`) that round-trips losslessly; pause/resume and
+  durability reduce to saving and reloading it.
+- Added pause/resume for clarification, confirmation, approval, and incidents,
+  with deployment-neutral ports and deterministic offline adapters that compose
+  the existing skill core (Requirement and Constraint Compiler, the
+  `ActionExecutor` contract, and `ExecutionOutcome`).
+- Made execution safety a property of the state: the execution phase re-derives a
+  hard preflight guard (requirements resolved, route not excluded, human control
+  satisfied, capabilities available) on every attempt, including post-incident
+  retries, so no path bypasses preflight controls.
+- Added a versioned local run-state store (`workflow_runs`) through the shared
+  migration runner, plus `wfgps workflow-list` / `wfgps workflow-status`.
+- Added end-to-end tests for autonomous, confirmed, dual-approved, recovered, and
+  escalated workflows, full serialization survival across every pause, durable
+  store reopen, and preflight/capability bypass prevention.
+
 ## 0.2.0 - 2026-06-29
 
 Stabilization baseline (`codex/stabilize-v0.2-baseline`).

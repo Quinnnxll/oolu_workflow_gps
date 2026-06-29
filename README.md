@@ -129,6 +129,38 @@ do not match. The local CLI adapter uses `shell=False`, but it is not an OS sand
 allow-listed commands must still be trusted. Untrusted execution belongs in the Docker or
 future restricted-worker composition.
 
+## Unified orchestrator
+
+`workflow_gps.orchestrator` connects the vertical slices into one resumable
+runtime (see [docs/adr/0002-unified-run-state.md](docs/adr/0002-unified-run-state.md)).
+A workflow flows through:
+
+```text
+intake -> guided clarification -> semantic grounding -> route optimization
+-> human-control evaluation -> confirmation or approval wait -> execution
+-> outcome monitoring -> automatic recovery or incident escalation
+-> finalization and route learning
+```
+
+The whole workflow is one versioned, serializable `RunState`. It pauses for
+clarification, confirmation, approval, or an incident and resumes later — even in
+a different process — without losing state, because pause/resume is just saving
+and reloading that object. Execution is gated by a hard preflight guard that is
+re-derived from the recorded decisions on every attempt (including post-incident
+retries), so no path reaches execution without resolved requirements, a
+non-excluded route, satisfied human control, and available capabilities.
+
+Driving a workflow is a library API (`WorkflowOrchestrator.start` / `step` /
+`resume`); the deterministic default stage adapters are offline and compose the
+existing skill core. Natural-language intake and production executors arrive on
+later branches. Durable runs are inspectable from the CLI:
+
+```bash
+wfgps workflow-list                       # runs and their phase / pause
+wfgps workflow-status RUN_ID              # phase, pending pause, and history
+wfgps workflow-status RUN_ID --json       # the full serialized run state
+```
+
 ## Requirements
 
 - Python **3.11+**

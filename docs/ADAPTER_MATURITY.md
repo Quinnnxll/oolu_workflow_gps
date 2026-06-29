@@ -55,6 +55,23 @@ Maturity levels:
 | `RemoteMockSkillStore` / `RemoteMockExecutionStore` | `skills/store.py` | Test-only / simulation | Model a network boundary by storing serialized JSON only. Not a real remote backend. |
 | `CliActionExecutor` | `skills/cli_adapter.py` | Experimental | Runs allow-listed local commands with `shell=False`. **Not an OS sandbox** — allow-listed commands must be trusted. Untrusted execution belongs in the Docker backend or a future restricted worker. |
 
+## Unified orchestrator (`orchestrator/`)
+
+The orchestrator core (`WorkflowOrchestrator`, `RunState`) is
+production-capable for the local single-user alpha: the run state is versioned and
+serializable, and the execution preflight guard is contract-tested. The default
+stage adapters that ship with it are deliberately deterministic and offline (see
+ADR-0002); each is the seam where a richer implementation lands on a later branch.
+
+| Adapter | Module | Maturity | Notes |
+| --- | --- | --- | --- |
+| `WorkflowOrchestrator` / `RunState` | `orchestrator/engine.py`, `state.py` | Production-capable (local) | Versioned, serializable run state; pause/resume; hard preflight guard re-derived on every execution. |
+| `LocalRunStateStore` | `orchestrator/store.py` | Production-capable (local) | Versioned SQLite run-state store via the shared migration runner. |
+| `ActionExecutorRouteRunner` | `orchestrator/adapters.py` | Experimental | Executes a route through the `ActionExecutor` contract; isolation is the executor's responsibility (use the Docker backend for untrusted code). |
+| `RiskBasedHumanControl`, `LeastCostRouteOptimizer`, `CapabilityGrounder`, `StatusOutcomeMonitor`, `BoundedRetryRecovery` | `orchestrator/adapters.py` | Experimental | Deterministic default policies; tunable but not yet hardened for production decisioning. |
+| `StaticIntaker` | `orchestrator/adapters.py` | Test-only | Returns a pre-built brief. Natural-language intake is a model-backed adapter on a later branch. |
+| `InMemoryRunStateStore` | `orchestrator/store.py` | Test-only | Non-durable (still serializes through JSON). |
+
 ## Provider credential adapters
 
 There are **no production provider authorization adapters yet** (Google OIDC,
