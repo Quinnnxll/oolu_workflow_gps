@@ -121,10 +121,24 @@ the `WorkerExecutor` (a runtime-backend wrapper).
 | `Worker` + `WorkerExecutor` | `worker/worker.py` | Experimental | Verifies, enforces isolation, runs under a timeout. `StubWorkerExecutor` is test-only; a real executor wraps a runtime `ExecutionBackend`. |
 | HMAC lease signing | `worker/leases.py` | Production-capable (first-party) | Symmetric keys are appropriate between a control plane and its own workers; per-worker keys are a natural extension. |
 
-## Provider credential adapters
+## Provider adapters (`providers/`)
 
-There are **no production provider authorization adapters yet** (Google OIDC,
-OpenAI project keys, Anthropic enterprise gateway). These are scoped to the
-later `codex/provider-adapters` branch. Today the only model credential path is
-an environment-provided API key consumed by `LiteLLMGateway`; it is never
-written to any persisted record, log, or fixture (see `tests/test_secret_hygiene.py`).
+Provider integrations share one request pipeline (capability discovery, rate
+limits, budgets, request ids, idempotency, retries, error classification) and keep
+credentials in the `SecretVault` — adapters hold references and mint auth headers
+only at call time. Every adapter passes the same
+capability/revocation/idempotency/secret-leakage contract suite. The integration
+*logic* is contract-tested; the seam to the network is the injected `HttpTransport`
+(a real HTTP client in production, a sandbox/remote-mock in tests).
+
+| Adapter | Module | Maturity | Notes |
+| --- | --- | --- | --- |
+| `SecretVault` | `providers/vault.py` | Production-capable (local) | In-memory credential boundary with revocation and redaction; a KMS/secret-manager-backed vault is the production adapter. |
+| `GoogleOAuthAdapter` | `providers/google.py` | Production-capable (logic) | Authorization-code + PKCE, scope mapping, callback validation, exchange, refresh, revocation. Needs a real `HttpTransport` wired in. |
+| `OpenAiAdapter` | `providers/apikey.py` | Production-capable (logic) | API key plus organization/project service-identity headers. |
+| `AnthropicAdapter` | `providers/apikey.py` | Production-capable (logic) | `x-api-key` direct, or `Authorization: Bearer` via the managed enterprise gateway. |
+| `HttpTransport` (real HTTP client) | — | Not implemented | The production transport adapter; an `httpx`/`requests` wrapper. Until wired, adapters run only against an injected sandbox/mock transport. |
+
+The legacy model credential path remains an environment-provided API key consumed
+by `LiteLLMGateway`; it is never written to any persisted record, log, or fixture
+(see `tests/test_secret_hygiene.py`).

@@ -4,6 +4,23 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Provider adapters (`codex/provider-adapters`).
+
+- Added `workflow_gps.providers`: contract-tested provider integrations behind a
+  credential vault boundary.
+- Implemented a Google authorization-code/OIDC adapter (PKCE, scope mapping,
+  callback validation, code exchange, refresh, revocation).
+- Implemented OpenAI (with organization/project service-identity headers) and
+  Anthropic (API-key and managed enterprise gateway) adapters.
+- Added a shared request pipeline: capability discovery, a token-bucket rate
+  limiter, spend budgets, request ids, idempotency keys (with replay caching),
+  retries with classified errors, and HTTP-status → error classification.
+- Kept credentials exclusively in the `SecretVault`; adapters hold references and
+  mint auth headers only at call time, with redaction for logs.
+- Added a single capability/revocation/idempotency/secret-leakage contract suite
+  run against every adapter through an injected sandbox/remote-mock transport, plus
+  per-provider flow, retry, rate-limit, budget, and service-identity tests.
+
 Worker control plane (`codex/worker-control-plane`).
 
 - Added `workflow_gps.worker`: a control plane that does planning and dispatch but

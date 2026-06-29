@@ -225,6 +225,26 @@ verifier is the production adapter.
 Workers also report health/capacity, support cancellation (which revokes the
 lease), enforce a wall-clock timeout, and are quarantined after repeated failures.
 
+## Provider adapters
+
+`workflow_gps.providers` replaces provider simulations with contract-tested
+integrations that all sit behind a credential vault.
+
+- **Google** — authorization-code/OIDC with PKCE: build the consent URL, validate
+  the callback, exchange the code, refresh, and revoke; capabilities map to scopes.
+- **OpenAI** — API key, plus organization/project service-identity headers.
+- **Anthropic** — API key, or the managed enterprise gateway (bearer token).
+- **Shared pipeline** — capability discovery, a token-bucket rate limiter, spend
+  budgets, request ids, idempotency keys (replays are cached, not re-sent), retries
+  with classified errors, and HTTP-status → error classification.
+- **Credentials stay in the vault.** Adapters hold only a `CredentialRef` and mint
+  an auth header at call time; the secret reaches the provider transport and nothing
+  else — not adapter state, audit logs, results, or exceptions.
+
+Every adapter passes one shared contract suite — capability, revocation,
+idempotency, and secret-leakage — run through an injected transport, so a real HTTP
+transport (the one production seam) drops in without changing the adapters.
+
 ## Requirements
 
 - Python **3.11+**
