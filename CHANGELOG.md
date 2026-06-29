@@ -4,6 +4,27 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Worker control plane (`codex/worker-control-plane`).
+
+- Added `workflow_gps.worker`: a control plane that does planning and dispatch but
+  holds **no execution backend and no credentials**, separated from workers that
+  run code.
+- Added signed, expiring, audience-bound, single-use worker task leases (HMAC),
+  verified against a revocation/consumption ledger so lost (forged), duplicated
+  (replayed), expired, or revoked leases cannot execute. The ledger has an
+  in-memory and a durable SQLite implementation (single-use survives restarts).
+- Added an isolation policy: untrusted synthesized code may run only on Docker (or
+  a stronger restricted worker); the subprocess backend is restricted to explicitly
+  trusted local skills. The worker enforces it before executing.
+- Added worker health, capacity, cancellation (revokes the lease), wall-clock
+  timeout, and failure-based quarantine.
+- Added outbound-only local agents for desktop/private-network resources: they poll
+  the control plane (no inbound port) and resolve local credentials themselves, so
+  the control plane never receives them.
+- Added tests proving the two exit-gate guarantees: the control plane never
+  executes or holds credentials, and lost/duplicated/expired/revoked leases cannot
+  execute.
+
 Identity and RBAC (`codex/identity-rbac`).
 
 - Added `workflow_gps.identity`: enforceable identity and authority replacing the

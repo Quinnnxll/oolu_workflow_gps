@@ -204,6 +204,27 @@ with self-approval, expired grants, confused-deputy scope mismatches, and step-u
 a stdlib HMAC verifier ships for local/test use, and a JWKS-backed asymmetric
 verifier is the production adapter.
 
+## Worker control plane
+
+`workflow_gps.worker` separates planning and public APIs from privileged execution.
+
+- **The control plane runs no code and holds no credentials.** It plans and
+  dispatches; workers execute. There is no `execute` method and no backend or
+  secret on the control plane.
+- **Signed, single-use leases authorize execution.** Each task is dispatched with
+  an HMAC-signed, expiring, audience-bound lease verified against a
+  consumption/revocation ledger, so a lost (forged), duplicated (replayed),
+  expired, or revoked lease cannot execute.
+- **Isolation is enforced.** Untrusted synthesized code may run only on Docker (or
+  a stronger restricted worker); the subprocess backend is reserved for explicitly
+  trusted local skills. The worker checks this before running.
+- **Outbound-only local agents** serve desktop and private-network resources: they
+  poll the control plane (no inbound port) and resolve local credentials
+  themselves, so those credentials never reach the control plane.
+
+Workers also report health/capacity, support cancellation (which revokes the
+lease), enforce a wall-clock timeout, and are quarantined after repeated failures.
+
 ## Requirements
 
 - Python **3.11+**

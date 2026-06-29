@@ -104,6 +104,23 @@ production crypto lands.
 | `Hs256Verifier` / `Hs256Signer` | `identity/tokens.py` | Test-only / local-symmetric | Stdlib HMAC. Real IdPs sign asymmetrically; do not use HS256 for production identity. |
 | JWKS asymmetric verifier (RS256/ES256) | — | Not implemented | The production `SignatureVerifier` adapter (optional crypto dependency); the validation logic is unchanged. |
 
+## Worker control plane (`worker/`)
+
+Separates planning/dispatch from privileged execution. The control plane holds no
+backend and no credentials; signed single-use leases authorize execution; workers
+enforce isolation; outbound-only local agents serve desktop/private resources. The
+lease and isolation semantics are contract-tested; the seam to real execution is
+the `WorkerExecutor` (a runtime-backend wrapper).
+
+| Adapter | Module | Maturity | Notes |
+| --- | --- | --- | --- |
+| `ControlPlane` / `LeaseSigner` / `LeaseVerifier` | `worker/` | Production-capable (logic) | Signed, expiring, audience-bound, single-use leases; dispatch with health/capacity/quarantine; cancellation via revocation. |
+| `LocalLeaseLedger` | `worker/ledger.py` | Production-capable (single host) | Durable single-use + revocation; the guarantee survives restarts. |
+| `IsolationPolicy` | `worker/policy.py` | Production-capable | Untrusted code → Docker/restricted-worker only; subprocess → trusted local skills. |
+| `LocalAgent` | `worker/local_agent.py` | Experimental | Outbound-only desktop/private-network agent holding local credentials; transport (HTTP long-poll/SSE) is the production seam. |
+| `Worker` + `WorkerExecutor` | `worker/worker.py` | Experimental | Verifies, enforces isolation, runs under a timeout. `StubWorkerExecutor` is test-only; a real executor wraps a runtime `ExecutionBackend`. |
+| HMAC lease signing | `worker/leases.py` | Production-capable (first-party) | Symmetric keys are appropriate between a control plane and its own workers; per-worker keys are a natural extension. |
+
 ## Provider credential adapters
 
 There are **no production provider authorization adapters yet** (Google OIDC,

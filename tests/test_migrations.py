@@ -26,6 +26,7 @@ from workflow_gps.skills.store import (
     LocalExecutionStore,
     LocalSkillStore,
 )
+from workflow_gps.worker.ledger import WORKER_MIGRATIONS
 
 # Every versioned schema in the project, paired with its migration history. New
 # stores added later must be registered here so the shared invariants below cover
@@ -39,6 +40,7 @@ ALL_SCHEMAS = [
     pytest.param(RUN_STATE_MIGRATIONS, "workflow_runs", id="workflow_runs"),
     pytest.param(DURABLE_MIGRATIONS, "durable", id="durable"),
     pytest.param(IDENTITY_MIGRATIONS, "identity", id="identity"),
+    pytest.param(WORKER_MIGRATIONS, "worker", id="worker"),
 ]
 
 
