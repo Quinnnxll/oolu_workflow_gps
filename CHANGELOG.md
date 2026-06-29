@@ -4,6 +4,24 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Desktop shell (`codex/desktop-shell`).
+
+- Added `workflow_gps.desktop`: the local single-user application service
+  (`DesktopService`) a desktop UI binds to over a loopback boundary, with frozen,
+  secret-free, serializable view-models.
+- Task entry and guided-question views; route preview with cost and exclusion
+  explanations; confirmation/approval/incident inboxes; workflow timeline,
+  cancellation, recovery, and a verifiable audit view.
+- Provider connection management over the credential vault (an OS-keychain vault is
+  the production adapter); Docker/worker health with trusted-vs-untrusted execution
+  labels; offline policy and local data export/deletion.
+- Approvals are minted only from an authorized identity session, and the shell has
+  no execution path, so the UI cannot bypass backend policy; no view ever carries a
+  provider secret.
+- Added tests proving a non-developer can complete, pause, resume, inspect, and
+  recover a workflow through the service alone, and that the UI can neither bypass
+  policy nor expose credentials.
+
 Provider adapters (`codex/provider-adapters`).
 
 - Added `workflow_gps.providers`: contract-tested provider integrations behind a

@@ -245,6 +245,28 @@ Every adapter passes one shared contract suite — capability, revocation,
 idempotency, and secret-leakage — run through an injected transport, so a real HTTP
 transport (the one production seam) drops in without changing the adapters.
 
+## Desktop shell
+
+`workflow_gps.desktop` is the first product surface: a local single-user
+application service (`DesktopService`) that a desktop UI binds to over a loopback
+boundary. The recommended composition is
+
+```text
+desktop UI -> local loopback API -> DesktopService -> unified service
+-> SQLite + filesystem -> OS credential vault -> isolated local worker
+```
+
+It presents every screen as a frozen, secret-free view-model: task entry and
+guided questions, route preview with cost and exclusion explanations,
+confirmation/approval/incident inboxes, workflow timeline, cancellation, recovery,
+and a verifiable audit view, plus provider connection management, Docker/worker
+health with trusted-vs-untrusted labels, offline policy, and local export/deletion.
+
+Two properties are structural: the shell has **no execution path** and routes
+approvals only through an authorized identity session, so the UI cannot bypass
+backend policy; and no view ever carries a provider secret. The GUI and the
+loopback transport are the remaining product layer built on this service.
+
 ## Requirements
 
 - Python **3.11+**

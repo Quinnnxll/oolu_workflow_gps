@@ -121,6 +121,22 @@ the `WorkerExecutor` (a runtime-backend wrapper).
 | `Worker` + `WorkerExecutor` | `worker/worker.py` | Experimental | Verifies, enforces isolation, runs under a timeout. `StubWorkerExecutor` is test-only; a real executor wraps a runtime `ExecutionBackend`. |
 | HMAC lease signing | `worker/leases.py` | Production-capable (first-party) | Symmetric keys are appropriate between a control plane and its own workers; per-worker keys are a natural extension. |
 
+## Desktop shell (`desktop/`)
+
+`DesktopService` is the local loopback boundary a desktop UI binds to. It exposes
+every screen as a frozen, secret-free view-model and routes every action through
+the backend's own gates (orchestrator preflight, durable resume, identity-minted
+approvals). It has no execution path and never surfaces a credential. The service
+and views are contract-tested; the actual GUI and loopback transport are the
+product seams.
+
+| Adapter | Module | Maturity | Notes |
+| --- | --- | --- | --- |
+| `DesktopService` | `desktop/service.py` | Production-capable (local logic) | Task entry, clarification, route preview, inboxes, timeline, cancel, audit, provider connections, worker health, export/deletion — all through backend gates. |
+| View-models | `desktop/views.py` | Production-capable | Frozen, JSON-serializable, secret-free projections. |
+| Desktop UI + loopback transport | — | Not implemented | The GUI (e.g. Tauri/Electron/Qt) and the loopback API/named-pipe binding are the product surface built on this service. |
+| OS credential vault | `providers/vault.py` (stand-in) | Experimental | The shell uses the in-memory `SecretVault`; an OS-keychain-backed vault is the production adapter. |
+
 ## Provider adapters (`providers/`)
 
 Provider integrations share one request pipeline (capability discovery, rate
