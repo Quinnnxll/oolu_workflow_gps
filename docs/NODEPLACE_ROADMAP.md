@@ -1,4 +1,4 @@
-# OoLu Workflow Reward Marketplace — design, formula, and version-goal plan
+# OoLu Workflow Reward Nodeplace — design, formula, and version-goal plan
 
 Status: Draft for planning. Owner: OoLu. Builds on the v0.2 backend
 (orchestrator, durable runtime, identity/RBAC, worker control plane, provider
@@ -9,19 +9,31 @@ math works**, and **the order we build it in**. Each milestone has a *Goal
 Adherence* checklist with binary, testable criteria. Do not advance a version
 until every box in its adherence checklist is true.
 
+## 0. Terminology
+
+- **Nodeplace** — the two-sided venue where contributed workflows are discovered
+  and run.
+- **Node** — a contributed (published) workflow listed on the Nodeplace. A node is
+  a sanitized, secret-free skill artifact.
+- **Noder** — a person who contributes nodes and earns on their verified
+  successful use.
+- **Consumer** — a person who runs a node to get work done.
+- **Publish / contribute** — the act of a noder putting a node on the Nodeplace
+  (opt-in, revocable).
+
 ---
 
 ## 1. Product thesis
 
 Users teach OoLu repetitive work as **workflows (skills)**. By default a workflow
 is **private and stored locally** — OoLu automates the owner's own repetitive work
-and nothing leaves the device. A user may **opt in to publish** a workflow to the
-marketplace. When another user runs a published workflow and it **succeeds**, the
-publisher earns a share of the commission.
+and nothing leaves the device. A user may **opt in to contribute** a workflow to
+the Nodeplace as a **node**. When another user runs a node and it **succeeds**, the
+**noder** earns a share of the commission.
 
 Two sides of one market:
-- **Publishers** supply reusable workflows and earn on verified successful use.
-- **Consumers** run workflows to get work done and pay per successful use (or via a
+- **Noders** supply reusable nodes and earn on verified successful use.
+- **Consumers** run nodes to get work done and pay per successful use (or via a
   plan).
 
 ---
@@ -30,11 +42,11 @@ Two sides of one market:
 
 These are the contract. A change that violates one is a release blocker.
 
-1. **Private by default.** Publishing is explicit and revocable. A private
+1. **Private by default.** Contributing is explicit and revocable. A private
    workflow's definition and data never leave the owner's storage.
-2. **Secrets never leave the vault.** A published workflow is a *sanitized* skill
-   (parameters, actions, constraints) — credentials are references only, scrubbed
-   by the existing gate. (`knowledge/scrubbing.py`, `providers/vault.py`.)
+2. **Secrets never leave the vault.** A node is a *sanitized* skill (parameters,
+   actions, constraints) — credentials are references only, scrubbed by the
+   existing gate. (`knowledge/scrubbing.py`, `providers/vault.py`.)
 3. **Commission only on platform-verified success.** Earnings accrue from the
    durable, hash-linked **audit log** + **execution outcomes** produced by
    **platform workers** — never from client-reported results. (`durable/audit.py`,
@@ -63,9 +75,9 @@ These are the contract. A change that violates one is a release blocker.
 | `C_p` | Pass-through provider/compute cost attributable to that execution (LLM tokens, sandbox compute) | $0.08 |
 | `N` | **Net contribution** of the execution, `N = max(0, G − C_p)` | $0.42 |
 | `ρ` (rho) | Platform commission rate on net contribution | 0.30 |
-| `σ` (sigma) | Publisher share rate, `σ = 1 − ρ` | 0.70 |
-| `w_i` | Attribution weight of publisher *i* in a multi-skill route | 2 of 3 |
-| `μ` (mu) | Optional policy multiplier for publisher *i* (reputation/promo), `0 ≤ μ ≤ μ_max` | 1.00 |
+| `σ` (sigma) | Noder share rate, `σ = 1 − ρ` | 0.70 |
+| `w_i` | Attribution weight of noder *i* in a multi-node route | 2 of 3 |
+| `μ` (mu) | Optional policy multiplier for noder *i* (reputation/promo), `0 ≤ μ ≤ μ_max` | 1.00 |
 | `H` | Holdback period before earnings become payable | 14 days |
 | `R` | Reserve fraction held against chargeback/refund risk | 0.10 |
 | `T` | Minimum payable balance before a payout batch is cut | $20.00 |
@@ -78,39 +90,39 @@ Recover pass-through cost first, then split the net contribution:
 ```
 N = max(0, G − C_p)                      # never pay commission on raw cost
 PlatformEarning   = N × ρ
-PublisherEarning  = N × σ                # σ = 1 − ρ
+NoderEarning      = N × σ                # σ = 1 − ρ
 ```
 
 Only emitted when the execution is **SUCCEEDED** and **platform-verified**. A
-failed/blocked/cancelled execution yields `PublisherEarning = 0` (see 3.6).
+failed/blocked/cancelled execution yields `NoderEarning = 0` (see 3.6).
 
-### 3.3 Multi-publisher routes (composition)
+### 3.3 Multi-noder routes (composition)
 
-If a route composes several published skills, the publisher pool `N × σ` is split
-by normalized weight, with the optional per-publisher multiplier:
+If a route composes several nodes, the noder pool `N × σ` is split by normalized
+weight, with the optional per-noder multiplier:
 
 ```
 weight_i      = w_i × μ_i
-PublisherEarning_i = (N × σ) × (weight_i / Σ_j weight_j)
+NoderEarning_i = (N × σ) × (weight_i / Σ_j weight_j)
 ```
 
-Default `w_i` = number of that publisher's reserved actions actually executed in
-the route (so contribution tracks real work). `μ_i` defaults to 1.0; reputation
-and promotions adjust it via policy, never via ad-hoc edits.
+Default `w_i` = number of that noder's reserved actions actually executed in the
+route (so contribution tracks real work). `μ_i` defaults to 1.0; reputation and
+promotions adjust it via policy, never via ad-hoc edits.
 
 Conservation check (must always hold):
 
 ```
-PlatformEarning + Σ_i PublisherEarning_i  ==  N
+PlatformEarning + Σ_i NoderEarning_i  ==  N
 ```
 
 ### 3.4 Settlement (period aggregation)
 
 A periodic settlement job reads the **metering ledger** for a closed period and
-produces immutable **earnings ledger** entries per publisher:
+produces immutable **earnings ledger** entries per noder:
 
 ```
-PeriodGross_i   = Σ over the publisher's successful events of PublisherEarning_i
+PeriodGross_i   = Σ over the noder's successful events of NoderEarning_i
 Reserve_i       = PeriodGross_i × R
 Available_i(t)  = Σ earnings whose (event_time + H) ≤ t  −  Reserve_i  −  Clawbacks_i  −  AlreadyPaid_i
 ```
@@ -120,7 +132,7 @@ Available_i(t)  = Σ earnings whose (event_time + H) ≤ t  −  Reserve_i  − 
 ```
 if Available_i(now) ≥ T:
     payout_amount = Available_i(now) − f_pp(payout_amount)   # processor fee at payout
-    issue PayoutBatch(publisher_i, payout_amount)            # via PayoutAdapter (Stripe Connect)
+    issue PayoutBatch(noder_i, payout_amount)                # via PayoutAdapter (Stripe Connect)
 ```
 
 Below `T`, the balance rolls forward. Payout requires a verified payout account
@@ -128,25 +140,25 @@ Below `T`, the balance rolls forward. Payout requires a verified payout account
 
 ### 3.6 Failure, refund, dispute (clawback)
 
-- **Failure / block / cancel:** no charge for the *skill value*; `PublisherEarning
-  = 0`. (Provider cost handling is policy: absorbed by platform, or billed at cost
-  with zero margin — see `PricingPolicy`.)
+- **Failure / block / cancel:** no charge for the *node value*; `NoderEarning = 0`.
+  (Provider cost handling is policy: absorbed by platform, or billed at cost with
+  zero margin — see `PricingPolicy`.)
 - **Refund / chargeback / dispute upheld:** append a **negative** earnings entry
   (clawback) referencing the original metering event id. If already paid out, the
-  publisher balance goes negative and is recovered from future earnings (the
-  reserve `R` exists to cushion this).
+  noder balance goes negative and is recovered from future earnings (the reserve
+  `R` exists to cushion this).
 - All reversals are **new ledger entries**, preserving invariant #6.
 
 ### 3.7 Worked examples
 
-1. **Single publisher, success.** `G=$0.50`, `C_p=$0.08`, `ρ=0.30`.
-   `N=$0.42` → Platform `$0.126`, Publisher `$0.294`.
-2. **Two publishers (weights 2 and 1), success.** Same `N=$0.42`, `σ=0.70`, pool
-   `$0.294`. Publisher A (w=2): `$0.196`; Publisher B (w=1): `$0.098`; Platform
-   `$0.126`. Sum `= $0.42` ✓.
-3. **Failure.** `PublisherEarning=0`; no consumer value charge; optional cost
-   recovery only.
-4. **Refund after payout.** Original Publisher earning `$0.294` already paid →
+1. **Single noder, success.** `G=$0.50`, `C_p=$0.08`, `ρ=0.30`.
+   `N=$0.42` → Platform `$0.126`, Noder `$0.294`.
+2. **Two noders (weights 2 and 1), success.** Same `N=$0.42`, `σ=0.70`, pool
+   `$0.294`. Noder A (w=2): `$0.196`; Noder B (w=1): `$0.098`; Platform `$0.126`.
+   Sum `= $0.42` ✓.
+3. **Failure.** `NoderEarning=0`; no consumer value charge; optional cost recovery
+   only.
+4. **Refund after payout.** Original Noder earning `$0.294` already paid →
    clawback entry `−$0.294`; recovered from reserve / future earnings.
 
 ---
@@ -157,12 +169,12 @@ New domain records, each versioned and behind ports (SQLite local / PostgreSQL
 prod), reusing existing models where possible. **Ledgers are append-only;
 balances/listings are projections.**
 
-### 4.1 Registry (`marketplace/`)
+### 4.1 Nodeplace registry (`nodeplace/`)
 
 | Record | Key fields | Notes |
 | --- | --- | --- |
-| `PublishedSkill` | `skill_id`, `owner_principal`, `tenant_id`, `visibility` (private/unlisted/public), `created_at` | Ownership + visibility. Wraps an existing `ReusableSkill`. |
-| `SkillVersion` | `version_id`, `skill_id`, `semver`, `content_hash`, `sanitized_skill_json`, `license`, `published_at` | Immutable, content-addressed sanitized artifact (no secrets). |
+| `Node` | `node_id`, `noder_principal`, `tenant_id`, `visibility` (private/unlisted/public), `created_at` | Ownership + visibility. Wraps an existing `ReusableSkill`. |
+| `NodeVersion` | `version_id`, `node_id`, `semver`, `content_hash`, `sanitized_skill_json`, `license`, `published_at` | Immutable, content-addressed sanitized artifact (no secrets). |
 | `Listing` | `listing_id`, `version_id`, `title`, `summary`, `tags`, `maturity_label`, `status` (draft/in_review/active/suspended) | Discovery surface; gated by review. |
 | `PricingPolicy` | `policy_id`, `version_id`, `model` (per_success/subscription/free), `unit_price`, `currency`, `cost_recovery` (absorb/passthrough) | Drives `G` and `C_p` treatment. |
 | `Rating` / `Review` | `subject_version_id`, `rater_principal`, `score`, `text`, `verified_run` | Only raters with a verified successful run can rate. |
@@ -172,23 +184,23 @@ balances/listings are projections.**
 | Record | Key fields | Notes |
 | --- | --- | --- |
 | `MeteringEvent` | `event_id`, `idempotency_key` (= execution key), `run_id`, `version_id`, `consumer_tenant`, `outcome`, `gross G`, `provider_cost C_p`, `audit_seq`, `occurred_at` | Append-only, one per verified billable execution; **derived from the audit log**. Unique on `idempotency_key`. |
-| `AttributionRecord` | `event_id`, `publisher_principal`, `weight w_i`, `multiplier μ_i` | Per-publisher split inputs for one event. |
+| `AttributionRecord` | `event_id`, `noder_principal`, `weight w_i`, `multiplier μ_i` | Per-noder split inputs for one event. |
 
 ### 4.3 Billing (`billing/`)
 
 | Record | Key fields | Notes |
 | --- | --- | --- |
-| `EarningsEntry` | `entry_id`, `publisher_principal`, `event_id?`, `amount` (+/−), `kind` (accrual/reserve/clawback/payout), `available_at`, `created_at` | Append-only earnings ledger; clawbacks are negative entries. |
-| `PublisherBalance` | `publisher_principal`, `available`, `pending`, `reserved`, `lifetime_paid` | **Projection** of `EarningsEntry`. Never edited directly. |
-| `PayoutBatch` | `batch_id`, `publisher_principal`, `amount`, `status`, `provider_ref`, `created_at` | Created by settlement; executed via `PayoutAdapter`. |
-| `PayoutAccount` | `publisher_principal`, `provider_account_id`, `kyc_status`, `country`, `currency` | Stripe Connect (or equiv) account; KYC gate for payout. |
+| `EarningsEntry` | `entry_id`, `noder_principal`, `event_id?`, `amount` (+/−), `kind` (accrual/reserve/clawback/payout), `available_at`, `created_at` | Append-only earnings ledger; clawbacks are negative entries. |
+| `NoderBalance` | `noder_principal`, `available`, `pending`, `reserved`, `lifetime_paid` | **Projection** of `EarningsEntry`. Never edited directly. |
+| `PayoutBatch` | `batch_id`, `noder_principal`, `amount`, `status`, `provider_ref`, `created_at` | Created by settlement; executed via `PayoutAdapter`. |
+| `PayoutAccount` | `noder_principal`, `provider_account_id`, `kyc_status`, `country`, `currency` | Stripe Connect (or equiv) account; KYC gate for payout. |
 | `Dispute` | `dispute_id`, `event_id`, `reason`, `state`, `resolution` | Drives clawbacks. |
 
 ### 4.4 Ports (so providers/stores stay swappable)
 
 - `RegistryStore`, `MeteringLedger`, `EarningsLedger`, `BalanceProjection`
   (SQLite + PostgreSQL adapters).
-- `PricingEngine` (pure: event → `(N, PlatformEarning, {PublisherEarning_i})`).
+- `PricingEngine` (pure: event → `(N, PlatformEarning, {NoderEarning_i})`).
 - `PayoutAdapter` (Stripe Connect adapter; sandbox/remote-mock for tests).
 - `FraudSignals` (pluggable anti-abuse checks).
 
@@ -199,7 +211,7 @@ balances/listings are projections.**
 | Verified "it ran and succeeded" | `durable/audit.py`, `ExecutionRecord` outcomes |
 | Exactly-once accrual | `durable/idempotency.py` |
 | Trustworthy execution | `worker/` signed, single-use leases; isolation policy |
-| Safe shareable unit | `skills/` records; credential refs only |
+| Safe contributable unit (the node) | `skills/` records; credential refs only |
 | Identity / tenancy / authority | `identity/` |
 | Async API + webhooks + RBAC | `gateway/` |
 
@@ -208,9 +220,9 @@ balances/listings are projections.**
 ## 5. Architecture additions
 
 ```
-                +-------------------- HTTP gateway (/v1/marketplace, /v1/earnings) ----+
+                +-------------------- HTTP gateway (/v1/nodeplace, /v1/earnings) ------+
                 |                                                                       |
-   consumer --> run workflow --> durable audit + execution outcome (verified) ---------+
+   consumer --> run node --> durable audit + execution outcome (verified) ------------+
                                               |
                                               v
                               metering/ : derive MeteringEvent (idempotent, attributed)
@@ -221,11 +233,11 @@ balances/listings are projections.**
                                               v
                               billing/  : PayoutBatch -> PayoutAdapter (Stripe Connect)
 
-   publisher --> marketplace/ : publish (opt-in) -> SkillVersion (sanitized) + Listing + PricingPolicy
+   noder --> nodeplace/ : contribute (opt-in) -> NodeVersion (sanitized) + Listing + PricingPolicy
 ```
 
-New modules: `workflow_gps/marketplace/`, `workflow_gps/metering/`,
-`workflow_gps/billing/`. New gateway routes under `/v1/marketplace`,
+New modules: `workflow_gps/nodeplace/`, `workflow_gps/metering/`,
+`workflow_gps/billing/`. New gateway routes under `/v1/nodeplace`,
 `/v1/listings`, `/v1/earnings`, `/v1/payout-accounts`, `/v1/disputes`.
 
 ---
@@ -258,40 +270,40 @@ Exit gate / Goal Adherence:
       (idempotent; replay/retry does not duplicate).
 - [ ] No pricing, charging, or payout code path exists yet.
 
-### P1 — `v0.4.0` "Publish & meter" (supply side + accounting, display-only money)
+### P1 — `v0.4.0` "Contribute & meter" (supply side + accounting, display-only money)
 
-Goal: publishers can share workflows; verified usage is attributed and earnings
-are *computed and shown* — still no real payments.
+Goal: noders can contribute nodes; verified usage is attributed and earnings are
+*computed and shown* — still no real payments.
 
 Deliverables:
-- `marketplace/`: opt-in publish flow, `SkillVersion` (sanitized, content-hashed),
+- `nodeplace/`: opt-in contribute flow, `NodeVersion` (sanitized, content-hashed),
   `Listing`, visibility, licensing, basic discovery/search.
-- Publish-time review + safety gate (sandboxed, reserved-action/approval rules
-  mandatory for marketplace skills).
-- `metering/`: `AttributionRecord` (multi-publisher weights).
+- Contribute-time review + safety gate (sandboxed, reserved-action/approval rules
+  mandatory for nodes).
+- `metering/`: `AttributionRecord` (multi-noder weights).
 - `billing/` (display-only): `PricingEngine` + `EarningsEntry` accrual ledger +
-  `PublisherBalance` projection (no payout adapter wired).
+  `NoderBalance` projection (no payout adapter wired).
 - Reputation/quality signals (`μ` inputs), verified-run-gated ratings.
 
 Exit gate / Goal Adherence:
-- [ ] Publishing is opt-in and revocable; private workflows never appear in the
-      registry and never leave local storage.
-- [ ] A published `SkillVersion` contains no secrets (secret-hygiene scan passes).
-- [ ] Tenant A runs Tenant B's published skill; verified success creates an
-      attributed `MeteringEvent` and an `EarningsEntry`.
-- [ ] `PlatformEarning + Σ PublisherEarning_i == N` for every event (property
-      test, incl. multi-publisher).
-- [ ] Failure/block/cancel accrues zero publisher earning.
+- [ ] Contributing is opt-in and revocable; private workflows never appear in the
+      Nodeplace and never leave local storage.
+- [ ] A published `NodeVersion` contains no secrets (secret-hygiene scan passes).
+- [ ] Tenant A runs Tenant B's node; verified success creates an attributed
+      `MeteringEvent` and an `EarningsEntry`.
+- [ ] `PlatformEarning + Σ NoderEarning_i == N` for every event (property test,
+      incl. multi-noder).
+- [ ] Failure/block/cancel accrues zero noder earning.
 - [ ] Earnings ledger is append-only; balance is a pure projection.
 - [ ] Cross-tenant earnings access is refused.
 
 ### P2 — `v0.5.0` "Monetize" (real money)
 
-Goal: consumers are charged; publishers are paid out; refunds/disputes claw back
+Goal: consumers are charged; noders are paid out; refunds/disputes claw back
 correctly; abuse is contained.
 
 Deliverables:
-- `PayoutAdapter` (Stripe Connect): consumer billing + publisher payouts; KYC/tax.
+- `PayoutAdapter` (Stripe Connect): consumer billing + noder payouts; KYC/tax.
 - Settlement job: holdback `H`, reserve `R`, minimum payout `T`, `PayoutBatch`.
 - Refund/chargeback/`Dispute` → clawback flow.
 - Trust & safety / anti-fraud: similarity/plagiarism detection, fake-success
@@ -300,15 +312,15 @@ Deliverables:
   for processor events (verified, replay-protected — reuse `gateway/webhooks.py`).
 
 Exit gate / Goal Adherence:
-- [ ] A consumer is charged `G` for a verified successful execution; a publisher's
-      `Available` balance increases by `PublisherEarning_i` after holdback `H`.
+- [ ] A consumer is charged `G` for a verified successful execution; a noder's
+      `Available` balance increases by `NoderEarning_i` after holdback `H`.
 - [ ] A payout above `T` settles to a KYC-verified account via the adapter; below
       `T` rolls forward.
 - [ ] A refund/chargeback posts a compensating clawback; paid-out negatives are
       recovered from reserve/future earnings; ledgers stay append-only.
 - [ ] No charge or payout occurs on local-only infra (production-adapter guard).
-- [ ] Self-dealing (publisher running own skill to farm commission) and replayed
-      "successes" are detected and excluded.
+- [ ] Self-dealing (a noder running their own node to farm commission) and
+      replayed "successes" are detected and excluded.
 - [ ] Processor webhooks are signature-verified and replay-protected.
 - [ ] Cross-tenant + concurrent-load money tests pass; no double-pay, no lost
       accrual under retries/restarts.
@@ -321,8 +333,8 @@ Mirror the existing per-branch "exit gate as tests" practice:
 
 - **Metering contract:** idempotent accrual; one event per verified success;
   derived only from audit + verified outcomes; never from client claims.
-- **Formula property tests:** conservation (`platform + Σ publisher == N`),
-  non-negativity, multi-publisher split correctness, failure → zero.
+- **Formula property tests:** conservation (`platform + Σ noder == N`),
+  non-negativity, multi-noder split correctness, failure → zero.
 - **Ledger invariants:** append-only; balance == replay of entries; clawback
   reverses exactly.
 - **Isolation/abuse:** cross-tenant denied; self-dealing excluded; replay/dup
@@ -337,15 +349,15 @@ Mirror the existing per-branch "exit gate as tests" practice:
 - **Regulatory:** handling money = money-transmission / KYC / AML / tax
   (1099/VAT). **Do not build payments in-house** — use Stripe Connect (or equiv)
   behind `PayoutAdapter`; never touch raw card data.
-- **Marketplace liability:** shared workflows act on others' behalf. Keep Docker
-  isolation + reserved-action/approval gates **mandatory** for marketplace skills;
-  require publish review; clear ToS and takedown process.
+- **Nodeplace liability:** nodes act on others' behalf. Keep Docker isolation +
+  reserved-action/approval gates **mandatory** for nodes; require contribute-time
+  review; clear ToS and takedown process.
 - **IP / plagiarism:** content-hash + similarity detection; ownership records;
   DMCA-style dispute path.
 - **Fraud:** commission only on platform-verified success; exclude self-dealing;
   velocity/anomaly checks; reserve `R` and holdback `H` cushion reversals.
-- **Privacy:** private-by-default; sanitized publish; export/delete already exist
-  (`durable/maintenance.py`, desktop export/delete).
+- **Privacy:** private-by-default; sanitized contribution; export/delete already
+  exist (`durable/maintenance.py`, desktop export/delete).
 
 ---
 
@@ -354,7 +366,7 @@ Mirror the existing per-branch "exit gate as tests" practice:
 - Pricing model default: per-success vs subscription vs hybrid; who bears `C_p`.
 - Platform rate `ρ` and any tiered/volume schedule.
 - Holdback `H`, reserve `R`, minimum payout `T` initial values per region.
-- Multi-publisher weighting default (`w_i` = reserved-action count vs declared).
+- Multi-noder weighting default (`w_i` = reserved-action count vs declared).
 - Reputation multiplier `μ` policy and bounds `μ_max`.
 - Payout provider and supported countries/currencies for launch.
 
@@ -364,7 +376,7 @@ Mirror the existing per-branch "exit gate as tests" practice:
 
 1. **P0 `v0.3.0`** — PostgreSQL + real OIDC/HTTP transport + frontend + metering
    recording. *Ship to real users; start accruing metering data.*
-2. **P1 `v0.4.0`** — publish/registry + attribution + earnings (display-only).
+2. **P1 `v0.4.0`** — contribute/registry + attribution + earnings (display-only).
    *Prove the loop with no money at risk.*
 3. **P2 `v0.5.0`** — pricing + payments/payouts + disputes + anti-fraud. *Turn on
    real money once the accounting is proven.*
