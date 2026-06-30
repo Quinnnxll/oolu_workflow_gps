@@ -15,6 +15,12 @@ dependencies = [
 [project.optional-dependencies]
 engine = ["langgraph>=0.2", "litellm>=1.40"]
 docker = ["docker>=7.0"]
+# P0 (v0.3.0) production-substrate adapters. Each fills a "Not implemented"
+# seam from docs/ADAPTER_MATURITY.md and stays behind an extra so the base
+# install keeps claiming only what is actually wired up.
+postgres = ["psycopg[binary]>=3.1"]   # PostgreSQL durable adapter (workstream A)
+oidc = ["cryptography>=41.0"]          # JWKS RS256/ES256 verifier (workstream B)
+http = ["httpx>=0.27"]                 # real HttpTransport for providers (workstream C)
 dev = ["pytest>=8.0", "mypy>=1.8", "ruff>=0.3"]
 
 [project.scripts]
@@ -46,4 +52,6 @@ markers = [
     "needs_uv: requires the uv binary on PATH",
     "needs_langgraph: requires langgraph installed",
     "needs_docker: requires a reachable Docker daemon",
+    "needs_postgres: requires a reachable PostgreSQL instance (workstream A)",
+    "needs_network: requires live outbound network access (workstream C)",
 ]
