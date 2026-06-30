@@ -39,6 +39,10 @@ from .google import (
 )
 from .vault import CredentialRef, SecretVault
 
+# NB: ``HttpxTransport`` lives in ``providers.transport`` and is intentionally not
+# re-exported here — it requires the optional ``http`` extra (httpx), and importing
+# the providers package must not force that dependency on the base install.
+
 __all__ = [
     "RETRYABLE_STATUSES",
     "AnthropicAdapter",
