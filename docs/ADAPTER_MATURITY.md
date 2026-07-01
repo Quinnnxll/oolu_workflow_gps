@@ -169,16 +169,25 @@ reserved-action/approval gates mandatory for nodes.
 
 ## Billing (`billing/`)
 
-Display-only in P1: earnings are **computed and shown**, never paid. The reward
-formula runs in exact integer micro-units so `Platform + Σ Noder == N` holds
-bit-exactly. Real charging/payouts/settlement/disputes are P2 and do **not** exist
-yet — there is no `PayoutAdapter`, no charge path, and no payout entry is emitted.
+Real money in P2: consumers are charged, noders are paid out, refunds/disputes
+claw back, and abuse is contained. The reward formula runs in exact integer
+micro-units so `Platform + Σ Noder == N` holds bit-exactly, and every money-moving
+path is refused on local-only infra (production PostgreSQL + asymmetric identity
+required — invariant #8). Payments are never built in-house: all movement goes
+through the `PayoutAdapter` (Stripe Connect over the injected `HttpTransport`),
+and raw card data is never touched. Charge/settlement/dispute effects are
+exactly-once via the durable idempotency ledger.
 
 | Adapter | Module | Maturity | Notes |
 | --- | --- | --- | --- |
 | `PricingEngine` | `billing/pricing.py` | Production-capable | Pure `event → (N, PlatformEarning, {NoderEarning_i})`; conservation exact; non-negative; multi-noder split by normalized `w_i·μ_i`. |
-| `EarningsLedger` / `BalanceProjection` | `billing/ledger.py` | Production-capable (display-only) | Append-only earnings ledger (accrual only in P1); `NoderBalance` is a pure projection, never edited in place. SQLite + PostgreSQL. |
-| `PayoutAdapter` (Stripe Connect) + settlement | — | Not implemented | Real money movement is P2; the ledger/projection are proven first. |
+| `EarningsLedger` / `BalanceProjection` | `billing/ledger.py` | Production-capable | Append-only ledger (accrual/reserve/clawback/payout); `NoderBalance` is a pure projection, never edited in place. SQLite + PostgreSQL. |
+| `require_production_money` | `billing/guard.py` | Production-capable | Refuses charge/payout unless the durable is PostgreSQL and identity is asymmetric. |
+| `ChargingService` | `billing/charging.py` | Production-capable | Charges G on verified success and accrues per noder after holdback H; exactly-once via durable idempotency; consults `FraudSignals`. |
+| `SettlementService` | `billing/settlement.py` | Production-capable | Reserve R on cleared gross; pays out ≥ T to a KYC-verified account, below T rolls forward; idempotent per (noder, period). |
+| `DisputeService` | `billing/disputes.py` | Production-capable | Refund/chargeback/dispute → compensating append-only CLAWBACK; recovered from reserve/future earnings. |
+| `DefaultFraudSignals` | `billing/fraud.py` | Production-capable | Self-dealing exclusion, replayed-success rejection, velocity throttle. |
+| `StripeConnectAdapter` | `billing/payout.py` | Production-capable (logic) | Charge/payout/KYC over the injected `HttpTransport`; needs a live transport + Stripe keys wired in production. `FakePayoutAdapter` is test/dev only. |
 
 ## Desktop shell (`desktop/`)
 
