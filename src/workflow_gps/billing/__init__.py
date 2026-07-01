@@ -33,6 +33,7 @@ from .policy import (
 )
 from .pricing import PricingEngine, PricingResult
 from .service import BillingService
+from .settlement import SettlementService
 
 __all__ = [
     "BILLING_SCHEMA_VERSION",
@@ -63,6 +64,7 @@ __all__ = [
     "PayoutStore",
     "PricingEngine",
     "PricingResult",
+    "SettlementService",
     "StripeConnectAdapter",
     "is_production_money",
     "require_production_money",
