@@ -141,17 +141,44 @@ transport are the production seams.
 
 ## Metering (`metering/`)
 
-Recording only — the P0 (`v0.3.0`) accounting substrate. One immutable
-`MeteringEvent` is derived per verified successful execution from the hash-linked
-audit log, keyed by the execution's idempotency key so replay/retry never
-duplicates. There is deliberately **no** pricing, charging, or payout code:
-attribution, earnings, and money arrive in later milestones (P1/P2) once the
-recording is trusted.
+The accounting substrate. One immutable `MeteringEvent` is derived per verified
+successful execution from the hash-linked audit log, keyed by the execution's
+idempotency key so replay/retry never duplicates. P0 records the fact; P1
+(`v0.4.0`) adds attribution (who supplied the node) and the money *facts* gross
+`G` / provider_cost `C_p` — still recorded, never charged.
 
 | Adapter | Module | Maturity | Notes |
 | --- | --- | --- | --- |
-| `MeteringLedger` | `metering/store.py` | Production-capable | Append-only event ledger keyed unique on the execution idempotency key; runs on both the SQLite and PostgreSQL durable connections. |
-| `MeteringDeriver` | `metering/deriver.py` | Production-capable | Idempotent derivation of `MeteringEvent` from verified `workflow.executed` audit events; failure/block/cancel are never metered. |
+| `MeteringLedger` | `metering/store.py` | Production-capable | Append-only event ledger keyed unique on the execution idempotency key; runs on both the SQLite and PostgreSQL durable connections. Records `G`/`C_p`/version/consumer facts; charges nothing. |
+| `MeteringDeriver` | `metering/deriver.py` | Production-capable | Idempotent derivation of `MeteringEvent` from verified `workflow.executed` audit events; failure/block/cancel are never metered. Joins a `RunBinding` to attribute the event. |
+| `AttributionStore` | `metering/attribution.py` | Production-capable | Run→node bindings and per-noder `AttributionRecord` (weight `w_i`, multiplier `μ_i`); idempotent, derived only from verified success. |
+
+## Nodeplace (`nodeplace/`)
+
+The two-sided registry (P1). Contributing is opt-in and revocable; a private
+workflow is never published and never leaves local storage. A published
+`NodeVersion` is a content-addressed, secret-free artifact (sanitized through the
+`knowledge/scrubbing` gate). Contribute-time review makes isolation and
+reserved-action/approval gates mandatory for nodes.
+
+| Adapter | Module | Maturity | Notes |
+| --- | --- | --- | --- |
+| `RegistryStore` / `NodeplaceService` | `nodeplace/store.py`, `service.py` | Production-capable | `Node`/`NodeVersion`/`Listing`/`PricingPolicy`; opt-in sanitized contribute, content-addressed reuse, visibility, discovery/search, owner-scoped revoke/publish. SQLite + PostgreSQL. |
+| `NodeSafetyGate` | `nodeplace/safety.py` | Production-capable | Mandatory-isolation + reserved-action/approval review at contribute and publish, reusing the worker `IsolationPolicy`. |
+| `RatingService` / `mu_from_ratings` | `nodeplace/ratings.py`, `reputation.py` | Production-capable | Verified-run-gated ratings (proof from the metering trail, never client-claimed); reputation feeds the pricing multiplier `μ`. |
+
+## Billing (`billing/`)
+
+Display-only in P1: earnings are **computed and shown**, never paid. The reward
+formula runs in exact integer micro-units so `Platform + Σ Noder == N` holds
+bit-exactly. Real charging/payouts/settlement/disputes are P2 and do **not** exist
+yet — there is no `PayoutAdapter`, no charge path, and no payout entry is emitted.
+
+| Adapter | Module | Maturity | Notes |
+| --- | --- | --- | --- |
+| `PricingEngine` | `billing/pricing.py` | Production-capable | Pure `event → (N, PlatformEarning, {NoderEarning_i})`; conservation exact; non-negative; multi-noder split by normalized `w_i·μ_i`. |
+| `EarningsLedger` / `BalanceProjection` | `billing/ledger.py` | Production-capable (display-only) | Append-only earnings ledger (accrual only in P1); `NoderBalance` is a pure projection, never edited in place. SQLite + PostgreSQL. |
+| `PayoutAdapter` (Stripe Connect) + settlement | — | Not implemented | Real money movement is P2; the ledger/projection are proven first. |
 
 ## Desktop shell (`desktop/`)
 
