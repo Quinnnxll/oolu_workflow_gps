@@ -17,6 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from ..billing import BillingService
 from ..durable.idempotency import IdempotencyLedger
 from ..durable.service import DurableWorkflowService
 from ..identity.errors import AuthenticationError, AuthorizationError
@@ -25,9 +26,16 @@ from ..identity.policy import AuthorityResolver
 from ..identity.service import IdentityApprovalAuthority
 from ..identity.sessions import default_assurance
 from ..identity.tokens import OidcValidator
+from ..nodeplace import (
+    ContributionError,
+    NodeplaceService,
+    OwnershipError,
+    Visibility,
+)
 from ..orchestrator import OrchestratorError
 from ..orchestrator.state import PauseKind, Phase, ResumeInput, RunState, TaskContract
 from ..providers.vault import SecretVault
+from ..skills.models import ReusableSkill
 from .errors import GatewayError
 from .http import (
     Request,
@@ -88,12 +96,16 @@ class GatewayApp:
         vault: SecretVault | None = None,
         config: GatewayConfig | None = None,
         idempotency: IdempotencyLedger | None = None,
+        nodeplace: NodeplaceService | None = None,
+        billing: BillingService | None = None,
         clock: Callable[[], datetime] | None = None,
     ):
         self._durable = durable
         self._validator = validator
         self._resolver = resolver
         self._approval = approval_authority
+        self._nodeplace = nodeplace
+        self._billing = billing
         self._vault = vault or SecretVault()
         self._config = config or GatewayConfig()
         self._idem = idempotency or durable.idempotency
@@ -203,6 +215,13 @@ class GatewayApp:
             requires_permission="providers:manage",
         )
         r.add("GET", "/v1/metrics", self._metrics_endpoint)
+        r.add("GET", "/v1/nodeplace", self._list_own_nodes)
+        r.add("POST", "/v1/nodeplace", self._contribute)
+        r.add("POST", "/v1/nodeplace/{node_id}/revoke", self._revoke_node)
+        r.add("GET", "/v1/listings", self._discover_listings)
+        r.add("POST", "/v1/listings/{listing_id}/publish", self._publish_listing)
+        r.add("GET", "/v1/earnings", self._earnings_balance)
+        r.add("GET", "/v1/earnings/entries", self._earnings_entries)
 
     # ------------------------------------------------------------------ #
     # Handlers.                                                           #
@@ -479,6 +498,109 @@ class GatewayApp:
 
     def _metrics_endpoint(self, request, session, params) -> Response:
         return json_response(200, dict(self._metrics))
+
+    # ------------------------------------------------------------------ #
+    # Nodeplace (supply side) + display-only earnings.                   #
+    # ------------------------------------------------------------------ #
+    def _require_nodeplace(self) -> NodeplaceService:
+        if self._nodeplace is None:
+            raise GatewayError(404, "not_found", "nodeplace is not enabled")
+        return self._nodeplace
+
+    def _require_billing(self) -> BillingService:
+        if self._billing is None:
+            raise GatewayError(404, "not_found", "earnings are not enabled")
+        return self._billing
+
+    def _contribute(self, request, session, params) -> Response:
+        nodeplace = self._require_nodeplace()
+        body = request.body or {}
+        try:
+            skill = ReusableSkill.model_validate(body["skill"])
+            visibility = Visibility(body.get("visibility", "public"))
+        except (KeyError, ValueError, TypeError) as exc:
+            raise GatewayError(400, "invalid_request", f"invalid contribution: {exc}") from exc
+        try:
+            result = nodeplace.contribute(
+                noder_principal=session.principal_id,
+                tenant_id=session.tenant_id,
+                skill=skill,
+                semver=str(body.get("semver", "1.0.0")),
+                title=str(body.get("title", skill.name)),
+                summary=str(body.get("summary", skill.description)),
+                tags=list(body.get("tags", [])),
+                license=str(body.get("license", "proprietary")),
+                visibility=visibility,
+            )
+        except ContributionError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        except OwnershipError as exc:
+            raise GatewayError(403, "forbidden", str(exc)) from exc
+        return json_response(
+            201,
+            {
+                "node_id": result.node.node_id,
+                "version_id": result.version.version_id,
+                "listing_id": result.listing.listing_id,
+                "content_hash": result.version.content_hash,
+                "visibility": result.node.visibility.value,
+            },
+        )
+
+    def _list_own_nodes(self, request, session, params) -> Response:
+        nodeplace = self._require_nodeplace()
+        nodes = nodeplace.list_own_nodes(
+            noder_principal=session.principal_id, tenant_id=session.tenant_id
+        )
+        return json_response(200, {"items": [n.model_dump(mode="json") for n in nodes]})
+
+    def _revoke_node(self, request, session, params) -> Response:
+        nodeplace = self._require_nodeplace()
+        try:
+            revoked = nodeplace.revoke(
+                params["node_id"],
+                noder_principal=session.principal_id,
+                tenant_id=session.tenant_id,
+            )
+        except OwnershipError as exc:
+            raise GatewayError(403, "forbidden", str(exc)) from exc
+        except ContributionError as exc:
+            raise GatewayError(404, "not_found", str(exc)) from exc
+        return json_response(200, {"revoked": revoked})
+
+    def _discover_listings(self, request, session, params) -> Response:
+        nodeplace = self._require_nodeplace()
+        listings = nodeplace.discover(request.query.get("q", ""))
+        return json_response(
+            200, {"items": [listing.model_dump(mode="json") for listing in listings]}
+        )
+
+    def _publish_listing(self, request, session, params) -> Response:
+        nodeplace = self._require_nodeplace()
+        try:
+            listing = nodeplace.publish(
+                params["listing_id"],
+                noder_principal=session.principal_id,
+                tenant_id=session.tenant_id,
+            )
+        except OwnershipError as exc:
+            raise GatewayError(403, "forbidden", str(exc)) from exc
+        except ContributionError as exc:
+            raise GatewayError(404, "not_found", str(exc)) from exc
+        return json_response(200, listing.model_dump(mode="json"))
+
+    def _earnings_balance(self, request, session, params) -> Response:
+        billing = self._require_billing()
+        return json_response(
+            200, billing.balance(session.principal_id).model_dump(mode="json")
+        )
+
+    def _earnings_entries(self, request, session, params) -> Response:
+        billing = self._require_billing()
+        entries = billing.entries(session.principal_id)
+        return json_response(
+            200, {"items": [entry.model_dump(mode="json") for entry in entries]}
+        )
 
     # ------------------------------------------------------------------ #
     # Helpers.                                                            #

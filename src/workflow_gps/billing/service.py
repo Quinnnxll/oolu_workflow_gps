@@ -48,3 +48,6 @@ class BillingService:
 
     def balance(self, noder_principal: str) -> NoderBalance:
         return self._projection.balance(noder_principal)
+
+    def entries(self, noder_principal: str) -> list[EarningsEntry]:
+        return self._ledger.entries(noder_principal)

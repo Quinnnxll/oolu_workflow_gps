@@ -44,6 +44,15 @@ def build_openapi() -> dict:
             "post": op("Connect a provider (requires providers:manage)"),
         },
         "/v1/metrics": {"get": op("Operational metrics")},
+        "/v1/nodeplace": {
+            "get": op("List the caller's own contributed nodes"),
+            "post": op("Contribute a workflow as a node (opt-in, sanitized)"),
+        },
+        "/v1/nodeplace/{node_id}/revoke": {"post": op("Revoke a contributed node")},
+        "/v1/listings": {"get": op("Discover active public node listings")},
+        "/v1/listings/{listing_id}/publish": {"post": op("Publish a draft listing")},
+        "/v1/earnings": {"get": op("The caller's own earnings balance (display-only)")},
+        "/v1/earnings/entries": {"get": op("The caller's own earnings ledger entries")},
         "/v1/openapi.json": {"get": op("This document", secured=False)},
     }
 
