@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from pydantic import BaseModel, ConfigDict
 
 from ..skills.models import ReusableSkill
-from .errors import ContributionError, OwnershipError
+from .errors import ContributionError, OwnershipError, SafetyViolation
 from .models import (
     Listing,
     ListingStatus,
@@ -14,6 +14,7 @@ from .models import (
     PricingPolicy,
     Visibility,
 )
+from .safety import NodeSafetyGate
 from .sanitize import sanitize_skill
 from .store import RegistryStore
 
@@ -28,8 +29,11 @@ class ContributionResult(BaseModel):
 
 
 class NodeplaceService:
-    def __init__(self, store: RegistryStore) -> None:
+    def __init__(
+        self, store: RegistryStore, *, safety_gate: NodeSafetyGate | None = None
+    ) -> None:
         self._store = store
+        self._safety = safety_gate or NodeSafetyGate()
 
     def contribute(
         self,
@@ -45,11 +49,18 @@ class NodeplaceService:
         visibility: Visibility = Visibility.PUBLIC,
         pricing: PricingPolicy | None = None,
         node_id: str | None = None,
+        backend: str = "docker",
+        requires_approval: bool = True,
     ) -> ContributionResult:
         if visibility == Visibility.PRIVATE:
             raise ContributionError(
                 "contribute is opt-in sharing; a private workflow is never published"
             )
+        report = self._safety.review(
+            skill.actions, backend=backend, requires_approval=requires_approval
+        )
+        if not report.safe:
+            raise SafetyViolation(report.violations)
         sanitized, content_hash = sanitize_skill(skill)
 
         node = self._owned_node(node_id, noder_principal, tenant_id) if node_id else None
@@ -77,6 +88,8 @@ class NodeplaceService:
             content_hash=content_hash,
             sanitized_skill_json=sanitized,
             license=license,
+            backend=backend,
+            requires_approval=requires_approval,
         )
         self._store.add_version(version)
 
@@ -102,6 +115,7 @@ class NodeplaceService:
         if listing is None:
             raise ContributionError("no such listing")
         self._assert_owns_version(listing.version_id, noder_principal, tenant_id)
+        self._gate_version(listing.version_id)
         active = listing.model_copy(
             update={"status": ListingStatus.ACTIVE, "updated_at": datetime.now(UTC)}
         )
@@ -147,6 +161,19 @@ class NodeplaceService:
         if version is None:
             raise ContributionError("no such version")
         self._owned_node(version.node_id, noder_principal, tenant_id)
+
+    def _gate_version(self, version_id: str) -> None:
+        version = self._store.get_version(version_id)
+        if version is None:
+            raise ContributionError("no such version")
+        skill = ReusableSkill.model_validate_json(version.sanitized_skill_json)
+        report = self._safety.review(
+            skill.actions,
+            backend=version.backend,
+            requires_approval=version.requires_approval,
+        )
+        if not report.safe:
+            raise SafetyViolation(report.violations)
 
     def _existing_version(self, node_id: str, content_hash: str) -> NodeVersion | None:
         for version in self._store.list_versions(node_id):

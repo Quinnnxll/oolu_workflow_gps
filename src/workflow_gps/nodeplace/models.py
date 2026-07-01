@@ -64,6 +64,8 @@ class NodeVersion(BaseModel):
     content_hash: str
     sanitized_skill_json: str
     license: str = "proprietary"
+    backend: str = "docker"
+    requires_approval: bool = True
     published_at: datetime = Field(default_factory=_now)
 
 

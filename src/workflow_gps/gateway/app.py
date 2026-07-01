@@ -531,6 +531,8 @@ class GatewayApp:
                 tags=list(body.get("tags", [])),
                 license=str(body.get("license", "proprietary")),
                 visibility=visibility,
+                backend=str(body.get("backend", "docker")),
+                requires_approval=bool(body.get("requires_approval", True)),
             )
         except ContributionError as exc:
             raise GatewayError(400, "invalid_request", str(exc)) from exc
