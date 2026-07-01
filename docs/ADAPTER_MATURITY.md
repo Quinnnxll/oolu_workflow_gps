@@ -87,7 +87,8 @@ the same ports.
 | `DurableRunStateStore` / `DurableRecordStore` | `durable/records.py` | Production-capable (single host) | Durable checkpoints and domain records for history reconstruction. |
 | `FilesystemArtifactStore` | `durable/artifacts.py` | Production-capable (single host) | Content-addressed local object storage; an S3/GCS adapter is the multi-host target. |
 | `DurableWorkflowService` | `durable/service.py` | Experimental | Restart-safe orchestration wrapper; sync and queue-driven modes are tested, but production hardening (back-pressure, multi-worker fairness) is pending. |
-| PostgreSQL + object-store adapter | — | Not implemented | The multi-process production target for every port above; scoped to deployment. |
+| `PostgresDurableConnection` | `durable/postgres.py` | Production-capable (multi-process) | The multi-process production target for the durable ports. Runs the existing stores unmodified via a dialect shim; exactly-once leasing and idempotency hold across separate connections under READ COMMITTED. Contract-tested against live PostgreSQL (`tests/test_durable_postgres.py`). Behind the `postgres` extra. |
+| Object-store (S3/GCS) artifact adapter | — | Not implemented | The multi-host artifact target; scoped to deployment. |
 
 ## Identity and RBAC (`identity/`)
 
@@ -102,7 +103,8 @@ production crypto lands.
 | `OidcValidator` / `SessionManager` / `AuthorityResolver` / `IdentityStore` | `identity/` | Production-capable (logic) | Claim validation, tenant isolation, role/grant resolution, step-up, expiry/revocation — all tested. |
 | `IdentityApprovalAuthority` | `identity/service.py` | Production-capable (local) | Mints an `ApprovalRecord` only from an authorized, verified session. |
 | `Hs256Verifier` / `Hs256Signer` | `identity/tokens.py` | Test-only / local-symmetric | Stdlib HMAC. Real IdPs sign asymmetrically; do not use HS256 for production identity. |
-| JWKS asymmetric verifier (RS256/ES256) | — | Not implemented | The production `SignatureVerifier` adapter (optional crypto dependency); the validation logic is unchanged. |
+| `JwksVerifier` (RS256/ES256) | `identity/jwks.py` | Production-capable | The production `SignatureVerifier`: JWKS fetch/cache with kid-rotation refresh, algorithm pinning, PKCS1v15/SHA256 and raw-`r\|\|s` ES256. Validation logic in `OidcValidator` is unchanged. Behind the `oidc` extra. |
+| `assert_production_identity` | `identity/tokens.py` | Production-capable | Config-time guard that rejects any provider using a symmetric (HS*) verifier, so HS256 cannot reach a production deployment. |
 
 ## Worker control plane (`worker/`)
 
@@ -134,8 +136,22 @@ transport are the production seams.
 | `GatewayApp` | `gateway/app.py` | Experimental (prototype) | OIDC auth, tenant-scoped RBAC, per-tenant quotas/rate limits, idempotent async submission, pagination, SSE, audit export. Not yet load-hardened. |
 | `WebhookSigner` / `WebhookVerifier` | `gateway/webhooks.py` | Production-capable (logic) | HMAC signing with timestamp tolerance and delivery-id replay protection. |
 | OpenAPI document | `gateway/openapi.py` | Production-capable | Versioned `/v1` contract served at `/v1/openapi.json`. |
-| WSGI/ASGI binding + live SSE transport | — | Not implemented | The production server adapter that maps real HTTP onto `Request`/`Response` and streams events. |
-| PostgreSQL durable backend | — | Not implemented | The gateway runs on the durable runtime; the multi-host production store is the Postgres adapter (see Durable runtime). |
+| `GatewayASGI` + chat frontend | `gateway/asgi.py`, `gateway/frontend/` | Production-capable (functional) | ASGI binding that maps real HTTP onto `Request`/`Response` and serves the SSE snapshot, plus a minimal OIDC chat SPA. Full run lifecycle contract-tested through the ASGI surface (`tests/test_gateway_asgi.py`). A live push-based SSE transport and a designed UI are the remaining product polish. |
+| PostgreSQL durable backend | `durable/postgres.py` | Production-capable (multi-process) | The gateway runs on the durable runtime; the multi-host production store is `PostgresDurableConnection` (see Durable runtime). |
+
+## Metering (`metering/`)
+
+Recording only — the P0 (`v0.3.0`) accounting substrate. One immutable
+`MeteringEvent` is derived per verified successful execution from the hash-linked
+audit log, keyed by the execution's idempotency key so replay/retry never
+duplicates. There is deliberately **no** pricing, charging, or payout code:
+attribution, earnings, and money arrive in later milestones (P1/P2) once the
+recording is trusted.
+
+| Adapter | Module | Maturity | Notes |
+| --- | --- | --- | --- |
+| `MeteringLedger` | `metering/store.py` | Production-capable | Append-only event ledger keyed unique on the execution idempotency key; runs on both the SQLite and PostgreSQL durable connections. |
+| `MeteringDeriver` | `metering/deriver.py` | Production-capable | Idempotent derivation of `MeteringEvent` from verified `workflow.executed` audit events; failure/block/cancel are never metered. |
 
 ## Desktop shell (`desktop/`)
 
@@ -169,7 +185,7 @@ capability/revocation/idempotency/secret-leakage contract suite. The integration
 | `GoogleOAuthAdapter` | `providers/google.py` | Production-capable (logic) | Authorization-code + PKCE, scope mapping, callback validation, exchange, refresh, revocation. Needs a real `HttpTransport` wired in. |
 | `OpenAiAdapter` | `providers/apikey.py` | Production-capable (logic) | API key plus organization/project service-identity headers. |
 | `AnthropicAdapter` | `providers/apikey.py` | Production-capable (logic) | `x-api-key` direct, or `Authorization: Bearer` via the managed enterprise gateway. |
-| `HttpTransport` (real HTTP client) | — | Not implemented | The production transport adapter; an `httpx`/`requests` wrapper. Until wired, adapters run only against an injected sandbox/mock transport. |
+| `HttpxTransport` (real HTTP client) | `providers/transport.py` | Production-capable | The production `HttpTransport`: an httpx wrapper honouring the declared content type (form for OAuth token endpoints, JSON otherwise), mapping transport failures to a retryable 503, and taking TLS/proxy from the environment. Behind the `http` extra. |
 
 The legacy model credential path remains an environment-provided API key consumed
 by `LiteLLMGateway`; it is never written to any persisted record, log, or fixture
