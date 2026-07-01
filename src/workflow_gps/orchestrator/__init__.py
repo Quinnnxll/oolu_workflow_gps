@@ -16,6 +16,13 @@ from .adapters import (
     StatusOutcomeMonitor,
 )
 from .engine import WorkflowOrchestrator
+from .intake import (
+    INTAKE_SYSTEM_PROMPT,
+    HeuristicIntaker,
+    IntakeModel,
+    LiteLLMIntakeModel,
+    ModelBackedIntaker,
+)
 from .ports import (
     FeedbackSink,
     Grounder,
@@ -71,12 +78,17 @@ __all__ = [
     "FeedbackRecord",
     "FeedbackSink",
     "Grounder",
+    "INTAKE_SYSTEM_PROMPT",
+    "HeuristicIntaker",
     "HumanControlDecision",
     "HumanControlPolicy",
     "InMemoryRunStateStore",
     "Incident",
     "Intaker",
+    "IntakeModel",
     "LeastCostRouteOptimizer",
+    "LiteLLMIntakeModel",
+    "ModelBackedIntaker",
     "LocalRunStateStore",
     "MonitorReport",
     "OrchestratorError",
