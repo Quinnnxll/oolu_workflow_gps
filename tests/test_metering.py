@@ -134,8 +134,8 @@ def test_metering_event_has_no_pricing_fields():
     assert not (set(MeteringEvent.model_fields) & forbidden)
 
 
-def test_no_billing_or_nodeplace_modules_exist():
-    for module in ("workflow_gps.billing", "workflow_gps.nodeplace"):
+def test_no_real_payment_path_exists():
+    for module in ("workflow_gps.payout", "workflow_gps.settlement"):
         with pytest.raises(ModuleNotFoundError):
             importlib.import_module(module)
 
