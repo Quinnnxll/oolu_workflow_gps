@@ -17,12 +17,13 @@ import base64
 import hashlib
 import hmac
 import json
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 
-from .errors import AuthenticationError
+from .errors import AuthenticationError, IdentityConfigurationError
 from .models import Claims, PrincipalKind
 
 
@@ -224,10 +225,22 @@ class Hs256Signer(BaseModel):
         return f"{header_b64}.{payload_b64}.{_b64url_encode(signature)}"
 
 
+def assert_production_identity(providers: Iterable[ProviderConfig]) -> None:
+    offenders = sorted(
+        p.issuer for p in providers if p.verifier.algorithm.upper().startswith("HS")
+    )
+    if offenders:
+        raise IdentityConfigurationError(
+            "production identity requires asymmetric token signatures; "
+            f"symmetric (HMAC) verifiers configured for: {offenders}"
+        )
+
+
 __all__ = [
     "Hs256Signer",
     "Hs256Verifier",
     "OidcValidator",
     "ProviderConfig",
     "SignatureVerifier",
+    "assert_production_identity",
 ]

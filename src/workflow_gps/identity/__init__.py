@@ -11,6 +11,7 @@ from .errors import (
     AuthorizationError,
     CrossTenantError,
     GrantExpiredError,
+    IdentityConfigurationError,
     IdentityError,
     SelfApprovalError,
     SessionExpiredError,
@@ -40,6 +41,7 @@ from .tokens import (
     OidcValidator,
     ProviderConfig,
     SignatureVerifier,
+    assert_production_identity,
 )
 
 __all__ = [
@@ -54,6 +56,7 @@ __all__ = [
     "GrantExpiredError",
     "Group",
     "Hs256Signer",
+    "IdentityConfigurationError",
     "Hs256Verifier",
     "Identity",
     "IdentityApprovalAuthority",
@@ -73,6 +76,7 @@ __all__ = [
     "SignatureVerifier",
     "StepUpRequiredError",
     "Tenant",
+    "assert_production_identity",
     "default_assurance",
     "grant_is_active",
 ]

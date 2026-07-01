@@ -12,6 +12,10 @@ class IdentityError(RuntimeError):
     """Base class for identity-layer failures."""
 
 
+class IdentityConfigurationError(IdentityError):
+    pass
+
+
 class AuthenticationError(IdentityError):
     """The caller's identity could not be established from a verifiable claim."""
 
