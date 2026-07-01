@@ -18,6 +18,7 @@ from .models import (
     Rating,
     Visibility,
 )
+from .plagiarism import is_duplicate_hash, is_plagiarism, similarity
 from .pricing import gross_from_policy
 from .ratings import RatingService, RatingStore
 from .reputation import mu_from_ratings
@@ -51,6 +52,9 @@ __all__ = [
     "UnverifiedRunError",
     "Visibility",
     "gross_from_policy",
+    "is_duplicate_hash",
+    "is_plagiarism",
     "mu_from_ratings",
     "sanitize_skill",
+    "similarity",
 ]

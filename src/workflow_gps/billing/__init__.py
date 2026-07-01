@@ -1,6 +1,7 @@
 from .accounts import PayoutStore
 from .charging import ChargingService
 from .disputes import DisputeService, DisputeStore
+from .fraud import DefaultFraudSignals, FraudSignals, FraudVerdict
 from .guard import MoneyModeError, is_production_money, require_production_money
 from .ledger import BalanceProjection, EarningsLedger
 from .models import (
@@ -55,6 +56,9 @@ __all__ = [
     "DEFAULT_MU_MAX",
     "DEFAULT_RESERVE_FRACTION",
     "DEFAULT_RHO",
+    "DefaultFraudSignals",
+    "FraudSignals",
+    "FraudVerdict",
     "EarningsEntry",
     "EarningsKind",
     "EarningsLedger",

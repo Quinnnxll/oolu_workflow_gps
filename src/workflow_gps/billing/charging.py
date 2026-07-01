@@ -7,6 +7,7 @@ from typing import Any
 from ..durable.idempotency import IdempotencyLedger
 from ..identity.tokens import ProviderConfig
 from ..metering.models import AttributionRecord, MeteringEvent, NoderShare
+from .fraud import FraudSignals
 from .guard import require_production_money
 from .ledger import EarningsLedger
 from .models import EarningsEntry, EarningsKind, to_micros
@@ -24,6 +25,7 @@ class ChargingService:
         durable: Any,
         providers: Iterable[ProviderConfig],
         idempotency: IdempotencyLedger,
+        fraud: FraudSignals | None = None,
         rho: float = DEFAULT_RHO,
         holdback_days: int = DEFAULT_HOLDBACK_DAYS,
         currency: str = "usd",
@@ -33,6 +35,7 @@ class ChargingService:
         self._durable = durable
         self._providers = list(providers)
         self._idem = idempotency
+        self._fraud = fraud
         self._engine = PricingEngine(rho=rho)
         self._holdback = timedelta(days=holdback_days)
         self._currency = currency
@@ -49,6 +52,26 @@ class ChargingService:
         require_production_money(self._durable, self._providers)
 
         def run() -> dict:
+            shares = [
+                NoderShare(
+                    noder_principal=a.noder_principal,
+                    weight=a.weight,
+                    multiplier=a.multiplier,
+                )
+                for a in attributions
+            ]
+            excluded: list[str] = []
+            if self._fraud is not None:
+                verdict = self._fraud.assess(
+                    idempotency_key=event.idempotency_key,
+                    consumer_principal=event.consumer_principal,
+                    shares=shares,
+                )
+                excluded = verdict.reasons
+                if not verdict.allowed:
+                    return {"charged": False, "excluded": excluded}
+                shares = verdict.shares
+
             receipt = self._payout.charge(
                 idempotency_key=event.idempotency_key,
                 amount_micros=to_micros(event.gross),
@@ -58,14 +81,7 @@ class ChargingService:
             result = self._engine.price(
                 gross=event.gross,
                 provider_cost=event.provider_cost or 0.0,
-                shares=[
-                    NoderShare(
-                        noder_principal=a.noder_principal,
-                        weight=a.weight,
-                        multiplier=a.multiplier,
-                    )
-                    for a in attributions
-                ],
+                shares=shares,
             )
             available_at = event.occurred_at + self._holdback
             for noder_principal, amount_micros in result.noder_micros.items():
@@ -83,6 +99,7 @@ class ChargingService:
                 "charge_ref": receipt.provider_ref,
                 "charged_micros": to_micros(event.gross),
                 "noder_accruals": dict(result.noder_micros),
+                "excluded": excluded,
             }
 
         return self._idem.run(f"charge:{event.idempotency_key}", run, scope="billing")
