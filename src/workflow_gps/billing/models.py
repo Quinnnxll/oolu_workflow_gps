@@ -55,3 +55,65 @@ class NoderBalance(BaseModel):
     pending_micros: int = 0
     reserved_micros: int = 0
     lifetime_paid_micros: int = 0
+
+
+class KycStatus(str, Enum):
+    PENDING = "pending"
+    VERIFIED = "verified"
+    REJECTED = "rejected"
+
+
+class ChargeStatus(str, Enum):
+    PENDING = "pending"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+class PayoutStatus(str, Enum):
+    PENDING = "pending"
+    PAID = "paid"
+    FAILED = "failed"
+
+
+class PayoutAccount(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    schema_version: int = BILLING_SCHEMA_VERSION
+    noder_principal: str
+    provider_account_id: str
+    kyc_status: KycStatus = KycStatus.PENDING
+    country: str = "US"
+    currency: str = "usd"
+    created_at: datetime = Field(default_factory=_now)
+
+
+class PayoutBatch(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    schema_version: int = BILLING_SCHEMA_VERSION
+    batch_id: str = Field(default_factory=_id)
+    noder_principal: str
+    amount_micros: int
+    currency: str = "usd"
+    status: PayoutStatus = PayoutStatus.PENDING
+    provider_ref: str | None = None
+    created_at: datetime = Field(default_factory=_now)
+
+
+class ChargeReceipt(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    provider_ref: str
+    amount_micros: int
+    currency: str
+    status: ChargeStatus
+
+
+class PayoutReceipt(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    provider_ref: str
+    amount_micros: int
+    currency: str
+    status: PayoutStatus
+    fee_micros: int = 0
