@@ -100,6 +100,24 @@ class PayoutBatch(BaseModel):
     created_at: datetime = Field(default_factory=_now)
 
 
+class DisputeState(str, Enum):
+    OPEN = "open"
+    UPHELD = "upheld"
+    REJECTED = "rejected"
+
+
+class Dispute(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    schema_version: int = BILLING_SCHEMA_VERSION
+    dispute_id: str = Field(default_factory=_id)
+    event_id: str
+    reason: str = ""
+    state: DisputeState = DisputeState.OPEN
+    resolution: str = ""
+    created_at: datetime = Field(default_factory=_now)
+
+
 class ChargeReceipt(BaseModel):
     model_config = ConfigDict(frozen=True)
 

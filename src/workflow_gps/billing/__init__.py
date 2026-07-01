@@ -1,5 +1,6 @@
 from .accounts import PayoutStore
 from .charging import ChargingService
+from .disputes import DisputeService, DisputeStore
 from .guard import MoneyModeError, is_production_money, require_production_money
 from .ledger import BalanceProjection, EarningsLedger
 from .models import (
@@ -7,6 +8,8 @@ from .models import (
     MICROS_PER_UNIT,
     ChargeReceipt,
     ChargeStatus,
+    Dispute,
+    DisputeState,
     EarningsEntry,
     EarningsKind,
     KycStatus,
@@ -43,6 +46,10 @@ __all__ = [
     "ChargeReceipt",
     "ChargeStatus",
     "ChargingService",
+    "Dispute",
+    "DisputeService",
+    "DisputeState",
+    "DisputeStore",
     "DEFAULT_HOLDBACK_DAYS",
     "DEFAULT_MIN_PAYOUT_MICROS",
     "DEFAULT_MU_MAX",
