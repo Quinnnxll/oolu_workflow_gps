@@ -308,7 +308,11 @@ class WorkflowOrchestrator:
         )
         self._emit(
             "workflow.executed",
-            {"run_id": state.run_id, "status": state.execution.status.value},
+            {
+                "run_id": state.run_id,
+                "status": state.execution.status.value,
+                "idempotency_key": key,
+            },
         )
         return self._advance(state, Phase.MONITORING, f"attempt {attempt}")
 
