@@ -55,8 +55,18 @@ def build_openapi() -> dict:
             "get": op("List a version's ratings and reputation"),
             "post": op("Rate a version (requires a verified successful run)"),
         },
-        "/v1/earnings": {"get": op("The caller's own earnings balance (display-only)")},
+        "/v1/earnings": {"get": op("The caller's own earnings balance")},
         "/v1/earnings/entries": {"get": op("The caller's own earnings ledger entries")},
+        "/v1/payout-accounts": {
+            "get": op("The caller's payout account and KYC status"),
+            "post": op("Onboard a payout (Stripe Connect) account for the caller"),
+        },
+        "/v1/disputes/{event_id}": {"get": op("List disputes for an event")},
+        "/v1/webhooks/processor": {
+            "post": op(
+                "Payment-processor webhook (HMAC-signed, replay-protected)", secured=False
+            )
+        },
         "/v1/openapi.json": {"get": op("This document", secured=False)},
     }
 

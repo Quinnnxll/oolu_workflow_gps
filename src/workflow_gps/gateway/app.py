@@ -17,7 +17,13 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from ..billing import BillingService
+from ..billing import (
+    BillingService,
+    DisputeService,
+    PayoutAdapter,
+    PayoutStatus,
+    PayoutStore,
+)
 from ..durable.idempotency import IdempotencyLedger
 from ..durable.service import DurableWorkflowService
 from ..identity.errors import AuthenticationError, AuthorizationError
@@ -39,7 +45,7 @@ from ..orchestrator import OrchestratorError
 from ..orchestrator.state import PauseKind, Phase, ResumeInput, RunState, TaskContract
 from ..providers.vault import SecretVault
 from ..skills.models import ReusableSkill
-from .errors import GatewayError
+from .errors import GatewayError, WebhookError
 from .http import (
     Request,
     Response,
@@ -49,6 +55,7 @@ from .http import (
     with_security_headers,
 )
 from .openapi import build_openapi
+from .webhooks import WebhookVerifier
 
 _PAUSE_VALUE = {
     PauseKind.CLARIFICATION: "clarification",
@@ -102,6 +109,10 @@ class GatewayApp:
         nodeplace: NodeplaceService | None = None,
         billing: BillingService | None = None,
         ratings: RatingService | None = None,
+        payout_store: PayoutStore | None = None,
+        payout_adapter: PayoutAdapter | None = None,
+        disputes: DisputeService | None = None,
+        webhook_verifier: WebhookVerifier | None = None,
         clock: Callable[[], datetime] | None = None,
     ):
         self._durable = durable
@@ -111,6 +122,10 @@ class GatewayApp:
         self._nodeplace = nodeplace
         self._billing = billing
         self._ratings = ratings
+        self._payout_store = payout_store
+        self._payout_adapter = payout_adapter
+        self._disputes = disputes
+        self._webhook_verifier = webhook_verifier
         self._vault = vault or SecretVault()
         self._config = config or GatewayConfig()
         self._idem = idempotency or durable.idempotency
@@ -229,6 +244,10 @@ class GatewayApp:
         r.add("GET", "/v1/versions/{version_id}/ratings", self._list_ratings)
         r.add("GET", "/v1/earnings", self._earnings_balance)
         r.add("GET", "/v1/earnings/entries", self._earnings_entries)
+        r.add("GET", "/v1/payout-accounts", self._get_payout_account)
+        r.add("POST", "/v1/payout-accounts", self._create_payout_account)
+        r.add("GET", "/v1/disputes/{event_id}", self._list_disputes)
+        r.add("POST", "/v1/webhooks/processor", self._processor_webhook, public=True)
 
     # ------------------------------------------------------------------ #
     # Handlers.                                                           #
@@ -646,6 +665,78 @@ class GatewayApp:
         return json_response(
             200, {"items": [entry.model_dump(mode="json") for entry in entries]}
         )
+
+    def _create_payout_account(self, request, session, params) -> Response:
+        if self._payout_store is None or self._payout_adapter is None:
+            raise GatewayError(404, "not_found", "payout accounts are not enabled")
+        body = request.body or {}
+        account = self._payout_adapter.create_account(
+            noder_principal=session.principal_id,
+            country=str(body.get("country", "US")),
+            currency=str(body.get("currency", "usd")),
+        )
+        self._payout_store.save_account(account)
+        return json_response(201, account.model_dump(mode="json"))
+
+    def _get_payout_account(self, request, session, params) -> Response:
+        if self._payout_store is None:
+            raise GatewayError(404, "not_found", "payout accounts are not enabled")
+        account = self._payout_store.get_account(session.principal_id)
+        if account is None:
+            raise GatewayError(404, "not_found", "no payout account for this principal")
+        return json_response(200, account.model_dump(mode="json"))
+
+    def _list_disputes(self, request, session, params) -> Response:
+        if self._disputes is None:
+            raise GatewayError(404, "not_found", "disputes are not enabled")
+        disputes = self._disputes.for_event(params["event_id"])
+        return json_response(
+            200, {"items": [d.model_dump(mode="json") for d in disputes]}
+        )
+
+    def _processor_webhook(self, request, session, params) -> Response:
+        if self._webhook_verifier is None or self._disputes is None:
+            raise GatewayError(404, "not_found", "processor webhooks are not enabled")
+        body = request.body or {}
+        headers = {
+            "X-Webhook-Id": request.header("x-webhook-id"),
+            "X-Webhook-Timestamp": request.header("x-webhook-timestamp"),
+            "X-Webhook-Signature": request.header("x-webhook-signature"),
+        }
+        try:
+            self._webhook_verifier.verify(
+                body, headers, now=request.now or self._clock()
+            )
+        except WebhookError as exc:
+            raise GatewayError(400, "invalid_webhook", str(exc)) from exc
+
+        def process() -> dict:
+            event_type = body.get("type", "")
+            result: dict = {"handled": event_type}
+            if event_type in ("charge.refunded", "charge.dispute.created"):
+                event_id = body.get("event_id")
+                self._disputes.refund(event_id=event_id, reason=event_type)
+                result["clawback_event_id"] = event_id
+            elif event_type in ("payout.paid", "payout.failed") and self._payout_store:
+                batch = self._payout_store.get_batch(body.get("batch_id", ""))
+                if batch is not None:
+                    status = (
+                        PayoutStatus.PAID
+                        if event_type == "payout.paid"
+                        else PayoutStatus.FAILED
+                    )
+                    self._payout_store.update_batch(
+                        batch.model_copy(
+                            update={"status": status, "provider_ref": body.get("provider_ref")}
+                        )
+                    )
+                    result["batch_id"] = batch.batch_id
+            return result
+
+        result = self._idem.run(
+            f"webhook:{headers['X-Webhook-Id']}", process, scope="webhooks"
+        )
+        return json_response(200, result)
 
     # ------------------------------------------------------------------ #
     # Helpers.                                                            #

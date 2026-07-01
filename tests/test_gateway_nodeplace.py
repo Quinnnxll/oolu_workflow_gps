@@ -149,12 +149,17 @@ def test_nodeplace_and_earnings_require_auth(tmp_path):
     assert app.handle(_req("GET", "/v1/nodeplace")).status == 401
 
 
-def test_no_payout_or_dispute_routes_exist(tmp_path):
+def test_money_routes_are_disabled_when_not_wired(tmp_path):
+    # The P2 money surface exists in the contract, but a gateway built without the
+    # payout/dispute/webhook services (as here) feature-gates those routes to 404.
     app, _, ident, _ = _build(tmp_path)
-    for path in ("/v1/payout", "/v1/payout-accounts", "/v1/disputes"):
-        resp = app.handle(_req("POST", path, token=ident.token("noder-1", "t1")))
-        assert resp.status == 404
-    document = app.handle(_req("GET", "/v1/openapi.json")).body
-    assert not any(
-        "payout" in path or "dispute" in path for path in document["paths"]
-    )
+    assert app.handle(
+        _req("POST", "/v1/payout-accounts", token=ident.token("noder-1", "t1"))
+    ).status == 404
+    assert app.handle(
+        _req("GET", "/v1/payout-accounts", token=ident.token("noder-1", "t1"))
+    ).status == 404
+    assert app.handle(
+        _req("GET", "/v1/disputes/evt-1", token=ident.token("noder-1", "t1"))
+    ).status == 404
+    assert app.handle(_req("POST", "/v1/webhooks/processor", body={"type": "x"})).status == 404

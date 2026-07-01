@@ -80,6 +80,9 @@ class DisputeService:
         self._idem = idempotency
         self._clock = clock or (lambda: datetime.now(UTC))
 
+    def for_event(self, event_id: str) -> list[Dispute]:
+        return self._disputes.for_event(event_id)
+
     def open(self, *, event_id: str, reason: str = "") -> Dispute:
         dispute = Dispute(event_id=event_id, reason=reason, state=DisputeState.OPEN)
         self._disputes.add(dispute)
