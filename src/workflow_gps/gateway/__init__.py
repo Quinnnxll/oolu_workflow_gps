@@ -9,6 +9,7 @@ live event stream are the production seams. See ``docs/ADAPTER_MATURITY.md``.
 """
 
 from .app import GatewayApp, GatewayConfig
+from .asgi import GatewayASGI
 from .errors import GatewayError, WebhookError
 from .http import Request, Response, Router
 from .openapi import API_VERSION, build_openapi
@@ -17,6 +18,7 @@ from .webhooks import WebhookSigner, WebhookVerifier
 __all__ = [
     "API_VERSION",
     "GatewayApp",
+    "GatewayASGI",
     "GatewayConfig",
     "GatewayError",
     "Request",
