@@ -8,6 +8,7 @@ _SCHEMA = """CREATE TABLE IF NOT EXISTS metering_events (
     run_id TEXT NOT NULL,
     version_id TEXT,
     consumer_tenant TEXT,
+    consumer_principal TEXT,
     outcome TEXT NOT NULL,
     audit_seq INTEGER NOT NULL,
     occurred_at TEXT NOT NULL,
@@ -27,14 +28,16 @@ class MeteringLedger:
             cursor = db.execute(
                 """INSERT OR IGNORE INTO metering_events
                    (event_id, idempotency_key, run_id, version_id, consumer_tenant,
-                    outcome, audit_seq, occurred_at, payload_json, recorded_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    consumer_principal, outcome, audit_seq, occurred_at, payload_json,
+                    recorded_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     event.event_id,
                     event.idempotency_key,
                     event.run_id,
                     event.version_id,
                     event.consumer_tenant,
+                    event.consumer_principal,
                     event.outcome,
                     event.audit_seq,
                     event.occurred_at.isoformat(),
@@ -53,6 +56,15 @@ class MeteringLedger:
         if row is None:
             return None
         return MeteringEvent.model_validate_json(row["payload_json"])
+
+    def verified_run(self, version_id: str, consumer_principal: str) -> bool:
+        with self._conn.lock:
+            row = self._conn.db.execute(
+                "SELECT 1 FROM metering_events"
+                " WHERE version_id = ? AND consumer_principal = ? LIMIT 1",
+                (version_id, consumer_principal),
+            ).fetchone()
+        return row is not None
 
     def events(self) -> list[MeteringEvent]:
         with self._conn.lock:

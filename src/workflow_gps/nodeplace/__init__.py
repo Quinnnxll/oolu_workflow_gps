@@ -2,7 +2,9 @@ from .errors import (
     ContributionError,
     NodeplaceError,
     OwnershipError,
+    RatingError,
     SafetyViolation,
+    UnverifiedRunError,
 )
 from .models import (
     NODEPLACE_SCHEMA_VERSION,
@@ -13,9 +15,12 @@ from .models import (
     NodeVersion,
     PricingModel,
     PricingPolicy,
+    Rating,
     Visibility,
 )
 from .pricing import gross_from_policy
+from .ratings import RatingService, RatingStore
+from .reputation import mu_from_ratings
 from .safety import NodeSafetyGate, SafetyReport
 from .sanitize import sanitize_skill
 from .service import ContributionResult, NodeplaceService
@@ -36,10 +41,16 @@ __all__ = [
     "OwnershipError",
     "PricingModel",
     "PricingPolicy",
+    "Rating",
+    "RatingError",
+    "RatingService",
+    "RatingStore",
     "RegistryStore",
     "SafetyReport",
     "SafetyViolation",
+    "UnverifiedRunError",
     "Visibility",
     "gross_from_policy",
+    "mu_from_ratings",
     "sanitize_skill",
 ]

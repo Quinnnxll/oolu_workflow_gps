@@ -94,3 +94,16 @@ class PricingPolicy(BaseModel):
     unit_price: float = 0.0
     currency: str = "USD"
     cost_recovery: CostRecovery = CostRecovery.ABSORB
+
+
+class Rating(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    schema_version: int = NODEPLACE_SCHEMA_VERSION
+    rating_id: str = Field(default_factory=_id)
+    subject_version_id: str
+    rater_principal: str
+    score: int
+    text: str = ""
+    verified_run: bool = True
+    created_at: datetime = Field(default_factory=_now)

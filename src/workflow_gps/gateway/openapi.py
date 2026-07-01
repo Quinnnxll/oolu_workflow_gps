@@ -51,6 +51,10 @@ def build_openapi() -> dict:
         "/v1/nodeplace/{node_id}/revoke": {"post": op("Revoke a contributed node")},
         "/v1/listings": {"get": op("Discover active public node listings")},
         "/v1/listings/{listing_id}/publish": {"post": op("Publish a draft listing")},
+        "/v1/versions/{version_id}/ratings": {
+            "get": op("List a version's ratings and reputation"),
+            "post": op("Rate a version (requires a verified successful run)"),
+        },
         "/v1/earnings": {"get": op("The caller's own earnings balance (display-only)")},
         "/v1/earnings/entries": {"get": op("The caller's own earnings ledger entries")},
         "/v1/openapi.json": {"get": op("This document", secured=False)},

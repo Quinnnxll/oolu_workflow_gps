@@ -30,6 +30,9 @@ from ..nodeplace import (
     ContributionError,
     NodeplaceService,
     OwnershipError,
+    RatingError,
+    RatingService,
+    UnverifiedRunError,
     Visibility,
 )
 from ..orchestrator import OrchestratorError
@@ -98,6 +101,7 @@ class GatewayApp:
         idempotency: IdempotencyLedger | None = None,
         nodeplace: NodeplaceService | None = None,
         billing: BillingService | None = None,
+        ratings: RatingService | None = None,
         clock: Callable[[], datetime] | None = None,
     ):
         self._durable = durable
@@ -106,6 +110,7 @@ class GatewayApp:
         self._approval = approval_authority
         self._nodeplace = nodeplace
         self._billing = billing
+        self._ratings = ratings
         self._vault = vault or SecretVault()
         self._config = config or GatewayConfig()
         self._idem = idempotency or durable.idempotency
@@ -220,6 +225,8 @@ class GatewayApp:
         r.add("POST", "/v1/nodeplace/{node_id}/revoke", self._revoke_node)
         r.add("GET", "/v1/listings", self._discover_listings)
         r.add("POST", "/v1/listings/{listing_id}/publish", self._publish_listing)
+        r.add("POST", "/v1/versions/{version_id}/ratings", self._rate_version)
+        r.add("GET", "/v1/versions/{version_id}/ratings", self._list_ratings)
         r.add("GET", "/v1/earnings", self._earnings_balance)
         r.add("GET", "/v1/earnings/entries", self._earnings_entries)
 
@@ -590,6 +597,42 @@ class GatewayApp:
         except ContributionError as exc:
             raise GatewayError(404, "not_found", str(exc)) from exc
         return json_response(200, listing.model_dump(mode="json"))
+
+    def _require_ratings(self) -> RatingService:
+        if self._ratings is None:
+            raise GatewayError(404, "not_found", "ratings are not enabled")
+        return self._ratings
+
+    def _rate_version(self, request, session, params) -> Response:
+        ratings = self._require_ratings()
+        body = request.body or {}
+        try:
+            score = int(body.get("score"))
+        except (TypeError, ValueError) as exc:
+            raise GatewayError(400, "invalid_request", "score must be an integer") from exc
+        try:
+            rating = ratings.rate(
+                rater_principal=session.principal_id,
+                version_id=params["version_id"],
+                score=score,
+                text=str(body.get("text", "")),
+            )
+        except UnverifiedRunError as exc:
+            raise GatewayError(403, "forbidden", str(exc)) from exc
+        except RatingError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(201, rating.model_dump(mode="json"))
+
+    def _list_ratings(self, request, session, params) -> Response:
+        ratings = self._require_ratings()
+        version_id = params["version_id"]
+        return json_response(
+            200,
+            {
+                "items": [r.model_dump(mode="json") for r in ratings.ratings(version_id)],
+                "reputation": ratings.reputation(version_id),
+            },
+        )
 
     def _earnings_balance(self, request, session, params) -> Response:
         billing = self._require_billing()

@@ -25,6 +25,7 @@ class MeteringEvent(BaseModel):
     run_id: str
     version_id: str | None = None
     consumer_tenant: str | None = None
+    consumer_principal: str | None = None
     outcome: str
     gross: float | None = None
     provider_cost: float | None = None
@@ -48,6 +49,7 @@ class RunBinding(BaseModel):
     run_id: str
     version_id: str
     consumer_tenant: str
+    consumer_principal: str | None = None
     gross: float = 0.0
     provider_cost: float = 0.0
     shares: list[NoderShare] = Field(default_factory=list)

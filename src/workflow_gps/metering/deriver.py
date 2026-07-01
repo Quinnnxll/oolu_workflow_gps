@@ -37,6 +37,7 @@ class MeteringDeriver:
                 run_id=run_id,
                 version_id=binding.version_id if binding else None,
                 consumer_tenant=binding.consumer_tenant if binding else None,
+                consumer_principal=binding.consumer_principal if binding else None,
                 outcome=record.payload["status"],
                 gross=binding.gross if binding else None,
                 provider_cost=binding.provider_cost if binding else None,
