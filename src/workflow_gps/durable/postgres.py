@@ -193,6 +193,10 @@ def _migrate_pg(pg: Any) -> None:
 
 
 class PostgresDurableConnection:
+    # The multi-process production backend: the only durable adapter on which
+    # real money movement is permitted (invariant #8).
+    is_production_durable = True
+
     def __init__(self, dsn: str | None = None) -> None:
         resolved = dsn or os.environ.get("DATABASE_URL")
         if not resolved:

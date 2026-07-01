@@ -180,6 +180,10 @@ DURABLE_MIGRATIONS: tuple[Migration, ...] = (
 class DurableConnection:
     """Owns one SQLite connection and a re-entrant lock for the durable runtime."""
 
+    # The local single-host adapter: safe for durable state, but not the
+    # production backend that real money movement requires (invariant #8).
+    is_production_durable = False
+
     def __init__(self, path: str | Path):
         db_path = str(path) if str(path) == ":memory:" else str(Path(path).expanduser())
         if db_path != ":memory:":
