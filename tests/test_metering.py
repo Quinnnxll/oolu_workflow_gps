@@ -118,18 +118,17 @@ def test_multiple_runs_each_produce_one_event(conn):
     assert len(ledger.events()) == 2
 
 
-def test_metering_event_has_no_pricing_fields():
+def test_metering_event_has_no_earnings_fields():
+    # P1: gross G and provider_cost C_p are recorded facts on the event; derived
+    # earnings/payout must never live here (that is billing/, display-only in P1).
     forbidden = {
-        "gross",
         "net",
-        "provider_cost",
-        "price",
-        "unit_price",
-        "amount",
         "commission",
         "earning",
-        "cost",
-        "currency",
+        "platform_earning",
+        "noder_earning",
+        "payout",
+        "balance",
     }
     assert not (set(MeteringEvent.model_fields) & forbidden)
 

@@ -10,6 +10,7 @@ from .models import (
     PricingPolicy,
     Visibility,
 )
+from .pricing import gross_from_policy
 from .sanitize import sanitize_skill
 from .service import ContributionResult, NodeplaceService
 from .store import RegistryStore
@@ -30,5 +31,6 @@ __all__ = [
     "PricingPolicy",
     "RegistryStore",
     "Visibility",
+    "gross_from_policy",
     "sanitize_skill",
 ]
