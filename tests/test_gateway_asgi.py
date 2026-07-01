@@ -115,3 +115,125 @@ def test_query_string_is_forwarded(tmp_path):
         assert len(json.loads(body)["items"]) == 1
     finally:
         conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# Live WebSocket event transport (ADR-0004).                                  #
+# --------------------------------------------------------------------------- #
+def _ws(asgi, path, *, subprotocols=None, query=b"", incoming=None):
+    """Drive a WebSocket scope. ``incoming`` is a list of post-connect client
+
+    frames (a callable is invoked for its side effect, e.g. appending an audit
+    event, and then treated as a plain client frame); the stream is terminated
+    with a ``websocket.disconnect`` once they are exhausted.
+    """
+    scope = {
+        "type": "websocket",
+        "path": path,
+        "subprotocols": list(subprotocols or []),
+        "query_string": query if isinstance(query, bytes) else query.encode(),
+    }
+    frames: list = [{"type": "websocket.connect"}, *(incoming or [])]
+    index = 0
+
+    async def receive():
+        nonlocal index
+        if index < len(frames):
+            frame = frames[index]
+            index += 1
+            if callable(frame):
+                frame()
+                return {"type": "websocket.receive", "text": "poll"}
+            return frame
+        return {"type": "websocket.disconnect", "code": 1000}
+
+    sent: list[dict] = []
+
+    async def send(message):
+        sent.append(message)
+
+    asyncio.run(asgi(scope, receive, send))
+    return sent
+
+
+def _submit_run(asgi, token):
+    _, _, body = _call(
+        asgi, "POST", "/v1/runs", headers=_auth(token), body={"intent": "auto"}
+    )
+    return json.loads(body)["run_id"]
+
+
+def test_websocket_rejects_missing_token(tmp_path):
+    app, conn, _ = _app(tmp_path)
+    asgi = GatewayASGI(app)
+    token = _fresh_token()
+    try:
+        run_id = _submit_run(asgi, token)
+        sent = _ws(asgi, f"/v1/runs/{run_id}/events")
+        assert sent == [{"type": "websocket.close", "code": 4401}]
+    finally:
+        conn.close()
+
+
+def test_websocket_streams_snapshot_then_closes(tmp_path):
+    app, conn, _ = _app(tmp_path)
+    asgi = GatewayASGI(app)
+    token = _fresh_token()
+    try:
+        run_id = _submit_run(asgi, token)
+        sent = _ws(
+            asgi,
+            f"/v1/runs/{run_id}/events",
+            subprotocols=["bearer", token],
+        )
+        assert sent[0] == {"type": "websocket.accept", "subprotocol": "bearer"}
+        frames = [json.loads(m["text"]) for m in sent if m["type"] == "websocket.send"]
+        assert frames, "expected the run's audit snapshot to be pushed"
+        assert all({"seq", "event_type", "phase", "at"} <= f.keys() for f in frames)
+        seqs = [f["seq"] for f in frames]
+        assert seqs == sorted(seqs)
+    finally:
+        conn.close()
+
+
+def test_websocket_pushes_new_events_incrementally(tmp_path):
+    app, conn, _ = _app(tmp_path)
+    asgi = GatewayASGI(app)
+    token = _fresh_token()
+    try:
+        run_id = _submit_run(asgi, token)
+
+        def emit():
+            app._durable.audit.append("live.marker", {"run_id": run_id})
+
+        sent = _ws(
+            asgi,
+            f"/v1/runs/{run_id}/events",
+            query=f"access_token={token}",
+            incoming=[emit],
+        )
+        assert sent[0] == {"type": "websocket.accept"}
+        frames = [json.loads(m["text"]) for m in sent if m["type"] == "websocket.send"]
+        assert any(f["event_type"] == "live.marker" for f in frames)
+        # The marker is delivered exactly once and never before its own seq.
+        markers = [f for f in frames if f["event_type"] == "live.marker"]
+        assert len(markers) == 1
+    finally:
+        conn.close()
+
+
+def test_websocket_cross_tenant_run_is_closed(tmp_path):
+    app, conn, _ = _app(tmp_path)
+    asgi = GatewayASGI(app)
+    owner = _fresh_token(subject="user-1", tenant="t1")
+    intruder = _fresh_token(subject="user-2", tenant="t2")
+    try:
+        run_id = _submit_run(asgi, owner)
+        sent = _ws(
+            asgi,
+            f"/v1/runs/{run_id}/events",
+            subprotocols=["bearer", intruder],
+        )
+        assert sent == [{"type": "websocket.close", "code": 4404}]
+    finally:
+        conn.close()

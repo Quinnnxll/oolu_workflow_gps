@@ -12,6 +12,7 @@ database see one consistent set of runs.
 
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -176,10 +177,11 @@ class GatewayApp:
     # Middleware.                                                         #
     # ------------------------------------------------------------------ #
     def _authenticate(self, request: Request) -> Session:
-        token = request.bearer_token()
+        return self._session_for(request.bearer_token(), request.now or self._clock())
+
+    def _session_for(self, token: str | None, now: datetime) -> Session:
         if not token:
             raise GatewayError(401, "unauthorized", "missing bearer token")
-        now = request.now or self._clock()
         try:
             claims = self._validator.validate(token, now=now)
         except AuthenticationError as exc:
@@ -194,6 +196,50 @@ class GatewayApp:
             amr=list(claims.amr),
             source_issuer=claims.issuer,
         )
+
+    # ------------------------------------------------------------------ #
+    # Live event transport (ADR-0004).                                    #
+    #                                                                     #
+    # The gateway is transport-agnostic: it exposes the two operations a  #
+    # live pushing transport (WebSocket over the ASGI binding) needs —    #
+    # authorize a run stream, and read event frames after a sequence —    #
+    # without knowing anything about sockets. The SSE ``_events`` handler #
+    # and the WebSocket binding both consume ``run_event_frames``.        #
+    # ------------------------------------------------------------------ #
+    def authorize_stream(
+        self, token: str | None, run_id: str, *, now: datetime | None = None
+    ) -> RunState:
+        """Authenticate a live-stream subscriber and tenant-guard the run.
+
+        Mirrors the HTTP auth path (validated token → session, never trusted
+        text) and the cross-tenant guard of ``_load`` (a run owned by another
+        tenant is indistinguishable from a missing one). Raises
+        :class:`GatewayError`; the ASGI binding maps its status onto a close code.
+        """
+        session = self._session_for(token, now or self._clock())
+        return self._load(run_id, session)
+
+    def run_event_frames(self, run_id: str, *, after_seq: int = 0) -> list[dict]:
+        """Return audit-derived event frames for a run after ``after_seq``.
+
+        Each frame carries the audit ``seq`` (the resumable cursor), the event
+        type, the run's current ``phase``, and the entry timestamp. The durable
+        audit stream is append-only, so ``after_seq`` yields only new frames —
+        the increment a live transport pushes. Returns ``[]`` for an unknown run.
+        """
+        state = self._durable.get(run_id)
+        if state is None:
+            return []
+        return [
+            {
+                "seq": r.seq,
+                "event_type": r.event_type,
+                "phase": state.phase.value,
+                "at": r.at.isoformat(),
+            }
+            for r in self._durable.audit.records(run_id=run_id)
+            if r.seq > after_seq
+        ]
 
     def _enforce_rate_limit(self, session: Session, request: Request) -> None:
         bucket = self._buckets.setdefault(
@@ -472,12 +518,15 @@ class GatewayApp:
         )
 
     def _events(self, request, session, params) -> Response:
+        # SSE snapshot: the polling fallback for the live WebSocket transport
+        # (ADR-0004). Both render the same ``run_event_frames`` so a client can
+        # switch between them without seeing a different event shape.
         state = self._load(params["run_id"], session)
-        records = self._durable.audit.records(run_id=state.run_id)
         frames = [
-            f"event: {r.event_type}\ndata: "
-            + f'{{"seq": {r.seq}, "phase": "{state.phase.value}"}}\n'
-            for r in records
+            f"event: {frame['event_type']}\ndata: "
+            + json.dumps({"seq": frame["seq"], "phase": frame["phase"]})
+            + "\n"
+            for frame in self.run_event_frames(state.run_id)
         ]
         return Response(
             status=200, body="\n".join(frames) + "\n", content_type="text/event-stream"
@@ -545,7 +594,9 @@ class GatewayApp:
             skill = ReusableSkill.model_validate(body["skill"])
             visibility = Visibility(body.get("visibility", "public"))
         except (KeyError, ValueError, TypeError) as exc:
-            raise GatewayError(400, "invalid_request", f"invalid contribution: {exc}") from exc
+            raise GatewayError(
+                400, "invalid_request", f"invalid contribution: {exc}"
+            ) from exc
         try:
             result = nodeplace.contribute(
                 noder_principal=session.principal_id,
@@ -628,7 +679,9 @@ class GatewayApp:
         try:
             score = int(body.get("score"))
         except (TypeError, ValueError) as exc:
-            raise GatewayError(400, "invalid_request", "score must be an integer") from exc
+            raise GatewayError(
+                400, "invalid_request", "score must be an integer"
+            ) from exc
         try:
             rating = ratings.rate(
                 rater_principal=session.principal_id,
@@ -648,7 +701,9 @@ class GatewayApp:
         return json_response(
             200,
             {
-                "items": [r.model_dump(mode="json") for r in ratings.ratings(version_id)],
+                "items": [
+                    r.model_dump(mode="json") for r in ratings.ratings(version_id)
+                ],
                 "reputation": ratings.reputation(version_id),
             },
         )
@@ -727,7 +782,10 @@ class GatewayApp:
                     )
                     self._payout_store.update_batch(
                         batch.model_copy(
-                            update={"status": status, "provider_ref": body.get("provider_ref")}
+                            update={
+                                "status": status,
+                                "provider_ref": body.get("provider_ref"),
+                            }
                         )
                     )
                     result["batch_id"] = batch.batch_id
