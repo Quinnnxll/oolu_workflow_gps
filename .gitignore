@@ -37,3 +37,6 @@ secrets.*
 *.swp
 .DS_Store
 Thumbs.db
+
+# Git bundles (transfer artifacts, never tracked)
+*.bundle
