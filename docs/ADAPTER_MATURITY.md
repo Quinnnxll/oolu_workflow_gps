@@ -62,10 +62,15 @@ production-capable for the local single-user alpha: the run state is versioned a
 serializable, and the execution preflight guard is contract-tested. The default
 stage adapters that ship with it are deliberately deterministic and offline (see
 ADR-0002); each is the seam where a richer implementation lands on a later branch.
-Intake is the first such seam filled: `ModelBackedIntaker` replaces the test-only
-`StaticIntaker` with real natural-language intake (with a deterministic offline
-fallback), while grounding, route generation, and execution remain the seams
-where the skills registry, a planner, and real backends plug in next.
+Intake, route generation, and a runnable assembly are now filled:
+`ModelBackedIntaker` replaces the test-only `StaticIntaker` with real
+natural-language intake (with a deterministic offline fallback);
+`SkillRegistryPlanner` generates candidate blueprints from a skill registry; and
+`workflow_gps.assembly.build_desktop_runtime` wires the whole durable +
+orchestrator + desktop stack from `Settings` (previously only assemblable in
+tests). A deployment with no skills/executors wired runs planning-only and
+terminates a run with "no executable route is configured yet" rather than faking
+success — real backends are the remaining seam.
 
 | Adapter | Module | Maturity | Notes |
 | --- | --- | --- | --- |
@@ -73,6 +78,8 @@ where the skills registry, a planner, and real backends plug in next.
 | `LocalRunStateStore` | `orchestrator/store.py` | Production-capable (local) | Versioned SQLite run-state store via the shared migration runner. |
 | `ActionExecutorRouteRunner` | `orchestrator/adapters.py` | Experimental | Executes a route through the `ActionExecutor` contract; isolation is the executor's responsibility (use the Docker backend for untrusted code). |
 | `RiskBasedHumanControl`, `LeastCostRouteOptimizer`, `CapabilityGrounder`, `StatusOutcomeMonitor`, `BoundedRetryRecovery` | `orchestrator/adapters.py` | Experimental | Deterministic default policies; tunable but not yet hardened for production decisioning. |
+| `SkillRegistryPlanner` (+ `RegistryGrounder`, `classify_risk`) | `orchestrator/planner.py` | Experimental | Generates candidate blueprints from a set of `ReusableSkill`s and resolves their capabilities; a verb heuristic assigns per-action risk (read/write/irreversible) so writes gate on confirmation and irreversible actions are reserved for approval. The heuristic and 1-skill→1-blueprint mapping are the tunable parts. |
+| `build_desktop_runtime` / `DesktopRuntime` (+ `build_cli_executor`, `build_intake_model`) | `assembly.py` | Experimental | The production assembly: one call wires the durable stack + orchestrator + `DesktopService` from `Settings`. Route planning and execution are injectable seams (`skills`/`blueprints`/`executors`); planner-less deployments run intake→clarification then terminate honestly with no executable route. |
 | `ModelBackedIntaker` (+ `HeuristicIntaker`) | `orchestrator/intake.py` | Production-capable (local) | Natural-language intake: turns a free-text intent into a structured `RequirementBrief`. Upholds the system's safety lines — never binds a parameter value (only suggests, so provenance is preserved), never lets the model self-authorize (a brief from intake is always `GUIDED`), and never lets a bad or absent model turn kill the run (degrades to the deterministic `HeuristicIntaker`). Contract-tested offline with a fake model. |
 | `LiteLLMIntakeModel` | `orchestrator/intake.py` | Production-capable (logic) | The live `IntakeModel` over LiteLLM (any OpenAI-compatible endpoint); lazily imported behind the `engine` extra, credentials from the environment. `FakeModel`-style injection keeps intake testable with no network. |
 | `StaticIntaker` | `orchestrator/adapters.py` | Test-only | Returns a pre-built brief. Superseded for real intake by `ModelBackedIntaker`; retained for deterministic scenario tests. |

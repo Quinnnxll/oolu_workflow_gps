@@ -17,13 +17,16 @@ from .orchestrator import (
     CollectingFeedbackSink,
     LeastCostRouteOptimizer,
     ModelBackedIntaker,
+    RegistryGrounder,
     RiskBasedHumanControl,
+    SkillRegistryPlanner,
     StatusOutcomeMonitor,
     WorkflowOrchestrator,
 )
 from .orchestrator.intake import IntakeModel
 from .orchestrator.state import Blueprint, RoutePlan, SemanticEdge, SemanticGrounding
 from .providers.vault import SecretVault
+from .skills.models import ReusableSkill
 from .skills.ports import ActionExecutor
 from .skills.requirements import RequirementBrief
 from .worker.policy import IsolationPolicy
@@ -71,6 +74,23 @@ class DesktopRuntime:
         self.close()
 
 
+def build_cli_executor(
+    *,
+    workspace: str | Path,
+    allowed_executables: list[str],
+    timeout_s: float = 30.0,
+) -> dict[str, ActionExecutor]:
+    from .skills.cli_adapter import CliActionExecutor, CliExecutionPolicy
+
+    policy = CliExecutionPolicy.create(
+        workspace=workspace,
+        allowed_executables=allowed_executables,
+        timeout_s=timeout_s,
+    )
+    executor = CliActionExecutor(policy)
+    return {executor.name: executor}
+
+
 def build_intake_model(settings: Settings | None = None) -> IntakeModel:
     settings = settings or Settings()
     from .orchestrator.intake import LiteLLMIntakeModel
@@ -84,6 +104,7 @@ def build_orchestrator_factory(
     settings: Settings | None = None,
     *,
     intake_model: IntakeModel | None = None,
+    skills: list[ReusableSkill] | None = None,
     blueprints: list[Blueprint] | None = None,
     grounding_map: dict[str, str] | None = None,
     executors: dict[str, ActionExecutor] | None = None,
@@ -91,11 +112,15 @@ def build_orchestrator_factory(
     intaker = ModelBackedIntaker(intake_model)
     executor = ActionExecutorRouteRunner(dict(executors or {}))
 
-    if blueprints:
-        grounder: object = CapabilityGrounder(
+    if skills and not blueprints:
+        planner = SkillRegistryPlanner(skills)
+        grounder: object = RegistryGrounder(planner.capabilities())
+        optimizer: object = LeastCostRouteOptimizer(planner.blueprints())
+    elif blueprints:
+        grounder = CapabilityGrounder(
             dict(grounding_map or {}), always_resolved=executor.capabilities()
         )
-        optimizer: object = LeastCostRouteOptimizer(list(blueprints))
+        optimizer = LeastCostRouteOptimizer(list(blueprints))
     else:
         grounder = PassthroughGrounder()
         optimizer = PlanningOnlyOptimizer()
@@ -121,6 +146,7 @@ def build_desktop_runtime(
     *,
     db_path: str | Path,
     intake_model: IntakeModel | None = None,
+    skills: list[ReusableSkill] | None = None,
     blueprints: list[Blueprint] | None = None,
     grounding_map: dict[str, str] | None = None,
     executors: dict[str, ActionExecutor] | None = None,
@@ -138,6 +164,7 @@ def build_desktop_runtime(
     factory = build_orchestrator_factory(
         settings,
         intake_model=intake_model,
+        skills=skills,
         blueprints=blueprints,
         grounding_map=grounding_map,
         executors=executors,

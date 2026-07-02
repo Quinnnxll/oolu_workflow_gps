@@ -23,6 +23,7 @@ from .intake import (
     LiteLLMIntakeModel,
     ModelBackedIntaker,
 )
+from .planner import RegistryGrounder, SkillRegistryPlanner, classify_risk
 from .ports import (
     FeedbackSink,
     Grounder,
@@ -100,6 +101,7 @@ __all__ = [
     "PreflightError",
     "RecoveryDecision",
     "RecoveryPolicy",
+    "RegistryGrounder",
     "ReservedAction",
     "ResumeError",
     "ResumeInput",
@@ -110,7 +112,9 @@ __all__ = [
     "RunStateStore",
     "SemanticEdge",
     "SemanticGrounding",
+    "SkillRegistryPlanner",
     "StaticIntaker",
+    "classify_risk",
     "StatusOutcomeMonitor",
     "TaskContract",
     "WorkflowExecutor",

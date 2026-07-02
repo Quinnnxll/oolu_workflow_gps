@@ -1,11 +1,17 @@
 from __future__ import annotations
 
-from workflow_gps.assembly import build_desktop_runtime
+import shutil
+
+import pytest
+
+from workflow_gps.assembly import build_cli_executor, build_desktop_runtime
 from workflow_gps.orchestrator.state import Blueprint, ReservedAction
 from workflow_gps.skills.models import (
     ActionEvent,
     ExecutionOutcome,
     ExecutionStatus,
+    ReusableSkill,
+    SkillSignature,
 )
 
 
@@ -78,6 +84,39 @@ def test_full_path_runs_end_to_end_with_injected_planner(tmp_path):
             "route": "echo-route",
             "actions": 1,
         }
+
+
+def _cli_run_skill(argv):
+    return ReusableSkill(
+        name="cli-task",
+        description="run a command",
+        signature=SkillSignature(application="cli", adapter="cli"),
+        actions=[
+            ActionEvent(
+                correlation_id="c1",
+                adapter="cli",
+                operation="run",
+                parameters={"argv": argv},
+            )
+        ],
+    )
+
+
+def test_registry_and_cli_executor_run_a_real_command(tmp_path):
+    if shutil.which("true") is None:
+        pytest.skip("no `true` binary")
+    with build_desktop_runtime(
+        db_path=tmp_path / "d.db",
+        skills=[_cli_run_skill(["true"])],
+        executors=build_cli_executor(workspace=tmp_path, allowed_executables=["true"]),
+    ) as rt:
+        view = rt.desktop.submit_task("run the thing")
+        assert view.awaiting == "confirmation"
+
+        done = rt.desktop.confirm(view.run_id, approved=True)
+        assert done.phase == "completed"
+        assert done.result["status"] == "succeeded"
+        assert done.result["route"] == "cli-task"
 
 
 def test_runs_survive_reopening_the_same_db(tmp_path):
