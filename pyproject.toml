@@ -36,6 +36,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/workflow_gps"]
+artifacts = ["src/workflow_gps/skills/packs/*.yaml"]
 
 [tool.ruff]
 line-length = 88

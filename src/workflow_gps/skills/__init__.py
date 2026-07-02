@@ -18,6 +18,14 @@ from .models import (
     SkillSignature,
     StateSnapshot,
 )
+from .pack import (
+    SkillPack,
+    SkillPackEntry,
+    load_skill_pack,
+    load_starter_pack,
+    parse_skill_pack,
+    starter_pack_text,
+)
 from .ports import (
     ActionExecutor,
     ApprovalProvider,
@@ -112,6 +120,8 @@ __all__ = [
     "ReusableSkill",
     "ScoredSkill",
     "SkillContextBuilder",
+    "SkillPack",
+    "SkillPackEntry",
     "SkillParameter",
     "SkillRegistry",
     "SkillSignature",
@@ -124,5 +134,9 @@ __all__ = [
     "WorkspaceConstraintValidator",
     "WorkspaceProbe",
     "changed_artifacts",
+    "load_skill_pack",
+    "load_starter_pack",
+    "parse_skill_pack",
     "render_tool_manifest",
+    "starter_pack_text",
 ]

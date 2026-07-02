@@ -1,0 +1,121 @@
+# OoLu starter skill pack — reviewed, declarative web-automation skills.
+#
+# These populate the local SkillRegistry so the fast tier has real tools to
+# retrieve and /v1/skills has content out of the box. They declare intent,
+# parameters, and actions; the browser ActionExecutor (Playwright) that runs
+# them ships separately. Every skill_id is stable so re-loading is idempotent.
+skills:
+  - skill_id: "web.dynamic_dropdown"
+    name: "Interact with a Dynamic Dropdown"
+    summary: "Open a JavaScript dropdown that lazy-loads its options and select one."
+    semver: "1.0.0"
+    tags: [web, ui, dropdown, select, form]
+    application: web
+    adapter: browser
+    parameters:
+      - name: trigger_selector
+        value_type: string
+        description: "CSS selector of the element that opens the dropdown"
+      - name: option_text
+        value_type: string
+        description: "Visible text of the option to choose"
+    actions:
+      - operation: click
+        parameters: { target: trigger }
+      - operation: wait_for
+        parameters: { state: options_loaded }
+      - operation: select_option
+
+  - skill_id: "web.paginated_table"
+    name: "Extract a Paginated Table"
+    summary: "Read every row of a table that spans multiple pages and return the rows."
+    semver: "1.0.0"
+    tags: [web, table, extract, pagination, scrape, data]
+    application: web
+    adapter: browser
+    parameters:
+      - name: table_selector
+        value_type: string
+        description: "CSS selector of the table"
+      - name: next_selector
+        value_type: string
+        description: "CSS selector of the next-page control"
+      - name: max_pages
+        value_type: integer
+        required: false
+    actions:
+      - operation: read_rows
+      - operation: click
+        parameters: { target: next_page }
+      - operation: read_rows
+
+  - skill_id: "web.twofa_intercept"
+    name: "Solve a 2FA Intercept"
+    summary: "Read a one-time passcode from the configured channel and enter it to pass 2FA."
+    semver: "1.0.0"
+    tags: [web, auth, 2fa, otp, mfa, login]
+    application: web
+    adapter: browser
+    parameters:
+      - name: code_selector
+        value_type: string
+        description: "CSS selector of the OTP input field"
+      - name: otp_source
+        value_type: string
+        description: "Where the code arrives (e.g. authenticator, sms, email)"
+    actions:
+      - operation: read_otp
+      - operation: fill
+        parameters: { target: code_field }
+      - operation: submit
+
+  - skill_id: "web.fill_and_submit_form"
+    name: "Fill and Submit a Form"
+    summary: "Populate a set of form fields from parameters and submit the form."
+    semver: "1.0.0"
+    tags: [web, form, fill, submit, input]
+    application: web
+    adapter: browser
+    parameters:
+      - name: form_selector
+        value_type: string
+      - name: fields
+        value_type: object
+        description: "Map of field selector -> value"
+    actions:
+      - operation: fill
+      - operation: submit
+
+  - skill_id: "web.download_file"
+    name: "Download a File"
+    summary: "Click a download control and capture the resulting file into the workspace."
+    semver: "1.0.0"
+    tags: [web, download, file, export]
+    application: web
+    adapter: browser
+    parameters:
+      - name: download_selector
+        value_type: string
+      - name: save_as
+        value_type: string
+        required: false
+    actions:
+      - operation: click
+        parameters: { target: download }
+      - operation: capture_download
+
+  - skill_id: "http.get_json"
+    name: "Fetch JSON from an API"
+    summary: "Perform an authenticated GET request to a JSON endpoint and return the body."
+    semver: "1.0.0"
+    tags: [http, api, json, fetch, get, read]
+    application: http
+    adapter: http
+    parameters:
+      - name: url
+        value_type: string
+      - name: headers
+        value_type: object
+        required: false
+    actions:
+      - operation: get

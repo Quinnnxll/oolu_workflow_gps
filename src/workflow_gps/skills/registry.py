@@ -33,10 +33,20 @@ def _tokens(text: str) -> list[str]:
     return [t for t in _TOKEN_RE.findall(text.lower()) if t not in _STOPWORDS]
 
 
+_VOLATILE_FIELDS = ("created_at", "updated_at", "success_count", "failure_count")
+_VOLATILE_ACTION_FIELDS = ("id", "observed_at")
+_ACTION_LISTS = ("actions", "recovery_actions")
+
+
 def _content_hash(skill: ReusableSkill) -> str:
-    canonical = json.dumps(
-        skill.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
-    )
+    data = skill.model_dump(mode="json")
+    for field in _VOLATILE_FIELDS:
+        data.pop(field, None)
+    for key in _ACTION_LISTS:
+        for action in data.get(key, []):
+            for field in _VOLATILE_ACTION_FIELDS:
+                action.pop(field, None)
+    canonical = json.dumps(data, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 

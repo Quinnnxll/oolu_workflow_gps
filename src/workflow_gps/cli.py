@@ -219,6 +219,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     workflow_status.add_argument("--json", action="store_true")
 
+    skill_register = sub.add_parser(
+        "skill-register",
+        help="load a skill pack (or the starter pack) into the registry",
+    )
+    skill_register.add_argument(
+        "pack", nargs="?", metavar="PACK", help="path to a skill-pack YAML file"
+    )
+    skill_register.add_argument(
+        "--starter", action="store_true", help="load the built-in starter pack"
+    )
+    skill_register.add_argument("--config", metavar="PATH", help="models.yaml path")
+    skill_register.add_argument(
+        "--registry", metavar="PATH", help="registry SQLite path"
+    )
+    skill_register.add_argument("--json", action="store_true")
+
     serve = sub.add_parser("serve", help="serve /v1/skills over HTTP (loopback)")
     serve.add_argument("--config", metavar="PATH", help="path to a models.yaml file")
     serve.add_argument("--registry", metavar="PATH", help="skill registry SQLite path")
@@ -231,6 +247,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="NAME_OR_PATH",
         help="allow-list a CLI executable for /v1/skills/execute",
+    )
+    serve.add_argument(
+        "--seed-starter",
+        action="store_true",
+        help="load the built-in starter pack if the registry is empty",
     )
 
     sub.add_parser("show-config", help="print the effective settings").add_argument(
@@ -664,6 +685,40 @@ def _cmd_workflow_status(args, out) -> int:
     return 0
 
 
+def _cmd_skill_register(args, out) -> int:
+    from .config import Settings
+    from .skills.pack import load_skill_pack, load_starter_pack
+    from .skills.registry import SkillRegistry
+
+    if not args.starter and not args.pack:
+        raise _CliError("provide a PACK path or --starter")
+    settings = Settings.load(args.config)
+    registry = SkillRegistry(args.registry or settings.skills.registry_path)
+    try:
+        registered = (
+            load_starter_pack(registry)
+            if args.starter
+            else load_skill_pack(registry, args.pack)
+        )
+    finally:
+        registry.close()
+    if args.json:
+        out.write(
+            json.dumps(
+                [
+                    {"skill_id": r.skill_id, "semver": r.semver, "name": r.name}
+                    for r in registered
+                ]
+            )
+            + "\n"
+        )
+    else:
+        for r in registered:
+            out.write(f"{r.skill_id}@{r.semver}  {r.name}\n")
+        out.write(f"registered {len(registered)} skill(s)\n")
+    return 0
+
+
 def _cmd_serve(args, out) -> int:
     from .config import Settings
     from .skills.registry import SkillRegistry
@@ -672,6 +727,11 @@ def _cmd_serve(args, out) -> int:
     settings = Settings.load(args.config)
     registry_path = args.registry or settings.skills.registry_path
     registry = SkillRegistry(registry_path)
+
+    if args.seed_starter and not registry.list(limit=1):
+        from .skills.pack import load_starter_pack
+
+        load_starter_pack(registry)
 
     executors = {}
     if args.allow_executable:
@@ -716,6 +776,8 @@ def main(argv: list[str] | None = None, *, builder=None, out=None) -> int:
 
                 builder = build_workflow_gps
             return _cmd_run(args, builder, out)
+        if args.command == "skill-register":
+            return _cmd_skill_register(args, out)
         if args.command == "serve":
             return _cmd_serve(args, out)
         if args.command == "show-config":
