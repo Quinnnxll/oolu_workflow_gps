@@ -54,6 +54,8 @@ Maturity levels:
 | `InMemorySkillStore` / `InMemoryExecutionStore` | `skills/store.py` | Test-only | Non-durable. |
 | `RemoteMockSkillStore` / `RemoteMockExecutionStore` | `skills/store.py` | Test-only / simulation | Model a network boundary by storing serialized JSON only. Not a real remote backend. |
 | `CliActionExecutor` | `skills/cli_adapter.py` | Experimental | Runs allow-listed local commands with `shell=False`. **Not an OS sandbox** — allow-listed commands must be trusted. Untrusted execution belongs in the Docker backend or a future restricted worker. |
+| `SkillRegistry` (+ `SkillContextBuilder`) | `skills/registry.py`, `skills/context.py` | Production-capable (local) | Versioned, content-addressed local SQLite catalog keyed by `(skill_id, semver)`; immutable released versions; keyword/tag search. `SkillContextBuilder` renders only the top-`max_context_tools` matching tools (from `models.yaml`) into the fast tier's prompt so context stays small and selection is sub-second. |
+| `SkillsServer` | `skills/server.py` | Experimental | Loopback ASGI exposing `GET /v1/skills` (list/search), `GET /v1/skills/{id}`, and `POST /v1/skills/execute` (runs a skill's actions through wired executors; refuses irreversible actions, which must go through the run/approval flow). Served by `wfgps serve` (behind the `serve` extra). No auth — loopback only. |
 
 ## Unified orchestrator (`orchestrator/`)
 

@@ -219,6 +219,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     workflow_status.add_argument("--json", action="store_true")
 
+    serve = sub.add_parser("serve", help="serve /v1/skills over HTTP (loopback)")
+    serve.add_argument("--config", metavar="PATH", help="path to a models.yaml file")
+    serve.add_argument("--registry", metavar="PATH", help="skill registry SQLite path")
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8756)
+    serve.add_argument("--workspace", metavar="PATH", help="CLI executor workspace")
+    serve.add_argument(
+        "--allow-executable",
+        action="append",
+        default=[],
+        metavar="NAME_OR_PATH",
+        help="allow-list a CLI executable for /v1/skills/execute",
+    )
+
     sub.add_parser("show-config", help="print the effective settings").add_argument(
         "--config", metavar="PATH", help="path to a models.yaml settings file"
     )
@@ -650,6 +664,41 @@ def _cmd_workflow_status(args, out) -> int:
     return 0
 
 
+def _cmd_serve(args, out) -> int:
+    from .config import Settings
+    from .skills.registry import SkillRegistry
+    from .skills.server import SkillsServer
+
+    settings = Settings.load(args.config)
+    registry_path = args.registry or settings.skills.registry_path
+    registry = SkillRegistry(registry_path)
+
+    executors = {}
+    if args.allow_executable:
+        if not args.workspace:
+            raise _CliError("--workspace is required with --allow-executable")
+        from .assembly import build_cli_executor
+
+        executors = build_cli_executor(
+            workspace=args.workspace, allowed_executables=args.allow_executable
+        )
+
+    app = SkillsServer(registry, executors=executors)
+    try:
+        import uvicorn
+    except ImportError as exc:
+        raise _CliError(
+            "uvicorn not installed (`pip install 'workflow-gps[serve]'`)"
+        ) from exc
+
+    out.write(
+        f"serving /v1/skills on http://{args.host}:{args.port} "
+        f"(registry: {registry_path})\n"
+    )
+    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    return 0
+
+
 def _version() -> str:
     return __version__
 
@@ -667,6 +716,8 @@ def main(argv: list[str] | None = None, *, builder=None, out=None) -> int:
 
                 builder = build_workflow_gps
             return _cmd_run(args, builder, out)
+        if args.command == "serve":
+            return _cmd_serve(args, out)
         if args.command == "show-config":
             return _cmd_show_config(args, out)
         if args.command == "telegram":

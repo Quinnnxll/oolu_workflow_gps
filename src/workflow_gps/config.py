@@ -70,6 +70,13 @@ class GraphSettings(BaseModel):
     )
 
 
+class SkillSettings(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    registry_path: str = "~/.workflow-gps/skills-registry.db"
+    max_context_tools: int = Field(default=8, ge=1)
+
+
 class Settings(BaseModel):
     """The whole engine configuration, composed from the components' own models."""
 
@@ -80,6 +87,7 @@ class Settings(BaseModel):
     edges: EdgePolicy = Field(default_factory=EdgePolicy)
     backend: BackendSettings = Field(default_factory=BackendSettings)
     graph: GraphSettings = Field(default_factory=GraphSettings)
+    skills: SkillSettings = Field(default_factory=SkillSettings)
     request_timeout_s: float = Field(
         default=120.0, description="Gateway completion timeout."
     )

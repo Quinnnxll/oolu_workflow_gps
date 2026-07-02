@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Callable
 from typing import Any, Protocol, runtime_checkable
 
 from ..skills.models import ConstraintSeverity, ConstraintSpec
@@ -93,7 +94,14 @@ class LiteLLMIntakeModel:
     the endpoint come from the environment, never persisted here.
     """
 
-    def __init__(self, model: str, *, temperature: float = 0.0, timeout: float = 60.0):
+    def __init__(
+        self,
+        model: str,
+        *,
+        temperature: float = 0.0,
+        timeout: float = 60.0,
+        context_provider: Callable[[str], str] | None = None,
+    ):
         try:
             import litellm
         except (
@@ -107,14 +115,18 @@ class LiteLLMIntakeModel:
         self._model = model
         self._temperature = temperature
         self._timeout = timeout
+        self._context_provider = context_provider
 
     def propose(self, intent: str) -> str:
+        system = INTAKE_SYSTEM_PROMPT
+        if self._context_provider is not None:
+            system = f"{system}\n\n{self._context_provider(intent)}"
         response = self._litellm.completion(
             model=self._model,
             temperature=self._temperature,
             timeout=self._timeout,
             messages=[
-                {"role": "system", "content": INTAKE_SYSTEM_PROMPT},
+                {"role": "system", "content": system},
                 {"role": "user", "content": intent},
             ],
         )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .config import Settings
 from .desktop.service import DesktopService
@@ -30,6 +31,9 @@ from .skills.models import ReusableSkill
 from .skills.ports import ActionExecutor
 from .skills.requirements import RequirementBrief
 from .worker.policy import IsolationPolicy
+
+if TYPE_CHECKING:
+    from .skills.registry import SkillRegistry
 
 _NO_ROUTE_REASON = "no executable route is configured for this deployment yet"
 
@@ -91,12 +95,26 @@ def build_cli_executor(
     return {executor.name: executor}
 
 
-def build_intake_model(settings: Settings | None = None) -> IntakeModel:
+def build_intake_model(
+    settings: Settings | None = None,
+    *,
+    registry: "SkillRegistry | None" = None,
+) -> IntakeModel:
     settings = settings or Settings()
     from .orchestrator.intake import LiteLLMIntakeModel
 
+    context_provider = None
+    if registry is not None:
+        from .skills.context import SkillContextBuilder
+
+        context_provider = SkillContextBuilder(
+            registry, max_tools=settings.skills.max_context_tools
+        ).manifest
+
     return LiteLLMIntakeModel(
-        settings.routing.fast.model, timeout=settings.request_timeout_s
+        settings.routing.fast.model,
+        timeout=settings.request_timeout_s,
+        context_provider=context_provider,
     )
 
 

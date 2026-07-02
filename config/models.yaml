@@ -89,4 +89,13 @@ backend:
 graph:
   recursion_limit: null       # null => derived from edges.max_recalcs
 
+# ---------------------------------------------------------------------------
+# Local skill registry. The fast tier searches this SQLite cache per intent and
+# injects only the top `max_context_tools` matching tool descriptions into its
+# prompt, so context stays small and tool selection stays sub-second.
+# ---------------------------------------------------------------------------
+skills:
+  registry_path: "~/.workflow-gps/skills-registry.db"
+  max_context_tools: 8
+
 request_timeout_s: 120.0      # gateway completion timeout

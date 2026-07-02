@@ -2,6 +2,7 @@
 
 from .cli_adapter import CliActionExecutor, CliExecutionPolicy
 from .compiler import DemonstrationCompiler
+from .context import SkillContextBuilder, render_tool_manifest
 from .models import (
     SKILL_SCHEMA_VERSION,
     ActionEvent,
@@ -30,6 +31,12 @@ from .ports import (
     SkillStore,
     StateProbe,
 )
+from .registry import (
+    SKILL_REGISTRY_MIGRATIONS,
+    RegisteredSkill,
+    ScoredSkill,
+    SkillRegistry,
+)
 from .requirements import (
     AuthorizationGrant,
     AuthorizationMode,
@@ -49,6 +56,7 @@ from .runtime import (
     StaticApprovalProvider,
     WorkspaceConstraintValidator,
 )
+from .server import SkillsServer
 from .store import (
     InMemoryExecutionStore,
     InMemorySkillStore,
@@ -60,6 +68,7 @@ from .store import (
 from .workspace import WorkspaceProbe, changed_artifacts
 
 __all__ = [
+    "SKILL_REGISTRY_MIGRATIONS",
     "SKILL_SCHEMA_VERSION",
     "ActionEvent",
     "ActionExecutor",
@@ -93,6 +102,7 @@ __all__ = [
     "ObserverAdapter",
     "ParameterDomain",
     "ParameterSource",
+    "RegisteredSkill",
     "RemoteMockSkillStore",
     "RemoteMockExecutionStore",
     "RequirementBrief",
@@ -100,9 +110,13 @@ __all__ = [
     "RequirementParameter",
     "SafeSkillRuntime",
     "ReusableSkill",
+    "ScoredSkill",
+    "SkillContextBuilder",
     "SkillParameter",
+    "SkillRegistry",
     "SkillSignature",
     "SkillStore",
+    "SkillsServer",
     "SecretProvider",
     "StateSnapshot",
     "StateProbe",
@@ -110,4 +124,5 @@ __all__ = [
     "WorkspaceConstraintValidator",
     "WorkspaceProbe",
     "changed_artifacts",
+    "render_tool_manifest",
 ]

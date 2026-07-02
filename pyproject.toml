@@ -21,6 +21,7 @@ docker = ["docker>=7.0"]
 postgres = ["psycopg[binary]>=3.1"]   # PostgreSQL durable adapter (workstream A)
 oidc = ["cryptography>=41.0"]          # JWKS RS256/ES256 verifier (workstream B)
 http = ["httpx>=0.27"]                 # real HttpTransport for providers (workstream C)
+serve = ["uvicorn>=0.30"]              # ASGI server for `wfgps serve` (/v1/skills)
 # P2 (v0.5.0) money movement: the Stripe Connect PayoutAdapter reuses the injected
 # HttpTransport (the `http` extra) instead of the Stripe SDK, so it is mockable in
 # tests and never touches raw card data. No separate payments dependency is needed.
