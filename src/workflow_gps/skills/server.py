@@ -6,6 +6,7 @@ from urllib.parse import parse_qs
 from uuid import uuid4
 
 from ..orchestrator.planner import classify_risk
+from .discovery import DiscoveredTool
 from .ports import ActionExecutor
 from .registry import RegisteredSkill, SkillRegistry
 
@@ -34,9 +35,11 @@ class SkillsServer:
         registry: SkillRegistry,
         *,
         executors: dict[str, ActionExecutor] | None = None,
+        tools: list[DiscoveredTool] | None = None,
     ):
         self._registry = registry
         self._executors = dict(executors or {})
+        self._tools = list(tools or [])
 
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
         if scope["type"] == "lifespan":
@@ -51,7 +54,11 @@ class SkillsServer:
                 scope.get("query_string", b"").decode("latin1")
             ).items()
         }
-        if method == "GET" and path == "/v1/skills":
+        if method == "GET" and path == "/v1/tools":
+            await self._json(
+                send, 200, {"items": [t.model_dump() for t in self._tools]}
+            )
+        elif method == "GET" and path == "/v1/skills":
             await self._json(send, 200, self._list(query))
         elif method == "POST" and path == "/v1/skills/execute":
             body = await self._read_json(receive)

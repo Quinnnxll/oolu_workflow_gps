@@ -4,6 +4,13 @@ from .browser import BrowserActionExecutor, BrowserPolicy, discover_chromium
 from .cli_adapter import CliActionExecutor, CliExecutionPolicy
 from .compiler import DemonstrationCompiler
 from .context import SkillContextBuilder, render_tool_manifest
+from .discovery import (
+    DEFAULT_TOOL_CATALOG,
+    DiscoveredTool,
+    ToolSpec,
+    discover_tools,
+    resolve_file,
+)
 from .models import (
     SKILL_SCHEMA_VERSION,
     ActionEvent,
@@ -83,6 +90,9 @@ __all__ = [
     "ActionExecutor",
     "BrowserActionExecutor",
     "BrowserPolicy",
+    "DEFAULT_TOOL_CATALOG",
+    "DiscoveredTool",
+    "ToolSpec",
     "ApprovalRecord",
     "ApprovalProvider",
     "AuthorizationGrant",
@@ -138,9 +148,11 @@ __all__ = [
     "WorkspaceProbe",
     "changed_artifacts",
     "discover_chromium",
+    "discover_tools",
     "load_skill_pack",
     "load_starter_pack",
     "parse_skill_pack",
     "render_tool_manifest",
+    "resolve_file",
     "starter_pack_text",
 ]

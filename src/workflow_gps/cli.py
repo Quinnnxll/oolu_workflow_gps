@@ -259,6 +259,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="enable the Playwright browser executor for /v1/skills/execute",
     )
     serve.add_argument(
+        "--discover-tools",
+        action="store_true",
+        help="probe PATH for known CLI tools; expose them at /v1/tools and allow-list them",
+    )
+    serve.add_argument(
         "--allow-host",
         action="append",
         default=[],
@@ -746,22 +751,29 @@ def _cmd_serve(args, out) -> int:
         load_starter_pack(registry)
 
     executors = {}
-    if args.allow_executable:
+    tools = []
+    if args.discover_tools:
+        from .skills.discovery import discover_tools
+
+        tools = discover_tools()
+    if args.allow_executable or args.discover_tools:
         if not args.workspace:
-            raise _CliError("--workspace is required with --allow-executable")
+            raise _CliError("--workspace is required to execute CLI tools")
         from .assembly import build_cli_executor
 
-        executors.update(
-            build_cli_executor(
-                workspace=args.workspace, allowed_executables=args.allow_executable
+        allowed = list(args.allow_executable) + [t.path for t in tools]
+        if allowed:
+            executors.update(
+                build_cli_executor(
+                    workspace=args.workspace, allowed_executables=allowed
+                )
             )
-        )
     if args.browser:
         from .assembly import build_browser_executor
 
         executors.update(build_browser_executor(allow_hosts=args.allow_host))
 
-    app = SkillsServer(registry, executors=executors)
+    app = SkillsServer(registry, executors=executors, tools=tools)
     try:
         import uvicorn
     except ImportError as exc:

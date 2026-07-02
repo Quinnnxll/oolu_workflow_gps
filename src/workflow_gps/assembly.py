@@ -95,6 +95,20 @@ def build_cli_executor(
     return {executor.name: executor}
 
 
+def build_discovered_cli_executor(
+    *,
+    workspace: str | Path,
+    extra_allow: list[str] | None = None,
+    timeout_s: float = 30.0,
+) -> dict[str, ActionExecutor]:
+    from .skills.discovery import discover_tools
+
+    allowed = [tool.path for tool in discover_tools()] + list(extra_allow or [])
+    return build_cli_executor(
+        workspace=workspace, allowed_executables=allowed, timeout_s=timeout_s
+    )
+
+
 def build_browser_executor(
     *,
     headless: bool = True,
