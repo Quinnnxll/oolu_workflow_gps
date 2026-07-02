@@ -1,9 +1,10 @@
 # OoLu starter skill pack — reviewed, declarative web-automation skills.
 #
-# These populate the local SkillRegistry so the fast tier has real tools to
-# retrieve and /v1/skills has content out of the box. They declare intent,
-# parameters, and actions; the browser ActionExecutor (Playwright) that runs
-# them ships separately. Every skill_id is stable so re-loading is idempotent.
+# The `browser`/`http` skills below are executed by the Playwright/HTTP
+# ActionExecutors. `run` skills carry an explicit, hardened step list; step
+# string values may reference the skill's parameters as {{param}} and are
+# substituted at execution time. Every skill_id is stable so re-loading is
+# idempotent.
 skills:
   - skill_id: "web.dynamic_dropdown"
     name: "Interact with a Dynamic Dropdown"
@@ -13,41 +14,73 @@ skills:
     application: web
     adapter: browser
     parameters:
+      - name: url
+        value_type: string
       - name: trigger_selector
         value_type: string
-        description: "CSS selector of the element that opens the dropdown"
-      - name: option_text
+        description: "selector of the element that opens the dropdown"
+      - name: option_selector
         value_type: string
-        description: "Visible text of the option to choose"
+        description: "selector of the option to choose once options load"
     actions:
-      - operation: click
-        parameters: { target: trigger }
-      - operation: wait_for
-        parameters: { state: options_loaded }
-      - operation: select_option
+      - operation: run
+        parameters:
+          steps:
+            - { op: goto, url: "{{url}}" }
+            - { op: click, selector: "{{trigger_selector}}" }
+            - { op: wait_for, selector: "{{option_selector}}" }
+            - { op: click, selector: "{{option_selector}}" }
 
   - skill_id: "web.paginated_table"
     name: "Extract a Paginated Table"
-    summary: "Read every row of a table that spans multiple pages and return the rows."
+    summary: "Read the rows of a table across two pages and return them."
     semver: "1.0.0"
     tags: [web, table, extract, pagination, scrape, data]
     application: web
     adapter: browser
     parameters:
+      - name: url
+        value_type: string
       - name: table_selector
         value_type: string
-        description: "CSS selector of the table"
       - name: next_selector
         value_type: string
-        description: "CSS selector of the next-page control"
-      - name: max_pages
-        value_type: integer
+    actions:
+      - operation: run
+        parameters:
+          steps:
+            - { op: goto, url: "{{url}}" }
+            - { op: read_rows, selector: "{{table_selector}}", name: page_1 }
+            - { op: click, selector: "{{next_selector}}" }
+            - { op: read_rows, selector: "{{table_selector}}", name: page_2 }
+
+  - skill_id: "web.fill_and_submit_form"
+    name: "Fill and Submit a Form Field"
+    summary: "Type a value into a form field and submit the form."
+    semver: "1.0.0"
+    tags: [web, form, fill, submit, input]
+    application: web
+    adapter: browser
+    parameters:
+      - name: url
+        value_type: string
+      - name: field_selector
+        value_type: string
+      - name: value
+        value_type: string
+      - name: submit_selector
+        value_type: string
+      - name: result_selector
+        value_type: string
         required: false
     actions:
-      - operation: read_rows
-      - operation: click
-        parameters: { target: next_page }
-      - operation: read_rows
+      - operation: run
+        parameters:
+          steps:
+            - { op: goto, url: "{{url}}" }
+            - { op: fill, selector: "{{field_selector}}", value: "{{value}}" }
+            - { op: click, selector: "{{submit_selector}}" }
+            - { op: read_text, selector: "{{result_selector}}", name: result }
 
   - skill_id: "web.twofa_intercept"
     name: "Solve a 2FA Intercept"
@@ -59,50 +92,13 @@ skills:
     parameters:
       - name: code_selector
         value_type: string
-        description: "CSS selector of the OTP input field"
       - name: otp_source
         value_type: string
-        description: "Where the code arrives (e.g. authenticator, sms, email)"
+        description: "where the code arrives (authenticator, sms, email)"
     actions:
       - operation: read_otp
       - operation: fill
-        parameters: { target: code_field }
       - operation: submit
-
-  - skill_id: "web.fill_and_submit_form"
-    name: "Fill and Submit a Form"
-    summary: "Populate a set of form fields from parameters and submit the form."
-    semver: "1.0.0"
-    tags: [web, form, fill, submit, input]
-    application: web
-    adapter: browser
-    parameters:
-      - name: form_selector
-        value_type: string
-      - name: fields
-        value_type: object
-        description: "Map of field selector -> value"
-    actions:
-      - operation: fill
-      - operation: submit
-
-  - skill_id: "web.download_file"
-    name: "Download a File"
-    summary: "Click a download control and capture the resulting file into the workspace."
-    semver: "1.0.0"
-    tags: [web, download, file, export]
-    application: web
-    adapter: browser
-    parameters:
-      - name: download_selector
-        value_type: string
-      - name: save_as
-        value_type: string
-        required: false
-    actions:
-      - operation: click
-        parameters: { target: download }
-      - operation: capture_download
 
   - skill_id: "http.get_json"
     name: "Fetch JSON from an API"

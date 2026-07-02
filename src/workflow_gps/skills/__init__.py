@@ -1,5 +1,6 @@
 """Portable skill learning, storage, requirements, and execution contracts."""
 
+from .browser import BrowserActionExecutor, BrowserPolicy, discover_chromium
 from .cli_adapter import CliActionExecutor, CliExecutionPolicy
 from .compiler import DemonstrationCompiler
 from .context import SkillContextBuilder, render_tool_manifest
@@ -80,6 +81,8 @@ __all__ = [
     "SKILL_SCHEMA_VERSION",
     "ActionEvent",
     "ActionExecutor",
+    "BrowserActionExecutor",
+    "BrowserPolicy",
     "ApprovalRecord",
     "ApprovalProvider",
     "AuthorizationGrant",
@@ -134,6 +137,7 @@ __all__ = [
     "WorkspaceConstraintValidator",
     "WorkspaceProbe",
     "changed_artifacts",
+    "discover_chromium",
     "load_skill_pack",
     "load_starter_pack",
     "parse_skill_pack",

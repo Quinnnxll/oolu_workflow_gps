@@ -253,6 +253,18 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="load the built-in starter pack if the registry is empty",
     )
+    serve.add_argument(
+        "--browser",
+        action="store_true",
+        help="enable the Playwright browser executor for /v1/skills/execute",
+    )
+    serve.add_argument(
+        "--allow-host",
+        action="append",
+        default=[],
+        metavar="HOST",
+        help="allow-list a hostname the browser executor may reach",
+    )
 
     sub.add_parser("show-config", help="print the effective settings").add_argument(
         "--config", metavar="PATH", help="path to a models.yaml settings file"
@@ -739,9 +751,15 @@ def _cmd_serve(args, out) -> int:
             raise _CliError("--workspace is required with --allow-executable")
         from .assembly import build_cli_executor
 
-        executors = build_cli_executor(
-            workspace=args.workspace, allowed_executables=args.allow_executable
+        executors.update(
+            build_cli_executor(
+                workspace=args.workspace, allowed_executables=args.allow_executable
+            )
         )
+    if args.browser:
+        from .assembly import build_browser_executor
+
+        executors.update(build_browser_executor(allow_hosts=args.allow_host))
 
     app = SkillsServer(registry, executors=executors)
     try:

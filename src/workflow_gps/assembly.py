@@ -95,6 +95,24 @@ def build_cli_executor(
     return {executor.name: executor}
 
 
+def build_browser_executor(
+    *,
+    headless: bool = True,
+    allow_hosts: list[str] | None = None,
+    executable_path: str | None = None,
+) -> dict[str, ActionExecutor]:
+    from .skills.browser import BrowserActionExecutor, BrowserPolicy
+
+    executor = BrowserActionExecutor(
+        policy=BrowserPolicy(
+            headless=headless,
+            allow_hosts=frozenset(allow_hosts or []),
+            executable_path=executable_path,
+        )
+    )
+    return {executor.name: executor}
+
+
 def build_intake_model(
     settings: Settings | None = None,
     *,
