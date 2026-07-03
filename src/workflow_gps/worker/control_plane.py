@@ -167,6 +167,10 @@ class ControlPlane:
         self._ledger.revoke(lease_id)
         return True
 
+    def is_revoked(self, lease_id: str) -> bool:
+        """Revocation authority: a remote worker consults this before executing."""
+        return self._ledger.is_revoked(lease_id)
+
     # --------------------------------------------------------------------- #
     def _select_worker(self, task: TaskRequest) -> WorkerInfo | None:
         candidates = [

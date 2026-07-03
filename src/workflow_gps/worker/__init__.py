@@ -22,12 +22,18 @@ from .errors import (
     IsolationViolation,
     LeaseError,
     ReplayedLease,
+    RevocationUnavailable,
     RevokedLease,
     TaskTimeout,
     WorkerError,
     WorkerQuarantined,
 )
-from .http import HttpWorkerTransport, WorkerHttpApp
+from .http import (
+    HttpWorkerTransport,
+    RemoteRevocationLedger,
+    RevocationHttpApp,
+    WorkerHttpApp,
+)
 from .leases import (
     LeaseSigner,
     LeaseVerifier,
@@ -63,7 +69,10 @@ __all__ = [
     "LocalAgent",
     "LocalLeaseLedger",
     "LocalSecretProvider",
+    "RemoteRevocationLedger",
     "ReplayedLease",
+    "RevocationHttpApp",
+    "RevocationUnavailable",
     "RevokedLease",
     "StubWorkerExecutor",
     "TaskRequest",

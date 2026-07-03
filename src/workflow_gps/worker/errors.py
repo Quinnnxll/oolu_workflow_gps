@@ -37,6 +37,10 @@ class ReplayedLease(LeaseError):
     """The lease was already consumed; single-use leases cannot run twice."""
 
 
+class RevocationUnavailable(LeaseError):
+    """The revocation authority could not be reached; the lease is refused (fail-closed)."""
+
+
 class IsolationViolation(WorkerError):
     """The chosen backend does not meet the task's required isolation."""
 
