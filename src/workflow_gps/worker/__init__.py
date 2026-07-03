@@ -28,6 +28,7 @@ from .errors import (
     WorkerError,
     WorkerQuarantined,
 )
+from .execution import BackendWorkerExecutor
 from .http import (
     HttpWorkerTransport,
     RemoteRevocationLedger,
@@ -54,6 +55,7 @@ __all__ = [
     "WORKER_MIGRATIONS",
     "Assignment",
     "AudienceMismatch",
+    "BackendWorkerExecutor",
     "CapacityExceeded",
     "ControlPlane",
     "HttpWorkerTransport",

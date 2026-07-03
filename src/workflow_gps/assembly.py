@@ -150,6 +150,28 @@ def build_worker_executor(
     return {executor.name: executor}
 
 
+def build_docker_worker_executor(
+    settings: Settings | None = None,
+    *,
+    image: str | None = None,
+    backend_kind: str = "docker",
+) -> Any:
+    """The Docker-sandboxed WorkerExecutor a worker host owns. Requires the docker
+    SDK and a reachable daemon (raises BackendUnavailable otherwise)."""
+    settings = settings or Settings()
+    from .runtime.isolation import LocalDockerBackend
+    from .worker.execution import BackendWorkerExecutor
+
+    backend = LocalDockerBackend(
+        image=image or settings.backend.image,
+        network_name=settings.backend.network_name,
+        uv_cache_dir=settings.backend.uv_cache_dir,
+        default_index_url=settings.backend.pinned_index_url,
+        run_as_user=settings.backend.run_as_user,
+    )
+    return BackendWorkerExecutor(backend, backend_kind=backend_kind)
+
+
 def build_remote_worker_executor(
     *,
     http: Any,
