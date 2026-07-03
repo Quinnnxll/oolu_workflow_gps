@@ -1,6 +1,7 @@
 """Portable skill learning, storage, requirements, and execution contracts."""
 
 from .browser import BrowserActionExecutor, BrowserPolicy, discover_chromium
+from .browser_observer import BrowserObserver
 from .cli_adapter import CliActionExecutor, CliExecutionPolicy
 from .compiler import DemonstrationCompiler
 from .context import (
@@ -116,6 +117,7 @@ __all__ = [
     "ActionEvent",
     "ActionExecutor",
     "BrowserActionExecutor",
+    "BrowserObserver",
     "BrowserPolicy",
     "DEFAULT_TOOL_CATALOG",
     "DemonstrationRecorder",

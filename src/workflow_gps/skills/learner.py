@@ -96,6 +96,7 @@ class SkillLearner:
         tags: list[str] | None = None,
         adapter: str = "cli",
         skill_id: str | None = None,
+        mode: str = "exact",
         verify: bool = True,
         register_unverified: bool = False,
     ) -> LearnedSkill:
@@ -104,9 +105,7 @@ class SkillLearner:
             application=demo.application or self._application, adapter=adapter
         )
         try:
-            skill = self._compiler.compile_exact(
-                demo, name=name, description=description, signature=signature
-            )
+            skill = self._compile(demo, name, description, signature, mode)
         except ValueError as exc:
             return LearnedSkill(status="compile_failed", reason=str(exc))
 
@@ -136,6 +135,31 @@ class SkillLearner:
             skill=skill,
             registered=registered,
             verification=verification,
+        )
+
+    def _compile(
+        self,
+        demo: Demonstration,
+        name: str,
+        description: str,
+        signature: SkillSignature,
+        mode: str,
+    ) -> ReusableSkill:
+        # "exact" needs a before/after workspace diff (file-producing demos);
+        # "actions" replays the captured actions (GUI/browser demos, no artifacts).
+        if mode == "actions":
+            if not demo.actions:
+                raise ValueError("an action skill requires at least one action")
+            return ReusableSkill(
+                name=name,
+                description=description,
+                signature=signature,
+                parameters=[],
+                actions=list(demo.actions),
+                demonstration_ids=[demo.id],
+            )
+        return self._compiler.compile_exact(
+            demo, name=name, description=description, signature=signature
         )
 
     def _verify(self, skill: ReusableSkill) -> VerificationResult:
