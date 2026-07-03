@@ -17,6 +17,12 @@ from .discovery import (
     discover_tools,
     resolve_file,
 )
+from .learner import (
+    LearnedSkill,
+    SkillLearner,
+    VerificationResult,
+    scrub_demonstration,
+)
 from .models import (
     SKILL_SCHEMA_VERSION,
     ActionEvent,
@@ -104,6 +110,7 @@ __all__ = [
     "DEFAULT_TOOL_CATALOG",
     "DiscoveredTool",
     "InProcessWorkerTransport",
+    "LearnedSkill",
     "PlanningContextBuilder",
     "RemoteWorkerActionExecutor",
     "ToolSpec",
@@ -148,6 +155,7 @@ __all__ = [
     "ReusableSkill",
     "ScoredSkill",
     "SkillContextBuilder",
+    "SkillLearner",
     "SkillPack",
     "SkillPackEntry",
     "SkillParameter",
@@ -155,6 +163,7 @@ __all__ = [
     "SkillSignature",
     "SkillStore",
     "SkillsServer",
+    "VerificationResult",
     "SecretProvider",
     "StateSnapshot",
     "StateProbe",
@@ -170,6 +179,7 @@ __all__ = [
     "render_tool_env",
     "render_tool_manifest",
     "resolve_file",
+    "scrub_demonstration",
     "select_tools",
     "starter_pack_text",
 ]

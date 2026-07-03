@@ -33,7 +33,16 @@ def _tokens(text: str) -> list[str]:
     return [t for t in _TOKEN_RE.findall(text.lower()) if t not in _STOPWORDS]
 
 
-_VOLATILE_FIELDS = ("created_at", "updated_at", "success_count", "failure_count")
+# Excluded from the content hash: the hash covers *behaviour* (signature, params,
+# actions, constraints), not provenance/telemetry — so the same skill learned from
+# a different demonstration instance is the same content, and re-learning is a no-op.
+_VOLATILE_FIELDS = (
+    "created_at",
+    "updated_at",
+    "success_count",
+    "failure_count",
+    "demonstration_ids",
+)
 _VOLATILE_ACTION_FIELDS = ("id", "observed_at")
 _ACTION_LISTS = ("actions", "recovery_actions")
 
