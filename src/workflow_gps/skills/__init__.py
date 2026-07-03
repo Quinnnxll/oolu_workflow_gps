@@ -59,6 +59,16 @@ from .ports import (
     SkillStore,
     StateProbe,
 )
+from .recorder import (
+    DemonstrationRecorder,
+    DurableAuditLogSource,
+    InMemoryLogSource,
+    LogEntry,
+    LogSource,
+    Recording,
+    RecordingMetrics,
+    select_best,
+)
 from .registry import (
     SKILL_REGISTRY_MIGRATIONS,
     RegisteredSkill,
@@ -108,10 +118,17 @@ __all__ = [
     "BrowserActionExecutor",
     "BrowserPolicy",
     "DEFAULT_TOOL_CATALOG",
+    "DemonstrationRecorder",
     "DiscoveredTool",
+    "DurableAuditLogSource",
+    "InMemoryLogSource",
     "InProcessWorkerTransport",
+    "LogEntry",
+    "LogSource",
     "LearnedSkill",
     "PlanningContextBuilder",
+    "Recording",
+    "RecordingMetrics",
     "RemoteWorkerActionExecutor",
     "ToolSpec",
     "WorkerTransport",
@@ -180,6 +197,7 @@ __all__ = [
     "render_tool_manifest",
     "resolve_file",
     "scrub_demonstration",
+    "select_best",
     "select_tools",
     "starter_pack_text",
 ]
