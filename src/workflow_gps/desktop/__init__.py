@@ -8,6 +8,7 @@ export/deletion — all as secret-free, serializable views. The shell cannot exe
 code or bypass backend policy. See ``docs/ADAPTER_MATURITY.md``.
 """
 
+from .loopback import DesktopLoopbackApp
 from .service import DesktopService
 from .views import (
     ActionView,
@@ -30,6 +31,7 @@ __all__ = [
     "AuditEntryView",
     "AuditView",
     "BlueprintView",
+    "DesktopLoopbackApp",
     "DesktopService",
     "ExecutionLabel",
     "ExportBundle",

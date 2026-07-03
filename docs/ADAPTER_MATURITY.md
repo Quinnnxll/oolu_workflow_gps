@@ -228,7 +228,8 @@ product seams.
 | --- | --- | --- | --- |
 | `DesktopService` | `desktop/service.py` | Production-capable (local logic) | Task entry, clarification, route preview, inboxes, timeline, cancel, audit, provider connections, worker health, export/deletion — all through backend gates. |
 | View-models | `desktop/views.py` | Production-capable | Frozen, JSON-serializable, secret-free projections. |
-| Desktop UI + loopback transport | — | Not implemented | The GUI (e.g. Tauri/Electron/Qt) and the loopback API/named-pipe binding are the product surface built on this service. |
+| `DesktopLoopbackApp` (loopback transport) | `desktop/loopback.py` | Experimental | The ADR-0004 loopback binding: an ASGI app exposing the `DesktopService` view-models over `127.0.0.1` with **no auth** (task submit/clarify/answer, inbox, timeline, route preview, confirm, resolve-incident, cancel, audit, worker health, offline policy, plus the skill library), and a **WebSocket live timeline**. Secret-free, no execution path; the multi-tenant OIDC gateway remains the door for web/mobile. Contract-tested through the ASGI surface. Approvals (identity-gated) are intentionally not exposed on the loopback. |
+| Desktop UI (Tauri + React) | `desktop-app/` | Not implemented (scaffolded) | The GUI is a Tauri shell + React/Vite bundle that binds to `DesktopLoopbackApp` over a Python sidecar; built on Windows/CI (PyInstaller sidecar + `tauri build`). |
 | OS credential vault | `providers/vault.py` (stand-in) | Experimental | The shell uses the in-memory `SecretVault`; an OS-keychain-backed vault is the production adapter. |
 
 ## Provider adapters (`providers/`)
