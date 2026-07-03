@@ -290,6 +290,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     record.add_argument("--json", action="store_true")
 
+    desktop = sub.add_parser(
+        "desktop", help="serve the ADR-0004 loopback transport for the desktop UI"
+    )
+    desktop.add_argument("--config", metavar="PATH", help="path to a models.yaml file")
+    desktop.add_argument("--db", metavar="PATH", help="durable workflow SQLite path")
+    desktop.add_argument(
+        "--registry", metavar="PATH", help="skill registry SQLite path"
+    )
+    desktop.add_argument("--host", default="127.0.0.1")
+    desktop.add_argument("--port", type=int, default=8765)
+    desktop.add_argument(
+        "--seed-starter",
+        action="store_true",
+        help="load the built-in starter pack if the registry is empty",
+    )
+
     sub.add_parser("show-config", help="print the effective settings").add_argument(
         "--config", metavar="PATH", help="path to a models.yaml settings file"
     )
@@ -915,6 +931,56 @@ def _cmd_serve(args, out) -> int:
     return 0
 
 
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def _cmd_desktop(args, out) -> int:
+    from .config import Settings
+    from .desktop.loopback import DesktopLoopbackApp
+
+    if args.host not in _LOOPBACK_HOSTS:
+        raise _CliError(
+            f"--host {args.host} is not loopback; the desktop transport is "
+            "127.0.0.1-only (it has no auth and serves an unauthenticated user)"
+        )
+
+    settings = Settings.load(args.config)
+    db_path = args.db or ".workflow-gps/desktop.db"
+
+    registry = None
+    if args.registry:
+        from .skills.registry import SkillRegistry
+
+        registry = SkillRegistry(args.registry)
+        if args.seed_starter and not registry.list(limit=1):
+            from .skills.pack import load_starter_pack
+
+            load_starter_pack(registry)
+
+    from .assembly import build_desktop_runtime
+
+    runtime = build_desktop_runtime(settings, db_path=db_path)
+    app = DesktopLoopbackApp(runtime.desktop, registry=registry)
+
+    try:
+        import uvicorn
+    except ImportError as exc:
+        raise _CliError(
+            "uvicorn not installed (`pip install 'workflow-gps[serve]'`)"
+        ) from exc
+
+    out.write(
+        f"serving desktop loopback on http://{args.host}:{args.port} (db: {db_path})\n"
+    )
+    try:
+        uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    finally:
+        runtime.close()
+        if registry is not None:
+            registry.close()
+    return 0
+
+
 def _version() -> str:
     return __version__
 
@@ -938,6 +1004,8 @@ def main(argv: list[str] | None = None, *, builder=None, out=None) -> int:
             return _cmd_skill_register(args, out)
         if args.command == "serve":
             return _cmd_serve(args, out)
+        if args.command == "desktop":
+            return _cmd_desktop(args, out)
         if args.command == "show-config":
             return _cmd_show_config(args, out)
         if args.command == "telegram":

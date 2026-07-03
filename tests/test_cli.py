@@ -159,3 +159,21 @@ def test_missing_subcommand_exits_two():
     with pytest.raises(SystemExit) as exc:
         main([], out=io.StringIO())
     assert exc.value.code == 2
+
+
+def test_desktop_rejects_non_loopback_host(tmp_path):
+    buf = io.StringIO()
+    err = io.StringIO()
+    import sys
+
+    orig = sys.stderr
+    sys.stderr = err
+    try:
+        code = main(
+            ["desktop", "--host", "0.0.0.0", "--db", str(tmp_path / "d.db")],
+            out=buf,
+        )
+    finally:
+        sys.stderr = orig
+    assert code == 2
+    assert "loopback" in err.getvalue()
