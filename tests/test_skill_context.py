@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import pytest
 
-from workflow_gps.skills.context import SkillContextBuilder, render_tool_manifest
+from workflow_gps.skills.context import (
+    PlanningContextBuilder,
+    SkillContextBuilder,
+    render_tool_env,
+    render_tool_manifest,
+    select_tools,
+)
+from workflow_gps.skills.discovery import DiscoveredTool
 from workflow_gps.skills.models import (
     ActionEvent,
     ReusableSkill,
@@ -10,6 +17,24 @@ from workflow_gps.skills.models import (
     SkillSignature,
 )
 from workflow_gps.skills.registry import SkillRegistry
+
+_TOOLS = [
+    DiscoveredTool(
+        name="ffmpeg",
+        path="/usr/bin/ffmpeg",
+        category="media",
+        tags=["video", "trim", "convert"],
+    ),
+    DiscoveredTool(
+        name="jq", path="/usr/bin/jq", category="data", tags=["json", "filter"]
+    ),
+    DiscoveredTool(
+        name="pandoc",
+        path="/usr/bin/pandoc",
+        category="document",
+        tags=["markdown", "pdf", "convert"],
+    ),
+]
 
 
 def _skill(name, description, *, params=()):
@@ -58,5 +83,47 @@ def test_manifest_lists_signature_and_version(registry):
     assert "Dynamic Dropdown" not in manifest
 
 
-def test_manifest_when_nothing_matches():
-    assert render_tool_manifest([]) == "No registered tools match this request."
+def test_empty_renderers_return_blank():
+    assert render_tool_manifest([]) == ""
+    assert render_tool_env([]) == ""
+
+
+def test_skill_context_builder_falls_back_to_sentinel(registry):
+    assert (
+        SkillContextBuilder(registry)
+        .manifest("nonexistent-xyz-term")
+        .startswith("No registered")
+    )
+
+
+def test_select_tools_by_intent():
+    picked = select_tools(_TOOLS, "trim a video clip", limit=5)
+    assert [t.name for t in picked] == ["ffmpeg"]
+    # A term that matches nothing yields nothing (don't clutter the context).
+    assert select_tools(_TOOLS, "zzz", limit=2) == []
+    # An empty intent falls back to everything, capped by limit.
+    assert len(select_tools(_TOOLS, "", limit=2)) == 2
+
+
+def test_render_tool_env_lists_name_category_path():
+    text = render_tool_env([_TOOLS[0]])
+    assert "ffmpeg [media] at /usr/bin/ffmpeg" in text
+    assert "video" in text
+
+
+def test_planning_context_combines_skills_and_tools(registry):
+    builder = PlanningContextBuilder(registry, tools=_TOOLS, max_skills=2, max_tools=2)
+    manifest = builder.manifest("extract a paginated table and convert to pdf")
+    assert "Registered skills" in manifest
+    assert "Paginated Table" in manifest
+    assert "Local tools" in manifest
+    assert "pandoc" in manifest  # matched "convert"/"pdf"
+    assert "jq" not in manifest  # irrelevant to this intent
+
+
+def test_planning_context_tools_only_and_empty():
+    tools_only = PlanningContextBuilder(tools=_TOOLS).manifest("filter json")
+    assert "Local tools" in tools_only
+    assert "Registered skills" not in tools_only
+
+    assert PlanningContextBuilder().manifest("anything").startswith("No registered")

@@ -46,6 +46,39 @@ def _echo_blueprint():
     )
 
 
+def test_build_planning_context_wires_registry_and_tools(tmp_path):
+    from workflow_gps.assembly import build_planning_context
+    from workflow_gps.skills.discovery import DiscoveredTool
+    from workflow_gps.skills.registry import SkillRegistry
+
+    assert build_planning_context() is None
+
+    reg = SkillRegistry(tmp_path / "reg.db")
+    reg.register(
+        ReusableSkill(
+            name="Extract Table",
+            description="extract a table",
+            signature=SkillSignature(application="web", adapter="browser"),
+            actions=[
+                ActionEvent(correlation_id="c", adapter="browser", operation="run")
+            ],
+        ),
+        semver="1.0.0",
+        tags=["table", "extract"],
+    )
+    tools = [
+        DiscoveredTool(name="jq", path="/usr/bin/jq", category="data", tags=["json"])
+    ]
+    try:
+        provider = build_planning_context(registry=reg, tools=tools)
+        assert provider is not None
+        text = provider("extract a table and filter json")
+        assert "Extract Table" in text
+        assert "jq" in text
+    finally:
+        reg.close()
+
+
 def test_planning_only_runtime_fails_with_no_route(tmp_path):
     with build_desktop_runtime(db_path=tmp_path / "d.db") as rt:
         view = rt.desktop.submit_task("do something")

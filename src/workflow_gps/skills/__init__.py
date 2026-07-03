@@ -3,7 +3,13 @@
 from .browser import BrowserActionExecutor, BrowserPolicy, discover_chromium
 from .cli_adapter import CliActionExecutor, CliExecutionPolicy
 from .compiler import DemonstrationCompiler
-from .context import SkillContextBuilder, render_tool_manifest
+from .context import (
+    PlanningContextBuilder,
+    SkillContextBuilder,
+    render_tool_env,
+    render_tool_manifest,
+    select_tools,
+)
 from .discovery import (
     DEFAULT_TOOL_CATALOG,
     DiscoveredTool,
@@ -98,6 +104,7 @@ __all__ = [
     "DEFAULT_TOOL_CATALOG",
     "DiscoveredTool",
     "InProcessWorkerTransport",
+    "PlanningContextBuilder",
     "RemoteWorkerActionExecutor",
     "ToolSpec",
     "WorkerTransport",
@@ -160,7 +167,9 @@ __all__ = [
     "load_skill_pack",
     "load_starter_pack",
     "parse_skill_pack",
+    "render_tool_env",
     "render_tool_manifest",
     "resolve_file",
+    "select_tools",
     "starter_pack_text",
 ]

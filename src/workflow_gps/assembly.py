@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -207,22 +208,44 @@ def build_browser_executor(
     return {executor.name: executor}
 
 
+def build_planning_context(
+    settings: Settings | None = None,
+    *,
+    registry: "SkillRegistry | None" = None,
+    tools: list[Any] | None = None,
+    discover: bool = False,
+) -> Callable[[str], str] | None:
+    settings = settings or Settings()
+    resolved_tools = list(tools or [])
+    if discover and not resolved_tools:
+        from .skills.discovery import discover_tools
+
+        resolved_tools = discover_tools()
+    if registry is None and not resolved_tools:
+        return None
+    from .skills.context import PlanningContextBuilder
+
+    return PlanningContextBuilder(
+        registry,
+        tools=resolved_tools,
+        max_skills=settings.skills.max_context_tools,
+        max_tools=settings.skills.max_context_tools,
+    ).manifest
+
+
 def build_intake_model(
     settings: Settings | None = None,
     *,
     registry: "SkillRegistry | None" = None,
+    tools: list[Any] | None = None,
+    discover: bool = False,
 ) -> IntakeModel:
     settings = settings or Settings()
     from .orchestrator.intake import LiteLLMIntakeModel
 
-    context_provider = None
-    if registry is not None:
-        from .skills.context import SkillContextBuilder
-
-        context_provider = SkillContextBuilder(
-            registry, max_tools=settings.skills.max_context_tools
-        ).manifest
-
+    context_provider = build_planning_context(
+        settings, registry=registry, tools=tools, discover=discover
+    )
     return LiteLLMIntakeModel(
         settings.routing.fast.model,
         timeout=settings.request_timeout_s,
