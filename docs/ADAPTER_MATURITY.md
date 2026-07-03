@@ -139,6 +139,7 @@ the `WorkerExecutor` (a runtime-backend wrapper).
 | `IsolationPolicy` | `worker/policy.py` | Production-capable | Untrusted code → Docker/restricted-worker only; subprocess → trusted local skills. |
 | `LocalAgent` | `worker/local_agent.py` | Experimental | Outbound-only desktop/private-network agent holding local credentials; transport (HTTP long-poll/SSE) is the production seam. |
 | `Worker` + `WorkerExecutor` | `worker/worker.py` | Experimental | Verifies, enforces isolation, runs under a timeout. `StubWorkerExecutor` is test-only; a real executor wraps a runtime `ExecutionBackend`. |
+| `RemoteWorkerActionExecutor` (+ `WorkerTransport`, `InProcessWorkerTransport`) | `skills/remote.py` | Experimental | Bridges the `ActionExecutor` contract onto the worker control plane: an action is dispatched as a signed, single-use lease and run on a worker whose backend the isolation policy permits — so **untrusted code runs on the worker's Docker, never the desktop**. Untrusted tasks with no isolated worker are `BLOCKED` (never run locally); trusted tasks may use subprocess. `InProcessWorkerTransport` models the network as a call (same-host / tests); the production seam is an HTTP transport to a cloud worker or an outbound-only `LocalAgent`. `assembly.build_worker_executor` wires a pool from an injected `WorkerExecutor`. |
 | HMAC lease signing | `worker/leases.py` | Production-capable (first-party) | Symmetric keys are appropriate between a control plane and its own workers; per-worker keys are a natural extension. |
 
 ## HTTP gateway (`gateway/`)

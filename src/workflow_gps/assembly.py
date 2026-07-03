@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .config import Settings
 from .desktop.service import DesktopService
@@ -107,6 +107,46 @@ def build_discovered_cli_executor(
     return build_cli_executor(
         workspace=workspace, allowed_executables=allowed, timeout_s=timeout_s
     )
+
+
+def build_worker_executor(
+    worker_executor: Any,
+    *,
+    secret: str = "local-worker-secret",
+    worker_id: str = "worker-1",
+    capabilities: frozenset[str] = frozenset({"run"}),
+    tenant_id: str = "local",
+    trust_level: str = "untrusted_synthesized",
+    timeout_seconds: float = 30.0,
+) -> dict[str, ActionExecutor]:
+    from .skills.remote import InProcessWorkerTransport, RemoteWorkerActionExecutor
+    from .worker.control_plane import ControlPlane, WorkerInfo
+    from .worker.leases import LeaseSigner, LeaseVerifier, TrustLevel
+    from .worker.ledger import InMemoryLeaseLedger
+    from .worker.worker import Worker
+
+    ledger = InMemoryLeaseLedger()
+    signer = LeaseSigner(secret)
+    control_plane = ControlPlane(signer, ledger=ledger)
+    control_plane.register_worker(
+        WorkerInfo(
+            worker_id=worker_id,
+            capabilities=capabilities,
+            backend_kind=worker_executor.backend_kind,
+        )
+    )
+    verifier = LeaseVerifier(secret, audience=worker_id, ledger=ledger)
+    worker = Worker(worker_id, verifier, worker_executor)
+    transport = InProcessWorkerTransport({worker_id: worker})
+    executor = RemoteWorkerActionExecutor(
+        control_plane,
+        transport,
+        tenant_id=tenant_id,
+        trust_level=TrustLevel(trust_level),
+        capabilities=capabilities,
+        timeout_seconds=timeout_seconds,
+    )
+    return {executor.name: executor}
 
 
 def build_browser_executor(

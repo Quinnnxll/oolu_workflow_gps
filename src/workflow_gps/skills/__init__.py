@@ -53,6 +53,11 @@ from .registry import (
     ScoredSkill,
     SkillRegistry,
 )
+from .remote import (
+    InProcessWorkerTransport,
+    RemoteWorkerActionExecutor,
+    WorkerTransport,
+)
 from .requirements import (
     AuthorizationGrant,
     AuthorizationMode,
@@ -92,7 +97,10 @@ __all__ = [
     "BrowserPolicy",
     "DEFAULT_TOOL_CATALOG",
     "DiscoveredTool",
+    "InProcessWorkerTransport",
+    "RemoteWorkerActionExecutor",
     "ToolSpec",
+    "WorkerTransport",
     "ApprovalRecord",
     "ApprovalProvider",
     "AuthorizationGrant",
