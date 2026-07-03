@@ -6,8 +6,18 @@ import type {
   WorkerHealth,
 } from "./types";
 
+// Dev: empty base → relative URLs → Vite proxies /v1 to the loopback backend.
+// Packaged: the Tauri shell injects the sidecar origin as window.__OOLU_API__.
+declare global {
+  interface Window {
+    __OOLU_API__?: string;
+  }
+}
+
+const BASE = (): string => window.__OOLU_API__ ?? "";
+
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(path, {
+  const res = await fetch(BASE() + path, {
     method,
     headers: body !== undefined ? { "Content-Type": "application/json" } : {},
     body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -50,8 +60,11 @@ export function timelineSocket(
   runId: string,
   onEvent: (e: TimelineEvent) => void,
 ): WebSocket {
-  const proto = location.protocol === "https:" ? "wss" : "ws";
-  const ws = new WebSocket(`${proto}://${location.host}/v1/tasks/${runId}/events`);
+  const base = BASE();
+  const origin = base
+    ? base.replace(/^http/, "ws")
+    : `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`;
+  const ws = new WebSocket(`${origin}/v1/tasks/${runId}/events`);
   ws.onmessage = (m) => {
     try {
       onEvent(JSON.parse(m.data) as TimelineEvent);

@@ -1,0 +1,69 @@
+name: desktop-windows
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "desktop-v*"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build wfgps sidecar (PyInstaller)
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[serve]" pyinstaller
+          pyinstaller desktop-app/sidecar/wfgps.spec \
+            --distpath desktop-app/src-tauri/binaries \
+            --workpath build/pyi --noconfirm
+          mv desktop-app/src-tauri/binaries/wfgps.exe \
+             desktop-app/src-tauri/binaries/wfgps-x86_64-pc-windows-msvc.exe
+
+      - name: Smoke-test the sidecar
+        run: desktop-app/src-tauri/binaries/wfgps-x86_64-pc-windows-msvc.exe version
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install frontend deps
+        working-directory: desktop-app/frontend
+        run: npm ci
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop-app/src-tauri
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2.0" --locked
+
+      - name: Generate icons
+        working-directory: desktop-app/src-tauri
+        run: cargo tauri icon icons/source.png
+
+      - name: Build installer
+        working-directory: desktop-app/src-tauri
+        run: cargo tauri build --bundles nsis
+
+      - name: Collect installer
+        run: |
+          mkdir -p out
+          cp desktop-app/src-tauri/target/release/bundle/nsis/*-setup.exe \
+             out/OoLu-Setup.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OoLu-Setup
+          path: out/OoLu-Setup.exe
+          if-no-files-found: error

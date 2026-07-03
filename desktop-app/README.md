@@ -45,3 +45,32 @@ wfgps desktop --port 8765 --registry .workflow-gps/skills.db --seed-starter
 ```sh
 cd frontend && npm run build   # → frontend/dist, embedded by the Tauri shell
 ```
+
+## Shell (`src-tauri/`)
+
+A Tauri v2 window. On launch the Rust core picks a free loopback port, spawns
+the `wfgps` sidecar as `wfgps desktop --port <port>`, waits for it to accept
+connections, then injects `window.__OOLU_API__ = "http://127.0.0.1:<port>"` into
+the webview so the packaged (proxy-less) frontend targets the sidecar directly.
+The sidecar is killed on window exit.
+
+```sh
+cd src-tauri
+cargo tauri icon icons/source.png   # generate the platform icon set
+cargo tauri dev                     # runs the sidecar + Vite together
+```
+
+The sidecar binary must exist at `src-tauri/binaries/wfgps-<target-triple>` for a
+packaged build (CI produces it with PyInstaller).
+
+## Installer (`OoLu-Setup.exe`)
+
+Built by `.github/workflows/desktop-windows.yml` on `windows-latest`
+(workflow_dispatch or a `desktop-v*` tag):
+
+1. PyInstaller bundles `wfgps` from `sidecar/wfgps.spec` into a single exe and
+   names it `wfgps-x86_64-pc-windows-msvc.exe` (Tauri sidecar convention).
+2. `npm ci` + `cargo tauri build --bundles nsis` emits the NSIS installer,
+   uploaded as the `OoLu-Setup` artifact.
+
+The installer is unsigned; Windows SmartScreen will warn on first run.

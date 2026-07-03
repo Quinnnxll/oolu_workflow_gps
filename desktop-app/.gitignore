@@ -2,3 +2,12 @@ node_modules/
 dist/
 *.tsbuildinfo
 target/
+
+# Tauri: generated at build time
+src-tauri/gen/
+src-tauri/icons/*
+!src-tauri/icons/source.png
+
+# PyInstaller sidecar, injected in CI
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
