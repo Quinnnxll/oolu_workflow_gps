@@ -3,6 +3,7 @@
     wfgps run "convert sales.csv into a bar chart"
     wfgps run "slugify a title" --backend docker --knowledge local
     wfgps run "..." --json                 # machine-readable result
+    wfgps record "book a flight" --url https://air.example  # learn a browser skill
     wfgps show-config                       # print effective settings
     wfgps telegram --reply-config replies.json
     wfgps version
@@ -270,6 +271,24 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="HOST",
         help="allow-list a hostname the browser executor may reach",
     )
+
+    record = sub.add_parser(
+        "record", help="record a browser demonstration into a learned skill"
+    )
+    record.add_argument("intent", help="what the demonstration accomplishes")
+    record.add_argument("--url", required=True, help="page to start the demo on")
+    record.add_argument("--name", help="skill name (default: the intent)")
+    record.add_argument("--config", metavar="PATH", help="path to a models.yaml file")
+    record.add_argument("--registry", metavar="PATH", help="skill registry SQLite path")
+    record.add_argument(
+        "--audit-db",
+        metavar="PATH",
+        help="durable DB whose audit log is correlated as backend system logs",
+    )
+    record.add_argument(
+        "--headless", action="store_true", help="run the browser without a window"
+    )
+    record.add_argument("--json", action="store_true")
 
     sub.add_parser("show-config", help="print the effective settings").add_argument(
         "--config", metavar="PATH", help="path to a models.yaml settings file"
@@ -736,6 +755,113 @@ def _cmd_skill_register(args, out) -> int:
     return 0
 
 
+def _browser_record_session(*, intent, url, headless, audit_db, wait):
+    from .skills.browser import discover_chromium
+    from .skills.browser_observer import BrowserObserver
+    from .skills.recorder import DemonstrationRecorder, DurableAuditLogSource
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise _CliError(
+            "playwright not installed (`pip install 'workflow-gps[browser]'`)"
+        ) from exc
+
+    conn = None
+    log_source = None
+    if audit_db:
+        from .durable.audit import DurableAuditLog
+        from .durable.connection import DurableConnection
+
+        conn = DurableConnection(audit_db)
+        log_source = DurableAuditLogSource(DurableAuditLog(conn))
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(
+            headless=headless, executable_path=discover_chromium()
+        )
+        try:
+            page = browser.new_page()
+            observer = BrowserObserver()
+            observer.attach(page)
+            recorder = DemonstrationRecorder(observer, log_source=log_source)
+            page.goto(url)
+            recorder.start()
+            wait()
+            return recorder.stop(intent=intent, application="web")
+        finally:
+            browser.close()
+            if conn is not None:
+                conn.close()
+
+
+def _cmd_record(args, out, *, session=None) -> int:
+    from .config import Settings
+    from .skills.learner import SkillLearner
+    from .skills.registry import SkillRegistry
+
+    settings = Settings.load(args.config)
+    registry = SkillRegistry(args.registry or settings.skills.registry_path)
+
+    if session is None:
+
+        def session(*, intent, url, headless, audit_db):
+            def wait():
+                out.write(
+                    "recording — interact with the browser, then press Enter here "
+                    "to stop…\n"
+                )
+                out.flush()
+                input()
+
+            return _browser_record_session(
+                intent=intent, url=url, headless=headless, audit_db=audit_db, wait=wait
+            )
+
+    try:
+        recording = session(
+            intent=args.intent,
+            url=args.url,
+            headless=args.headless,
+            audit_db=args.audit_db,
+        )
+        learned = SkillLearner(registry, scrub_pii=True).learn(
+            recording.demonstration,
+            name=args.name or args.intent,
+            description=args.intent,
+            adapter="browser",
+            mode="actions",
+            # A browser replay can have side effects; the draft is verified later.
+            verify=False,
+        )
+    finally:
+        registry.close()
+
+    if args.json:
+        out.write(
+            json.dumps(
+                {
+                    "status": learned.status,
+                    "skill_id": learned.registered.skill_id
+                    if learned.registered
+                    else None,
+                    "actions": len(recording.demonstration.actions),
+                    "metrics": recording.metrics.model_dump(),
+                }
+            )
+            + "\n"
+        )
+    elif learned.registered is not None:
+        out.write(
+            f"{learned.status}: {learned.registered.skill_id}@{learned.registered.semver} "
+            f"({len(recording.demonstration.actions)} actions, "
+            f"{recording.metrics.duration_s:.1f}s) — unverified draft\n"
+        )
+    else:
+        out.write(f"{learned.status}: {learned.reason}\n")
+    return 0 if learned.status == "registered" else 1
+
+
 def _cmd_serve(args, out) -> int:
     from .config import Settings
     from .skills.registry import SkillRegistry
@@ -806,6 +932,8 @@ def main(argv: list[str] | None = None, *, builder=None, out=None) -> int:
 
                 builder = build_workflow_gps
             return _cmd_run(args, builder, out)
+        if args.command == "record":
+            return _cmd_record(args, out)
         if args.command == "skill-register":
             return _cmd_skill_register(args, out)
         if args.command == "serve":
