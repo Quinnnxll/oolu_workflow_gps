@@ -149,6 +149,46 @@ def build_worker_executor(
     return {executor.name: executor}
 
 
+def build_remote_worker_executor(
+    *,
+    http: Any,
+    worker_urls: dict[str, str],
+    secret: str = "local-worker-secret",
+    capabilities: frozenset[str] = frozenset({"run"}),
+    backend_kind: str = "docker",
+    tenant_id: str = "local",
+    trust_level: str = "untrusted_synthesized",
+    timeout_seconds: float = 30.0,
+) -> dict[str, ActionExecutor]:
+    from .skills.remote import RemoteWorkerActionExecutor
+    from .worker.control_plane import ControlPlane, WorkerInfo
+    from .worker.http import HttpWorkerTransport
+    from .worker.leases import LeaseSigner, TrustLevel
+    from .worker.ledger import InMemoryLeaseLedger
+
+    control_plane = ControlPlane(LeaseSigner(secret), ledger=InMemoryLeaseLedger())
+    for worker_id in worker_urls:
+        control_plane.register_worker(
+            WorkerInfo(
+                worker_id=worker_id,
+                capabilities=capabilities,
+                backend_kind=backend_kind,
+            )
+        )
+    transport = HttpWorkerTransport(
+        http, worker_urls=worker_urls, timeout=timeout_seconds
+    )
+    executor = RemoteWorkerActionExecutor(
+        control_plane,
+        transport,
+        tenant_id=tenant_id,
+        trust_level=TrustLevel(trust_level),
+        capabilities=capabilities,
+        timeout_seconds=timeout_seconds,
+    )
+    return {executor.name: executor}
+
+
 def build_browser_executor(
     *,
     headless: bool = True,

@@ -27,6 +27,7 @@ from .errors import (
     WorkerError,
     WorkerQuarantined,
 )
+from .http import HttpWorkerTransport, WorkerHttpApp
 from .leases import (
     LeaseSigner,
     LeaseVerifier,
@@ -49,6 +50,7 @@ __all__ = [
     "AudienceMismatch",
     "CapacityExceeded",
     "ControlPlane",
+    "HttpWorkerTransport",
     "ExpiredLease",
     "InMemoryLeaseLedger",
     "InvalidLease",
@@ -70,6 +72,7 @@ __all__ = [
     "Worker",
     "WorkerError",
     "WorkerExecutor",
+    "WorkerHttpApp",
     "WorkerInfo",
     "WorkerKind",
     "WorkerQuarantined",
