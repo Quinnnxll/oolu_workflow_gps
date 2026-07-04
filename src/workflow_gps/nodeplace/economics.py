@@ -155,6 +155,15 @@ class CandidateAssembler:
         self._ratings = ratings
         self._clock = clock or (lambda: datetime.now(UTC))
 
+    def assemble_version(self, version_id: str) -> AssembledCandidate | None:
+        """Assemble one version, with substitutes counted against the whole
+        public market. ``None`` when the version has no active public listing
+        (a revoked or unpublished node cannot be bound to a paying run)."""
+        for entry in self.assemble(""):
+            if entry.candidate.version_id == version_id:
+                return entry
+        return None
+
     def assemble(self, query: str = "") -> list[AssembledCandidate]:
         listings = self._registry.discover(query)
         now = self._clock()

@@ -33,6 +33,7 @@ from ..identity.policy import AuthorityResolver
 from ..identity.service import IdentityApprovalAuthority
 from ..identity.sessions import default_assurance
 from ..identity.tokens import OidcValidator
+from ..metering.attribution import AttributionStore
 from ..nodeplace import (
     CandidateAssembler,
     ConsumerAccount,
@@ -49,6 +50,7 @@ from ..nodeplace import (
     SubscriptionPlan,
     UnverifiedRunError,
     Visibility,
+    build_run_binding,
     reward_multiplier,
     utility,
 )
@@ -132,6 +134,7 @@ class GatewayApp:
         ratings: RatingService | None = None,
         market: CandidateAssembler | None = None,
         price_book: PriceBook | None = None,
+        attribution: AttributionStore | None = None,
         payout_store: PayoutStore | None = None,
         payout_adapter: PayoutAdapter | None = None,
         disputes: DisputeService | None = None,
@@ -147,6 +150,7 @@ class GatewayApp:
         self._ratings = ratings
         self._market = market
         self._price_book = price_book
+        self._attribution = attribution
         self._payout_store = payout_store
         self._payout_adapter = payout_adapter
         self._disputes = disputes
@@ -335,6 +339,13 @@ class GatewayApp:
         intent = body.get("intent")
         if not intent:
             raise GatewayError(400, "invalid_request", "intent is required")
+        node_version_id = body.get("node_version_id")
+        if node_version_id is not None and (
+            self._market is None
+            or self._price_book is None
+            or self._attribution is None
+        ):
+            raise GatewayError(404, "not_found", "market economics are not enabled")
         tenant_runs = sum(
             1
             for s in self._durable.runs.list()
@@ -345,6 +356,21 @@ class GatewayApp:
         max_recovery = int(body.get("max_recovery_attempts", 1))
 
         def submit() -> dict:
+            # A marketplace run is priced and attributed BEFORE anything can
+            # settle: assemble live economics, clear the price (committing —
+            # a real run moves the market reference), and bind the run to its
+            # shares. The exactly-once pipeline (metering deriver -> billing
+            # -> ledger) turns the binding into earnings only if the audit
+            # log later shows a platform-verified success for this run_id.
+            entry = None
+            if node_version_id is not None:
+                entry = self._market.assemble_version(str(node_version_id))
+                if entry is None:
+                    raise GatewayError(
+                        404,
+                        "not_found",
+                        f"no active public listing for version '{node_version_id}'",
+                    )
             contract = TaskContract(
                 intent=intent,
                 submitted_by=session.principal_id,
@@ -352,7 +378,35 @@ class GatewayApp:
             )
             state = self._durable.submit(contract, max_recovery_attempts=max_recovery)
             self._metrics["runs_submitted"] += 1
-            return self._run_dict(state)
+            result = self._run_dict(state)
+            if entry is not None:
+                cleared = self._price_book.clear(
+                    class_key=entry.candidate.class_key,
+                    node_class=entry.candidate.node_class,
+                    ask=entry.candidate.cleared_price,
+                    cost=entry.candidate.cost,
+                    substitutes=entry.signals.substitutes,
+                )
+                candidate = entry.candidate.model_copy(
+                    update={"cleared_price": cleared.cleared}
+                )
+                binding = build_run_binding(
+                    run_id=state.run_id,
+                    consumer_tenant=session.tenant_id,
+                    candidate=candidate,
+                    signals=entry.signals,
+                    consumer_principal=session.principal_id,
+                )
+                self._attribution.bind(binding)
+                self._metrics["market_runs_bound"] += 1
+                result["market"] = {
+                    "version_id": candidate.version_id,
+                    "gross": binding.gross,
+                    "provider_cost": binding.provider_cost,
+                    "cleared": cleared.model_dump(mode="json"),
+                    "noders": [s.noder_principal for s in binding.shares],
+                }
+            return result
 
         key = request.header("idempotency-key")
         result = (

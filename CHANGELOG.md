@@ -22,6 +22,14 @@ economic layer for Noders and route planning; design in
 - `PriceBook.clear` and `QuoteEngine.quote` gained preview modes
   (`commit=False` / `commit_prices=False`) so read paths cannot shift
   market reference prices.
+- `POST /v1/runs` accepts an optional `node_version_id`: the gateway
+  assembles that version's live economics, clears the price (committing —
+  a real run moves the market), and binds the run to its noder shares via
+  `build_run_binding` inside the idempotent submit, before returning. The
+  metering deriver turns the binding into earnings only when the audit log
+  shows a platform-verified success for that run — closing the last manual
+  gap between quoting and the exactly-once earnings pipeline. Unlisted or
+  revoked versions are refused; plain runs are untouched.
 
 - Added `nodeplace.market`: node pricing classes (commodity / workflow /
   professional / regulated pass-through), `CostVector`, and a persisted

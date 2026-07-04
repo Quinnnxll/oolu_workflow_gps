@@ -165,6 +165,16 @@ Two authenticated gateway routes expose it:
   previews by default (`commit_prices: false`); nothing here writes a ledger
   — money still moves only through the metering deriver on verified success.
 
+And the loop closes at run submission: `POST /v1/runs` with a
+`node_version_id` assembles that version's live economics, clears the price
+(committing — a real run moves the market reference), and binds the run to
+its noder shares (`build_run_binding`) inside the idempotent submit. From
+there the standing pipeline does the rest: audit-verified success -> metering
+event -> billing split -> earnings ledger -> settlement. A version without an
+active public listing is refused, so a revoked node can never be bound to a
+paying run. The end-to-end test drives submit -> verified execution ->
+derive -> accrual and asserts micro-conservation on the way through.
+
 ## 7. Incentive properties (all under test)
 
 - A better-rated, more-reliable noder earns a larger slice of the same pool.

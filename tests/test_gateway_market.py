@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from test_http_gateway import _app, _req
 
-from workflow_gps.durable.audit import DurableAuditLog
 from workflow_gps.gateway import GatewayApp
 from workflow_gps.metering.attribution import AttributionStore
 from workflow_gps.metering.deriver import MeteringDeriver
@@ -27,7 +26,7 @@ def _build(tmp_path):
     registry = RegistryStore(conn)
     metering = MeteringLedger(conn)
     attribution = AttributionStore(conn)
-    audit = DurableAuditLog(conn)
+    audit = base._durable.audit  # the orchestrator's own event sink
     ratings = RatingService(RatingStore(conn), verified_run=metering.verified_run)
     assembler = CandidateAssembler(
         registry=registry,
@@ -43,6 +42,7 @@ def _build(tmp_path):
         ratings=ratings,
         market=assembler,
         price_book=PriceBook(tmp_path / "prices.db"),
+        attribution=attribution,
     )
     return app, conn, ident, registry, metering, attribution, audit
 
@@ -266,6 +266,86 @@ def test_market_endpoints_validate_and_fail_loudly(tmp_path):
     )
     assert missing.status == 404
     assert "Teleport" in missing.body["error"]["message"]
+    conn.close()
+
+
+def test_submit_run_binds_marketplace_node_and_accrues_on_verified_success(
+    tmp_path,
+):
+    """The full loop: submit -> priced binding -> verified execution ->
+    metering -> billing accrual, with conservation intact."""
+    from workflow_gps.billing import BillingService, EarningsLedger
+
+    app, conn, ident, registry, metering, attribution, audit = _build(tmp_path)
+    proven, _flaky = _seed(app, ident, registry, metering, attribution, audit)
+
+    resp = app.handle(
+        _req(
+            "POST",
+            "/v1/runs",
+            token=ident.token("consumer", "t2"),
+            body={"intent": "clean this month's invoices", "node_version_id": proven},
+        )
+    )
+    assert resp.status == 202, resp.body
+    market = resp.body["market"]
+    assert market["version_id"] == proven
+    assert market["gross"] > 0
+    assert market["noders"] == ["noder-good"]
+
+    run_id = resp.body["run_id"]
+    binding = attribution.get_binding(run_id)
+    assert binding is not None
+    assert binding.consumer_tenant == "t2"
+    assert binding.consumer_principal == "consumer"
+    assert binding.gross == market["gross"]
+    (share,) = binding.shares
+    assert share.noder_principal == "noder-good"
+    assert share.multiplier > 1.0  # earned: history + verified 5-star rating
+
+    # The stub scenario executed the run; the audit log holds the verified
+    # success. Derive it into metering, then accrue earnings from it.
+    events = MeteringDeriver(audit, metering, attribution).derive()
+    event = next(e for e in events if e.run_id == run_id)
+    assert event.version_id == proven and event.gross == market["gross"]
+
+    billing = BillingService(EarningsLedger(conn))
+    entries = billing.price(event, attribution.attributions(event.event_id))
+    assert entries.conserves()
+    billing.accrue(event, attribution.attributions(event.event_id))
+    balance = billing.balance("noder-good")
+    assert balance.pending_micros + balance.available_micros == sum(
+        entries.noder_micros.values()
+    )
+    assert sum(entries.noder_micros.values()) > 0
+    conn.close()
+
+
+def test_submit_run_with_unlisted_version_is_refused(tmp_path):
+    app, conn, ident, registry, metering, attribution, audit = _build(tmp_path)
+    _seed(app, ident, registry, metering, attribution, audit)
+    resp = app.handle(
+        _req(
+            "POST",
+            "/v1/runs",
+            token=ident.token("consumer", "t2"),
+            body={"intent": "do something", "node_version_id": "no-such-version"},
+        )
+    )
+    assert resp.status == 404
+    assert "no-such-version" in resp.body["error"]["message"]
+    # And a plain run (no marketplace node) still submits untouched.
+    plain = app.handle(
+        _req(
+            "POST",
+            "/v1/runs",
+            token=ident.token("consumer", "t2"),
+            body={"intent": "do something plain"},
+        )
+    )
+    assert plain.status == 202
+    assert "market" not in plain.body
+    assert attribution.get_binding(plain.body["run_id"]) is None
     conn.close()
 
 

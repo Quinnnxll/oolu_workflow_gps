@@ -19,7 +19,12 @@ def build_openapi() -> dict:
 
     paths = {
         "/v1/runs": {
-            "post": op("Submit a task contract (async; returns 202 with a run id)"),
+            "post": op(
+                "Submit a task contract (async; returns 202 with a run id). "
+                "An optional node_version_id binds the run to a marketplace "
+                "node: the price clears and the noder shares attach, and "
+                "earnings accrue only on platform-verified success"
+            ),
             "get": op("List runs for the caller's tenant (paginated)"),
         },
         "/v1/runs/{run_id}": {"get": op("Get a run's status")},
