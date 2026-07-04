@@ -1,8 +1,9 @@
 # Reward & pricing system — design
 
 Status: Implemented (`nodeplace/market.py`, `nodeplace/rewards.py`,
-`nodeplace/quotes.py`). Builds on the existing money stack and the
-Nodeplace roadmap's invariants; supersedes the `Reward_system.txt` prototype.
+`nodeplace/quotes.py`, `nodeplace/economics.py`, gateway `/v1/market/*`).
+Builds on the existing money stack and the Nodeplace roadmap's invariants;
+supersedes the `Reward_system.txt` prototype.
 
 ## 1. What the prototype got right, and what had to change
 
@@ -134,7 +135,37 @@ see it:
   their incentive before anyone runs anything; consumers see where their
   money goes; the ledger stays untouched until verification.
 
-## 6. Incentive properties (all under test)
+## 6. Live assembly and the gateway surface
+
+`nodeplace/economics.py` is the seam between records and economics.
+`CandidateAssembler.assemble(query)` joins, per active public listing:
+
+- the **registry** (version, ask from the pricing policy, owning noder);
+- the **metering ledger** — verified successes and their *measured* provider
+  cost (which becomes the candidate's cost vector);
+- the **audit log** — failed `workflow.executed` records mapped to versions
+  through run bindings, so failure counts are real too (`LiveVersionStats`);
+- the **rating store** — the reputation mu from verified raters;
+- substitute counts computed per class key across the assembled set.
+
+Market classification rides on listing tags: `class:<node class>` (default
+`workflow`) and `market:<segment>` produce class keys like
+`commodity:file_conversion_csv_xlsx`. The contribute endpoint accepts a
+`pricing` object so a noder sets the ask at contribution time.
+
+Two authenticated gateway routes expose it:
+
+- `GET /v1/market/candidates?q=&mode=&days_elapsed=` — assembled candidates
+  ranked by mode-weighted utility, each with its cleared-price breakdown,
+  reward signals, and current reward multiplier. **Read-only**: prices are
+  previewed with `commit=False`, so browsing never moves the price book.
+- `POST /v1/market/quotes` — a full `WorkflowQuote` (coverage lines,
+  warnings, payout previews) from live data; steps name a discovery query
+  each, the plan is optional (a documented default applies). Quotes are
+  previews by default (`commit_prices: false`); nothing here writes a ledger
+  — money still moves only through the metering deriver on verified success.
+
+## 7. Incentive properties (all under test)
 
 - A better-rated, more-reliable noder earns a larger slice of the same pool.
 - Scarce supply earns more and pays lower commission; crowded commodities

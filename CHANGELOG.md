@@ -8,6 +8,21 @@ Reward & pricing system (`claude/oolu-workflow-planning-review`) — the
 economic layer for Noders and route planning; design in
 `docs/REWARD_PRICING_DESIGN.md`.
 
+- Added `nodeplace.economics`: `CandidateAssembler` joins the registry,
+  metering ledger (verified successes + measured provider cost), audit log
+  (real failure counts via run bindings), and rating store into
+  `CandidateEconomics` + `RewardSignals` per listing, with substitutes
+  computed per class key; listing tags (`class:`, `market:`) carry market
+  classification, and the contribute endpoint now accepts a `pricing` ask.
+- Added gateway routes `GET /v1/market/candidates` (utility-ranked live
+  candidates with cleared-price breakdowns and reward multipliers;
+  read-only — browsing previews prices without moving the book) and
+  `POST /v1/market/quotes` (full workflow quote from live economics;
+  previews by default, never a ledger write), documented in the OpenAPI.
+- `PriceBook.clear` and `QuoteEngine.quote` gained preview modes
+  (`commit=False` / `commit_prices=False`) so read paths cannot shift
+  market reference prices.
+
 - Added `nodeplace.market`: node pricing classes (commodity / workflow /
   professional / regulated pass-through), `CostVector`, and a persisted
   `PriceBook` that clears asks through cost floor -> competition pull ->

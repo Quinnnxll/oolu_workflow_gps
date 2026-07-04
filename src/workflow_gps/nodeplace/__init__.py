@@ -1,3 +1,10 @@
+from .economics import (
+    AssembledCandidate,
+    CandidateAssembler,
+    LiveVersionStats,
+    VersionStats,
+    classify_listing,
+)
 from .errors import (
     ContributionError,
     NodeplaceError,
@@ -68,7 +75,12 @@ __all__ = [
     "DEFAULT_POLICIES",
     "MODE_WEIGHTS",
     "NODEPLACE_SCHEMA_VERSION",
+    "AssembledCandidate",
+    "CandidateAssembler",
     "CandidateEconomics",
+    "LiveVersionStats",
+    "VersionStats",
+    "classify_listing",
     "ClearedPrice",
     "ConsumerAccount",
     "ContributionError",

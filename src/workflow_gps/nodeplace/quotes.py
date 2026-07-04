@@ -163,7 +163,11 @@ class QuoteEngine:
         *,
         mode: QuoteMode = QuoteMode.STANDARD,
         days_elapsed: float = 30.0,
+        commit_prices: bool = True,
     ) -> WorkflowQuote:
+        # ``commit_prices=False`` quotes without moving the price book's
+        # reference prices — for quote-shopping surfaces; a binding quote
+        # (about to execute) commits.
         step_quotes: list[StepQuote] = []
         invoice_lines: list[InvoiceLine] = []
         previews: list[PayoutPreview] = []
@@ -196,6 +200,7 @@ class QuoteEngine:
                 quality_parity=signals.quality_parity,
                 user_value=user_value,
                 days_elapsed=days_elapsed,
+                commit=commit_prices,
             )
             chosen = chosen.model_copy(update={"cleared_price": cleared.cleared})
 

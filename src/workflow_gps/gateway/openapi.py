@@ -55,6 +55,17 @@ def build_openapi() -> dict:
             "get": op("List a version's ratings and reputation"),
             "post": op("Rate a version (requires a verified successful run)"),
         },
+        "/v1/market/candidates": {
+            "get": op(
+                "Rank live candidates by verified quality per retry-adjusted "
+                "dollar (read-only price preview)"
+            ),
+        },
+        "/v1/market/quotes": {
+            "post": op(
+                "Quote a workflow from live economics (forecast; no money moves)"
+            ),
+        },
         "/v1/earnings": {"get": op("The caller's own earnings balance")},
         "/v1/earnings/entries": {"get": op("The caller's own earnings ledger entries")},
         "/v1/payout-accounts": {
@@ -64,7 +75,8 @@ def build_openapi() -> dict:
         "/v1/disputes/{event_id}": {"get": op("List disputes for an event")},
         "/v1/webhooks/processor": {
             "post": op(
-                "Payment-processor webhook (HMAC-signed, replay-protected)", secured=False
+                "Payment-processor webhook (HMAC-signed, replay-protected)",
+                secured=False,
             )
         },
         "/v1/openapi.json": {"get": op("This document", secured=False)},

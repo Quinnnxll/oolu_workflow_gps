@@ -34,13 +34,23 @@ from ..identity.service import IdentityApprovalAuthority
 from ..identity.sessions import default_assurance
 from ..identity.tokens import OidcValidator
 from ..nodeplace import (
+    CandidateAssembler,
+    ConsumerAccount,
     ContributionError,
     NodeplaceService,
     OwnershipError,
+    PriceBook,
+    PricingPolicy,
+    QuoteEngine,
+    QuoteMode,
     RatingError,
     RatingService,
+    StepCandidates,
+    SubscriptionPlan,
     UnverifiedRunError,
     Visibility,
+    reward_multiplier,
+    utility,
 )
 from ..orchestrator import OrchestratorError
 from ..orchestrator.state import PauseKind, Phase, ResumeInput, RunState, TaskContract
@@ -64,6 +74,16 @@ _PAUSE_VALUE = {
     PauseKind.APPROVAL: "approval",
     PauseKind.INCIDENT: "incident",
 }
+
+# The plan applied to /v1/market/quotes when the request names none. A
+# documented money knob (like billing.policy), not a hidden default.
+DEFAULT_QUOTE_PLAN = SubscriptionPlan(
+    name="api-default",
+    monthly_price=20.0,
+    automation_cost_budget=6.0,
+    included_cli_calls=1200,
+    included_api_calls=400,
+)
 
 
 @dataclass(frozen=True)
@@ -110,6 +130,8 @@ class GatewayApp:
         nodeplace: NodeplaceService | None = None,
         billing: BillingService | None = None,
         ratings: RatingService | None = None,
+        market: CandidateAssembler | None = None,
+        price_book: PriceBook | None = None,
         payout_store: PayoutStore | None = None,
         payout_adapter: PayoutAdapter | None = None,
         disputes: DisputeService | None = None,
@@ -123,6 +145,8 @@ class GatewayApp:
         self._nodeplace = nodeplace
         self._billing = billing
         self._ratings = ratings
+        self._market = market
+        self._price_book = price_book
         self._payout_store = payout_store
         self._payout_adapter = payout_adapter
         self._disputes = disputes
@@ -288,6 +312,8 @@ class GatewayApp:
         r.add("POST", "/v1/listings/{listing_id}/publish", self._publish_listing)
         r.add("POST", "/v1/versions/{version_id}/ratings", self._rate_version)
         r.add("GET", "/v1/versions/{version_id}/ratings", self._list_ratings)
+        r.add("GET", "/v1/market/candidates", self._market_candidates)
+        r.add("POST", "/v1/market/quotes", self._market_quote)
         r.add("GET", "/v1/earnings", self._earnings_balance)
         r.add("GET", "/v1/earnings/entries", self._earnings_entries)
         r.add("GET", "/v1/payout-accounts", self._get_payout_account)
@@ -597,6 +623,16 @@ class GatewayApp:
             raise GatewayError(
                 400, "invalid_request", f"invalid contribution: {exc}"
             ) from exc
+        pricing = None
+        if isinstance(body.get("pricing"), dict):
+            try:
+                pricing = PricingPolicy.model_validate(
+                    {**body["pricing"], "version_id": "pending"}
+                )
+            except Exception as exc:
+                raise GatewayError(
+                    400, "invalid_request", f"bad pricing: {exc}"
+                ) from exc
         try:
             result = nodeplace.contribute(
                 noder_principal=session.principal_id,
@@ -608,6 +644,7 @@ class GatewayApp:
                 tags=list(body.get("tags", [])),
                 license=str(body.get("license", "proprietary")),
                 visibility=visibility,
+                pricing=pricing,
                 backend=str(body.get("backend", "docker")),
                 requires_approval=bool(body.get("requires_approval", True)),
             )
@@ -707,6 +744,116 @@ class GatewayApp:
                 "reputation": ratings.reputation(version_id),
             },
         )
+
+    # ------------------------------------------------------------------ #
+    # Market economics: candidates + quotes from live production data.    #
+    # ------------------------------------------------------------------ #
+    def _require_market(self) -> tuple[CandidateAssembler, PriceBook]:
+        if self._market is None or self._price_book is None:
+            raise GatewayError(404, "not_found", "market economics are not enabled")
+        return self._market, self._price_book
+
+    @staticmethod
+    def _parse_mode(raw: str) -> QuoteMode:
+        try:
+            return QuoteMode(raw)
+        except ValueError as exc:
+            valid = ", ".join(m.value for m in QuoteMode)
+            raise GatewayError(
+                400, "invalid_request", f"mode must be one of: {valid}"
+            ) from exc
+
+    def _market_candidates(self, request, session, params) -> Response:
+        """Rank live candidates for a step. Read-only: never moves the book."""
+        assembler, book = self._require_market()
+        mode = self._parse_mode(request.query.get("mode", "standard"))
+        try:
+            days_elapsed = float(request.query.get("days_elapsed", 30.0))
+        except ValueError as exc:
+            raise GatewayError(
+                400, "invalid_request", "days_elapsed must be a number"
+            ) from exc
+
+        items = []
+        for entry in assembler.assemble(request.query.get("q", "")):
+            cleared = book.clear(
+                class_key=entry.candidate.class_key,
+                node_class=entry.candidate.node_class,
+                ask=entry.candidate.cleared_price,
+                cost=entry.candidate.cost,
+                substitutes=entry.signals.substitutes,
+                days_elapsed=days_elapsed,
+                commit=False,  # browsing must not shift market state
+            )
+            candidate = entry.candidate.model_copy(
+                update={"cleared_price": cleared.cleared}
+            )
+            items.append(
+                {
+                    "listing_id": entry.listing_id,
+                    "title": entry.title,
+                    "tags": entry.tags,
+                    "utility": utility(candidate, mode),
+                    "candidate": candidate.model_dump(mode="json"),
+                    "cleared": cleared.model_dump(mode="json"),
+                    "signals": entry.signals.model_dump(mode="json"),
+                    "reward_multiplier": reward_multiplier(entry.signals).multiplier,
+                }
+            )
+        items.sort(key=lambda item: item["utility"], reverse=True)
+        return json_response(200, {"mode": mode.value, "items": items})
+
+    def _market_quote(self, request, session, params) -> Response:
+        """Quote a workflow off live economics. A forecast: no money moves,
+        and (by default) the price book's references are not committed."""
+        assembler, book = self._require_market()
+        body = request.body or {}
+        mode = self._parse_mode(str(body.get("mode", "standard")))
+
+        raw_steps = body.get("steps")
+        if not isinstance(raw_steps, list) or not raw_steps:
+            raise GatewayError(400, "invalid_request", "steps must be a non-empty list")
+
+        plan = DEFAULT_QUOTE_PLAN
+        if isinstance(body.get("plan"), dict):
+            try:
+                plan = SubscriptionPlan.model_validate(body["plan"])
+            except Exception as exc:
+                raise GatewayError(400, "invalid_request", f"bad plan: {exc}") from exc
+
+        steps: list[StepCandidates] = []
+        for raw in raw_steps:
+            if not isinstance(raw, dict) or not raw.get("name"):
+                raise GatewayError(
+                    400, "invalid_request", "each step needs at least a name"
+                )
+            assembled = assembler.assemble(str(raw.get("q", raw["name"])))
+            if not assembled:
+                raise GatewayError(
+                    404, "not_found", f"no candidates found for step '{raw['name']}'"
+                )
+            steps.append(
+                StepCandidates(
+                    name=str(raw["name"]),
+                    candidates=[entry.candidate for entry in assembled],
+                    signals={
+                        entry.candidate.version_id: entry.signals for entry in assembled
+                    },
+                    cli_calls=int(raw.get("cli_calls", 0)),
+                    api_calls=int(raw.get("api_calls", 0)),
+                    vendor=raw.get("vendor"),
+                    minutes_saved=float(raw.get("minutes_saved", 0.0)),
+                )
+            )
+
+        account = ConsumerAccount(user_id=session.principal_id, plan=plan)
+        quote = QuoteEngine(book).quote(
+            account,
+            steps,
+            mode=mode,
+            commit_prices=bool(body.get("commit_prices", False)),
+        )
+        return json_response(200, quote.model_dump(mode="json"))
 
     def _earnings_balance(self, request, session, params) -> Response:
         billing = self._require_billing()

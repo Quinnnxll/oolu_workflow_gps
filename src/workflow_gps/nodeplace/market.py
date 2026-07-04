@@ -247,8 +247,14 @@ class PriceBook:
         quality_parity: float = 1.0,
         user_value: float | None = None,
         days_elapsed: float = 30.0,
+        commit: bool = True,
     ) -> ClearedPrice:
-        """Clear one ask through floor -> competition -> anchor -> damping."""
+        """Clear one ask through floor -> competition -> anchor -> damping.
+
+        ``commit=False`` previews the clearing without moving the persisted
+        reference — for read-only surfaces (browsing candidates) that must not
+        shift market state. A real quote commits.
+        """
         notes: list[str] = []
 
         if node_class is NodeClass.REGULATED:
@@ -296,12 +302,13 @@ class PriceBook:
                 if cleared != damped:
                     notes.append("damping band engaged")
                 cleared = max(cleared, floor)
-            self._db.execute(
-                """INSERT OR REPLACE INTO market_reference_prices
-                   (class_key, price, updated_at_days) VALUES (?, ?, ?)""",
-                (class_key, cleared, days_elapsed),
-            )
-            self._db.commit()
+            if commit:
+                self._db.execute(
+                    """INSERT OR REPLACE INTO market_reference_prices
+                       (class_key, price, updated_at_days) VALUES (?, ?, ?)""",
+                    (class_key, cleared, days_elapsed),
+                )
+                self._db.commit()
 
         return ClearedPrice(
             class_key=class_key,
