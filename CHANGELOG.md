@@ -57,6 +57,20 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- Node-granular script caching (build-order item 4):
+  `runtime/script_node.py` adds `NodeScriptRunner`, an `ActionExecutor`
+  (adapter `"script"`) that makes synthesized code a third node body kind
+  inside DAG blueprints. Scripts memoize per node — cache key = node key +
+  slot-binding fingerprint + environment fingerprint
+  (`cache.NodeScriptSignature`), never the parent intent — so the same
+  sub-task recurring across different workflows hits the same entry. Hits
+  run the cached script straight on the backend (no gateway call); on a
+  miss or environment drift only that node re-synthesizes, via
+  `GraphEngineSynthesizer` driving the graph engine's full recalculating
+  loop for the single node goal. Every synthesis is verified by executing
+  through the runner's own backend before it is reported or cached, and a
+  repaired script replaces the stale entry on verified success.
+
 - `Blueprint` is a real partial order: `BlueprintEdge` (`before`/`fallback`
   relations, `sop`/`learned`/`data` provenance) plus an `ordering` mode —
   `sequential` (backward-compatible default) chains actions and layers

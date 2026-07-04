@@ -43,3 +43,51 @@ def make_script_cache_key(signature: ScriptCacheSignature) -> str:
         ensure_ascii=False,
     )
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+# --------------------------------------------------------------------------- #
+# Node-granular signatures.                                                    #
+# --------------------------------------------------------------------------- #
+def bindings_fingerprint(bindings: dict) -> str:
+    """Canonical fingerprint of a node's slot bindings (order-insensitive)."""
+    blob = json.dumps(
+        bindings, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class NodeScriptSignature:
+    """Cache identity for one node's synthesized script.
+
+    Keyed by the node (not the parent intent) plus the slot-binding
+    fingerprint and the environment: the same sub-task recurring inside
+    *different* workflows hits the same entry — which is exactly where the
+    intent-string cache never hits. A changed binding, backend, or
+    environment produces a different key, so a stale script is never
+    replayed against a world it was not synthesized for.
+    """
+
+    node_key: str
+    bindings_fingerprint: str
+    environment_fingerprint: str
+    backend_kind: str
+    backend_image: str | None = None
+    pinned_index_url: str | None = None
+    workflow_gps_version: str = __version__
+    cache_schema_version: int = CACHE_SCHEMA_VERSION
+
+    def canonical_payload(self) -> dict:
+        payload = asdict(self)
+        payload["node_key"] = normalize_intent(self.node_key)
+        return payload
+
+
+def make_node_script_cache_key(signature: NodeScriptSignature) -> str:
+    blob = json.dumps(
+        signature.canonical_payload(),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return "node:" + hashlib.sha256(blob.encode("utf-8")).hexdigest()

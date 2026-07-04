@@ -282,7 +282,7 @@ own?" — because they promoted it.
 | 1 | DAG `Blueprint` (nodes + edges) + readiness scheduler with transitive skip, fallback substitution, timeouts | `orchestrator/state.py`, `orchestrator/scheduler.py` | **Implemented** (`DagRouteRunner`; tests in `test_dag_scheduler.py`) |
 | 2 | Slot induction in the compiler (multi-demo diff → parameters; path templating) | `skills/compiler.py` | **Implemented** (`compile_generalized`, `bind_parameters`, `SkillLearner.generalize`; tests in `test_generalize.py`) |
 | 3 | SOP compiler: YAML → ConstraintSpecs + hard edges + approval gates + risk budget | `skills/sop.py`, `orchestrator/adaptive.py` | **Implemented** (`parse_sop`, `apply_sop_to_blueprint`, `apply_sop_to_skill`; tests in `test_sop.py`) |
-| 4 | Node-granular script cache + single-node re-synthesis via the graph engine | `cache/`, `graph/`, planner seam | Open — needs the graph engine in the loop |
+| 4 | Node-granular script cache + single-node re-synthesis via the graph engine | `cache/signature.py`, `runtime/script_node.py` | **Implemented** (`NodeScriptRunner` — an `ActionExecutor` for script-bodied nodes, keyed by node + bindings + environment; stale scripts re-synthesize through `GraphEngineSynthesizer` without touching sibling nodes; tests in `test_node_script_cache.py`) |
 | 5 | Trace statistics: Beta posteriors + precedence matrix; Thompson selection among alternatives | `knowledge/traces.py`, `orchestrator/adaptive.py` | **Implemented** (`TraceStore`, `AdaptivePlanner`, `ThompsonRouteOptimizer`; tests in `test_trace_store.py`, `test_adaptive_planner.py`) |
 | 6 | Unify `Node`/`ReusableSkill`/`ReservedAction` into one `NodeContract` | `skills/models.py` outward | Open — do last, mechanically, now that 1–3 and 5 prove the shape |
 
