@@ -4,6 +4,32 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Reward & pricing system (`claude/oolu-workflow-planning-review`) — the
+economic layer for Noders and route planning; design in
+`docs/REWARD_PRICING_DESIGN.md`.
+
+- Added `nodeplace.market`: node pricing classes (commodity / workflow /
+  professional / regulated pass-through), `CostVector`, and a persisted
+  `PriceBook` that clears asks through cost floor -> competition pull ->
+  value anchor -> per-class damping bands, with an explainable
+  `ClearedPrice` breakdown. Regulated fees pass through untouched.
+  Route economics (`utility`, `rank_candidates`) score candidates by
+  platform-verified quality per retry-adjusted dollar under four quote
+  modes (budget/standard/premium/certified) — never by self-declared
+  quality.
+- Added `nodeplace.rewards`: bounded reward multipliers from non-gameable
+  signals (ratings reputation, metered reliability, scarcity, maintenance,
+  commodity decay), class-aware platform commission (lowest for scarce
+  professional supply, zero on pass-through), geometric lineage royalties
+  for derived nodes, and `build_run_binding` — the bridge into the
+  exactly-once metering -> billing -> ledger -> settlement pipeline, so
+  money still moves only on platform-verified success and every split
+  conserves to the micro.
+- Added `nodeplace.quotes`: `QuoteEngine` with subscription coverage vs
+  outside-plan pass-through lines, retry-adjusted budget projection,
+  accumulating budget/quota warnings, per-step noder payout *previews*
+  (forecasts, clearly labeled — never ledger entries), and usage settling.
+
 Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
