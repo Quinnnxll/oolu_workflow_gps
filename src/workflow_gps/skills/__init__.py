@@ -3,7 +3,11 @@
 from .browser import BrowserActionExecutor, BrowserPolicy, discover_chromium
 from .browser_observer import BrowserObserver
 from .cli_adapter import CliActionExecutor, CliExecutionPolicy
-from .compiler import DemonstrationCompiler
+from .compiler import (
+    DemonstrationCompiler,
+    bind_parameters,
+    template_demonstration,
+)
 from .context import (
     PlanningContextBuilder,
     SkillContextBuilder,
@@ -101,6 +105,15 @@ from .runtime import (
     WorkspaceConstraintValidator,
 )
 from .server import SkillsServer
+from .sop import (
+    ApprovalRule,
+    ForbidRule,
+    StandardOperatingProcedure,
+    VerifyRule,
+    apply_sop_to_skill,
+    operation_matches,
+    parse_sop,
+)
 from .store import (
     InMemoryExecutionStore,
     InMemorySkillStore,
@@ -136,6 +149,15 @@ __all__ = [
     "WorkerTransport",
     "ApprovalRecord",
     "ApprovalProvider",
+    "ApprovalRule",
+    "ForbidRule",
+    "StandardOperatingProcedure",
+    "VerifyRule",
+    "apply_sop_to_skill",
+    "bind_parameters",
+    "operation_matches",
+    "parse_sop",
+    "template_demonstration",
     "AuthorizationGrant",
     "AuthorizationMode",
     "ArtifactStore",

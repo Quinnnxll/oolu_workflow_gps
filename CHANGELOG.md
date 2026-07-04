@@ -4,6 +4,41 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
+typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
+planner now grows automatically with the user's executions and learned skills.
+
+- `Blueprint` is a real partial order: `BlueprintEdge` (`before`/`fallback`
+  relations, `sop`/`learned`/`data` provenance) plus an `ordering` mode —
+  `sequential` (backward-compatible default) chains actions and layers
+  explicit edges on top; `graph` runs unrelated actions in parallel.
+- Added `orchestrator.scheduler.DagRouteRunner`: a readiness scheduler
+  (drop-in `WorkflowExecutor`) with transitive failure cascade (no deadlocks),
+  substitution-semantics fallback branches (a repaired failure keeps the
+  route green and downstream nodes wait on the repair), per-action timeouts
+  via the executor `cancel` hook, cycle/capability preflight, and optional
+  per-run trace recording.
+- Added `knowledge.traces.TraceStore`: private, SQLite-persisted execution
+  statistics — per-node Beta success posteriors (context-bucketed), a
+  precedence matrix that recovers a DAG from linear traces under a
+  consistency threshold, and per-node cost EWMAs. Replaces sequence
+  memorization; statistics accumulate across sessions with no training step.
+- Added `orchestrator.adaptive`: `AdaptivePlanner` (blueprints rebuilt from
+  the live `SkillRegistry` on every plan, learned edges promoted only with
+  sufficient evidence, SOPs compiled in), `ThompsonRouteOptimizer` (route
+  choice by sampling the user's own success posteriors, cost as tiebreak),
+  `TraceFeedbackSink`, and `apply_sop_to_blueprint`.
+- Added `skills.sop`: declarative YAML SOPs (`require_order`, `forbid`,
+  `approval`, `require_verify`, `risk_budget`) compiled into hard edges,
+  reserved actions, exclusions, and skill validators — human structure the
+  learner can never overwrite.
+- Generalizing compiler: `DemonstrationCompiler.compile_generalized` diffs
+  repeated demonstrations into typed slots (varying values become
+  parameters, identical variations unify, workspace paths are templated to
+  `{workspace}`), `bind_parameters` rebinds them, and
+  `SkillLearner.generalize` runs the same scrub -> compile -> verify ->
+  register gate as exact learning.
+
 HTTP gateway (`codex/http-gateway`).
 
 - Added `workflow_gps.gateway`: a private, tenant-aware HTTP control-plane prototype

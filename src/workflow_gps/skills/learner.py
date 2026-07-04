@@ -7,7 +7,11 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..knowledge.scrubbing import scrub
-from .compiler import DemonstrationCompiler
+from .compiler import (
+    DemonstrationCompiler,
+    bind_parameters,
+    template_demonstration,
+)
 from .models import Demonstration, ExecutionStatus, ReusableSkill, SkillSignature
 from .ports import ActionExecutor
 from .registry import RegisteredSkill, SkillRegistry
@@ -129,6 +133,91 @@ class SkillLearner:
             semver=semver,
             summary=description,
             tags=list(tags or ["learned"]),
+        )
+        return LearnedSkill(
+            status="registered",
+            skill=skill,
+            registered=registered,
+            verification=verification,
+        )
+
+    def generalize(
+        self,
+        demonstrations: list[Demonstration],
+        *,
+        name: str,
+        description: str,
+        semver: str = "0.1.0",
+        tags: list[str] | None = None,
+        adapter: str = "cli",
+        skill_id: str | None = None,
+        verify: bool = True,
+        verify_values: dict | None = None,
+        verify_workspace: str | None = None,
+        register_unverified: bool = False,
+    ) -> LearnedSkill:
+        """Compile repeated demonstrations of one task into a generalized skill.
+
+        Values that vary across the demonstrations become typed parameters;
+        the constant structure becomes the skill body (see
+        ``DemonstrationCompiler.compile_generalized``). Verification replays
+        the skill with ``verify_values`` (defaulting to the first observed
+        value of every induced parameter) through the sandbox executors, so a
+        generalized skill passes the same gate as an exact one.
+        """
+        # Workspace-template BEFORE scrubbing: the scrubber masks absolute
+        # paths, which would collapse the variation slot induction diffs on.
+        demos = [template_demonstration(demo) for demo in demonstrations]
+        if self._scrub:
+            demos = [scrub_demonstration(demo) for demo in demos]
+        if not demos:
+            return LearnedSkill(
+                status="compile_failed", reason="no demonstrations supplied"
+            )
+        signature = SkillSignature(
+            application=demos[0].application or self._application, adapter=adapter
+        )
+        try:
+            skill = self._compiler.compile_generalized(
+                demos, name=name, description=description, signature=signature
+            )
+        except ValueError as exc:
+            return LearnedSkill(status="compile_failed", reason=str(exc))
+
+        skill = skill.model_copy(update={"id": skill_id or f"learned.{_slug(name)}"})
+
+        if verify:
+            values = dict(verify_values or {})
+            for param in skill.parameters:
+                observed = param.domain.get("observed") or []
+                if param.name not in values and observed:
+                    values[param.name] = observed[0]
+            try:
+                bound_actions = bind_parameters(
+                    skill, values, workspace=verify_workspace
+                )
+            except ValueError as exc:
+                verification = VerificationResult(verified=False, reason=str(exc))
+            else:
+                verification = self._verify(
+                    skill.model_copy(update={"actions": bound_actions})
+                )
+        else:
+            verification = VerificationResult(
+                verified=None, reason="verification skipped"
+            )
+        if not (verification.verified or not verify or register_unverified):
+            return LearnedSkill(
+                status="unverified",
+                skill=skill,
+                verification=verification,
+                reason=verification.reason,
+            )
+        registered = self._registry.register(
+            skill,
+            semver=semver,
+            summary=description,
+            tags=list(tags or ["learned", "generalized"]),
         )
         return LearnedSkill(
             status="registered",

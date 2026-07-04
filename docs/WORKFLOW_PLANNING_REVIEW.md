@@ -277,14 +277,19 @@ own?" — because they promoted it.
 
 ## 4. Recommended build order
 
-| # | Change | Where | Why first |
-| - | ------ | ----- | --------- |
-| 1 | DAG `Blueprint` (nodes + edges) + readiness scheduler with transitive skip, timeouts, checkpointed per-node results | `orchestrator/state.py`, new `orchestrator/scheduler.py` | Unblocks everything; port of `SuperNode.execute` with its bugs fixed |
-| 2 | Slot induction in the compiler (multi-demo diff → parameters; path templating) | `skills/compiler.py`, `skills/workspace.py` | Turns exact replays into reusable nodes; delivers "insert file locations" |
-| 3 | SOP compiler: YAML → ConstraintSpecs + hard edges + approval gates + risk budget | new `skills/sop.py`, `orchestrator/planner.py` | Human dependencies enforced by the machinery that already gates execution |
-| 4 | Node-granular script cache + single-node re-synthesis via the graph engine | `cache/`, `graph/`, planner seam | Replaces whole-script recalculation; big cost win |
-| 5 | Trace statistics: Beta posteriors + precedence matrix; Thompson selection among alternatives | new `knowledge/traces.py` | Replaces sequence memorization with transferable, personalized learning |
-| 6 | Unify `Node`/`ReusableSkill`/`ReservedAction` into one `NodeContract` | `skills/models.py` outward | Do last, mechanically, once 1–5 prove the shape |
+| # | Change | Where | Status |
+| - | ------ | ----- | ------ |
+| 1 | DAG `Blueprint` (nodes + edges) + readiness scheduler with transitive skip, fallback substitution, timeouts | `orchestrator/state.py`, `orchestrator/scheduler.py` | **Implemented** (`DagRouteRunner`; tests in `test_dag_scheduler.py`) |
+| 2 | Slot induction in the compiler (multi-demo diff → parameters; path templating) | `skills/compiler.py` | **Implemented** (`compile_generalized`, `bind_parameters`, `SkillLearner.generalize`; tests in `test_generalize.py`) |
+| 3 | SOP compiler: YAML → ConstraintSpecs + hard edges + approval gates + risk budget | `skills/sop.py`, `orchestrator/adaptive.py` | **Implemented** (`parse_sop`, `apply_sop_to_blueprint`, `apply_sop_to_skill`; tests in `test_sop.py`) |
+| 4 | Node-granular script cache + single-node re-synthesis via the graph engine | `cache/`, `graph/`, planner seam | Open — needs the graph engine in the loop |
+| 5 | Trace statistics: Beta posteriors + precedence matrix; Thompson selection among alternatives | `knowledge/traces.py`, `orchestrator/adaptive.py` | **Implemented** (`TraceStore`, `AdaptivePlanner`, `ThompsonRouteOptimizer`; tests in `test_trace_store.py`, `test_adaptive_planner.py`) |
+| 6 | Unify `Node`/`ReusableSkill`/`ReservedAction` into one `NodeContract` | `skills/models.py` outward | Open — do last, mechanically, now that 1–3 and 5 prove the shape |
 
-Items 1–3 are pure-Python, deterministic, and testable with the existing
-stub executors; none requires a model in the loop.
+Items 1–3 and 5 shipped pure-Python, deterministic, and tested with stub
+executors; no model in the loop. The growth loop is closed end-to-end:
+`SkillLearner.generalize` grows the registry from repeated demonstrations,
+`AdaptivePlanner` picks up new skills on the very next plan, `DagRouteRunner`
+records every execution into the `TraceStore`, and `ThompsonRouteOptimizer`
+turns that accumulating history into better route choices — see
+`test_adaptive_planner.py::test_route_choice_converges_to_the_route_that_works_for_this_user`.

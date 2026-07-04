@@ -15,6 +15,12 @@ from .adapters import (
     StaticIntaker,
     StatusOutcomeMonitor,
 )
+from .adaptive import (
+    AdaptivePlanner,
+    ThompsonRouteOptimizer,
+    TraceFeedbackSink,
+    apply_sop_to_blueprint,
+)
 from .engine import WorkflowOrchestrator
 from .intake import (
     INTAKE_SYSTEM_PROMPT,
@@ -37,9 +43,11 @@ from .ports import (
     RouteOptimizer,
     WorkflowExecutor,
 )
+from .scheduler import DagRouteRunner, action_node_key
 from .state import (
     ORCHESTRATOR_SCHEMA_VERSION,
     Blueprint,
+    BlueprintEdge,
     ConfirmationRecord,
     ExecutionRecord,
     FeedbackRecord,
@@ -70,8 +78,15 @@ __all__ = [
     "ORCHESTRATOR_SCHEMA_VERSION",
     "RUN_STATE_MIGRATIONS",
     "ActionExecutorRouteRunner",
+    "AdaptivePlanner",
     "Blueprint",
+    "BlueprintEdge",
     "BoundedRetryRecovery",
+    "DagRouteRunner",
+    "ThompsonRouteOptimizer",
+    "TraceFeedbackSink",
+    "action_node_key",
+    "apply_sop_to_blueprint",
     "CapabilityGrounder",
     "CollectingFeedbackSink",
     "ConfirmationRecord",

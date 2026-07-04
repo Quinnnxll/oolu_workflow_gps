@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -118,14 +118,43 @@ class ReservedAction(BaseModel):
     risk: str = "read"
 
 
+class BlueprintEdge(BaseModel):
+    """A dependency between two actions in a blueprint, by ``ActionEvent.id``.
+
+    ``relation="before"``: the target may run only after the source verified.
+    ``relation="fallback"``: the target runs only if the source failed.
+
+    ``provenance`` keeps human-authored structure distinguishable from learned
+    structure: ``"sop"`` edges may only be changed by the human who owns the
+    SOP, while ``"learned"``/``"data"`` edges may be pruned by new evidence.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    source: str
+    target: str
+    relation: Literal["before", "fallback"] = "before"
+    provenance: Literal["sop", "learned", "data"] = "learned"
+
+
 class Blueprint(BaseModel):
-    """A candidate route: an ordered set of reserved actions with a cost."""
+    """A candidate route: reserved actions plus the dependency edges between them.
+
+    ``ordering="sequential"`` (the default, and the pre-DAG behaviour) chains
+    the actions in list order — explicit edges are added *on top* of the
+    chain, so an SOP edge that contradicts the demonstrated order surfaces as
+    a cycle instead of being silently ignored. ``ordering="graph"`` means the
+    edges are the complete ordering: actions with no path between them are
+    independent and may run in parallel.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     id: str = Field(default_factory=_id)
     name: str
     actions: list[ReservedAction] = Field(default_factory=list)
+    edges: list[BlueprintEdge] = Field(default_factory=list)
+    ordering: Literal["sequential", "graph"] = "sequential"
     estimated_cost: float = 0.0
     excluded: bool = False
     exclusion_reason: str | None = None
