@@ -58,7 +58,9 @@ class DefaultFraudSignals:
         self._seen_keys.add(idempotency_key)
 
         if consumer_principal is not None and self._velocity_limit is not None:
-            self._counts[consumer_principal] = self._counts.get(consumer_principal, 0) + 1
+            self._counts[consumer_principal] = (
+                self._counts.get(consumer_principal, 0) + 1
+            )
             if self._counts[consumer_principal] > self._velocity_limit:
                 return FraudVerdict(
                     allowed=False, reasons=["velocity_exceeded"], shares=[]
@@ -67,7 +69,10 @@ class DefaultFraudSignals:
         reasons: list[str] = []
         kept: list[NoderShare] = []
         for share in shares:
-            if consumer_principal is not None and share.noder_principal == consumer_principal:
+            if (
+                consumer_principal is not None
+                and share.noder_principal == consumer_principal
+            ):
                 reasons.append(f"self_dealing:{share.noder_principal}")
             else:
                 kept.append(share)

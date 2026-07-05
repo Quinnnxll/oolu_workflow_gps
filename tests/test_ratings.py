@@ -61,7 +61,9 @@ def _record_run(metering: MeteringLedger, *, version_id: str, principal: str) ->
 
 def _service(conn):
     metering = MeteringLedger(conn)
-    return RatingService(RatingStore(conn), verified_run=metering.verified_run), metering
+    return RatingService(
+        RatingStore(conn), verified_run=metering.verified_run
+    ), metering
 
 
 # --------------------------------------------------------------------------- #
@@ -76,7 +78,9 @@ def test_rating_requires_a_verified_run(conn):
 def test_verified_run_allows_rating(conn):
     service, metering = _service(conn)
     _record_run(metering, version_id="v1", principal="rater")
-    rating = service.rate(rater_principal="rater", version_id="v1", score=4, text="good")
+    rating = service.rate(
+        rater_principal="rater", version_id="v1", score=4, text="good"
+    )
     assert rating.verified_run is True
     assert rating.score == 4
     assert [r.rater_principal for r in service.ratings("v1")] == ["rater"]

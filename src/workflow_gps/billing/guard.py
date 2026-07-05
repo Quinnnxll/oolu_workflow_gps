@@ -11,9 +11,7 @@ class MoneyModeError(RuntimeError):
     pass
 
 
-def require_production_money(
-    durable: Any, providers: Iterable[ProviderConfig]
-) -> None:
+def require_production_money(durable: Any, providers: Iterable[ProviderConfig]) -> None:
     if not getattr(durable, "is_production_durable", False):
         raise MoneyModeError(
             "real money requires the production PostgreSQL durable adapter; "

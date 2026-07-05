@@ -37,9 +37,7 @@ def test_json_body_is_the_default_encoding() -> None:
 
     resp = _transport(handler).request("POST", "https://api.test/x", body={"a": 1})
 
-    assert resp == ProviderResponse(
-        status=200, json={"ok": True}, headers=resp.headers
-    )
+    assert resp == ProviderResponse(status=200, json={"ok": True}, headers=resp.headers)
     assert "application/json" in captured["content_type"]
     assert json.loads(captured["body"]) == {"a": 1}
 

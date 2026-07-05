@@ -50,12 +50,18 @@ def conn(request):
 def _executed(audit, run_id, status="succeeded", attempt=1):
     return audit.append(
         "workflow.executed",
-        {"run_id": run_id, "status": status, "idempotency_key": f"{run_id}:exec:{attempt}"},
+        {
+            "run_id": run_id,
+            "status": status,
+            "idempotency_key": f"{run_id}:exec:{attempt}",
+        },
     )
 
 
 def _deriver(conn):
-    return MeteringDeriver(DurableAuditLog(conn), MeteringLedger(conn), AttributionStore(conn))
+    return MeteringDeriver(
+        DurableAuditLog(conn), MeteringLedger(conn), AttributionStore(conn)
+    )
 
 
 def test_bound_run_produces_attributed_event(conn):
@@ -105,7 +111,10 @@ def test_multi_noder_attribution(conn):
 
     events = MeteringDeriver(audit, MeteringLedger(conn), attribution).derive()
     records = attribution.attributions(events[0].event_id)
-    assert {r.noder_principal: r.weight for r in records} == {"noder-A": 2.0, "noder-B": 1.0}
+    assert {r.noder_principal: r.weight for r in records} == {
+        "noder-A": 2.0,
+        "noder-B": 1.0,
+    }
 
 
 def test_unbound_run_records_bare_event_without_attribution(conn):
@@ -160,10 +169,22 @@ def test_failure_produces_no_event_and_no_attribution(conn):
 
 
 def test_gross_from_policy():
-    assert gross_from_policy(
-        PricingPolicy(version_id="v", model=PricingModel.PER_SUCCESS, unit_price=0.5)
-    ) == 0.5
-    assert gross_from_policy(PricingPolicy(version_id="v", model=PricingModel.FREE)) == 0.0
-    assert gross_from_policy(
-        PricingPolicy(version_id="v", model=PricingModel.SUBSCRIPTION, unit_price=9.99)
-    ) == 0.0
+    assert (
+        gross_from_policy(
+            PricingPolicy(
+                version_id="v", model=PricingModel.PER_SUCCESS, unit_price=0.5
+            )
+        )
+        == 0.5
+    )
+    assert (
+        gross_from_policy(PricingPolicy(version_id="v", model=PricingModel.FREE)) == 0.0
+    )
+    assert (
+        gross_from_policy(
+            PricingPolicy(
+                version_id="v", model=PricingModel.SUBSCRIPTION, unit_price=9.99
+            )
+        )
+        == 0.0
+    )

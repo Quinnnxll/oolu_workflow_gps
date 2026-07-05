@@ -39,7 +39,12 @@ def _record_run(metering, *, version_id, principal):
 def test_rating_requires_verified_run(tmp_path):
     app, _, ident, _ = _build(tmp_path)
     resp = app.handle(
-        _req("POST", "/v1/versions/v1/ratings", token=ident.token("rater", "t1"), body={"score": 5})
+        _req(
+            "POST",
+            "/v1/versions/v1/ratings",
+            token=ident.token("rater", "t1"),
+            body={"score": 5},
+        )
     )
     assert resp.status == 403
 
@@ -58,7 +63,9 @@ def test_verified_run_can_rate_and_reputation_is_shown(tmp_path):
     assert rated.status == 201
     assert rated.body["verified_run"] is True
 
-    listed = app.handle(_req("GET", "/v1/versions/v1/ratings", token=ident.token("rater", "t1")))
+    listed = app.handle(
+        _req("GET", "/v1/versions/v1/ratings", token=ident.token("rater", "t1"))
+    )
     assert listed.status == 200
     assert len(listed.body["items"]) == 1
     assert listed.body["reputation"] == 5.0 / 3.0

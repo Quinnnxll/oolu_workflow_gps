@@ -38,7 +38,9 @@ class _AsymmetricVerifier:
 
 _ASYMMETRIC = [
     ProviderConfig(
-        issuer="https://idp", audiences=frozenset({"wfgps"}), verifier=_AsymmetricVerifier()
+        issuer="https://idp",
+        audiences=frozenset({"wfgps"}),
+        verifier=_AsymmetricVerifier(),
     )
 ]
 
@@ -88,7 +90,11 @@ def test_concurrent_charges_are_exactly_once():
     main = _pg()
     payout = FakePayoutAdapter()
     event = _event()
-    attributions = [AttributionRecord(event_id=event.event_id, noder_principal="noder-B", weight=1.0)]
+    attributions = [
+        AttributionRecord(
+            event_id=event.event_id, noder_principal="noder-B", weight=1.0
+        )
+    ]
 
     def worker():
         conn = PostgresDurableConnection(PG_DSN)
@@ -126,7 +132,11 @@ def test_concurrent_settlement_pays_once():
         )
     )
     PayoutStore(main).save_account(
-        PayoutAccount(noder_principal="noder-B", provider_account_id="acct_1", kyc_status=KycStatus.VERIFIED)
+        PayoutAccount(
+            noder_principal="noder-B",
+            provider_account_id="acct_1",
+            kyc_status=KycStatus.VERIFIED,
+        )
     )
 
     def worker():
@@ -167,7 +177,11 @@ def test_restart_mid_settlement_does_not_double_pay():
         )
     )
     PayoutStore(conn).save_account(
-        PayoutAccount(noder_principal="noder-B", provider_account_id="acct_1", kyc_status=KycStatus.VERIFIED)
+        PayoutAccount(
+            noder_principal="noder-B",
+            provider_account_id="acct_1",
+            kyc_status=KycStatus.VERIFIED,
+        )
     )
     try:
         SettlementService(
@@ -195,7 +209,12 @@ def test_restart_mid_settlement_does_not_double_pay():
             min_payout_micros=100_000,
         ).settle("noder-B", period_key="2030-01")
         assert len(payout._payouts) == 1  # still paid once across the restart
-        assert BalanceProjection(EarningsLedger(restarted)).balance("noder-B").lifetime_paid_micros == 264600
+        assert (
+            BalanceProjection(EarningsLedger(restarted))
+            .balance("noder-B")
+            .lifetime_paid_micros
+            == 264600
+        )
     finally:
         restarted.close()
 
@@ -217,7 +236,11 @@ def test_cross_noder_isolation_under_concurrent_accrual():
             audit_seq=1,
             occurred_at=CLEARED_AT,
         )
-        attributions = [AttributionRecord(event_id=event.event_id, noder_principal=noder, weight=1.0)]
+        attributions = [
+            AttributionRecord(
+                event_id=event.event_id, noder_principal=noder, weight=1.0
+            )
+        ]
         try:
             ChargingService(
                 ledger=EarningsLedger(conn),
@@ -240,8 +263,17 @@ def test_cross_noder_isolation_under_concurrent_accrual():
             t.join()
         ledger = EarningsLedger(main)
         after = CLEARED_AT + timedelta(days=15)
-        assert BalanceProjection(ledger).balance("noder-A", now=after).available_micros == 294000
-        assert BalanceProjection(ledger).balance("noder-B", now=after).available_micros == 294000
-        assert BalanceProjection(ledger).balance("stranger", now=after).available_micros == 0
+        assert (
+            BalanceProjection(ledger).balance("noder-A", now=after).available_micros
+            == 294000
+        )
+        assert (
+            BalanceProjection(ledger).balance("noder-B", now=after).available_micros
+            == 294000
+        )
+        assert (
+            BalanceProjection(ledger).balance("stranger", now=after).available_micros
+            == 0
+        )
     finally:
         main.close()

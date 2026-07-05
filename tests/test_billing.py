@@ -40,7 +40,9 @@ def test_worked_example_single_noder():
 
 def test_worked_example_two_noders():
     result = PricingEngine(rho=0.30).price(
-        gross=0.50, provider_cost=0.08, shares=_shares(("noder-A", 2.0), ("noder-B", 1.0))
+        gross=0.50,
+        provider_cost=0.08,
+        shares=_shares(("noder-A", 2.0), ("noder-B", 1.0)),
     )
     assert result.platform_micros == 126000
     assert result.noder_micros == {"noder-A": 196000, "noder-B": 98000}
@@ -61,7 +63,9 @@ def test_conservation_holds_across_many_cases():
     for rho in (0.0, 0.1, 0.30, 0.5, 0.7, 1.0):
         engine = PricingEngine(rho=rho)
         for gross, cost, pairs in cases:
-            result = engine.price(gross=gross, provider_cost=cost, shares=_shares(*pairs))
+            result = engine.price(
+                gross=gross, provider_cost=cost, shares=_shares(*pairs)
+            )
             assert result.conserves()
             assert result.platform_micros >= 0
             assert all(micros >= 0 for micros in result.noder_micros.values())
@@ -197,6 +201,8 @@ def test_unbound_event_accrues_nothing(conn):
         "workflow.executed",
         {"run_id": "local", "status": "succeeded", "idempotency_key": "local:exec:1"},
     )
-    events = MeteringDeriver(audit, MeteringLedger(conn), AttributionStore(conn)).derive()
+    events = MeteringDeriver(
+        audit, MeteringLedger(conn), AttributionStore(conn)
+    ).derive()
     billing = BillingService(EarningsLedger(conn), rho=0.30)
     assert billing.accrue(events[0], []) == []

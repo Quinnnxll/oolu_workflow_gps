@@ -73,10 +73,17 @@ def test_contribute_then_publish_then_discover(tmp_path):
     assert published.body["status"] == "active"
 
     found = app.handle(
-        _req("GET", "/v1/listings", token=ident.token("consumer", "t2"), query={"q": "deploy"})
+        _req(
+            "GET",
+            "/v1/listings",
+            token=ident.token("consumer", "t2"),
+            query={"q": "deploy"},
+        )
     )
     assert found.status == 200
-    assert [item["version_id"] for item in found.body["items"]] == [created["version_id"]]
+    assert [item["version_id"] for item in found.body["items"]] == [
+        created["version_id"]
+    ]
 
 
 def test_draft_listing_not_discoverable(tmp_path):
@@ -130,7 +137,9 @@ def test_earnings_are_display_only_and_principal_scoped(tmp_path):
     assert mine.status == 200
     assert mine.body["available_micros"] == 294000
 
-    stranger = app.handle(_req("GET", "/v1/earnings", token=ident.token("noder-2", "t2")))
+    stranger = app.handle(
+        _req("GET", "/v1/earnings", token=ident.token("noder-2", "t2"))
+    )
     assert stranger.body["available_micros"] == 0
 
     entries = app.handle(
@@ -153,13 +162,25 @@ def test_money_routes_are_disabled_when_not_wired(tmp_path):
     # The P2 money surface exists in the contract, but a gateway built without the
     # payout/dispute/webhook services (as here) feature-gates those routes to 404.
     app, _, ident, _ = _build(tmp_path)
-    assert app.handle(
-        _req("POST", "/v1/payout-accounts", token=ident.token("noder-1", "t1"))
-    ).status == 404
-    assert app.handle(
-        _req("GET", "/v1/payout-accounts", token=ident.token("noder-1", "t1"))
-    ).status == 404
-    assert app.handle(
-        _req("GET", "/v1/disputes/evt-1", token=ident.token("noder-1", "t1"))
-    ).status == 404
-    assert app.handle(_req("POST", "/v1/webhooks/processor", body={"type": "x"})).status == 404
+    assert (
+        app.handle(
+            _req("POST", "/v1/payout-accounts", token=ident.token("noder-1", "t1"))
+        ).status
+        == 404
+    )
+    assert (
+        app.handle(
+            _req("GET", "/v1/payout-accounts", token=ident.token("noder-1", "t1"))
+        ).status
+        == 404
+    )
+    assert (
+        app.handle(
+            _req("GET", "/v1/disputes/evt-1", token=ident.token("noder-1", "t1"))
+        ).status
+        == 404
+    )
+    assert (
+        app.handle(_req("POST", "/v1/webhooks/processor", body={"type": "x"})).status
+        == 404
+    )

@@ -33,7 +33,9 @@ def _b64url_uint(value: str) -> int:
 def _public_key_from_jwk(jwk: dict) -> Any | None:
     kty = jwk.get("kty")
     if kty == "RSA":
-        return RSAPublicNumbers(_b64url_uint(jwk["e"]), _b64url_uint(jwk["n"])).public_key()
+        return RSAPublicNumbers(
+            _b64url_uint(jwk["e"]), _b64url_uint(jwk["n"])
+        ).public_key()
     if kty == "EC":
         if jwk.get("crv") != "P-256":
             return None
@@ -54,7 +56,9 @@ class JwksVerifier:
         clock: Callable[[], float] | None = None,
     ) -> None:
         if algorithm not in _SUPPORTED:
-            raise ValueError(f"unsupported algorithm {algorithm!r}; use one of {_SUPPORTED}")
+            raise ValueError(
+                f"unsupported algorithm {algorithm!r}; use one of {_SUPPORTED}"
+            )
         self.algorithm = algorithm
         self._fetch = fetch
         self._cache_ttl = cache_ttl
@@ -79,7 +83,8 @@ class JwksVerifier:
             self._refresh(now)
         key = self._lookup(kid)
         if key is None and (
-            self._last_miss_at is None or (now - self._last_miss_at) >= self._min_refresh
+            self._last_miss_at is None
+            or (now - self._last_miss_at) >= self._min_refresh
         ):
             self._last_miss_at = now
             self._refresh(now)
@@ -109,10 +114,14 @@ class JwksVerifier:
         self._keys = keys
         self._fetched_at = now
 
-    def _verify_signature(self, key: Any, signing_input: bytes, signature: bytes) -> bool:
+    def _verify_signature(
+        self, key: Any, signing_input: bytes, signature: bytes
+    ) -> bool:
         try:
             if self.algorithm == "RS256":
-                key.verify(signature, signing_input, padding.PKCS1v15(), hashes.SHA256())
+                key.verify(
+                    signature, signing_input, padding.PKCS1v15(), hashes.SHA256()
+                )
             else:
                 if len(signature) != 64:
                     return False

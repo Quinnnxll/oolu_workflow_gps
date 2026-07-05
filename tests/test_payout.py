@@ -31,7 +31,9 @@ PG_DSN = os.environ.get("WFGPS_TEST_PG_DSN") or os.environ.get("DATABASE_URL")
 def _stripe(handler):
     vault = SecretVault()
     ref = vault.put("sk_test_secret", kind="stripe_key")
-    transport = HttpxTransport(client=httpx.Client(transport=httpx.MockTransport(handler)))
+    transport = HttpxTransport(
+        client=httpx.Client(transport=httpx.MockTransport(handler))
+    )
     return StripeConnectAdapter(vault=vault, transport=transport, api_key_ref=ref)
 
 
@@ -50,7 +52,10 @@ def test_charge_sends_bearer_auth_form_and_idempotency_key():
         return httpx.Response(200, json={"id": "ch_1", "status": "succeeded"})
 
     receipt = _stripe(handler).charge(
-        idempotency_key="run-1", amount_micros=500000, currency="usd", consumer_ref="cus_1"
+        idempotency_key="run-1",
+        amount_micros=500000,
+        currency="usd",
+        consumer_ref="cus_1",
     )
     assert receipt.provider_ref == "ch_1"
     assert receipt.status == ChargeStatus.SUCCEEDED
@@ -66,7 +71,10 @@ def test_payout_maps_transfer_response():
         return httpx.Response(200, json={"id": "tr_1", "status": "paid"})
 
     receipt = _stripe(handler).payout(
-        idempotency_key="b1", provider_account_id="acct_1", amount_micros=294000, currency="usd"
+        idempotency_key="b1",
+        provider_account_id="acct_1",
+        amount_micros=294000,
+        currency="usd",
     )
     assert receipt.provider_ref == "tr_1"
     assert receipt.status == PayoutStatus.PAID
@@ -74,7 +82,9 @@ def test_payout_maps_transfer_response():
 
 def test_account_kyc_requires_charges_and_payouts_enabled():
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"id": "acct_1", "charges_enabled": True, "payouts_enabled": True})
+        return httpx.Response(
+            200, json={"id": "acct_1", "charges_enabled": True, "payouts_enabled": True}
+        )
 
     account = _stripe(handler).create_account(
         noder_principal="noder-1", country="US", currency="usd"
@@ -85,7 +95,10 @@ def test_account_kyc_requires_charges_and_payouts_enabled():
 
 def test_pending_kyc_when_not_fully_enabled():
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"id": "acct_2", "charges_enabled": True, "payouts_enabled": False})
+        return httpx.Response(
+            200,
+            json={"id": "acct_2", "charges_enabled": True, "payouts_enabled": False},
+        )
 
     account = _stripe(handler).create_account(
         noder_principal="noder-1", country="US", currency="usd"
@@ -95,11 +108,16 @@ def test_pending_kyc_when_not_fully_enabled():
 
 def test_processor_error_is_raised_and_redacts_the_secret():
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(402, json={"error": "card_declined", "key": "sk_test_secret"})
+        return httpx.Response(
+            402, json={"error": "card_declined", "key": "sk_test_secret"}
+        )
 
     with pytest.raises(PaymentError) as excinfo:
         _stripe(handler).charge(
-            idempotency_key="x", amount_micros=1000, currency="usd", consumer_ref="cus_1"
+            idempotency_key="x",
+            amount_micros=1000,
+            currency="usd",
+            consumer_ref="cus_1",
         )
     assert "sk_test_secret" not in str(excinfo.value)
 
@@ -109,12 +127,26 @@ def test_processor_error_is_raised_and_redacts_the_secret():
 # --------------------------------------------------------------------------- #
 def test_fake_adapter_dedups_charge_and_payout():
     adapter = FakePayoutAdapter()
-    a = adapter.charge(idempotency_key="k", amount_micros=500000, currency="usd", consumer_ref="c")
-    b = adapter.charge(idempotency_key="k", amount_micros=999999, currency="usd", consumer_ref="c")
+    a = adapter.charge(
+        idempotency_key="k", amount_micros=500000, currency="usd", consumer_ref="c"
+    )
+    b = adapter.charge(
+        idempotency_key="k", amount_micros=999999, currency="usd", consumer_ref="c"
+    )
     assert a == b  # same idempotency key -> identical receipt
     account = adapter.create_account(noder_principal="n", country="US", currency="usd")
-    p1 = adapter.payout(idempotency_key="p", provider_account_id=account.provider_account_id, amount_micros=100, currency="usd")
-    p2 = adapter.payout(idempotency_key="p", provider_account_id=account.provider_account_id, amount_micros=100, currency="usd")
+    p1 = adapter.payout(
+        idempotency_key="p",
+        provider_account_id=account.provider_account_id,
+        amount_micros=100,
+        currency="usd",
+    )
+    p2 = adapter.payout(
+        idempotency_key="p",
+        provider_account_id=account.provider_account_id,
+        amount_micros=100,
+        currency="usd",
+    )
     assert p1 == p2
     assert adapter.account_status(account.provider_account_id) == KycStatus.VERIFIED
 
@@ -150,11 +182,19 @@ def conn(request):
 def test_account_upsert_and_kyc_gate(conn):
     store = PayoutStore(conn)
     store.save_account(
-        PayoutAccount(noder_principal="n", provider_account_id="acct_1", kyc_status=KycStatus.PENDING)
+        PayoutAccount(
+            noder_principal="n",
+            provider_account_id="acct_1",
+            kyc_status=KycStatus.PENDING,
+        )
     )
     assert store.is_verified("n") is False
     store.save_account(
-        PayoutAccount(noder_principal="n", provider_account_id="acct_1", kyc_status=KycStatus.VERIFIED)
+        PayoutAccount(
+            noder_principal="n",
+            provider_account_id="acct_1",
+            kyc_status=KycStatus.VERIFIED,
+        )
     )
     assert store.is_verified("n") is True
     assert store.get_account("n").provider_account_id == "acct_1"
@@ -162,9 +202,15 @@ def test_account_upsert_and_kyc_gate(conn):
 
 def test_batch_persistence_and_status_query(conn):
     store = PayoutStore(conn)
-    batch = PayoutBatch(noder_principal="n", amount_micros=294000, status=PayoutStatus.PENDING)
+    batch = PayoutBatch(
+        noder_principal="n", amount_micros=294000, status=PayoutStatus.PENDING
+    )
     store.add_batch(batch)
-    store.update_batch(batch.model_copy(update={"status": PayoutStatus.PAID, "provider_ref": "tr_1"}))
+    store.update_batch(
+        batch.model_copy(update={"status": PayoutStatus.PAID, "provider_ref": "tr_1"})
+    )
     assert store.get_batch(batch.batch_id).status == PayoutStatus.PAID
-    assert [b.batch_id for b in store.batches_by_status(PayoutStatus.PAID)] == [batch.batch_id]
+    assert [b.batch_id for b in store.batches_by_status(PayoutStatus.PAID)] == [
+        batch.batch_id
+    ]
     assert store.batches_by_status(PayoutStatus.PENDING) == []

@@ -32,7 +32,9 @@ class _AsymmetricVerifier:
 
 _ASYMMETRIC = [
     ProviderConfig(
-        issuer="https://idp", audiences=frozenset({"wfgps"}), verifier=_AsymmetricVerifier()
+        issuer="https://idp",
+        audiences=frozenset({"wfgps"}),
+        verifier=_AsymmetricVerifier(),
     )
 ]
 
@@ -53,7 +55,11 @@ def _event():
 
 
 def _attrs(event):
-    return [AttributionRecord(event_id=event.event_id, noder_principal="noder-B", weight=1.0)]
+    return [
+        AttributionRecord(
+            event_id=event.event_id, noder_principal="noder-B", weight=1.0
+        )
+    ]
 
 
 def test_charging_is_refused_on_local_infra():
@@ -112,7 +118,9 @@ def test_charge_accrues_with_holdback_on_production():
         assert before.available_micros == 0
         assert before.pending_micros == 294000
 
-        after = projection.balance("noder-B", now=EVENT_TIME + timedelta(days=14, seconds=1))
+        after = projection.balance(
+            "noder-B", now=EVENT_TIME + timedelta(days=14, seconds=1)
+        )
         assert after.available_micros == 294000
         assert after.pending_micros == 0
     finally:

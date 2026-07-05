@@ -100,7 +100,9 @@ def test_contribute_rejects_mutating_node_without_approval():
 
 def test_read_only_node_may_skip_approval():
     service = _service()
-    result = _contribute(service, skill=_skill(operation="read"), requires_approval=False)
+    result = _contribute(
+        service, skill=_skill(operation="read"), requires_approval=False
+    )
     published = service.publish(
         result.listing.listing_id, noder_principal="noder-1", tenant_id="t1"
     )

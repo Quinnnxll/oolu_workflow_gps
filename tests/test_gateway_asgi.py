@@ -20,7 +20,9 @@ def _call(asgi, method, path, *, headers=None, body=None, query=b""):
         "type": "http",
         "method": method,
         "path": path,
-        "headers": [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()],
+        "headers": [
+            (k.lower().encode(), v.encode()) for k, v in (headers or {}).items()
+        ],
         "query_string": query if isinstance(query, bytes) else query.encode(),
     }
     payload = json.dumps(body).encode() if body is not None else b""
@@ -35,7 +37,9 @@ def _call(asgi, method, path, *, headers=None, body=None, query=b""):
 
     asyncio.run(asgi(scope, receive, send))
     start = next(m for m in sent if m["type"] == "http.response.start")
-    body_bytes = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
+    body_bytes = b"".join(
+        m.get("body", b"") for m in sent if m["type"] == "http.response.body"
+    )
     headers_out = {k.decode(): v.decode() for k, v in start["headers"]}
     return start["status"], headers_out, body_bytes
 

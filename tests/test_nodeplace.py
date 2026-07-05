@@ -58,7 +58,14 @@ def _skill(*, description="does a thing") -> ReusableSkill:
     )
 
 
-def _contribute(service, *, principal="noder-1", tenant="t-noder", visibility=Visibility.PUBLIC, skill=None):
+def _contribute(
+    service,
+    *,
+    principal="noder-1",
+    tenant="t-noder",
+    visibility=Visibility.PUBLIC,
+    skill=None,
+):
     return service.contribute(
         noder_principal=principal,
         tenant_id=tenant,
@@ -96,7 +103,9 @@ def test_private_visibility_is_rejected_on_contribute(service):
 
 def test_active_public_listing_is_discoverable(service):
     result = _contribute(service)
-    service.publish(result.listing.listing_id, noder_principal="noder-1", tenant_id="t-noder")
+    service.publish(
+        result.listing.listing_id, noder_principal="noder-1", tenant_id="t-noder"
+    )
     found = service.discover("deploy")
     assert [listing.version_id for listing in found] == [result.version.version_id]
 
@@ -108,36 +117,59 @@ def test_draft_listing_is_not_discoverable(service):
 
 def test_unlisted_node_is_not_discoverable_but_retrievable(service):
     result = _contribute(service, visibility=Visibility.UNLISTED)
-    service.publish(result.listing.listing_id, noder_principal="noder-1", tenant_id="t-noder")
+    service.publish(
+        result.listing.listing_id, noder_principal="noder-1", tenant_id="t-noder"
+    )
     assert service.discover("deploy") == []
     assert service.runnable_version(result.version.version_id) is not None
 
 
 def test_revocation_removes_from_discovery(service):
     result = _contribute(service)
-    service.publish(result.listing.listing_id, noder_principal="noder-1", tenant_id="t-noder")
+    service.publish(
+        result.listing.listing_id, noder_principal="noder-1", tenant_id="t-noder"
+    )
     assert service.discover("deploy")
-    assert service.revoke(result.node.node_id, noder_principal="noder-1", tenant_id="t-noder") is True
+    assert (
+        service.revoke(
+            result.node.node_id, noder_principal="noder-1", tenant_id="t-noder"
+        )
+        is True
+    )
     assert service.discover("deploy") == []
     assert service.runnable_version(result.version.version_id) is None
 
 
 def test_revoke_is_idempotent(service):
     result = _contribute(service)
-    assert service.revoke(result.node.node_id, noder_principal="noder-1", tenant_id="t-noder") is True
-    assert service.revoke(result.node.node_id, noder_principal="noder-1", tenant_id="t-noder") is False
+    assert (
+        service.revoke(
+            result.node.node_id, noder_principal="noder-1", tenant_id="t-noder"
+        )
+        is True
+    )
+    assert (
+        service.revoke(
+            result.node.node_id, noder_principal="noder-1", tenant_id="t-noder"
+        )
+        is False
+    )
 
 
 def test_only_owner_can_revoke(service):
     result = _contribute(service)
     with pytest.raises(OwnershipError):
-        service.revoke(result.node.node_id, noder_principal="intruder", tenant_id="t-other")
+        service.revoke(
+            result.node.node_id, noder_principal="intruder", tenant_id="t-other"
+        )
 
 
 def test_only_owner_can_publish(service):
     result = _contribute(service)
     with pytest.raises(OwnershipError):
-        service.publish(result.listing.listing_id, noder_principal="intruder", tenant_id="t-other")
+        service.publish(
+            result.listing.listing_id, noder_principal="intruder", tenant_id="t-other"
+        )
 
 
 def test_same_content_reuses_version(service):
@@ -163,7 +195,9 @@ def test_pricing_policy_is_stored_against_the_version(service):
         semver="1.0.0",
         title="Paid Node",
         summary="per success",
-        pricing=PricingPolicy(version_id="ignored", model=PricingModel.PER_SUCCESS, unit_price=0.5),
+        pricing=PricingPolicy(
+            version_id="ignored", model=PricingModel.PER_SUCCESS, unit_price=0.5
+        ),
     )
     assert result.policy.version_id == result.version.version_id
     assert result.policy.model == PricingModel.PER_SUCCESS

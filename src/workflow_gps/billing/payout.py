@@ -82,7 +82,10 @@ class StripeConnectAdapter:
 
     def _post(self, path: str, body: dict, idempotency_key: str | None = None) -> dict:
         response = self._transport.request(
-            "POST", f"{self._base_url}{path}", headers=self._headers(idempotency_key), body=body
+            "POST",
+            f"{self._base_url}{path}",
+            headers=self._headers(idempotency_key),
+            body=body,
         )
         if response.status >= 400:
             raise PaymentError(

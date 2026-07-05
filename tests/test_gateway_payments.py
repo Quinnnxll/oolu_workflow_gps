@@ -34,7 +34,9 @@ class _AsymmetricVerifier:
 
 _ASYMMETRIC = [
     ProviderConfig(
-        issuer="https://idp", audiences=frozenset({"wfgps"}), verifier=_AsymmetricVerifier()
+        issuer="https://idp",
+        audiences=frozenset({"wfgps"}),
+        verifier=_AsymmetricVerifier(),
     )
 ]
 
@@ -69,32 +71,45 @@ def _signed(payload, *, delivery_id):
 def test_create_and_get_payout_account(tmp_path):
     app, _, _, ident = _build(tmp_path)
     created = app.handle(
-        _req("POST", "/v1/payout-accounts", token=ident.token("noder-1", "t1"), body={"country": "US"})
+        _req(
+            "POST",
+            "/v1/payout-accounts",
+            token=ident.token("noder-1", "t1"),
+            body={"country": "US"},
+        )
     )
     assert created.status == 201
     assert created.body["kyc_status"] == "verified"
-    fetched = app.handle(_req("GET", "/v1/payout-accounts", token=ident.token("noder-1", "t1")))
+    fetched = app.handle(
+        _req("GET", "/v1/payout-accounts", token=ident.token("noder-1", "t1"))
+    )
     assert fetched.status == 200
     assert fetched.body["provider_account_id"] == created.body["provider_account_id"]
 
 
 def test_get_payout_account_404_when_absent(tmp_path):
     app, _, _, ident = _build(tmp_path)
-    resp = app.handle(_req("GET", "/v1/payout-accounts", token=ident.token("nobody", "t1")))
+    resp = app.handle(
+        _req("GET", "/v1/payout-accounts", token=ident.token("nobody", "t1"))
+    )
     assert resp.status == 404
 
 
 def test_list_disputes_for_event(tmp_path):
     app, _, _, ident = _build(tmp_path)
     app._disputes.open(event_id="evt-1", reason="chargeback")
-    resp = app.handle(_req("GET", "/v1/disputes/evt-1", token=ident.token("noder-1", "t1")))
+    resp = app.handle(
+        _req("GET", "/v1/disputes/evt-1", token=ident.token("noder-1", "t1"))
+    )
     assert resp.status == 200
     assert len(resp.body["items"]) == 1
 
 
 def test_webhook_without_signature_is_rejected(tmp_path):
     app, _, _, _ = _build(tmp_path)
-    resp = app.handle(_req("POST", "/v1/webhooks/processor", body={"type": "payout.paid"}))
+    resp = app.handle(
+        _req("POST", "/v1/webhooks/processor", body={"type": "payout.paid"})
+    )
     assert resp.status == 400
 
 
@@ -102,7 +117,12 @@ def test_webhook_tampered_payload_is_rejected(tmp_path):
     app, _, _, _ = _build(tmp_path)
     headers = _signed({"type": "payout.paid"}, delivery_id="d1")
     resp = app.handle(
-        _req("POST", "/v1/webhooks/processor", body={"type": "charge.refunded"}, headers=headers)
+        _req(
+            "POST",
+            "/v1/webhooks/processor",
+            body={"type": "charge.refunded"},
+            headers=headers,
+        )
     )
     assert resp.status == 400
 
@@ -111,9 +131,13 @@ def test_webhook_replay_is_rejected(tmp_path):
     app, _, _, _ = _build(tmp_path)
     payload = {"type": "payout.paid", "batch_id": "unknown"}
     headers = _signed(payload, delivery_id="d1")
-    first = app.handle(_req("POST", "/v1/webhooks/processor", body=payload, headers=headers))
+    first = app.handle(
+        _req("POST", "/v1/webhooks/processor", body=payload, headers=headers)
+    )
     assert first.status == 200
-    replay = app.handle(_req("POST", "/v1/webhooks/processor", body=payload, headers=headers))
+    replay = app.handle(
+        _req("POST", "/v1/webhooks/processor", body=payload, headers=headers)
+    )
     assert replay.status == 400
 
 
@@ -148,7 +172,9 @@ def test_refund_webhook_triggers_clawback(tmp_path):
         )
         payload = {"type": "charge.refunded", "event_id": "evt-1"}
         headers = _signed(payload, delivery_id="refund-1")
-        resp = app.handle(_req("POST", "/v1/webhooks/processor", body=payload, headers=headers))
+        resp = app.handle(
+            _req("POST", "/v1/webhooks/processor", body=payload, headers=headers)
+        )
         assert resp.status == 200
         assert resp.body["clawback_event_id"] == "evt-1"
         assert BalanceProjection(ledger).balance("noder-B").available_micros == 0

@@ -37,7 +37,9 @@ class _AsymmetricVerifier:
 
 _ASYMMETRIC = [
     ProviderConfig(
-        issuer="https://idp", audiences=frozenset({"wfgps"}), verifier=_AsymmetricVerifier()
+        issuer="https://idp",
+        audiences=frozenset({"wfgps"}),
+        verifier=_AsymmetricVerifier(),
     )
 ]
 
@@ -57,7 +59,9 @@ def _seed_accrual(ledger, *, noder="noder-B", micros=294000):
 def _verified_account(store, *, noder="noder-B"):
     store.save_account(
         PayoutAccount(
-            noder_principal=noder, provider_account_id="acct_1", kyc_status=KycStatus.VERIFIED
+            noder_principal=noder,
+            provider_account_id="acct_1",
+            kyc_status=KycStatus.VERIFIED,
         )
     )
 
@@ -158,7 +162,9 @@ def test_unverified_account_is_not_paid():
         _seed_accrual(ledger)
         store.save_account(
             PayoutAccount(
-                noder_principal="noder-B", provider_account_id="acct_1", kyc_status=KycStatus.PENDING
+                noder_principal="noder-B",
+                provider_account_id="acct_1",
+                kyc_status=KycStatus.PENDING,
             )
         )
         result = service.settle("noder-B", period_key="2030-01")

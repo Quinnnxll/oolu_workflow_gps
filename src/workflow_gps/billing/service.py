@@ -17,7 +17,9 @@ class BillingService:
     ) -> PricingResult:
         shares = [
             NoderShare(
-                noder_principal=a.noder_principal, weight=a.weight, multiplier=a.multiplier
+                noder_principal=a.noder_principal,
+                weight=a.weight,
+                multiplier=a.multiplier,
             )
             for a in attributions
         ]

@@ -141,5 +141,13 @@ def test_no_real_payment_path_exists():
 
 def test_metering_exposes_no_money_symbols():
     surface = " ".join(dir(importlib.import_module("workflow_gps.metering"))).lower()
-    for token in ("price", "pricing", "charge", "payout", "billing", "earning", "commission"):
+    for token in (
+        "price",
+        "pricing",
+        "charge",
+        "payout",
+        "billing",
+        "earning",
+        "commission",
+    ):
         assert token not in surface

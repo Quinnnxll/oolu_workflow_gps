@@ -34,7 +34,9 @@ class _AsymmetricVerifier:
 
 _ASYMMETRIC = [
     ProviderConfig(
-        issuer="https://idp", audiences=frozenset({"wfgps"}), verifier=_AsymmetricVerifier()
+        issuer="https://idp",
+        audiences=frozenset({"wfgps"}),
+        verifier=_AsymmetricVerifier(),
     )
 ]
 
@@ -130,8 +132,23 @@ def test_paid_out_clawback_goes_negative_and_is_recovered():
         ledger, service = _service(conn)
         # An already-settled event: accrual cleared, reserve held, payout made.
         _accrual(ledger, event_id="evt-1")
-        ledger.append(EarningsEntry(noder_principal="noder-B", amount_micros=29400, kind=EarningsKind.RESERVE, available_at=CLEARED_AT))
-        ledger.append(EarningsEntry(noder_principal="noder-B", event_id="batch-1", amount_micros=-264600, kind=EarningsKind.PAYOUT, available_at=CLEARED_AT))
+        ledger.append(
+            EarningsEntry(
+                noder_principal="noder-B",
+                amount_micros=29400,
+                kind=EarningsKind.RESERVE,
+                available_at=CLEARED_AT,
+            )
+        )
+        ledger.append(
+            EarningsEntry(
+                noder_principal="noder-B",
+                event_id="batch-1",
+                amount_micros=-264600,
+                kind=EarningsKind.PAYOUT,
+                available_at=CLEARED_AT,
+            )
+        )
         assert BalanceProjection(ledger).balance("noder-B").available_micros == 0
 
         service.refund(event_id="evt-1", reason="chargeback")

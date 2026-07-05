@@ -97,7 +97,8 @@ class PayoutStore:
     def get_batch(self, batch_id: str) -> PayoutBatch | None:
         with self._conn.lock:
             row = self._conn.db.execute(
-                "SELECT payload_json FROM payout_batches WHERE batch_id = ?", (batch_id,)
+                "SELECT payload_json FROM payout_batches WHERE batch_id = ?",
+                (batch_id,),
             ).fetchone()
         return PayoutBatch.model_validate_json(row["payload_json"]) if row else None
 

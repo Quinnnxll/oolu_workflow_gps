@@ -23,16 +23,22 @@ _REPLACE_PK = {"routes": "route_id", "semantic_evidence": "evidence_id"}
 
 def _translate(sql: str) -> str:
     s = sql
-    replace = re.match(r"\s*INSERT\s+OR\s+REPLACE\s+INTO\s+(\w+)\s*\(([^)]+)\)", s, re.I)
+    replace = re.match(
+        r"\s*INSERT\s+OR\s+REPLACE\s+INTO\s+(\w+)\s*\(([^)]+)\)", s, re.I
+    )
     if replace:
         table = replace.group(1)
         columns = [c.strip() for c in replace.group(2).split(",")]
         pk = _REPLACE_PK[table]
         assignments = ", ".join(f"{c} = EXCLUDED.{c}" for c in columns if c != pk)
-        s = re.sub(r"\s*INSERT\s+OR\s+REPLACE\s+INTO", "INSERT INTO", s, count=1, flags=re.I)
+        s = re.sub(
+            r"\s*INSERT\s+OR\s+REPLACE\s+INTO", "INSERT INTO", s, count=1, flags=re.I
+        )
         s = f"{s.rstrip().rstrip(';')} ON CONFLICT ({pk}) DO UPDATE SET {assignments}"
     elif re.match(r"\s*INSERT\s+OR\s+IGNORE\s+INTO", s, re.I):
-        s = re.sub(r"\s*INSERT\s+OR\s+IGNORE\s+INTO", "INSERT INTO", s, count=1, flags=re.I)
+        s = re.sub(
+            r"\s*INSERT\s+OR\s+IGNORE\s+INTO", "INSERT INTO", s, count=1, flags=re.I
+        )
         s = f"{s.rstrip().rstrip(';')} ON CONFLICT DO NOTHING"
     s = s.replace("?", "%s")
     s = re.sub(r"ON CONFLICT\(", "ON CONFLICT (", s, flags=re.I)

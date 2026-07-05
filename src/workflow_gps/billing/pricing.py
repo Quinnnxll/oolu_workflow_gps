@@ -48,4 +48,6 @@ class PricingEngine:
             else:
                 amount = pool - allocated
             noder[principal] = noder.get(principal, 0) + amount
-        return PricingResult(net_micros=net, platform_micros=platform, noder_micros=noder)
+        return PricingResult(
+            net_micros=net, platform_micros=platform, noder_micros=noder
+        )
