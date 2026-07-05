@@ -57,6 +57,16 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- Browser-level end-to-end tests (`tests/test_browser_e2e.py`): a real
+  Chromium drives the real front-end over a minimal in-test ASGI HTTP
+  server (no external server dependency). The tour: assemble the seeded
+  marketplace chain, watch the budget verdict, confirm the run through
+  the shared money path, onboard a payout account (KYC pending blocks
+  payouts), and render health; a second test proves the task screen
+  degrades gracefully where the transport has no websockets. Skips
+  cleanly wherever the `browser` extra (playwright) or a Chromium
+  executable is unavailable; falls back to the host-installed
+  `/opt/pw-browsers/chromium` when playwright's own download is absent.
 - Payout-account onboarding in the shell: `DesktopService.payout_account`
   / `onboard_payout_account` (new `payout_adapter` ctor hook, also a
   `build_desktop_runtime` passthrough) over `GET`/`POST
