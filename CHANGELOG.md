@@ -4,6 +4,30 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The multi-user gateway grows a face:
+
+- Replaced the gateway front-end (served by `GatewayASGI` at `GET /`)
+  with a **sign-in page + shell**: username/password → `POST
+  /v1/auth/login`, the bearer token lives in `sessionStorage` for that
+  tab (a 401 signs the tab out; sign-out drops it), and every fetch
+  carries `Authorization: Bearer`. IdP-fronted hosts (no local accounts)
+  get a paste-a-token fallback on the same page.
+- Screens over the authenticated surface: **Runs** (start an intent,
+  list, detail with audit timeline + live WebSocket frames via the
+  bearer subprotocol), **Assemble** (goal → priced preview with
+  planning cost, expected success, and budget verdicts → run the
+  contract; a 202 hold links to the inbox), **Inbox** (approve/decline
+  held reserved contracts), **Earnings**, **Users** (admin-only:
+  create, disable/enable), **Health**. Screens degrade honestly: 404 →
+  "not enabled on this host", 403 → "no authority for this screen".
+  XSS-safe by construction (DOM building, no HTML templates, no
+  `innerHTML`), pinned by tests along with every route the page calls.
+- Real-Chromium end-to-end tours against a real host runtime: sign-in
+  (wrong password says only "invalid credentials"), admin provisions
+  and disables a user from the browser and the disabled account is
+  locked out, and a member sees the Users screen refuse and the
+  unwired Earnings screen say so — instead of breaking.
+
 Multi-user web hosting — accounts, not a shared token:
 
 - Added `identity.accounts`: **local user accounts** as the identity
