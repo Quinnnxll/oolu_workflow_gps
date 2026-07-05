@@ -21,6 +21,7 @@ from .errors import (
     UnverifiedRunError,
 )
 from .execution import (
+    CompiledContract,
     ContractMarket,
     ContractNodeOutcome,
     ContractRunResult,
@@ -103,6 +104,7 @@ __all__ = [
     "VersionStats",
     "classify_listing",
     "ClearedPrice",
+    "CompiledContract",
     "ConsumerAccount",
     "ContractMarket",
     "ContractNodeOutcome",

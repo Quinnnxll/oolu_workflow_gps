@@ -98,6 +98,7 @@ class DesktopService:
         price_book=None,  # nodeplace.PriceBook
         contract_runner=None,  # orchestrator.DagRouteRunner over backend executors
         attribution=None,  # metering.AttributionStore
+        trace_store=None,  # knowledge.TraceStore: confirmed runs sharpen picks
     ):
         self._durable = durable
         self._approval = approval_authority
@@ -108,6 +109,7 @@ class DesktopService:
         self._price_book = price_book
         self._contract_runner = contract_runner
         self._attribution = attribution
+        self._trace_store = trace_store
         self._connections: dict[str, _Connection] = {}
         self._confirmed: dict[str, AssemblyRunView] = {}
 
@@ -314,7 +316,14 @@ class DesktopService:
 
         spec = GoalSpec.model_validate({"name": goal, "want": want, "have": have or []})
         preview = preview_assembly(
-            self._market, self._price_book, spec, query=query, fill_gaps=fill_gaps
+            self._market,
+            self._price_book,
+            spec,
+            query=query,
+            fill_gaps=fill_gaps,
+            # Picks carry this desktop's own confirmed-run history on top
+            # of platform-verified counts (single user: the global bucket).
+            trace_store=self._trace_store,
         )
         return AssemblyPreviewView(
             goal=goal,
@@ -375,10 +384,10 @@ class DesktopService:
         from ..skills.contract import NodeContract
 
         parsed = NodeContract.model_validate(contract)
-        blueprint = compile_runnable(parsed)
+        compiled = compile_runnable(parsed)
         result = execute_contract(
             parsed,
-            blueprint,
+            compiled,
             runner=self._contract_runner,
             assembler=self._market,
             price_book=self._price_book,
@@ -386,6 +395,7 @@ class DesktopService:
             audit=self._durable.audit,
             consumer_tenant="local",
             consumer_principal="desktop",
+            trace_store=self._trace_store,
         )
         view = AssemblyRunView(
             run_id=result.run_id,

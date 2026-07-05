@@ -27,7 +27,7 @@ from .assembler import (
     GoalSpec,
     contract_from_registered,
 )
-from .contract import contract_to_blueprint
+from .contract import compile_with_owners, contract_to_blueprint
 from .engine import WorkflowOrchestrator
 from .intake import (
     INTAKE_SYSTEM_PROMPT,
@@ -97,6 +97,7 @@ __all__ = [
     "GoalSpec",
     "action_node_key",
     "apply_sop_to_blueprint",
+    "compile_with_owners",
     "contract_from_registered",
     "contract_to_blueprint",
     "CapabilityGrounder",

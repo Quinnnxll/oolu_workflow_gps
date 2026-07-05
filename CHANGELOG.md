@@ -57,6 +57,23 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- Confirmed runs feed the TraceStore: `execute_contract` accepts a
+  `trace_store` (+ `trace_context`) and records one node-granular trace
+  per run — each top-level child's verdict (a child succeeds only if
+  every action it contributed did), the price it actually cleared at as
+  its cost EWMA, and completion order into the precedence matrix — under
+  the same `route:{name}` keys the assembler scores by.
+  `compile_with_owners` (orchestrator) returns the blueprint plus an
+  action-to-child attribution map from ONE compile pass (script bodies
+  mint fresh action ids per compile, so a second pass would not match);
+  `compile_runnable` now returns a `CompiledContract` carrying both.
+  On the pick side, `preview_assembly` folds the caller's own history
+  into each contract's `NodeStats` (evidence adds; the personally paid
+  cost supersedes the listed one). Gateway: new `trace_store` ctor param,
+  bucketed per tenant (`trace_context=tenant_id`) so one tenant's
+  failures personalize only their own picks; desktop: `trace_store` ctor
+  param on the shell (single user: the global bucket). Every confirmed
+  run sharpens the next assembly — no separate training step.
 - Desktop confirm button: `DesktopService.confirm_assembly` runs the
   contract the preview returned — through the shared
   `nodeplace.execution.execute_contract`, the exact code path behind the

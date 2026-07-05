@@ -33,6 +33,7 @@ from ..identity.policy import AuthorityResolver
 from ..identity.service import IdentityApprovalAuthority
 from ..identity.sessions import default_assurance
 from ..identity.tokens import OidcValidator
+from ..knowledge.traces import TraceStore
 from ..metering.attribution import AttributionStore
 from ..nodeplace import (
     CandidateAssembler,
@@ -152,6 +153,7 @@ class GatewayApp:
         price_book: PriceBook | None = None,
         attribution: AttributionStore | None = None,
         contract_executors: dict[str, ActionExecutor] | None = None,
+        trace_store: TraceStore | None = None,
         payout_store: PayoutStore | None = None,
         payout_adapter: PayoutAdapter | None = None,
         disputes: DisputeService | None = None,
@@ -171,6 +173,10 @@ class GatewayApp:
         self._contract_runner = (
             DagRouteRunner(contract_executors) if contract_executors else None
         )
+        # Node-granular trace recording happens in execute_contract (per
+        # contract child), not in the runner — attaching the store to the
+        # runner too would double-count the whole-route outcome.
+        self._trace_store = trace_store
         self._payout_store = payout_store
         self._payout_adapter = payout_adapter
         self._disputes = disputes
@@ -922,6 +928,10 @@ class GatewayApp:
             goal,
             query=str(body.get("q", "")),
             fill_gaps=bool(body.get("fill_gaps", False)),
+            # Picks carry the tenant's own confirmed-run history on top of
+            # platform-verified counts — personalized per tenant bucket.
+            trace_store=self._trace_store,
+            trace_context=session.tenant_id,
         )
         return json_response(200, preview.model_dump(mode="json"))
 
@@ -952,7 +962,7 @@ class GatewayApp:
         except Exception as exc:
             raise GatewayError(400, "invalid_request", f"bad contract: {exc}") from exc
         try:
-            blueprint = compile_runnable(contract)
+            compiled = compile_runnable(contract)
         except ReservedActionsError as exc:
             raise GatewayError(403, "forbidden", str(exc)) from exc
         except ValueError as exc:
@@ -961,7 +971,7 @@ class GatewayApp:
         def submit() -> dict:
             result = execute_contract(
                 contract,
-                blueprint,
+                compiled,
                 runner=self._contract_runner,
                 assembler=assembler,
                 price_book=book,
@@ -969,6 +979,8 @@ class GatewayApp:
                 audit=self._durable.audit,
                 consumer_tenant=session.tenant_id,
                 consumer_principal=session.principal_id,
+                trace_store=self._trace_store,
+                trace_context=session.tenant_id,
             )
             self._metrics["contract_runs"] += 1
             return result.model_dump(mode="json")

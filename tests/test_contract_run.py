@@ -53,7 +53,7 @@ class _CliExecutor:
         return None
 
 
-def _build(tmp_path, *, executors=None):
+def _build(tmp_path, *, executors=None, trace_store=None):
     base, conn, ident = _app(tmp_path)
     registry = RegistryStore(conn)
     metering = MeteringLedger(conn)
@@ -76,6 +76,7 @@ def _build(tmp_path, *, executors=None):
         price_book=PriceBook(tmp_path / "prices.db"),
         attribution=attribution,
         contract_executors=executors,
+        trace_store=trace_store,
     )
     return app, conn, ident, registry, metering, attribution, audit
 
@@ -186,6 +187,123 @@ def test_contract_run_executes_binds_and_pays_end_to_end(tmp_path):
     assert again.status == 200
     assert again.body["run_id"] == run_id
     assert executor.calls == 2
+    conn.close()
+
+
+def test_contract_run_feeds_the_trace_store(tmp_path):
+    """The growth loop: a run records node-granular traces under the same
+    route:{name} keys the assembler scores by."""
+    from workflow_gps.knowledge.traces import TraceStore, route_node_key
+
+    traces = TraceStore(tmp_path / "traces.db")
+    app, conn, ident, registry, *_rest = _build(
+        tmp_path, executors={"cli": _CliExecutor()}, trace_store=traces
+    )
+    _seed_chain(app, ident, registry)
+    contract = _assembled_contract(app, ident)
+
+    resp = app.handle(
+        _req(
+            "POST",
+            "/v1/runs/contract",
+            token=ident.token("consumer", "t2"),
+            body={"contract": contract},
+        )
+    )
+    assert resp.status == 200 and resp.body["status"] == "succeeded"
+
+    # Whole-goal and per-node posteriors grew, in the tenant's bucket.
+    goal = traces.posterior(route_node_key("clean-the-books"), "t2")
+    assert (goal.successes, goal.failures) == (1, 0)
+    for name in ("raw exporter", "invoice cleaner"):
+        node = traces.posterior(route_node_key(name), "t2")
+        assert (node.successes, node.failures) == (1, 0)
+
+    # The cost EWMA is the price this run actually cleared at.
+    cleared = {n["version_id"]: n["cleared"] for n in resp.body["market"]["nodes"]}
+    assert cleared  # both nodes committed a price
+    by_name = {c["name"]: c["id"] for c in contract["body"]["nodes"]}
+    paid = traces.expected_cost(route_node_key("invoice cleaner"), "t2")
+    assert paid == cleared[by_name["invoice cleaner"]]
+
+    # The precedence matrix learned the real order: export before clean.
+    ab, ba = traces.precedence(
+        route_node_key("raw exporter"), route_node_key("invoice cleaner")
+    )
+    assert (ab, ba) == (1, 0)
+    traces.close()
+    conn.close()
+
+
+def test_personal_history_flips_the_assembly_pick(tmp_path):
+    """Two equivalent producers: the tenant's own confirmed-run failures
+    push assembly onto the alternative — personalization by construction."""
+    from workflow_gps.knowledge.traces import (
+        NodeObservation,
+        TraceStore,
+        route_node_key,
+    )
+
+    traces = TraceStore(tmp_path / "traces.db")
+    app, conn, ident, registry, *_rest = _build(tmp_path, trace_store=traces)
+    _seed_chain(app, ident, registry)
+    # A second cleaner, identical vocabulary; alphabetically first, so with
+    # no history the deterministic tie-break picks it.
+    _contribute_and_publish(
+        app,
+        ident,
+        registry,
+        name="backup cleaner",
+        noder="noder-backup",
+        price=0.20,
+        consumes=[RAW],
+        produces=[TIDY],
+    )
+
+    def selected():
+        resp = app.handle(
+            _req(
+                "POST",
+                "/v1/market/assemble",
+                token=ident.token("consumer", "t2"),
+                body={
+                    "goal": {"name": "clean-the-books", "want": [TIDY]},
+                    "q": "invoice",
+                },
+            )
+        )
+        assert resp.status == 200, resp.body
+        return set(resp.body["selected"])
+
+    first_pick = selected()
+    assert "backup cleaner" in first_pick
+
+    # This tenant's own runs keep failing on the backup cleaner.
+    for run in range(3):
+        traces.record_run(
+            goal="clean-the-books",
+            steps=[
+                NodeObservation(node_key=route_node_key("backup cleaner"), ok=False)
+            ],
+            success=False,
+            context="t2",
+        )
+    assert "invoice cleaner" in selected()  # the pick flipped
+
+    # Another tenant shares no history: their pick is unchanged.
+    other = app.handle(
+        _req(
+            "POST",
+            "/v1/market/assemble",
+            token=ident.token("someone-else", "t1"),
+            body={
+                "goal": {"name": "clean-the-books", "want": [TIDY]},
+                "q": "invoice",
+            },
+        )
+    )
+    assert "backup cleaner" in set(other.body["selected"])
+    traces.close()
     conn.close()
 
 

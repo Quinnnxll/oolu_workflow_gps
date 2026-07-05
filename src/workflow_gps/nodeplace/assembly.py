@@ -14,8 +14,9 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..billing.pricing import PricingEngine
+from ..knowledge.traces import TraceStore, route_node_key
 from ..orchestrator.assembler import ContractAssembler, GoalSpec
-from ..skills.contract import NodeContract, Slot, SubgraphBody
+from ..skills.contract import NodeContract, NodeStats, Slot, SubgraphBody
 from .economics import CandidateAssembler
 from .market import PriceBook
 from .rewards import commission_rate, lineage_shares, reward_multiplier
@@ -60,6 +61,33 @@ class AssemblyPreview(BaseModel):
     platform_margin_preview: float = 0.0
 
 
+def _personalize(
+    contract: NodeContract, trace_store: TraceStore, context: str
+) -> NodeContract:
+    """Fold the caller's own confirmed-run history into a contract's stats.
+
+    Marketplace stats are platform-wide verified counts; the trace store
+    holds what happened when *this* caller ran the node. Both are evidence
+    about the same Beta posterior, so they add — and the personal cost EWMA
+    (what the caller actually paid) supersedes the listed automation cost.
+    A node with no personal history is returned untouched.
+    """
+    personal = trace_store.posterior(route_node_key(contract.name), context)
+    if personal.observations == 0:
+        return contract
+    base = contract.stats or NodeStats()
+    paid = trace_store.expected_cost(route_node_key(contract.name), context)
+    return contract.model_copy(
+        update={
+            "stats": NodeStats(
+                successes=base.successes + personal.successes,
+                failures=base.failures + personal.failures,
+                cost_ewma=paid if paid is not None else base.cost_ewma,
+            )
+        }
+    )
+
+
 def preview_assembly(
     assembler: CandidateAssembler,
     price_book: PriceBook,
@@ -67,12 +95,23 @@ def preview_assembly(
     *,
     query: str = "",
     fill_gaps: bool = False,
+    trace_store: TraceStore | None = None,
+    trace_context: str = "",
 ) -> AssemblyPreview:
-    """Assemble a goal over the marketplace and price the plan, read-only."""
+    """Assemble a goal over the marketplace and price the plan, read-only.
+
+    With a ``trace_store``, the library the assembler picks from carries the
+    caller's own confirmed-run history on top of platform-verified counts —
+    so every executed contract sharpens the next assembly, per
+    ``trace_context`` bucket (e.g. per tenant).
+    """
     marketplace = assembler.contracts(query)
     by_id = {entry.contract.id: entry for entry in marketplace}
+    library = [entry.contract for entry in marketplace]
+    if trace_store is not None:
+        library = [_personalize(c, trace_store, trace_context) for c in library]
     result = ContractAssembler(
-        [entry.contract for entry in marketplace],
+        library,
         fill_gaps_with_scripts=fill_gaps,
     ).assemble(goal)
 

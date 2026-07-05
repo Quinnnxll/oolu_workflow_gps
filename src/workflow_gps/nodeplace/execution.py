@@ -17,14 +17,17 @@ invariant intact on every direct path.
 
 from __future__ import annotations
 
+from typing import NamedTuple
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..knowledge.traces import NodeObservation, TraceStore, route_node_key
 from ..metering.models import NoderShare, RunBinding
-from ..orchestrator.contract import contract_to_blueprint
-from ..orchestrator.state import Blueprint, RoutePlan
+from ..orchestrator.contract import compile_with_owners
+from ..orchestrator.state import Blueprint, ExecutionRecord, RoutePlan
 from ..skills.contract import NodeContract, SubgraphBody
+from ..skills.models import ExecutionStatus
 from .economics import CandidateAssembler
 from .market import PriceBook
 from .rewards import lineage_shares, reward_multiplier
@@ -32,6 +35,15 @@ from .rewards import lineage_shares, reward_multiplier
 
 class ReservedActionsError(PermissionError):
     """The contract contains reserved actions; only the approval flow may run it."""
+
+
+class CompiledContract(NamedTuple):
+    """A contract compiled once: the runnable blueprint plus, for every
+    action id, the name of the top-level child that contributed it (the
+    key trace statistics accumulate under)."""
+
+    blueprint: Blueprint
+    owners: dict[str, str]
 
 
 class ContractNodeOutcome(BaseModel):
@@ -65,25 +77,25 @@ class ContractRunResult(BaseModel):
     market: ContractMarket = Field(default_factory=ContractMarket)
 
 
-def compile_runnable(contract: NodeContract) -> Blueprint:
+def compile_runnable(contract: NodeContract) -> CompiledContract:
     """Compile for direct execution; reserved actions are refused loudly.
 
     Raises ``ValueError`` for an uncompilable contract and
     :class:`ReservedActionsError` when any action is reserved — direct paths
     never get to skip the orchestrator's approval flow.
     """
-    blueprint = contract_to_blueprint(contract)
+    blueprint, owners = compile_with_owners(contract)
     if any(item.reserved for item in blueprint.actions):
         raise ReservedActionsError(
             "contract contains reserved actions; submit it through the "
             "orchestrator flow so approval can be granted"
         )
-    return blueprint
+    return CompiledContract(blueprint=blueprint, owners=owners)
 
 
 def execute_contract(
     contract: NodeContract,
-    blueprint: Blueprint,
+    compiled: CompiledContract,
     *,
     runner,  # orchestrator.DagRouteRunner (any WorkflowExecutor-compatible)
     assembler: CandidateAssembler,
@@ -93,6 +105,8 @@ def execute_contract(
     consumer_tenant: str,
     consumer_principal: str,
     run_id: str | None = None,
+    trace_store: TraceStore | None = None,
+    trace_context: str = "",
 ) -> ContractRunResult:
     """Run an assembled contract with multi-node marketplace binding.
 
@@ -100,6 +114,13 @@ def execute_contract(
     aggregate :class:`RunBinding` (run bindings key on ``run_id``) whose
     shares merge each node's lineage split weighted by its cleared price —
     so the deriver pays every noder in the chain from one verified event.
+
+    With a ``trace_store`` attached, the run also feeds the growth loop:
+    one node-granular trace per run — each top-level child's verdict and
+    what it actually cost — recorded under the same ``route:{name}`` keys
+    the assembler scores by, so every confirmed run sharpens the next
+    assembly's picks. ``trace_context`` buckets the statistics (e.g. per
+    tenant), which is what personalizes them.
     """
     run_id = run_id or uuid4().hex
     children = (
@@ -107,6 +128,7 @@ def execute_contract(
     )
     market_nodes: list[ContractNodeOutcome] = []
     merged: dict[str, float] = {}
+    cleared_by_name: dict[str, float] = {}
     gross_total = 0.0
     cost_total = 0.0
     representative: str | None = None
@@ -123,6 +145,7 @@ def execute_contract(
             substitutes=signals.substitutes,
         )  # commit: a real run moves the market reference
         representative = representative or candidate.version_id
+        cleared_by_name[child.name] = cleared.cleared
         gross_total += cleared.cleared
         cost_total += candidate.cost.automation_cost
         shares = lineage_shares(
@@ -162,7 +185,7 @@ def execute_contract(
         )
 
     record = runner.execute(
-        RoutePlan(chosen=blueprint, alternatives=[], total_cost=0.0),
+        RoutePlan(chosen=compiled.blueprint, alternatives=[], total_cost=0.0),
         idempotency_key=f"{run_id}:exec:1",
         attempt=1,
     )
@@ -176,6 +199,15 @@ def execute_contract(
             "idempotency_key": record.idempotency_key,
         },
     )
+    if trace_store is not None:
+        _record_contract_trace(
+            trace_store,
+            contract,
+            compiled,
+            record,
+            cleared_by_name,
+            context=trace_context,
+        )
     return ContractRunResult(
         run_id=run_id,
         status=record.status.value,
@@ -189,4 +221,51 @@ def execute_contract(
             nodes=market_nodes,
             noders=sorted(merged),
         ),
+    )
+
+
+def _record_contract_trace(
+    trace_store: TraceStore,
+    contract: NodeContract,
+    compiled: CompiledContract,
+    record: ExecutionRecord,
+    cleared_by_name: dict[str, float],
+    *,
+    context: str,
+) -> None:
+    """Fold one contract run into the trace statistics, node-granularly.
+
+    A child succeeds only if every action it contributed succeeded; its
+    cost is the price the run actually cleared at (marketplace children
+    only). Steps are ordered by each child's last completion, so the
+    precedence matrix learns the real partial order across runs. Keys are
+    ``route:{child name}`` — exactly what the assembler scores by.
+    """
+    action_of = {
+        f"{record.idempotency_key}:{item.action.id}": item.action.id
+        for item in compiled.blueprint.actions
+    }
+    child_ok: dict[str, bool] = {}
+    last_done: dict[str, int] = {}
+    for index, outcome in enumerate(record.action_outcomes):  # completion order
+        action_id = action_of.get(outcome.idempotency_key)
+        owner = compiled.owners.get(action_id or "")
+        if owner is None or owner == contract.name:
+            continue  # unattributable, or the contract's own glue actions
+        ok = outcome.status is ExecutionStatus.SUCCEEDED
+        child_ok[owner] = child_ok.get(owner, True) and ok
+        last_done[owner] = index
+    steps = [
+        NodeObservation(
+            node_key=route_node_key(name),
+            ok=child_ok[name],
+            cost=cleared_by_name.get(name),
+        )
+        for name in sorted(child_ok, key=lambda n: last_done[n])
+    ]
+    trace_store.record_run(
+        goal=contract.name,
+        steps=steps,
+        success=record.status is ExecutionStatus.SUCCEEDED,
+        context=context,
     )

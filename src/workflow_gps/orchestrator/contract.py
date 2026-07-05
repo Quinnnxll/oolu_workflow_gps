@@ -46,11 +46,15 @@ class _Fragment:
         edges: list[BlueprintEdge],
         entries: list[str],
         exits: list[str],
+        owners: dict[str, str] | None = None,
     ):
         self.actions = actions
         self.edges = edges
         self.entries = entries  # action ids with no internal dependencies
         self.exits = exits  # action ids nothing internal depends on
+        # action id -> name of the immediate child that contributed it
+        # (only populated by subgraph compilation).
+        self.owners = owners or {}
 
     @property
     def ids(self) -> list[str]:
@@ -59,8 +63,25 @@ class _Fragment:
 
 def contract_to_blueprint(contract: NodeContract) -> Blueprint:
     """The public entry point: one contract, one executable blueprint."""
+    blueprint, _owners = compile_with_owners(contract)
+    return blueprint
+
+
+def compile_with_owners(contract: NodeContract) -> tuple[Blueprint, dict[str, str]]:
+    """Compile, plus a map from action id to the owning top-level child name.
+
+    Both come from ONE compile pass — script bodies mint a fresh action id
+    on every compile, so attribution computed from a second pass would not
+    match the blueprint that actually runs. Actions the contract contributes
+    directly (non-subgraph bodies, fallback repairs) map to the contract's
+    own name. This is what lets per-node execution traces accumulate under
+    the same keys the assembler scores by.
+    """
     fragment = _compile(contract)
-    return Blueprint(
+    owners = dict(fragment.owners)
+    for item in fragment.actions:
+        owners.setdefault(item.action.id, contract.name)
+    blueprint = Blueprint(
         name=contract.name,
         actions=fragment.actions,
         edges=fragment.edges,
@@ -71,6 +92,7 @@ def contract_to_blueprint(contract: NodeContract) -> Blueprint:
             else float(len(fragment.actions))
         ),
     )
+    return blueprint, owners
 
 
 def _compile(contract: NodeContract) -> _Fragment:
@@ -111,6 +133,7 @@ def _compile(contract: NodeContract) -> _Fragment:
             edges,
             fragment.entries,
             fragment.exits,
+            owners={**fragment.owners, **repair.owners},
         )
     return fragment
 
@@ -210,4 +233,9 @@ def _compile_subgraph(contract: NodeContract, body: SubgraphBody) -> _Fragment:
         entries = [actions[0].action.id]
     if not exits:
         exits = [actions[-1].action.id]
-    return _Fragment(actions, edges, entries, exits)
+    # Every action a child contributed (however deeply nested) belongs to
+    # that child at THIS level — trace attribution is per immediate child.
+    owners = {
+        aid: child.name for child in body.nodes for aid in fragments[child.id].ids
+    }
+    return _Fragment(actions, edges, entries, exits, owners=owners)

@@ -22,7 +22,7 @@ from workflow_gps.metering.deriver import MeteringDeriver
 from workflow_gps.orchestrator import DagRouteRunner
 
 
-def _desktop(tmp_path, *, executor=None):
+def _desktop(tmp_path, *, executor=None, trace_store=None):
     app, conn, ident, registry, metering, attribution, audit = _build(tmp_path)
     _seed_market(app, ident, registry)
     svc = DesktopService(
@@ -33,6 +33,7 @@ def _desktop(tmp_path, *, executor=None):
             DagRouteRunner({"cli": executor}) if executor is not None else None
         ),
         attribution=attribution,
+        trace_store=trace_store,
     )
     return app, svc, conn, metering, attribution, audit
 
@@ -214,6 +215,35 @@ def test_loopback_confirm_route_end_to_end(tmp_path):
 
     status, _err = _call(app, "POST", "/v1/assembly/confirm", body={})
     assert status == 400  # a contract object is required
+    conn.close()
+
+
+def test_confirmed_runs_feed_the_trace_store_and_the_next_preview(tmp_path):
+    """The desktop growth loop: every confirm sharpens the planner's own
+    statistics — no separate training step."""
+    from workflow_gps.knowledge.traces import TraceStore, route_node_key
+
+    traces = TraceStore(tmp_path / "traces.db")
+    _app, svc, conn, *_rest = _desktop(
+        tmp_path, executor=_CliExecutor(), trace_store=traces
+    )
+    before = traces.posterior(route_node_key("invoice cleaner"))
+    assert before.observations == 0
+
+    preview = svc.assembly_preview(goal="clean-the-books", want=[TIDY])
+    run = svc.confirm_assembly(preview.contract)
+    assert run.status == "succeeded"
+
+    for name in ("raw exporter", "invoice cleaner"):
+        node = traces.posterior(route_node_key(name))
+        assert (node.successes, node.failures) == (1, 0)
+    goal = traces.posterior(route_node_key("clean-the-books"))
+    assert goal.successes == 1
+
+    # The next preview still assembles the (now personally proven) chain.
+    again = svc.assembly_preview(goal="clean-the-books", want=[TIDY])
+    assert again.complete and set(again.selected) == set(preview.selected)
+    traces.close()
     conn.close()
 
 
