@@ -93,12 +93,21 @@ def compile_runnable(contract: NodeContract) -> CompiledContract:
     return CompiledContract(blueprint=blueprint, owners=owners)
 
 
+class ContractEstimate(NamedTuple):
+    """A pre-commit cost estimate plus what kind of job this mostly is."""
+
+    gross: float
+    # The class key of the child carrying the most cost — the class the
+    # budget layer buckets spending behavior under.
+    goal_class: str | None
+
+
 def estimate_contract_gross(
     contract: NodeContract,
     *,
     assembler: CandidateAssembler,
     price_book: PriceBook,
-) -> float:
+) -> ContractEstimate:
     """What this contract would cost to run, without committing anything.
 
     The same per-child clearing the run performs, in preview mode — so a
@@ -109,6 +118,7 @@ def estimate_contract_gross(
         contract.body.nodes if isinstance(contract.body, SubgraphBody) else [contract]
     )
     total = 0.0
+    dominant: tuple[float, str] | None = None
     for child in children:
         entry = assembler.assemble_version(child.id)
         if entry is None:
@@ -123,7 +133,9 @@ def estimate_contract_gross(
             commit=False,  # an estimate must not move the market
         )
         total += cleared.cleared
-    return total
+        if dominant is None or cleared.cleared > dominant[0]:
+            dominant = (cleared.cleared, candidate.class_key)
+    return ContractEstimate(gross=total, goal_class=dominant[1] if dominant else None)
 
 
 def execute_contract(
@@ -165,6 +177,7 @@ def execute_contract(
     gross_total = 0.0
     cost_total = 0.0
     representative: str | None = None
+    dominant: tuple[float, str] | None = None
     for child in children:
         entry = assembler.assemble_version(child.id)
         if entry is None:
@@ -178,6 +191,8 @@ def execute_contract(
             substitutes=signals.substitutes,
         )  # commit: a real run moves the market reference
         representative = representative or candidate.version_id
+        if dominant is None or cleared.cleared > dominant[0]:
+            dominant = (cleared.cleared, candidate.class_key)
         cleared_by_name[child.name] = cleared.cleared
         gross_total += cleared.cleared
         cost_total += candidate.cost.automation_cost
@@ -214,6 +229,8 @@ def execute_contract(
                     )
                     for principal, weight in sorted(merged.items())
                 ],
+                # The class the budget layer buckets this spend under.
+                goal_class=dominant[1] if dominant else None,
             )
         )
 

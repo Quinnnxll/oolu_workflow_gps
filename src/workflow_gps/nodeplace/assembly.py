@@ -12,6 +12,7 @@ the same numbers from the same math.
 from __future__ import annotations
 
 import random
+from typing import Callable
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -168,7 +169,10 @@ def preview_assembly(
     trace_context: str = "",
     rng: random.Random | None = None,
     budget: BudgetPolicy | None = None,
-    spend_history: list[float] | None = None,
+    # goal_class | None -> the caller's committed run grosses (None = all
+    # classes). A lookup, not a list: the plan's class is only known after
+    # assembly, and behavior is judged within its own class of goal.
+    spend_lookup: Callable[[str | None], list[float] | None] | None = None,
     wallet_balance: float | None = None,
 ) -> AssemblyPreview:
     """Assemble a goal over the marketplace and price the plan, read-only.
@@ -205,6 +209,7 @@ def preview_assembly(
     nodes: list[AssemblyNodePreview] = []
     gross_total = 0.0
     margin_total = 0.0
+    dominant: tuple[float, str] | None = None  # (cleared, class_key)
     children = (
         contract.body.nodes
         if contract is not None and isinstance(contract.body, SubgraphBody)
@@ -245,6 +250,8 @@ def preview_assembly(
         )
         gross_total += cleared.cleared
         margin_total += split.platform_micros / 1_000_000
+        if dominant is None or cleared.cleared > dominant[0]:
+            dominant = (cleared.cleared, candidate.class_key)
         nodes.append(
             AssemblyNodePreview(
                 name=child.name,
@@ -274,7 +281,13 @@ def preview_assembly(
         budget=assess_budget(
             gross_total,
             policy=budget,
-            spend_history=spend_history,
+            spend_history=spend_lookup(None) if spend_lookup else None,
+            class_history=(
+                spend_lookup(dominant[1])
+                if spend_lookup and dominant is not None
+                else None
+            ),
+            goal_class=dominant[1] if dominant else None,
             wallet_balance=wallet_balance,
         ),
     )

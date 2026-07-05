@@ -31,6 +31,7 @@ from .errors import (
 )
 from .execution import (
     CompiledContract,
+    ContractEstimate,
     ContractMarket,
     ContractNodeOutcome,
     ContractRunResult,
@@ -119,6 +120,7 @@ __all__ = [
     "ClearedPrice",
     "CompiledContract",
     "ConsumerAccount",
+    "ContractEstimate",
     "ContractMarket",
     "ContractNodeOutcome",
     "ContractRunResult",

@@ -48,12 +48,19 @@ class AttributionStore:
         return RunBinding.model_validate_json(row["payload_json"]) if row else None
 
     def consumer_spend(
-        self, tenant: str, principal: str | None = None, *, limit: int = 50
+        self,
+        tenant: str,
+        principal: str | None = None,
+        *,
+        goal_class: str | None = None,
+        limit: int = 50,
     ) -> list[float]:
         """The consumer's recent committed run grosses, most recent first.
 
         This is what the budget layer learns spending behavior from: prices
-        that actually bound to runs — not quotes, not previews.
+        that actually bound to runs — not quotes, not previews. With a
+        ``goal_class``, only runs of that class count — spending habits are
+        judged within their own class of goal.
         """
         with self._conn.lock:
             rows = self._conn.db.execute(
@@ -65,6 +72,8 @@ class AttributionStore:
         for row in rows:
             binding = RunBinding.model_validate_json(row["payload_json"])
             if principal is not None and binding.consumer_principal != principal:
+                continue
+            if goal_class is not None and binding.goal_class != goal_class:
                 continue
             grosses.append(binding.gross)
             if len(grosses) >= limit:

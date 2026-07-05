@@ -79,6 +79,58 @@ def test_wallet_asks_for_review_but_never_caps():
     assert fat_wallet.allowed is False
 
 
+def test_class_history_judges_its_own_class():
+    """The birthday case: lavish gift spending is normal FOR GIFTS, and it
+    never loosens (or gets flagged by) the tight everyday profile."""
+    everyday = [0.5, 0.6, 0.4, 0.5, 0.5]
+    gifts = [50.0, 60.0, 45.0]
+
+    # A 45-unit gift: the global profile would scream, the gift-class
+    # profile shrugs — and the class profile is the one with authority.
+    flagged_globally = assess_budget(45.0, spend_history=everyday)
+    assert flagged_globally.needs_review
+    judged_in_class = assess_budget(
+        45.0,
+        spend_history=everyday,
+        class_history=gifts,
+        goal_class="workflow:gifts",
+    )
+    assert not judged_in_class.needs_review
+    assert judged_in_class.goal_class == "workflow:gifts"
+    assert judged_in_class.class_profile is not None
+    assert judged_in_class.class_profile.peak == 60.0
+
+    # And the converse: lavish gifts never loosen everyday automation.
+    # Globally, the 60-unit gift peak would wave a 5-unit run through;
+    # the everyday class knows better.
+    mixed_global = everyday + gifts
+    waved_through = assess_budget(5.0, spend_history=mixed_global)
+    assert not waved_through.needs_review  # the global blind spot
+    held = assess_budget(
+        5.0,
+        spend_history=mixed_global,
+        class_history=everyday,
+        goal_class="workflow:everyday",
+    )
+    assert held.needs_review
+    assert any("workflow:everyday" in r for r in held.reasons)
+
+
+def test_thin_class_history_falls_back_to_global():
+    """A first lavish run in a new class gets one review (judged globally);
+    afterwards the class speaks for itself."""
+    everyday = [0.5, 0.6, 0.4, 0.5, 0.5]
+    verdict = assess_budget(
+        45.0,
+        spend_history=everyday,
+        class_history=[50.0],  # one gift so far: not enough to judge by
+        goal_class="workflow:gifts",
+    )
+    assert verdict.needs_review
+    (reason,) = verdict.reasons
+    assert "workflow:gifts" not in reason  # the global profile judged
+
+
 def test_reasons_accumulate_across_all_signals():
     verdict = assess_budget(
         10.0,
@@ -93,15 +145,16 @@ def test_reasons_accumulate_across_all_signals():
 # --------------------------------------------------------------------------- #
 # Gateway enforcement on the run path; verdicts on the preview.                #
 # --------------------------------------------------------------------------- #
-def _spend(attribution, gross, count):
+def _spend(attribution, gross, count, goal_class=None):
     for index in range(count):
         attribution.bind(
             RunBinding(
-                run_id=f"hist-{gross}-{index}",
+                run_id=f"hist-{goal_class}-{gross}-{index}",
                 version_id="v-past",
                 consumer_tenant="t2",
                 consumer_principal="consumer",
                 gross=gross,
+                goal_class=goal_class,
             )
         )
 
@@ -199,6 +252,56 @@ def test_spending_behavior_gates_outlier_runs(tmp_path):
     # Another tenant's history is theirs alone: fresh consumers run free.
     profile = acknowledged.body["budget"]["profile"]
     assert profile["runs"] >= 3
+    conn.close()
+
+
+def test_run_is_judged_within_its_own_goal_class(tmp_path):
+    """Lavish spending in another class never waves an outlier through —
+    and a class with its own lavish history runs free where the global
+    (everyday-heavy) profile would have flagged it."""
+    app, conn, ident, registry, metering, attribution, audit = _build(
+        tmp_path, executors={"cli": _CliExecutor()}
+    )
+    _seed_chain(app, ident, registry)
+    contract = _assembled_contract(app, ident)  # class workflow:invoice_cleaning
+    token = ident.token("consumer", "t2")
+
+    # Tight habits IN this class; lucrative gift spending elsewhere.
+    _spend(attribution, gross=0.01, count=3, goal_class="workflow:invoice_cleaning")
+    _spend(attribution, gross=100.0, count=3, goal_class="workflow:gifts")
+
+    held = app.handle(
+        _req("POST", "/v1/runs/contract", token=token, body={"contract": contract})
+    )
+    assert held.status == 409  # gift money does not launder invoice habits
+    assert "workflow:invoice_cleaning" in held.body["error"]["message"]
+    conn.close()
+
+    # Fresh consumer whose lavish history IS this class: runs free.
+    lavish_dir = tmp_path / "lavish"
+    lavish_dir.mkdir()
+    app, conn, ident, registry, metering, attribution, audit = _build(
+        lavish_dir, executors={"cli": _CliExecutor()}
+    )
+    _seed_chain(app, ident, registry)
+    contract = _assembled_contract(app, ident)
+    _spend(attribution, gross=50.0, count=3, goal_class="workflow:invoice_cleaning")
+    _spend(attribution, gross=0.01, count=5, goal_class="workflow:everyday")
+
+    resp = app.handle(
+        _req(
+            "POST",
+            "/v1/runs/contract",
+            token=ident.token("consumer", "t2"),
+            body={"contract": contract},
+        )
+    )
+    assert resp.status == 200, resp.body  # normal for THIS class of goal
+    assert resp.body["budget"]["goal_class"] == "workflow:invoice_cleaning"
+    assert resp.body["budget"]["class_profile"]["peak"] == 50.0
+    # The run's own binding carries the class, growing the right bucket.
+    binding = attribution.get_binding(resp.body["run_id"])
+    assert binding.goal_class == "workflow:invoice_cleaning"
     conn.close()
 
 

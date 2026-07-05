@@ -952,7 +952,7 @@ class GatewayApp:
             # instead of taking the greedy best — opt-in per request.
             rng=self._rng if bool(body.get("explore", False)) else None,
             budget=self._budget_policy(body),
-            spend_history=self._spend_history(session),
+            spend_lookup=lambda goal_class: self._spend_history(session, goal_class),
             wallet_balance=self._wallet_balance(session),
         )
         return json_response(200, preview.model_dump(mode="json"))
@@ -973,10 +973,14 @@ class GatewayApp:
         except Exception as exc:
             raise GatewayError(400, "invalid_request", f"bad budget: {exc}") from exc
 
-    def _spend_history(self, session) -> list[float] | None:
+    def _spend_history(
+        self, session, goal_class: str | None = None
+    ) -> list[float] | None:
         if self._attribution is None:
             return None
-        return self._attribution.consumer_spend(session.tenant_id, session.principal_id)
+        return self._attribution.consumer_spend(
+            session.tenant_id, session.principal_id, goal_class=goal_class
+        )
 
     def _wallet_balance(self, session) -> float | None:
         if self._wallet_lookup is None:
@@ -1018,11 +1022,21 @@ class GatewayApp:
 
         # Budget gate BEFORE anything commits: estimate in preview mode,
         # judge it against the cap, the review threshold, the tenant's own
-        # spending behavior, and the (possibly partial) linked wallet.
+        # spending behavior (within this plan's class of goal), and the
+        # (possibly partial) linked wallet.
+        estimate = estimate_contract_gross(
+            contract, assembler=assembler, price_book=book
+        )
         verdict = assess_budget(
-            estimate_contract_gross(contract, assembler=assembler, price_book=book),
+            estimate.gross,
             policy=self._budget_policy(body),
             spend_history=self._spend_history(session),
+            class_history=(
+                self._spend_history(session, estimate.goal_class)
+                if estimate.goal_class is not None
+                else None
+            ),
+            goal_class=estimate.goal_class,
             wallet_balance=self._wallet_balance(session),
         )
         try:

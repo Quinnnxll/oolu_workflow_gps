@@ -12,6 +12,12 @@ authority:
   spending (median and peak of their bound run grosses): a plan well above
   anything their history demonstrates needs review even when no explicit
   threshold was set. New users (too little history) are never judged by it.
+  Behavior is judged **per class of goal** when the class has its own
+  history: someone who spends lucratively on gifts but keeps everyday
+  automation tight is two different spenders, and neither habit should
+  loosen — or flag — the other. A class without enough history falls back
+  to the global profile (so a first lavish run in a new class gets one
+  review, and from then on the class speaks for itself).
 
 The linked wallet is deliberately the weakest signal: its remaining balance
 may be a small slice of the user's true assets, so it NEVER caps or scales
@@ -86,6 +92,10 @@ class BudgetVerdict(BaseModel):
     needs_review: bool = False
     reasons: list[str] = Field(default_factory=list)
     profile: SpendingProfile | None = None
+    # When the plan has a class and the class has history, behavior was
+    # judged by THIS profile, not the global one.
+    goal_class: str | None = None
+    class_profile: SpendingProfile | None = None
 
 
 def assess_budget(
@@ -93,6 +103,8 @@ def assess_budget(
     *,
     policy: BudgetPolicy | None = None,
     spend_history: list[float] | None = None,
+    class_history: list[float] | None = None,
+    goal_class: str | None = None,
     wallet_balance: float | None = None,
 ) -> BudgetVerdict:
     """Judge an estimated plan cost against every configured signal.
@@ -100,12 +112,28 @@ def assess_budget(
     Reasons accumulate (like quote warnings): every tripped signal is
     reported, none overwrites another, so the user sees the whole picture
     in one verdict.
+
+    Behavior is class-first: when ``class_history`` (the caller's runs of
+    this same class of goal) is deep enough to judge, it REPLACES the
+    global profile for the behavioral check — the birthday-gift class may
+    be lavish while everyday automation stays tight, and neither habit
+    leaks into the other. Only a class without enough history falls back
+    to the global profile.
     """
     policy = policy or BudgetPolicy()
     profile = SpendingProfile.from_history(
         spend_history or [],
         multiplier=policy.behavior_multiplier,
         min_history=policy.min_history,
+    )
+    class_profile = (
+        SpendingProfile.from_history(
+            class_history or [],
+            multiplier=policy.behavior_multiplier,
+            min_history=policy.min_history,
+        )
+        if goal_class is not None
+        else None
     )
     reasons: list[str] = []
     allowed = True
@@ -122,12 +150,15 @@ def assess_budget(
             f"estimated cost {estimated:.2f} is above the review threshold "
             f"{policy.review_threshold:.2f}"
         )
-    if profile.comfort_ceiling is not None and estimated > profile.comfort_ceiling:
+    judge, scope = profile, "your usual spending"
+    if class_profile is not None and class_profile.comfort_ceiling is not None:
+        judge, scope = class_profile, f"your usual spending on {goal_class}"
+    if judge.comfort_ceiling is not None and estimated > judge.comfort_ceiling:
         needs_review = True
         reasons.append(
-            f"estimated cost {estimated:.2f} is well above your usual "
-            f"spending (typical {profile.typical:.2f} per run, highest so "
-            f"far {profile.peak:.2f})"
+            f"estimated cost {estimated:.2f} is well above {scope} "
+            f"(typical {judge.typical:.2f} per run, highest so "
+            f"far {judge.peak:.2f})"
         )
     if wallet_balance is not None and estimated > wallet_balance:
         # The wallet may be a slice of the user's true assets: never a cap,
@@ -144,6 +175,8 @@ def assess_budget(
         needs_review=needs_review,
         reasons=reasons,
         profile=profile,
+        goal_class=goal_class,
+        class_profile=class_profile,
     )
 
 

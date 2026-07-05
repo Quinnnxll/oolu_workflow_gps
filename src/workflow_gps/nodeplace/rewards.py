@@ -235,4 +235,5 @@ def build_run_binding(
         gross=candidate.cleared_price,
         provider_cost=candidate.cost.automation_cost,
         shares=shares,
+        goal_class=candidate.class_key,
     )

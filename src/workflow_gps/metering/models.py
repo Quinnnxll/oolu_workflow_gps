@@ -53,6 +53,10 @@ class RunBinding(BaseModel):
     gross: float = 0.0
     provider_cost: float = 0.0
     shares: list[NoderShare] = Field(default_factory=list)
+    # What kind of job this run mostly was (a market class key). Lets the
+    # budget layer learn spending behavior per class of goal — lavish in
+    # one class never loosens (or tightens) another.
+    goal_class: str | None = None
 
 
 class AttributionRecord(BaseModel):

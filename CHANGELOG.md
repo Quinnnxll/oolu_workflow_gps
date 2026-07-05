@@ -57,6 +57,20 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- Per-goal-class spending profiles: behavioral budgets are judged within
+  the plan's own class of goal — spending lucratively on gifts while
+  keeping everyday automation tight is two different spenders, and
+  neither habit loosens (or flags) the other. `RunBinding` gains a
+  `goal_class` (the class key of the run's costliest child, stamped by
+  `execute_contract` and `build_run_binding`), `consumer_spend` filters
+  by it, and `estimate_contract_gross` returns a `ContractEstimate`
+  (gross + dominant class). `assess_budget` is class-first: a class with
+  enough history REPLACES the global profile for the behavioral check
+  (reasons name the class); a class with thin history falls back to the
+  global profile — so a first lavish run in a new class gets exactly one
+  review, then the class speaks for itself. Verdicts carry `goal_class`
+  and `class_profile`; `preview_assembly` takes a `spend_lookup`
+  (class -> history) since the plan's class is only known after assembly.
 - Cost-aware assembly budgets (`nodeplace.budget`): three signals with
   three authorities judge an assembled plan's estimated cost. A
   caller-set `hard_cap` refuses outright (`BudgetExceededError` -> 402

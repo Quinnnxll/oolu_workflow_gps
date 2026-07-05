@@ -339,7 +339,7 @@ class DesktopService:
             # real chances proportional to their remaining uncertainty.
             rng=self._rng if explore else None,
             budget=BudgetPolicy(hard_cap=budget_cap, review_threshold=review_threshold),
-            spend_history=self._spend_history(),
+            spend_lookup=self._spend_history,
             wallet_balance=self._wallet_balance(),
         )
         return AssemblyPreviewView(
@@ -378,10 +378,12 @@ class DesktopService:
             ),
         )
 
-    def _spend_history(self) -> list[float] | None:
+    def _spend_history(self, goal_class: str | None = None) -> list[float] | None:
         if self._attribution is None:
             return None
-        return self._attribution.consumer_spend("local", "desktop")
+        return self._attribution.consumer_spend(
+            "local", "desktop", goal_class=goal_class
+        )
 
     def _wallet_balance(self) -> float | None:
         return self._wallet_lookup() if self._wallet_lookup is not None else None
@@ -431,15 +433,22 @@ class DesktopService:
         # review reasons (threshold, spending behavior, a linked wallet
         # that may only be partial) block until explicitly acknowledged.
         # Both raise PermissionError subclasses -> 403 at the loopback.
+        estimate = estimate_contract_gross(
+            parsed, assembler=self._market, price_book=self._price_book
+        )
         enforce_budget(
             assess_budget(
-                estimate_contract_gross(
-                    parsed, assembler=self._market, price_book=self._price_book
-                ),
+                estimate.gross,
                 policy=BudgetPolicy(
                     hard_cap=budget_cap, review_threshold=review_threshold
                 ),
                 spend_history=self._spend_history(),
+                class_history=(
+                    self._spend_history(estimate.goal_class)
+                    if estimate.goal_class is not None
+                    else None
+                ),
+                goal_class=estimate.goal_class,
                 wallet_balance=self._wallet_balance(),
             ),
             review_acknowledged=review_acknowledged,
