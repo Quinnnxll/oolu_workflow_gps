@@ -54,6 +54,26 @@ class Node(BaseModel):
     revoked_at: datetime | None = None
 
 
+class LineageRecord(BaseModel):
+    """One ancestor in a version's derivation chain (level 1 = direct parent).
+
+    Recorded at contribution time from ``derived_from`` and immutable
+    thereafter — the provenance that fills royalty ancestors automatically
+    when the version is bound to a paying run.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    ancestor_version_id: str
+    ancestor_noder_principal: str
+    level: int = Field(ge=1)
+
+
+# Royalties reach at most this many ancestry levels; beyond it the geometric
+# decay (0.35^level) makes shares economically negligible anyway.
+MAX_LINEAGE_DEPTH = 5
+
+
 class NodeVersion(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -66,6 +86,7 @@ class NodeVersion(BaseModel):
     license: str = "proprietary"
     backend: str = "docker"
     requires_approval: bool = True
+    lineage: list[LineageRecord] = Field(default_factory=list)
     published_at: datetime = Field(default_factory=_now)
 
 

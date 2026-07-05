@@ -51,7 +51,10 @@ def build_openapi() -> dict:
         "/v1/metrics": {"get": op("Operational metrics")},
         "/v1/nodeplace": {
             "get": op("List the caller's own contributed nodes"),
-            "post": op("Contribute a workflow as a node (opt-in, sanitized)"),
+            "post": op(
+                "Contribute a workflow as a node (opt-in, sanitized; "
+                "derived_from records royalty lineage)"
+            ),
         },
         "/v1/nodeplace/{node_id}/revoke": {"post": op("Revoke a contributed node")},
         "/v1/listings": {"get": op("Discover active public node listings")},

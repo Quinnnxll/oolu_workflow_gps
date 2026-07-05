@@ -57,6 +57,26 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- Goal-directed assembly: `orchestrator/assembler.py` adds
+  `ContractAssembler` — give it a `GoalSpec` (wanted slots + slots on hand)
+  and a contract library (a list, or a callable over a live registry via
+  `contract_from_registered`, which carries trace-store history), and it
+  backward-chains producers by verified success (deterministic, or
+  Thompson-sampled with an `rng`), skips what is on hand, dedupes shared
+  producers, and returns one `SubgraphBody` contract whose ordering falls
+  out of slot flow at compile time. Unproducible slots are reported as
+  `missing` — or, with `fill_gaps_with_scripts=True`, become synthesized
+  `ScriptBody` gap nodes the node-cached script runner realizes and
+  memoizes at execution time.
+- Lineage records on `NodeVersion`: `contribute(derived_from=...)` (service
+  and gateway) records the parent and its ancestors as immutable
+  `LineageRecord`s (levels shift by one per generation, capped at
+  `MAX_LINEAGE_DEPTH=5`; unknown parents are refused). When a marketplace
+  run binds (`POST /v1/runs` with `node_version_id`), royalty ancestors now
+  fill automatically from the version's recorded lineage
+  (`CandidateAssembler.lineage_for`) instead of caller input — derivation
+  provenance is the source of truth, and the geometric royalty split pays
+  upstream noders on every verified success.
 - NodeContract unification (build-order item 6 — the review is complete):
   `skills/contract.py` defines the one node schema the three vocabularies
   converge on — typed `Slot` consumes/produces, three body kinds

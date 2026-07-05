@@ -29,8 +29,10 @@ from .market import (
     utility,
 )
 from .models import (
+    MAX_LINEAGE_DEPTH,
     NODEPLACE_SCHEMA_VERSION,
     CostRecovery,
+    LineageRecord,
     Listing,
     ListingStatus,
     Node,
@@ -91,6 +93,8 @@ __all__ = [
     "DampingPolicy",
     "InvoiceLine",
     "LineageLink",
+    "LineageRecord",
+    "MAX_LINEAGE_DEPTH",
     "Listing",
     "ListingStatus",
     "Node",

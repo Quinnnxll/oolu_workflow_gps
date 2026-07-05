@@ -47,27 +47,32 @@ def _build(tmp_path):
     return app, conn, ident, registry, metering, attribution, audit
 
 
-def _contribute_and_publish(app, ident, registry, *, name, noder, price):
+def _contribute_and_publish(
+    app, ident, registry, *, name, noder, price, derived_from=None
+):
     skill = ReusableSkill(
         name=name,
         description=f"{name} cleans invoices",
         signature=SkillSignature(application="cli", adapter="cli"),
         actions=[ActionEvent(correlation_id="c", adapter="cli", operation="run")],
     )
+    body = {
+        "skill": skill.model_dump(mode="json"),
+        "semver": "1.0.0",
+        "title": name,
+        "summary": f"{name} cleans invoices reliably",
+        "tags": ["invoice", "class:workflow", "market:invoice_cleaning"],
+        "visibility": "public",
+        "pricing": {"model": "per_success", "unit_price": price},
+    }
+    if derived_from is not None:
+        body["derived_from"] = derived_from
     created = app.handle(
         _req(
             "POST",
             "/v1/nodeplace",
             token=ident.token(noder, "t1"),
-            body={
-                "skill": skill.model_dump(mode="json"),
-                "semver": "1.0.0",
-                "title": name,
-                "summary": f"{name} cleans invoices reliably",
-                "tags": ["invoice", "class:workflow", "market:invoice_cleaning"],
-                "visibility": "public",
-                "pricing": {"model": "per_success", "unit_price": price},
-            },
+            body=body,
         )
     )
     assert created.status == 201, created.body

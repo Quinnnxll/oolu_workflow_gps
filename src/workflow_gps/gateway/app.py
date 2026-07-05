@@ -395,6 +395,9 @@ class GatewayApp:
                     consumer_tenant=session.tenant_id,
                     candidate=candidate,
                     signals=entry.signals,
+                    # Royalty ancestors come from the version's recorded
+                    # lineage — derivation provenance, not caller input.
+                    ancestors=self._market.lineage_for(candidate.version_id),
                     consumer_principal=session.principal_id,
                 )
                 self._attribution.bind(binding)
@@ -701,6 +704,7 @@ class GatewayApp:
                 pricing=pricing,
                 backend=str(body.get("backend", "docker")),
                 requires_approval=bool(body.get("requires_approval", True)),
+                derived_from=body.get("derived_from"),
             )
         except ContributionError as exc:
             raise GatewayError(400, "invalid_request", str(exc)) from exc

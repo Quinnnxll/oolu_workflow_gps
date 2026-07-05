@@ -7,6 +7,8 @@ from pydantic import BaseModel, ConfigDict
 from ..skills.models import ReusableSkill
 from .errors import ContributionError, OwnershipError, SafetyViolation
 from .models import (
+    MAX_LINEAGE_DEPTH,
+    LineageRecord,
     Listing,
     ListingStatus,
     Node,
@@ -51,11 +53,13 @@ class NodeplaceService:
         node_id: str | None = None,
         backend: str = "docker",
         requires_approval: bool = True,
+        derived_from: str | None = None,
     ) -> ContributionResult:
         if visibility == Visibility.PRIVATE:
             raise ContributionError(
                 "contribute is opt-in sharing; a private workflow is never published"
             )
+        lineage = self._lineage_for(derived_from) if derived_from else []
         report = self._safety.review(
             skill.actions, backend=backend, requires_approval=requires_approval
         )
@@ -63,7 +67,9 @@ class NodeplaceService:
             raise SafetyViolation(report.violations)
         sanitized, content_hash = sanitize_skill(skill)
 
-        node = self._owned_node(node_id, noder_principal, tenant_id) if node_id else None
+        node = (
+            self._owned_node(node_id, noder_principal, tenant_id) if node_id else None
+        )
         if node is None:
             node = Node(
                 noder_principal=noder_principal,
@@ -90,6 +96,7 @@ class NodeplaceService:
             license=license,
             backend=backend,
             requires_approval=requires_approval,
+            lineage=lineage,
         )
         self._store.add_version(version)
 
@@ -110,7 +117,40 @@ class NodeplaceService:
             node=node, version=version, listing=listing, policy=policy
         )
 
-    def publish(self, listing_id: str, *, noder_principal: str, tenant_id: str) -> Listing:
+    def _lineage_for(self, parent_version_id: str) -> list[LineageRecord]:
+        """The derivation chain a new version inherits from its parent.
+
+        The direct parent is level 1; the parent's own ancestors shift one
+        level deeper, capped at ``MAX_LINEAGE_DEPTH``. A revoked ancestor
+        stays in the record — provenance is history, not availability — but
+        an unknown parent is refused rather than guessed.
+        """
+        parent = self._store.get_version(parent_version_id)
+        if parent is None:
+            raise ContributionError(
+                f"derived_from references unknown version '{parent_version_id}'"
+            )
+        parent_node = self._store.get_node(parent.node_id)
+        if parent_node is None:
+            raise ContributionError(
+                f"derived_from version '{parent_version_id}' has no node"
+            )
+        lineage = [
+            LineageRecord(
+                ancestor_version_id=parent.version_id,
+                ancestor_noder_principal=parent_node.noder_principal,
+                level=1,
+            )
+        ]
+        for record in parent.lineage:
+            if record.level + 1 > MAX_LINEAGE_DEPTH:
+                continue
+            lineage.append(record.model_copy(update={"level": record.level + 1}))
+        return lineage
+
+    def publish(
+        self, listing_id: str, *, noder_principal: str, tenant_id: str
+    ) -> Listing:
         listing = self._store.get_listing(listing_id)
         if listing is None:
             raise ContributionError("no such listing")
@@ -126,7 +166,9 @@ class NodeplaceService:
         node = self._owned_node(node_id, noder_principal, tenant_id)
         if node.revoked_at is not None:
             return False
-        self._store.update_node(node.model_copy(update={"revoked_at": datetime.now(UTC)}))
+        self._store.update_node(
+            node.model_copy(update={"revoked_at": datetime.now(UTC)})
+        )
         return True
 
     def discover(self, query: str = "") -> list[Listing]:

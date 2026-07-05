@@ -38,7 +38,7 @@ from ..skills.models import ExecutionStatus
 from .market import CandidateEconomics, CostVector, NodeClass
 from .pricing import gross_from_policy
 from .ratings import RatingService
-from .rewards import RewardSignals
+from .rewards import LineageLink, RewardSignals
 from .store import RegistryStore
 
 _EXECUTED_EVENT = "workflow.executed"
@@ -154,6 +154,18 @@ class CandidateAssembler:
         self._stats = stats
         self._ratings = ratings
         self._clock = clock or (lambda: datetime.now(UTC))
+
+    def lineage_for(self, version_id: str) -> list[LineageLink]:
+        """The version's recorded royalty ancestors, ready for a run binding."""
+        version = self._registry.get_version(version_id)
+        if version is None:
+            return []
+        return [
+            LineageLink(
+                noder_principal=record.ancestor_noder_principal, level=record.level
+            )
+            for record in version.lineage
+        ]
 
     def assemble_version(self, version_id: str) -> AssembledCandidate | None:
         """Assemble one version, with substitutes counted against the whole
