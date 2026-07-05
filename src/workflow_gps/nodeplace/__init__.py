@@ -42,6 +42,7 @@ from .execution import (
     execute_contract,
     reserved_operations,
 )
+from .holds import PendingContractRecord, PendingContractStore
 from .market import (
     DEFAULT_POLICIES,
     MODE_WEIGHTS,
@@ -147,6 +148,8 @@ __all__ = [
     "NodeplaceService",
     "OwnershipError",
     "PayoutPreview",
+    "PendingContractRecord",
+    "PendingContractStore",
     "PriceBook",
     "PricingModel",
     "PricingPolicy",

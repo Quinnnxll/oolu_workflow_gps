@@ -31,12 +31,24 @@ def build_openapi() -> dict:
             "post": op(
                 "Execute an assembled contract directly: compiles to a DAG, "
                 "binds every marketplace node (aggregate lineage-weighted "
-                "shares), runs it, and audit-links the outcome; reserved "
-                "actions are refused — those need the approval flow. "
+                "shares), runs it, and audit-links the outcome. A contract "
+                "with reserved actions is HELD (202 awaiting_approval), "
+                "tenant-scoped and durable, for an authorized decision. "
                 "Budget-gated: a 'budget' hard_cap refuses (402), a "
                 "review_threshold, the caller's own spending behavior, or a "
                 "partial linked wallet hold the run (409) until "
                 "'review_acknowledged: true'"
+            ),
+        },
+        "/v1/runs/contract/holds": {
+            "get": op("List the caller tenant's held reserved contracts"),
+        },
+        "/v1/runs/contract/holds/{pending_id}": {
+            "post": op(
+                "Decide a held reserved contract (requires approver "
+                "authority): approval re-runs the budget gate on the "
+                "submitter's terms and executes with the run bound to the "
+                "ORIGINAL submitter; declining removes it. Both audited"
             ),
         },
         "/v1/runs/{run_id}": {"get": op("Get a run's status")},

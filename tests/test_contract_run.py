@@ -499,27 +499,249 @@ def test_contradicting_traces_never_override_data_flow(tmp_path):
     conn.close()
 
 
-def test_contract_run_refuses_reserved_actions(tmp_path):
-    """Human control survives the direct path: irreversible verbs are 403."""
-    app, conn, ident, *_rest = _build(tmp_path, executors={"cli": _CliExecutor()})
-    destructive = NodeContract(
+def _destructive():
+    return NodeContract(
         name="wipe it",
         body=ActionsBody(
             actions=[
                 ActionEvent(correlation_id="c", adapter="cli", operation="delete_files")
             ]
         ),
+    ).model_dump(mode="json")
+
+
+def _grant_approver(ident, principal, tenant):
+    from workflow_gps.identity import AuthorityGrant, Role
+
+    ident.store.add_role(
+        Role(tenant_id=tenant, name="approver", permissions=frozenset({"approve:*"}))
     )
-    resp = app.handle(
+    ident.store.add_grant(
+        AuthorityGrant(
+            tenant_id=tenant,
+            principal_id=principal,
+            role_name="approver",
+            granted_by="x",
+        )
+    )
+
+
+def test_reserved_contract_is_held_not_refused(tmp_path):
+    """Human control survives the direct path — as a tenant-scoped hold the
+    submitter cannot release, decided only by an authorized approver, with
+    the run bound to the ORIGINAL submitter."""
+    executor = _CliExecutor(("run", "delete_files"))
+    app, conn, ident, registry, metering, attribution, audit = _build(
+        tmp_path, executors={"cli": executor}
+    )
+    _seed_chain(app, ident, registry)
+    consumer = ident.token("consumer", "t2")
+
+    held = app.handle(
         _req(
             "POST",
             "/v1/runs/contract",
-            token=ident.token("consumer", "t2"),
-            body={"contract": destructive.model_dump(mode="json")},
+            token=consumer,
+            body={"contract": _destructive()},
+            headers={"Idempotency-Key": "hold-1"},
         )
     )
-    assert resp.status == 403
-    assert "reserved" in resp.body["error"]["message"]
+    assert held.status == 202, held.body
+    assert held.body["status"] == "awaiting_approval"
+    assert held.body["reserved"] == ["cli/delete_files"]
+    pending_id = held.body["pending_id"]
+    assert executor.calls == 0
+
+    # Idempotent: the same key re-returns the same hold, no duplicate.
+    again = app.handle(
+        _req(
+            "POST",
+            "/v1/runs/contract",
+            token=consumer,
+            body={"contract": _destructive()},
+            headers={"Idempotency-Key": "hold-1"},
+        )
+    )
+    assert again.body["pending_id"] == pending_id
+
+    # Tenant-scoped listing: t2 sees it, t1 does not.
+    mine = app.handle(_req("GET", "/v1/runs/contract/holds", token=consumer))
+    assert [h["pending_id"] for h in mine.body["items"]] == [pending_id]
+    assert mine.body["items"][0]["submitted_by"] == "consumer"
+    other = app.handle(
+        _req("GET", "/v1/runs/contract/holds", token=ident.token("user", "t1"))
+    )
+    assert other.body["items"] == []
+
+    def decide(token, approved=True, pid=pending_id):
+        return app.handle(
+            _req(
+                "POST",
+                f"/v1/runs/contract/holds/{pid}",
+                token=token,
+                body={"approved": approved},
+            )
+        )
+
+    # The submitter has no approve authority: 403, and the hold survives.
+    assert decide(consumer).status == 403
+    # An approver in ANOTHER tenant cannot even see it: 404.
+    assert decide(ident.token("approver-1", "t1")).status == 404
+    assert executor.calls == 0
+
+    # An approver in the hold's own tenant releases it.
+    _grant_approver(ident, "approver-2", "t2")
+    resp = decide(ident.token("approver-2", "t2"))
+    assert resp.status == 200, resp.body
+    assert resp.body["status"] == "succeeded"
+    assert executor.calls == 1
+
+    # The run belongs to the SUBMITTER, not the approver.
+    binding_check = app.handle(_req("GET", "/v1/runs/contract/holds", token=consumer))
+    assert binding_check.body["items"] == []  # decided: gone
+    (approved_event,) = [
+        r for r in audit.records() if r.event_type == "contract.approved"
+    ]
+    assert approved_event.payload["by"] == "approver-2"
+    assert approved_event.payload["reserved"] == ["cli/delete_files"]
+    # Deciding again is a 404.
+    assert decide(ident.token("approver-2", "t2")).status == 404
+    conn.close()
+
+
+def test_gateway_holds_survive_a_restart_and_decline_removes(tmp_path):
+    """Holds are durable: a fresh gateway over the same durable store lists
+    and decides them (recompiling once); declining removes without running."""
+    from workflow_gps.nodeplace import NodeplaceService
+
+    executor = _CliExecutor(("run", "delete_files"))
+    app, conn, ident, registry, metering, attribution, audit = _build(
+        tmp_path, executors={"cli": executor}
+    )
+    _seed_chain(app, ident, registry)
+    consumer = ident.token("consumer", "t2")
+    _grant_approver(ident, "approver-2", "t2")
+
+    first = app.handle(
+        _req(
+            "POST",
+            "/v1/runs/contract",
+            token=consumer,
+            body={"contract": _destructive()},
+        )
+    )
+    second = app.handle(
+        _req(
+            "POST",
+            "/v1/runs/contract",
+            token=consumer,
+            body={"contract": _destructive()},
+        )
+    )
+    assert first.status == 202 and second.status == 202
+
+    # "Restart": a fresh gateway over the same durable + market state,
+    # with a fresh executor — no in-memory carryover.
+    reborn_executor = _CliExecutor(("run", "delete_files"))
+    reborn = GatewayApp(
+        app._durable,
+        validator=ident.validator,
+        resolver=ident.resolver,
+        approval_authority=ident.authority,
+        nodeplace=NodeplaceService(registry),
+        market=app._market,
+        price_book=app._price_book,
+        attribution=attribution,
+        contract_executors={"cli": reborn_executor},
+    )
+    listed = reborn.handle(_req("GET", "/v1/runs/contract/holds", token=consumer))
+    assert {h["pending_id"] for h in listed.body["items"]} == {
+        first.body["pending_id"],
+        second.body["pending_id"],
+    }
+
+    approver = ident.token("approver-2", "t2")
+    ran = reborn.handle(
+        _req(
+            "POST",
+            f"/v1/runs/contract/holds/{first.body['pending_id']}",
+            token=approver,
+            body={"approved": True},
+        )
+    )
+    assert ran.status == 200 and ran.body["status"] == "succeeded"
+    assert reborn_executor.calls == 1 and executor.calls == 0  # recompiled here
+
+    declined = reborn.handle(
+        _req(
+            "POST",
+            f"/v1/runs/contract/holds/{second.body['pending_id']}",
+            token=approver,
+            body={"approved": False},
+        )
+    )
+    assert declined.status == 200 and declined.body["status"] == "declined"
+    assert reborn_executor.calls == 1  # the decline never ran anything
+    # Both gateways agree the durable truth: nothing left.
+    assert (
+        app.handle(_req("GET", "/v1/runs/contract/holds", token=consumer)).body["items"]
+        == []
+    )
+    conn.close()
+
+
+def test_hold_decision_still_runs_the_budget_gate(tmp_path):
+    """Approval grants the reserved actions, not the money: the submitter's
+    review threshold still holds the priced run until acknowledged."""
+    executor = _CliExecutor(("run", "delete_files"))
+    app, conn, ident, registry, *_rest = _build(tmp_path, executors={"cli": executor})
+    _seed_chain(app, ident, registry)
+    consumer = ident.token("consumer", "t2")
+    _grant_approver(ident, "approver-2", "t2")
+    approver = ident.token("approver-2", "t2")
+
+    # A priced marketplace chain PLUS a reserved node, tiny review threshold.
+    hybrid = _assembled_contract(app, ident)
+    hybrid["body"]["nodes"].append(_destructive())
+
+    def submit(extra):
+        return app.handle(
+            _req(
+                "POST",
+                "/v1/runs/contract",
+                token=consumer,
+                body={"contract": hybrid, **extra},
+            )
+        )
+
+    held = submit({"budget": {"review_threshold": 0.000001}})
+    assert held.status == 202
+    blocked = app.handle(
+        _req(
+            "POST",
+            f"/v1/runs/contract/holds/{held.body['pending_id']}",
+            token=approver,
+            body={"approved": True},
+        )
+    )
+    assert blocked.status == 409
+    assert blocked.body["error"]["code"] == "review_required"
+    assert executor.calls == 0
+    # The hold survives; a submission acknowledged up front releases fine.
+    acknowledged = submit(
+        {"budget": {"review_threshold": 0.000001}, "review_acknowledged": True}
+    )
+    ran = app.handle(
+        _req(
+            "POST",
+            f"/v1/runs/contract/holds/{acknowledged.body['pending_id']}",
+            token=approver,
+            body={"approved": True},
+        )
+    )
+    assert ran.status == 200 and ran.body["status"] == "succeeded"
+    assert executor.calls == 3  # two marketplace steps + the approved one
+    assert ran.body["market"]["gross"] > 0
     conn.close()
 
 

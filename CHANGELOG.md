@@ -57,6 +57,24 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- Gateway hold-for-approval for reserved contracts: `POST
+  /v1/runs/contract` no longer 403s a contract with reserved actions —
+  it HOLDS it (202 `awaiting_approval` with a `pending_id`, idempotent
+  under the Idempotency-Key, budget knobs captured at submission).
+  `GET /v1/runs/contract/holds` lists the caller tenant's holds;
+  `POST /v1/runs/contract/holds/{pending_id}` decides one. Decisions are
+  tenant-scoped (another tenant's hold is a 404 — existence never
+  leaks), require approve authority in the hold's own tenant (the
+  submitter's own token gets 403 and the hold survives), re-run the
+  budget gate on the SUBMITTER's terms and histories (402/409 leave the
+  hold intact), and execute with the run bound to the ORIGINAL
+  submitter — the approver authorizes, never takes the consumer seat.
+  Declining removes the hold; both outcomes are audited with the
+  decider's principal. The shared `PendingContractStore` moved to
+  `nodeplace.holds` (table `pending_contracts`, records now carry the
+  submitting tenant/principal, `list(tenant=...)` filters) and backs
+  both surfaces, so gateway holds also survive restarts and every
+  process over one database sees one consistent set.
 - Held approvals survive restarts: pending reserved contracts moved from
   process memory into the shell's own durable database
   (`desktop.pending.PendingContractStore`, table

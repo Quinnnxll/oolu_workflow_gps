@@ -18,6 +18,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from uuid import uuid4
 
 from ..billing import (
     BillingService,
@@ -44,13 +45,14 @@ from ..nodeplace import (
     ContributionError,
     NodeplaceService,
     OwnershipError,
+    PendingContractRecord,
+    PendingContractStore,
     PriceBook,
     PricingPolicy,
     QuoteEngine,
     QuoteMode,
     RatingError,
     RatingService,
-    ReservedActionsError,
     ReviewRequiredError,
     StepCandidates,
     SubscriptionPlan,
@@ -58,11 +60,12 @@ from ..nodeplace import (
     Visibility,
     assess_budget,
     build_run_binding,
-    compile_runnable,
+    compile_contract,
     enforce_budget,
     estimate_contract_gross,
     execute_contract,
     preview_assembly,
+    reserved_operations,
     reward_multiplier,
     utility,
 )
@@ -193,6 +196,11 @@ class GatewayApp:
         # None. A partial view of the user's assets by design: budgets never
         # cap on it, they only flag it for review.
         self._wallet_lookup = wallet_lookup
+        # Reserved contracts held for approval: durable (they survive a
+        # restart), tenant-scoped. The compiled artifact is process-local —
+        # whichever process decides recompiles once.
+        self._holds = PendingContractStore(durable.conn)
+        self._compiled_holds: dict[str, tuple] = {}
         self._payout_store = payout_store
         self._payout_adapter = payout_adapter
         self._disputes = disputes
@@ -362,6 +370,12 @@ class GatewayApp:
         r.add("POST", "/v1/market/quotes", self._market_quote)
         r.add("POST", "/v1/market/assemble", self._market_assemble)
         r.add("POST", "/v1/runs/contract", self._submit_contract_run)
+        r.add("GET", "/v1/runs/contract/holds", self._list_contract_holds)
+        r.add(
+            "POST",
+            "/v1/runs/contract/holds/{pending_id}",
+            self._decide_contract_hold,
+        )
         r.add("GET", "/v1/earnings", self._earnings_balance)
         r.add("GET", "/v1/earnings/entries", self._earnings_entries)
         r.add("GET", "/v1/payout-accounts", self._get_payout_account)
@@ -1014,11 +1028,51 @@ class GatewayApp:
         except Exception as exc:
             raise GatewayError(400, "invalid_request", f"bad contract: {exc}") from exc
         try:
-            compiled = compile_runnable(contract)
-        except ReservedActionsError as exc:
-            raise GatewayError(403, "forbidden", str(exc)) from exc
+            compiled = compile_contract(contract)
         except ValueError as exc:
             raise GatewayError(400, "invalid_request", str(exc)) from exc
+        reserved = reserved_operations(compiled)
+        if reserved:
+            # Not a dead end: hold it durably, tenant-scoped, for an
+            # authorized approver (POST /v1/runs/contract/holds/{id}).
+            policy = self._budget_policy(body)
+
+            def hold() -> dict:
+                pending_id = uuid4().hex
+                self._holds.add(
+                    PendingContractRecord(
+                        pending_id=pending_id,
+                        contract=contract.model_dump(mode="json"),
+                        reserved=reserved,
+                        consumer_tenant=session.tenant_id,
+                        consumer_principal=session.principal_id,
+                        budget_cap=policy.hard_cap if policy else None,
+                        review_threshold=(policy.review_threshold if policy else None),
+                        review_acknowledged=bool(
+                            body.get("review_acknowledged", False)
+                        ),
+                        created_at=self._clock(),
+                    )
+                )
+                self._compiled_holds[pending_id] = (contract, compiled)
+                self._metrics["contract_holds"] += 1
+                return {
+                    "pending_id": pending_id,
+                    "status": "awaiting_approval",
+                    "reserved": reserved,
+                }
+
+            key = request.header("idempotency-key")
+            held = (
+                self._idem.run(
+                    f"gw:contract-hold:{session.tenant_id}:{key}",
+                    hold,
+                    scope="gateway",
+                )
+                if key
+                else hold()
+            )
+            return json_response(202, held)
 
         # Budget gate BEFORE anything commits: estimate in preview mode,
         # judge it against the cap, the review threshold, the tenant's own
@@ -1077,6 +1131,136 @@ class GatewayApp:
             else submit()
         )
         return json_response(200, result)
+
+    def _list_contract_holds(self, request, session, params) -> Response:
+        """Reserved contracts held for approval — the caller's tenant only."""
+        items = [
+            {
+                "pending_id": record.pending_id,
+                "name": str(record.contract.get("name", "contract")),
+                "reserved": record.reserved,
+                "submitted_by": record.consumer_principal,
+                "created_at": record.created_at.isoformat(),
+            }
+            for record in self._holds.list(tenant=session.tenant_id)
+        ]
+        return json_response(200, {"items": items})
+
+    def _decide_contract_hold(self, request, session, params) -> Response:
+        """Decide a held reserved contract — approval mints from identity.
+
+        Tenant-scoped (another tenant's hold is a 404, never a 403 that
+        leaks its existence). Approval requires approve authority in the
+        hold's tenant, re-runs the budget gate on the SUBMITTER's terms and
+        histories (prices may have moved while held; approval grants the
+        reserved actions, not the money), and executes with the run bound
+        to the ORIGINAL submitter — the approver authorizes, never earns
+        the consumer seat. Declining removes the hold. Both outcomes are
+        audited with the decider's principal.
+        """
+        record = self._holds.get(params["pending_id"])
+        if record is None or record.consumer_tenant != session.tenant_id:
+            raise GatewayError(404, "not_found", "no such held contract")
+        body = request.body or {}
+        if "approved" not in body:
+            raise GatewayError(
+                400, "invalid_request", "approved (true or false) is required"
+            )
+        pending_id = record.pending_id
+        if not bool(body["approved"]):
+            self._holds.remove(pending_id)
+            self._compiled_holds.pop(pending_id, None)
+            self._durable.audit.append(
+                "contract.declined",
+                {"pending_id": pending_id, "by": session.principal_id},
+            )
+            return json_response(200, {"pending_id": pending_id, "status": "declined"})
+        if self._contract_runner is None:
+            raise GatewayError(404, "not_found", "contract execution is not enabled")
+        assembler, book = self._require_market()
+        if self._attribution is None:
+            raise GatewayError(404, "not_found", "market economics are not enabled")
+        if self._approval is None:
+            raise GatewayError(404, "not_found", "approval authority is not configured")
+        cached = self._compiled_holds.get(pending_id)
+        if cached is None:  # a hold from before a restart: recompile once
+            parsed = NodeContract.model_validate(record.contract)
+            cached = (parsed, compile_contract(parsed))
+            self._compiled_holds[pending_id] = cached
+        parsed, compiled = cached
+        try:
+            approval = self._approval.approve(
+                session,
+                run_id=pending_id,
+                policy=parsed.name,
+                requester_id=record.consumer_principal or "",
+                required_assurance=int(body.get("required_assurance", 1)),
+                now=request.now or self._clock(),
+            )
+        except AuthorizationError as exc:
+            raise GatewayError(403, "forbidden", str(exc)) from exc
+        estimate = estimate_contract_gross(parsed, assembler=assembler, price_book=book)
+        verdict = assess_budget(
+            estimate.gross,
+            policy=BudgetPolicy(
+                hard_cap=record.budget_cap,
+                review_threshold=record.review_threshold,
+            ),
+            spend_history=self._attribution.consumer_spend(
+                record.consumer_tenant, record.consumer_principal
+            ),
+            class_history=(
+                self._attribution.consumer_spend(
+                    record.consumer_tenant,
+                    record.consumer_principal,
+                    goal_class=estimate.goal_class,
+                )
+                if estimate.goal_class is not None
+                else None
+            ),
+            goal_class=estimate.goal_class,
+            wallet_balance=(
+                self._wallet_lookup(record.consumer_tenant, record.consumer_principal)
+                if self._wallet_lookup is not None
+                else None
+            ),
+        )
+        try:
+            enforce_budget(verdict, review_acknowledged=record.review_acknowledged)
+        except BudgetExceededError as exc:
+            raise GatewayError(402, "budget_exceeded", str(exc)) from exc
+        except ReviewRequiredError as exc:
+            raise GatewayError(409, "review_required", str(exc)) from exc
+        result = execute_contract(
+            parsed,
+            compiled,
+            runner=self._contract_runner,
+            assembler=assembler,
+            price_book=book,
+            attribution=self._attribution,
+            audit=self._durable.audit,
+            consumer_tenant=record.consumer_tenant,
+            consumer_principal=record.consumer_principal,
+            trace_store=self._trace_store,
+            trace_context=record.consumer_tenant,
+        )
+        self._holds.remove(pending_id)
+        self._compiled_holds.pop(pending_id, None)
+        self._metrics["contract_runs"] += 1
+        self._durable.audit.append(
+            "contract.approved",
+            {
+                "pending_id": pending_id,
+                "run_id": result.run_id,
+                "approval_id": approval.id,
+                "by": session.principal_id,
+                "reserved": record.reserved,
+            },
+        )
+        payload = result.model_dump(mode="json")
+        payload["pending_id"] = pending_id
+        payload["budget"] = verdict.model_dump(mode="json")
+        return json_response(200, payload)
 
     def _market_quote(self, request, session, params) -> Response:
         """Quote a workflow off live economics. A forecast: no money moves,

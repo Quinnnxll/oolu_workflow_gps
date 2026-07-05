@@ -28,6 +28,7 @@ from ..durable.maintenance import delete_workflow
 from ..durable.service import DurableWorkflowService
 from ..identity.models import Session
 from ..identity.service import IdentityApprovalAuthority
+from ..nodeplace.holds import PendingContractRecord, PendingContractStore
 from ..orchestrator.state import (
     PauseKind,
     Phase,
@@ -39,7 +40,6 @@ from ..orchestrator.state import (
 from ..providers.vault import SecretVault
 from ..worker.leases import TrustLevel
 from ..worker.policy import IsolationPolicy
-from .pending import PendingContractRecord, PendingContractStore
 from .views import (
     ActionView,
     AssemblyPayoutView,
@@ -465,6 +465,8 @@ class DesktopService:
                     pending_id=pending_id,
                     contract=parsed.model_dump(mode="json"),
                     reserved=reserved,
+                    consumer_tenant="local",
+                    consumer_principal="desktop",
                     budget_cap=budget_cap,
                     review_threshold=review_threshold,
                     review_acknowledged=review_acknowledged,
