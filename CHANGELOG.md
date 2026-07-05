@@ -57,6 +57,22 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- Hardening passes: property-style fuzzing of the money invariants and
+  concurrency stress on the shared stores (no new dependencies — seeded
+  `random`, explicit seeds, failures replay exactly). The money machine
+  (12 seeds x 50 random ops: accruals, clock advances, settlement cycles
+  with a flaky processor, upheld/rejected disputes) checks after every
+  step that the reserve is never negative, lifetime payouts never exceed
+  gross accruals (money is never minted), only upheld clawbacks can
+  drive a balance negative, and the ledger's PAYOUT outflow equals what
+  the processor actually paid — then jumps past the risk window for the
+  eventually-100% endgame (gross == paid + available + reserved, residue
+  below threshold). The concurrency suite races 16 barrier-synchronized
+  threads at the primitives: idempotent `run` executes exactly once (and
+  exactly once again after `release`), ledger dedup admits one row per
+  unique key with no lost distinct writes, a hold is decided by exactly
+  one contender (with sweeps racing adds), and trace statistics lose
+  nothing across threads.
 - Reserve release — the holdback is a loan, not a fee: the settlement
   reserve target is now scoped to the chargeback **risk window**
   (`risk_window_days`, default `DEFAULT_RISK_WINDOW_DAYS = 90`; `None`
