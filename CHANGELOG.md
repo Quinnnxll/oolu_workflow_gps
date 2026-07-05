@@ -57,6 +57,18 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- Trace-derived learned orderings in assembled subgraphs: when the
+  caller's own runs consistently completed one child before another
+  (`TraceStore.derive_edges`: enough observations, one direction nearly
+  always, transitively reduced), `preview_assembly` stamps that order
+  onto the assembled contract as `provenance="learned"` `ContractEdge`s —
+  which the compiler already turns into real dependencies, so the
+  scheduler stops racing steps the user's history says are ordered. Slot
+  flow outranks statistics: learned edges that data-flow or explicit
+  edges already imply or contradict are dropped (a contradiction stays
+  parallelism, never a learned cycle), and ambiguous child names are left
+  out. Surfaced as `learned_order` (`[{"first", "then"}, ...]`) on the
+  assemble response and the desktop `AssemblyPreviewView`.
 - Thompson-sampled assembly (`explore: true`): `preview_assembly` accepts
   an `rng` and passes it to `ContractAssembler`, so producer picks are
   sampled from the same personalized Beta posteriors instead of taken

@@ -360,6 +360,7 @@ class DesktopService:
                 if preview.contract is not None
                 else None
             ),
+            learned_order=list(preview.learned_order),
         )
 
     def confirm_assembly(

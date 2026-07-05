@@ -386,6 +386,116 @@ def test_explore_thompson_samples_assembly_picks(tmp_path):
     conn.close()
 
 
+def test_learned_order_rides_the_assembled_contract(tmp_path):
+    """Two slot-independent nodes are parallel by default — until the
+    caller's own runs consistently order them. Then the assembled contract
+    carries a learned edge the compiler turns into a real dependency."""
+    from workflow_gps.knowledge.traces import (
+        NodeObservation,
+        TraceStore,
+        route_node_key,
+    )
+    from workflow_gps.orchestrator import compile_with_owners
+
+    alpha_out = {"name": "alpha_out", "value_type": "path"}
+    beta_out = {"name": "beta_out", "value_type": "path"}
+    traces = TraceStore(tmp_path / "traces.db")
+    app, conn, ident, registry, *_rest = _build(tmp_path, trace_store=traces)
+    for name, noder, produces in (
+        ("alpha step", "noder-a", [alpha_out]),
+        ("beta step", "noder-b", [beta_out]),
+    ):
+        _contribute_and_publish(
+            app,
+            ident,
+            registry,
+            name=name,
+            noder=noder,
+            price=0.10,
+            consumes=[],
+            produces=produces,
+        )
+
+    def assemble():
+        resp = app.handle(
+            _req(
+                "POST",
+                "/v1/market/assemble",
+                token=ident.token("consumer", "t2"),
+                body={"goal": {"name": "both-things", "want": [alpha_out, beta_out]}},
+            )
+        )
+        assert resp.status == 200, resp.body
+        return resp.body
+
+    # No slot relation and no history: parallel, nothing learned.
+    body = assemble()
+    assert body["learned_order"] == []
+    assert body["contract"]["body"]["edges"] == []
+
+    # The caller's runs consistently finish alpha before beta.
+    for run in range(3):
+        traces.record_run(
+            goal="both-things",
+            steps=[
+                NodeObservation(node_key=route_node_key("alpha step"), ok=True),
+                NodeObservation(node_key=route_node_key("beta step"), ok=True),
+            ],
+            success=True,
+            context="t2",
+        )
+
+    body = assemble()
+    assert body["learned_order"] == [{"first": "alpha step", "then": "beta step"}]
+    (edge,) = body["contract"]["body"]["edges"]
+    assert edge["provenance"] == "learned" and edge["relation"] == "before"
+
+    # The learned edge becomes a real dependency in the compiled DAG.
+    from workflow_gps.skills.contract import NodeContract
+
+    blueprint, owners = compile_with_owners(
+        NodeContract.model_validate(body["contract"])
+    )
+    ordered = {
+        (owners[e.source], owners[e.target])
+        for e in blueprint.edges
+        if e.relation == "before"
+    }
+    assert ("alpha step", "beta step") in ordered
+    traces.close()
+    conn.close()
+
+
+def test_contradicting_traces_never_override_data_flow(tmp_path):
+    """Typed slots outrank statistics: a trace order opposite to a data
+    edge is dropped, not stamped — no learned cycles, ever."""
+    from workflow_gps.knowledge.traces import (
+        NodeObservation,
+        TraceStore,
+        route_node_key,
+    )
+
+    traces = TraceStore(tmp_path / "traces.db")
+    app, conn, ident, registry, *_rest = _build(tmp_path, trace_store=traces)
+    _seed_chain(app, ident, registry)  # data edge: exporter -> cleaner
+    # Corrupt history claims the cleaner finished first, consistently.
+    for run in range(3):
+        traces.record_run(
+            goal="clean-the-books",
+            steps=[
+                NodeObservation(node_key=route_node_key("invoice cleaner"), ok=True),
+                NodeObservation(node_key=route_node_key("raw exporter"), ok=True),
+            ],
+            success=True,
+            context="t2",
+        )
+
+    contract = _assembled_contract(app, ident)
+    assert contract["body"]["edges"] == []  # data flow stands; nothing learned
+    traces.close()
+    conn.close()
+
+
 def test_contract_run_refuses_reserved_actions(tmp_path):
     """Human control survives the direct path: irreversible verbs are 403."""
     app, conn, ident, *_rest = _build(tmp_path, executors={"cli": _CliExecutor()})

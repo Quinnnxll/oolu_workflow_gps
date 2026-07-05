@@ -174,6 +174,9 @@ class AssemblyPreviewView(BaseModel):
     estimated_gross_total: float = 0.0
     platform_margin_preview: float = 0.0
     contract: dict[str, Any] | None = None
+    # Orderings this desktop's own runs consistently exhibited, already
+    # stamped onto the contract as learned edges the run will honor.
+    learned_order: list[dict[str, str]] = Field(default_factory=list)
 
 
 class AssemblyRunStepView(BaseModel):

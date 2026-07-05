@@ -18,7 +18,14 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..billing.pricing import PricingEngine
 from ..knowledge.traces import TraceStore, route_node_key
 from ..orchestrator.assembler import ContractAssembler, GoalSpec
-from ..skills.contract import NodeContract, NodeStats, Slot, SubgraphBody
+from ..skills.contract import (
+    ContractEdge,
+    NodeContract,
+    NodeStats,
+    Slot,
+    SubgraphBody,
+    derive_data_edges,
+)
 from .economics import CandidateAssembler
 from .market import PriceBook
 from .rewards import commission_rate, lineage_shares, reward_multiplier
@@ -61,6 +68,9 @@ class AssemblyPreview(BaseModel):
     nodes: list[AssemblyNodePreview] = Field(default_factory=list)
     estimated_gross_total: float = 0.0
     platform_margin_preview: float = 0.0
+    # Orderings the caller's own runs consistently exhibited, stamped onto
+    # the contract as learned edges: [{"first": name, "then": name}, ...].
+    learned_order: list[dict[str, str]] = Field(default_factory=list)
 
 
 def _personalize(
@@ -88,6 +98,59 @@ def _personalize(
             )
         }
     )
+
+
+def _with_learned_order(
+    contract: NodeContract, trace_store: TraceStore
+) -> tuple[NodeContract, list[dict[str, str]]]:
+    """Stamp trace-derived orderings onto a subgraph as learned edges.
+
+    Slot flow orders what data forces; everything else is parallel by
+    default. But when the caller's own runs consistently completed one
+    child before another (``derive_edges``: enough observations, one
+    direction nearly always), that order is knowledge — so it rides the
+    contract as ``provenance="learned"`` edges the compiler already
+    honors, and the scheduler stops racing steps the user's history says
+    are ordered. Edges that data flow or explicit edges already imply —
+    or contradict — are dropped: typed slots outrank statistics, and a
+    contradiction must surface as parallelism, never as a learned cycle.
+    """
+    body = contract.body
+    if not isinstance(body, SubgraphBody):
+        return contract, []
+    names: dict[str, list[str]] = {}
+    for child in body.nodes:
+        names.setdefault(child.name, []).append(child.id)
+    # Ambiguous names cannot be attributed to one child: leave them out.
+    key_to_id = {
+        route_node_key(name): ids[0] for name, ids in names.items() if len(ids) == 1
+    }
+    derived = trace_store.derive_edges(list(key_to_id))
+    if not derived:
+        return contract, []
+    fixed = {(e.source, e.target) for e in body.edges} | {
+        (e.source, e.target) for e in derive_data_edges(body.nodes)
+    }
+    id_to_name = {child.id: child.name for child in body.nodes}
+    learned: list[ContractEdge] = []
+    for first_key, second_key in derived:
+        source, target = key_to_id[first_key], key_to_id[second_key]
+        if (source, target) in fixed or (target, source) in fixed:
+            continue
+        learned.append(ContractEdge(source=source, target=target, provenance="learned"))
+    if not learned:
+        return contract, []
+    stamped = contract.model_copy(
+        update={
+            "body": SubgraphBody(
+                nodes=list(body.nodes), edges=list(body.edges) + learned
+            )
+        }
+    )
+    order = [
+        {"first": id_to_name[e.source], "then": id_to_name[e.target]} for e in learned
+    ]
+    return stamped, order
 
 
 def preview_assembly(
@@ -127,13 +190,17 @@ def preview_assembly(
         fill_gaps_with_scripts=fill_gaps,
     ).assemble(goal)
 
+    contract = result.contract
+    learned_order: list[dict[str, str]] = []
+    if contract is not None and trace_store is not None:
+        contract, learned_order = _with_learned_order(contract, trace_store)
+
     nodes: list[AssemblyNodePreview] = []
     gross_total = 0.0
     margin_total = 0.0
     children = (
-        result.contract.body.nodes
-        if result.contract is not None
-        and isinstance(result.contract.body, SubgraphBody)
+        contract.body.nodes
+        if contract is not None and isinstance(contract.body, SubgraphBody)
         else []
     )
     for child in children:
@@ -192,8 +259,9 @@ def preview_assembly(
         selected=result.selected,
         gap_filled=result.gap_filled,
         missing=result.missing,
-        contract=result.contract,
+        contract=contract,
         nodes=nodes,
         estimated_gross_total=gross_total,
         platform_margin_preview=margin_total,
+        learned_order=learned_order,
     )
