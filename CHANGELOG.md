@@ -4,6 +4,29 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The trace corpus and the first learned planner:
+
+- `TraceStore` now logs every recorded run **verbatim** (`trace_runs`, a
+  new migration existing databases adopt cleanly): the aggregates grade
+  nodes; the log answers "what did whole successful plans look like".
+  Read it with `runs(context=, goal=, limit=)` — newest first, `None`
+  filters mean all, the empty string stays a real bucket.
+- Added `knowledge.corpus`: `build_examples` turns runs into
+  (goal, plan-prefix → next node) training examples — the shape a
+  forward-generating sequence model trains on — and `export_jsonl`
+  writes them oldest-first as a portable file for offline model
+  training. Failed runs export flagged (`run_success: false`), never
+  silently dropped.
+- Added `orchestrator.TraceProposalModel`: the baseline learned planner
+  behind the same `ProposalModel` seam a Mamba/SSM checkpoint later
+  implements. It proposes live from the caller's own run log, judged
+  against the most specific evidence pool available (runs of this goal →
+  runs sharing an already-selected node → all runs; the budget layer's
+  class-first shape), weights candidates by the Beta mean of the runs
+  they appeared in, has no opinion where it has no evidence, and costs
+  nothing. A future sequence checkpoint must beat it in the replay
+  harness to earn its inference cost.
+
 Thompson v2 — the learning loop gets honest about time, money, and proof:
 
 - `TraceStore` gained `recency_decay` (default 1.0 = today's exact

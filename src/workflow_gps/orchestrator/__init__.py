@@ -57,6 +57,7 @@ from .proposals import (
     PROPOSAL_PURPOSE,
     PROPOSAL_SYSTEM_PROMPT,
     GatewayProposalModel,
+    TraceProposalModel,
     parse_weights,
 )
 from .scheduler import DagRouteRunner, action_node_key
@@ -161,6 +162,7 @@ __all__ = [
     "classify_risk",
     "StatusOutcomeMonitor",
     "TaskContract",
+    "TraceProposalModel",
     "WorkflowExecutor",
     "WorkflowOrchestrator",
 ]

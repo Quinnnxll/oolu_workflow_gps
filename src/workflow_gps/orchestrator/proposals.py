@@ -29,6 +29,7 @@ import json
 import re
 from typing import Sequence
 
+from ..knowledge.traces import RecordedRun, TraceStore, route_node_key
 from ..metering.model_calls import ModelCallMeter
 from ..models import ModelTier
 from ..routing.gateway import Gateway, extract_script
@@ -201,6 +202,72 @@ def _render_slot(slot: Slot) -> str:
     if slot.description:
         rendered += f" — {slot.description}"
     return rendered
+
+
+class TraceProposalModel:
+    """The baseline learned planner: proposes from the caller's own runs.
+
+    Reads the trace store's raw run log LIVE on every contested pick (so
+    each executed contract immediately informs the next assembly) and
+    judges candidates against the most specific evidence pool available —
+    the same class-first shape as the budget layer's behavioral profiles:
+
+    1. runs of THIS goal;
+    2. else runs sharing at least one already-selected node (co-selection:
+       "when these nodes were in a plan, what ran alongside them");
+    3. else all recorded runs.
+
+    Within the pool a candidate's weight is the Beta mean of the runs it
+    appeared in — appearing in verified successes endorses it, appearing
+    in failures counts against it — and a candidate the pool never saw
+    gets NO opinion rather than a bad one. Free and local (cost 0).
+
+    This is deliberately the modest end of the ``ProposalModel`` seam: a
+    sequence checkpoint (Mamba/SSM via the routing gateway or ONNX) later
+    implements the same protocol, trains on the same corpus
+    (``knowledge.corpus.export_jsonl``), and must beat this baseline in
+    the replay harness to earn its inference cost.
+    """
+
+    def __init__(self, store: TraceStore, *, context: str = "", max_runs: int = 500):
+        self._store = store
+        self._context = context
+        self._max_runs = max_runs
+
+    def propose(
+        self,
+        *,
+        goal: GoalSpec,
+        slot: Slot,
+        selected: Sequence[str],
+        candidates: Sequence[NodeContract],
+    ) -> Proposal:
+        runs = self._store.runs(context=self._context, limit=self._max_runs)
+        pool = self._evidence_pool(runs, goal, selected)
+        weights: dict[str, float] = {}
+        for candidate in candidates:
+            key = route_node_key(candidate.name)
+            appeared = [run for run in pool if key in run.step_keys()]
+            if not appeared:
+                continue  # never seen here: no opinion, not a bad one
+            wins = sum(1 for run in appeared if run.success)
+            losses = len(appeared) - wins
+            weights[candidate.id] = (1.0 + wins) / (2.0 + wins + losses)
+        return Proposal(weights=weights, cost=0.0)
+
+    @staticmethod
+    def _evidence_pool(
+        runs: list[RecordedRun], goal: GoalSpec, selected: Sequence[str]
+    ) -> list[RecordedRun]:
+        goal_runs = [run for run in runs if run.goal == goal.name]
+        if goal_runs:
+            return goal_runs
+        selected_keys = {route_node_key(name) for name in selected}
+        if selected_keys:
+            companions = [run for run in runs if selected_keys & run.step_keys()]
+            if companions:
+                return companions
+        return runs
 
 
 def _render_candidate(contract: NodeContract) -> list[str]:

@@ -19,6 +19,7 @@ from .client import (
     LocalKnowledgeClient,
     NoopKnowledgeClient,
 )
+from .corpus import TrainingExample, build_examples, export_jsonl
 from .remote import (
     RemoteConfig,
     RemoteKnowledgeClient,
@@ -40,6 +41,7 @@ from .traces import (
     TRACE_STORE_MIGRATIONS,
     NodeObservation,
     NodePosterior,
+    RecordedRun,
     TraceStore,
     route_node_key,
 )
@@ -72,6 +74,7 @@ __all__ = [
     "NodePosterior",
     "TraceStore",
     "route_node_key",
+    "RecordedRun",
     # offline replay: strategies audition on history before they ship
     "Arm",
     "BanditStrategy",
@@ -79,4 +82,8 @@ __all__ = [
     "ReplayWorld",
     "StrategyReport",
     "evaluate",
+    # the trace corpus: recorded runs become training data
+    "TrainingExample",
+    "build_examples",
+    "export_jsonl",
 ]

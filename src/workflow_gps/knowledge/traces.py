@@ -20,6 +20,11 @@ goals and sharpen with every run:
   are parallel by default. This recovers a partial order (a DAG) from linear
   traces — the thing pairwise-adjacency counting cannot do.
 - **Per-node cost EWMAs** for route cost estimates.
+- **A raw run log**: every recorded run's ordered steps, kept verbatim.
+  The aggregates above answer "how good is this node"; the log answers
+  "what did whole successful plans look like" — the training corpus for
+  learned planners (``knowledge.corpus``), exportable for offline model
+  training without a second bookkeeping path.
 
 Everything is persisted in SQLite, so the statistics accumulate across
 processes and sessions: the system grows with the user's executions without a
@@ -28,6 +33,7 @@ separate training step.
 
 from __future__ import annotations
 
+import json
 import random
 import sqlite3
 import threading
@@ -83,6 +89,20 @@ def route_node_key(goal: str) -> str:
     return f"route:{goal}"
 
 
+@dataclass(frozen=True, slots=True)
+class RecordedRun:
+    """One run exactly as it was recorded: the corpus unit."""
+
+    goal: str
+    context: str
+    success: bool
+    steps: tuple[NodeObservation, ...]  # completion order, verbatim
+    recorded_at: str
+
+    def step_keys(self) -> frozenset[str]:
+        return frozenset(step.node_key for step in self.steps)
+
+
 def _create(conn: sqlite3.Connection) -> None:
     conn.execute(
         """CREATE TABLE IF NOT EXISTS trace_node_stats (
@@ -110,7 +130,27 @@ def _drop(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE IF EXISTS trace_precedence")
 
 
-TRACE_STORE_MIGRATIONS: tuple[Migration, ...] = (Migration(up=_create, down=_drop),)
+def _create_run_log(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS trace_runs (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               goal TEXT NOT NULL,
+               context TEXT NOT NULL DEFAULT '',
+               success INTEGER NOT NULL,
+               steps TEXT NOT NULL,
+               recorded_at TEXT NOT NULL
+           )"""
+    )
+
+
+def _drop_run_log(conn: sqlite3.Connection) -> None:
+    conn.execute("DROP TABLE IF EXISTS trace_runs")
+
+
+TRACE_STORE_MIGRATIONS: tuple[Migration, ...] = (
+    Migration(up=_create, down=_drop),
+    Migration(up=_create_run_log, down=_drop_run_log),
+)
 
 
 class TraceStore:
@@ -157,6 +197,19 @@ class TraceStore:
         """
         now = datetime.now(UTC).isoformat()
         with self._lock:
+            # The raw run rides along verbatim: aggregates grade nodes,
+            # the log is the corpus whole plans are learned from.
+            self._db.execute(
+                "INSERT INTO trace_runs (goal, context, success, steps, recorded_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    goal,
+                    context,
+                    1 if success else 0,
+                    json.dumps([[s.node_key, bool(s.ok), s.cost] for s in steps]),
+                    now,
+                ),
+            )
             self._bump(route_node_key(goal), context, success, None, now)
             for step in steps:
                 self._bump(step.node_key, context, step.ok, step.cost, now)
@@ -205,6 +258,46 @@ class TraceStore:
                VALUES (?, ?, ?, ?, ?, ?)""",
             (node_key, context, successes, failures, ewma, now),
         )
+
+    # ------------------------------------------------------------------ #
+    # The raw run log: the training corpus.                               #
+    # ------------------------------------------------------------------ #
+    def runs(
+        self,
+        *,
+        context: str | None = None,
+        goal: str | None = None,
+        limit: int = 500,
+    ) -> list[RecordedRun]:
+        """Recorded runs, newest first. ``None`` filters mean "all" —
+        the empty string is a real (global) context bucket, not a wildcard."""
+        query = "SELECT goal, context, success, steps, recorded_at FROM trace_runs"
+        clauses, params = [], []
+        if context is not None:
+            clauses.append("context = ?")
+            params.append(context)
+        if goal is not None:
+            clauses.append("goal = ?")
+            params.append(goal)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+        with self._lock:
+            rows = self._db.execute(query, params).fetchall()
+        return [
+            RecordedRun(
+                goal=row["goal"],
+                context=row["context"],
+                success=bool(row["success"]),
+                steps=tuple(
+                    NodeObservation(node_key=key, ok=bool(ok), cost=cost)
+                    for key, ok, cost in json.loads(row["steps"])
+                ),
+                recorded_at=row["recorded_at"],
+            )
+            for row in rows
+        ]
 
     # ------------------------------------------------------------------ #
     # Posteriors + selection.                                             #
