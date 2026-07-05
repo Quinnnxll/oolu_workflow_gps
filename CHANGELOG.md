@@ -4,6 +4,30 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Unified-surface migration, step 3 — the flip:
+
+- **`wfgps desktop` now serves the unified gateway surface by default**:
+  same routes and front-end as `wfgps host`, loopback-only, auto signed
+  in, with `--registry` / `--seed-starter` keeping their meaning (the
+  starter pack seeds the registry and its skills plan `POST /v1/runs`
+  intents) — the setup scripts and the packaged app work unchanged. The
+  pre-migration surface stays available behind **`--legacy-loopback`**
+  for the transition window; `--unified` remains as a no-op flag.
+- Parity screens: the Earnings screen gained the **payout-account card**
+  (KYC status when onboarded; a country/currency onboarding form when
+  not — a host without a payout adapter answers with the same honest
+  404), and Health gained **execution isolation** (a new gateway
+  `GET /v1/worker-health` route rendering the enforced
+  `IsolationPolicy` via a helper both shells now share — the labels are
+  computed from the policy, never restated by hand).
+- **First-run crash fixed** (the packaged app's field failure,
+  reproduced by the new seeding test): `SkillRegistry`, `TraceStore`,
+  `PriceBook`, and `LocalKnowledgeClient` did not create their parent
+  directories, so a fresh machine died with sqlite's "unable to open
+  database file" before any table logic ran. All path-owning stores now
+  create their directories at construction, pinned by a test that
+  builds each one under a deliberately nonexistent path.
+
 Unified-surface migration, step 2 — task-flow parity:
 
 - The unified front-end's run detail now makes **every pause kind

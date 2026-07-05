@@ -45,3 +45,28 @@ class IsolationPolicy:
                 f"{trust.value} may not run on backend {backend_kind!r}; "
                 f"allowed: {sorted(self.allowed_backends(trust))}"
             )
+
+
+def execution_labels(policy: IsolationPolicy) -> list[dict]:
+    """Human-scale labels for what may run where, per trust level.
+
+    The one description both shells (loopback and unified gateway)
+    render on their health screens — computed from the policy that is
+    actually enforced, never restated by hand.
+    """
+    labels: list[dict] = []
+    for trust in (TrustLevel.UNTRUSTED_SYNTHESIZED, TrustLevel.TRUSTED_LOCAL_SKILL):
+        allowed = sorted(policy.allowed_backends(trust))
+        labels.append(
+            {
+                "trust_level": trust.value,
+                "allowed_backends": allowed,
+                "isolated": "subprocess" not in allowed,
+                "label": (
+                    "Untrusted — isolated container only"
+                    if trust is TrustLevel.UNTRUSTED_SYNTHESIZED
+                    else "Trusted local skill — may run on host"
+                ),
+            }
+        )
+    return labels

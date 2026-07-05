@@ -462,10 +462,49 @@ async function inboxScreen() {
 }
 
 /* ---- earnings ---- */
+async function payoutCard() {
+  const err = h("div", { class: "error" });
+  async function onboard(event) {
+    event.preventDefault();
+    err.textContent = "";
+    try {
+      await api("POST", "/v1/payout-accounts", {
+        country: document.getElementById("payout-country").value || "US",
+        currency: document.getElementById("payout-currency").value || "usd",
+      });
+      render();
+    } catch (e) { err.textContent = e.message; }
+  }
+  try {
+    const account = await api("GET", "/v1/payout-accounts");
+    return h("div", { class: "card" },
+      h("h2", {}, "payout account"),
+      badge("KYC " + account.kyc_status,
+        account.kyc_status === "verified" ? "ok" : undefined),
+      h("span", { class: "muted" },
+        " " + account.provider_account_id
+        + " · " + account.country + "/" + account.currency));
+  } catch (e) {
+    if (e.status !== 404) return h("div", { class: "error" }, e.message);
+    // No account yet (or payouts unwired): offer onboarding; a host
+    // without a payout adapter answers that POST with the same honest 404.
+    return h("form", { class: "card", onsubmit: onboard },
+      h("h2", {}, "set up payouts"),
+      h("p", { class: "muted" },
+        "Earnings accrue either way; an account is needed to pay them out."),
+      h("label", { for: "payout-country" }, "Country"),
+      h("input", { id: "payout-country", value: "US" }),
+      h("label", { for: "payout-currency" }, "Currency"),
+      h("input", { id: "payout-currency", value: "usd" }),
+      h("button", { type: "submit" }, "Set up payouts"), err);
+  }
+}
+
 async function earningsScreen() {
   const balance = await api("GET", "/v1/earnings");
   const entries = await api("GET", "/v1/earnings/entries");
   return h("div", {},
+    await payoutCard(),
     h("div", { class: "card" },
       h("div", {}, "available: " + money(balance.available),
         " · pending: " + money(balance.pending)),
@@ -535,10 +574,21 @@ async function usersScreen() {
 /* ---- health ---- */
 async function healthScreen() {
   const metrics = await api("GET", "/v1/metrics");
-  return h("table", {},
-    h("tr", {}, h("th", {}, "metric"), h("th", {}, "value")),
-    Object.entries(metrics).map(([k, v]) =>
-      h("tr", {}, h("td", {}, k), h("td", {}, String(v)))));
+  let worker = null;
+  try { worker = await api("GET", "/v1/worker-health"); } catch { /* older host */ }
+  return h("div", {},
+    worker === null ? null : h("div", { class: "card" },
+      h("h2", {}, "execution isolation"),
+      badge(worker.docker_available ? "docker available" : "docker unavailable",
+        worker.docker_available ? "ok" : "bad"),
+      h("ul", { class: "plain" }, worker.labels.map((l) =>
+        h("li", {}, badge(l.isolated ? "isolated" : "host", l.isolated ? "ok" : undefined),
+          " ", l.label,
+          h("span", { class: "muted" }, "  (" + l.allowed_backends.join(", ") + ")"))))),
+    h("table", {},
+      h("tr", {}, h("th", {}, "metric"), h("th", {}, "value")),
+      Object.entries(metrics).map(([k, v]) =>
+        h("tr", {}, h("td", {}, k), h("td", {}, String(v))))));
 }
 
 /* ---- router ---- */

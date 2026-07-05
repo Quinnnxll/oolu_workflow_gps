@@ -160,3 +160,31 @@ def test_every_sqlite_store_creates_schema_in_its_constructor():
         instance = cls(":memory:")
         instance.close()
     assert inspect.isclass(PriceBook)
+
+
+def test_path_owning_stores_create_their_parent_directories(tmp_path):
+    """The packaged app's field failure, pinned: on a fresh machine the
+    data directory does not exist yet, and sqlite will not create it —
+    every path-owning store must, or first run dies before any table."""
+    from workflow_gps.identity.accounts import LocalUserStore
+    from workflow_gps.identity.store import IdentityStore
+    from workflow_gps.knowledge.client import LocalKnowledgeClient
+    from workflow_gps.knowledge.traces import TraceStore
+    from workflow_gps.nodeplace.market import PriceBook
+    from workflow_gps.skills.registry import SkillRegistry
+
+    for index, cls in enumerate(
+        (
+            SkillRegistry,
+            TraceStore,
+            PriceBook,
+            LocalKnowledgeClient,
+            IdentityStore,
+            LocalUserStore,
+        )
+    ):
+        nested = tmp_path / f"brand-{index}" / "new" / "dirs" / "store.db"
+        assert not nested.parent.exists()
+        instance = cls(nested)
+        instance.close()
+        assert nested.exists(), cls.__name__

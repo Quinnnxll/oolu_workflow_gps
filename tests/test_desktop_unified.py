@@ -103,3 +103,72 @@ def test_workflows_run_on_current_action_majors():
             assert f"actions/{pin}" not in text, (workflow.name, pin)
     windows = (ROOT / ".github" / "workflows" / "desktop-windows.yml").read_text()
     assert 'node-version: "22"' in windows  # Node 20 itself is end-of-life
+
+
+def test_unified_is_now_the_default_surface(monkeypatch, tmp_path):
+    """Step 3: `wfgps desktop` with no flags serves the unified gateway."""
+    import uvicorn
+
+    from workflow_gps.gateway.asgi import GatewayASGI
+
+    served = {}
+    monkeypatch.setattr(
+        uvicorn, "run", lambda app, **kw: served.update({"app": app, **kw})
+    )
+    out = io.StringIO()
+    code = cli.main(["desktop", "--db", str(tmp_path / "d" / "desktop.db")], out=out)
+    assert code == 0
+    assert isinstance(served["app"], GatewayASGI)
+    assert "#auth=" in out.getvalue()
+
+
+def test_legacy_loopback_stays_available_behind_a_flag(monkeypatch, tmp_path):
+    import uvicorn
+
+    from workflow_gps.desktop.loopback import DesktopLoopbackApp
+
+    served = {}
+    monkeypatch.setattr(
+        uvicorn, "run", lambda app, **kw: served.update({"app": app, **kw})
+    )
+    code = cli.main(
+        [
+            "desktop",
+            "--legacy-loopback",
+            "--db",
+            str(tmp_path / "d" / "desktop.db"),
+        ],
+        out=io.StringIO(),
+    )
+    assert code == 0
+    assert isinstance(served["app"], DesktopLoopbackApp)
+
+
+def test_the_default_surface_still_seeds_the_starter_pack(monkeypatch, tmp_path):
+    """The setup scripts' exact flags keep their meaning after the flip:
+    the starter pack seeds the registry and its skills ride the runtime."""
+    import uvicorn
+
+    from workflow_gps.skills.registry import SkillRegistry
+
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: None)
+    registry_path = tmp_path / "app" / "skills.db"
+    out = io.StringIO()
+    code = cli.main(
+        [
+            "desktop",
+            "--db",
+            str(tmp_path / "app" / "desktop.db"),
+            "--registry",
+            str(registry_path),
+            "--seed-starter",
+        ],
+        out=out,
+    )
+    assert code == 0
+    assert "skills loaded" in out.getvalue()
+    registry = SkillRegistry(registry_path)
+    try:
+        assert registry.list(limit=1)  # the starter pack actually landed
+    finally:
+        registry.close()

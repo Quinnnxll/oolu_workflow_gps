@@ -110,9 +110,12 @@ SKILL_REGISTRY_MIGRATIONS: tuple[Migration, ...] = (Migration(up=_create, down=_
 class SkillRegistry:
     def __init__(self, path: str | Path):
         self._lock = threading.RLock()
-        self._db = sqlite3.connect(
-            str(Path(path).expanduser()), check_same_thread=False
-        )
+        location = Path(path).expanduser()
+        if str(location) != ":memory:":
+            # First run on a fresh machine: the data directory may not
+            # exist yet, and sqlite will not create it for us.
+            location.resolve().parent.mkdir(parents=True, exist_ok=True)
+        self._db = sqlite3.connect(str(location), check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         with self._lock:
             migrate(self._db, SKILL_REGISTRY_MIGRATIONS, label="skill-registry")

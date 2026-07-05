@@ -38,7 +38,6 @@ from ..orchestrator.state import (
     TaskContract,
 )
 from ..providers.vault import SecretVault
-from ..worker.leases import TrustLevel
 from ..worker.policy import IsolationPolicy
 from .views import (
     ActionView,
@@ -835,23 +834,14 @@ class DesktopService:
     # Worker health + trusted/untrusted execution labeling.              #
     # ------------------------------------------------------------------ #
     def worker_health(self) -> WorkerHealthView:
-        labels = []
-        for trust in (TrustLevel.UNTRUSTED_SYNTHESIZED, TrustLevel.TRUSTED_LOCAL_SKILL):
-            allowed = sorted(self._isolation.allowed_backends(trust))
-            isolated = "subprocess" not in allowed
-            labels.append(
-                ExecutionLabel(
-                    trust_level=trust.value,
-                    allowed_backends=allowed,
-                    isolated=isolated,
-                    label=(
-                        "Untrusted — isolated container only"
-                        if trust is TrustLevel.UNTRUSTED_SYNTHESIZED
-                        else "Trusted local skill — may run on host"
-                    ),
-                )
-            )
-        return WorkerHealthView(docker_available=self._docker_available, labels=labels)
+        from ..worker.policy import execution_labels
+
+        return WorkerHealthView(
+            docker_available=self._docker_available,
+            labels=[
+                ExecutionLabel(**entry) for entry in execution_labels(self._isolation)
+            ],
+        )
 
     # ------------------------------------------------------------------ #
     # Offline policy + local data export / deletion.                      #

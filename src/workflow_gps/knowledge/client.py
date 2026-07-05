@@ -154,7 +154,11 @@ class LocalKnowledgeClient:
 
     def __init__(self, db_path: str | Path = ":memory:"):
         self._lock = threading.Lock()
-        self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        location = str(Path(db_path).expanduser())
+        if location != ":memory:":
+            # First run on a fresh machine: sqlite does not create dirs.
+            Path(location).resolve().parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(location, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             migrate(self._conn, KNOWLEDGE_MIGRATIONS, label="knowledge")

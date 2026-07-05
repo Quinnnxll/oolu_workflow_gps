@@ -218,6 +218,9 @@ class PriceBook:
         location = (
             str(path) if str(path) == ":memory:" else str(Path(path).expanduser())
         )
+        if location != ":memory:":
+            # First run on a fresh machine: sqlite does not create dirs.
+            Path(location).resolve().parent.mkdir(parents=True, exist_ok=True)
         self._db = sqlite3.connect(location, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         self._policies = dict(policies or DEFAULT_POLICIES)

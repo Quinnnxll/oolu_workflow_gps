@@ -50,6 +50,8 @@ def test_every_path_the_frontend_calls_is_a_real_route():
         "/v1/runs/contract/holds",
         "/v1/earnings",
         "/v1/earnings/entries",
+        "/v1/payout-accounts",
+        "/v1/worker-health",
         "/v1/metrics",
     }
     for path in called:

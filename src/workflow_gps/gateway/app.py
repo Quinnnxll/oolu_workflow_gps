@@ -183,6 +183,8 @@ class GatewayApp:
         disputes: DisputeService | None = None,
         webhook_verifier: WebhookVerifier | None = None,
         accounts=None,  # identity.LocalAccountService: local multi-user login
+        isolation=None,  # worker.IsolationPolicy: powers /v1/worker-health
+        docker_available: bool = True,
         clock: Callable[[], datetime] | None = None,
     ):
         self._durable = durable
@@ -226,6 +228,12 @@ class GatewayApp:
         # answer only when this is configured — installs fronted by a real
         # IdP keep a 404 there and lose nothing.
         self._accounts = accounts
+        # What may run where, per trust level — rendered by the shell's
+        # health screen from the policy that is actually enforced.
+        from ..worker.policy import IsolationPolicy
+
+        self._isolation = isolation or IsolationPolicy()
+        self._docker_available = docker_available
         self._vault = vault or SecretVault()
         self._config = config or GatewayConfig()
         self._idem = idempotency or durable.idempotency
@@ -380,6 +388,7 @@ class GatewayApp:
             requires_permission="providers:manage",
         )
         r.add("GET", "/v1/metrics", self._metrics_endpoint)
+        r.add("GET", "/v1/worker-health", self._worker_health)
         r.add("GET", "/v1/nodeplace", self._list_own_nodes)
         r.add("POST", "/v1/nodeplace", self._contribute)
         r.add("POST", "/v1/nodeplace/{node_id}/revoke", self._revoke_node)
@@ -758,6 +767,17 @@ class GatewayApp:
 
     def _metrics_endpoint(self, request, session, params) -> Response:
         return json_response(200, dict(self._metrics))
+
+    def _worker_health(self, request, session, params) -> Response:
+        from ..worker.policy import execution_labels
+
+        return json_response(
+            200,
+            {
+                "docker_available": self._docker_available,
+                "labels": execution_labels(self._isolation),
+            },
+        )
 
     # ------------------------------------------------------------------ #
     # Nodeplace (supply side) + display-only earnings.                   #

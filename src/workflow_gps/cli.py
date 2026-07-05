@@ -338,8 +338,14 @@ def build_parser() -> argparse.ArgumentParser:
     desktop.add_argument(
         "--unified",
         action="store_true",
-        help="serve the multi-user gateway shell locally, auto signed in "
-        "(preview of the unified surface; still loopback-only)",
+        help="serve the unified gateway shell (the default since the "
+        "surface migration; flag kept for compatibility)",
+    )
+    desktop.add_argument(
+        "--legacy-loopback",
+        action="store_true",
+        help="serve the pre-migration loopback surface instead "
+        "(deprecated; will be removed after the transition window)",
     )
 
     web = sub.add_parser(
@@ -1217,7 +1223,9 @@ def _cmd_desktop(args, out) -> int:
             "127.0.0.1-only (it has no auth and serves an unauthenticated user)"
         )
 
-    if args.unified:
+    if not args.legacy_loopback:
+        # The unified surface is the default since the migration: same
+        # gateway as `wfgps host`, auto signed in, loopback-only.
         return _cmd_desktop_unified(args, out)
 
     settings = Settings.load(args.config)
@@ -1289,10 +1297,27 @@ def _cmd_desktop_unified(args, out) -> int:
     data_dir = (
         Path(args.db).parent / "unified" if args.db else Path(".workflow-gps/unified")
     )
+    # --registry / --seed-starter keep their meaning: the starter pack
+    # loads into the skill registry and its skills plan `POST /v1/runs`
+    # intents — the setup scripts and the packaged app work unchanged.
+    skills = None
+    if args.registry:
+        from .skills.registry import SkillRegistry
+
+        registry = SkillRegistry(args.registry)
+        try:
+            if args.seed_starter and not registry.list(limit=1):
+                from .skills.pack import load_starter_pack
+
+                load_starter_pack(registry)
+            skills = [entry.skill for entry in registry.list()] or None
+        finally:
+            registry.close()
     runtime = build_host_runtime(
         Settings.load(args.config),
         data_dir=data_dir,
         secret=secrets_module.token_urlsafe(32),
+        skills=skills,
         # A desktop session should outlive a workday without re-auth.
         token_ttl_seconds=7 * 24 * 3600,
     )
@@ -1315,9 +1340,11 @@ def _cmd_desktop_unified(args, out) -> int:
 
     url = f"http://{args.host}:{args.port}/#auth={login.token}"
     out.write(
-        "Workflow-GPS unified shell (preview) is starting.\n"
+        "Workflow-GPS shell is starting (unified surface).\n"
         f"  open {url}\n"
-        f"  (data: {data_dir}; signed in automatically as 'local')\n"
+        f"  (data: {data_dir}; signed in automatically as 'local'"
+        + (f"; {len(skills)} skills loaded" if skills else "")
+        + ")\n"
         "  press Ctrl+C to stop\n"
     )
     if args.open_browser:
