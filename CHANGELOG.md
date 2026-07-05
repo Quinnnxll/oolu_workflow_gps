@@ -4,6 +4,38 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The first domain pack — CAD, with verification grounded in mathematics:
+
+- Added `domains.cad.geometry`: exact mesh mathematics with stated
+  hypotheses. Volume by the divergence theorem (Σ v0·(v1×v2)/6 — exact
+  on closed, consistently oriented meshes; translation invariance and
+  orientation antisymmetry are *asserted in tests*, not assumed),
+  surface area, extents, and a combinatorial `ManifoldReport`
+  (boundary / non-manifold / misoriented edges, degenerate triangles,
+  connected components, Euler characteristic, and genus via χ = 2c − 2g).
+  STL both directions, with binary detection by the exact length
+  equation — never the header, which real files lie about.
+- Added `domains.cad.verify`: `GeometrySpec` (watertightness, volume and
+  area intervals, extent box-fit, exact genus) → `GeometryReport` with
+  measured numbers behind every failure. Volume is *withheld* on open
+  meshes — the formula's hypothesis failed, so no number beats a wrong
+  number.
+- Added `domains.cad.OpenSCADExecutor` (adapter `cad`): deterministic
+  `render_stl` through the OpenSCAD CLI (binary configurable as an argv
+  prefix — tests drive the real subprocess path via a stub renderer;
+  a `skipif` test runs the true binary when installed) and pure-Python
+  `verify_geometry`. A failed predicate fails the action → the run → the
+  earnings, and the trace posterior records the failure honestly: the
+  platform's money-on-verified-success promise, enforced by geometry.
+- Added `domains.cad.cad_starter_pack()`: a parametric mounting plate and
+  its verification node, slot-chained. The spec's bounds bracket
+  closed-form values (inscribed-polygon hole area (n/2)r²sin(2π/n),
+  perimeter 2nr·sin(π/n); volume ≈ 3087.08 mm³, area ≈ 2098.9 mm²,
+  genus exactly 1) — tight enough to refute a hole-less or double-holed
+  part outright, recomputed from the formulas in the tests. A gateway
+  test contributes both nodes and goal-assembles them: CAD nodes are
+  ordinary marketplace citizens.
+
 The trace corpus and the first learned planner:
 
 - `TraceStore` now logs every recorded run **verbatim** (`trace_runs`, a
