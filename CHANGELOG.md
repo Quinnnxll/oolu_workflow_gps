@@ -4,6 +4,16 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+- The learned planner is now **wired in by default**: when a surface has
+  a `trace_store` and no explicit `proposal_model`, producer picks are
+  advised by `TraceProposalModel` over the caller's own recorded runs —
+  free, evidence-only, and tenant-scoped (the gateway constructs the
+  model per request with the calling tenant's context, so one tenant's
+  history never enters another's evidence pool; the desktop uses its
+  single-user bucket). An explicitly passed `proposal_model` always
+  wins. Pinned in tests with run-level evidence per-node personalization
+  cannot see: steps that succeeded inside runs that failed as wholes.
+
 The first domain pack — CAD, with verification grounded in mathematics:
 
 - Added `domains.cad.geometry`: exact mesh mathematics with stated

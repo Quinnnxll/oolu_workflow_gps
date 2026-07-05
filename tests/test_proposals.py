@@ -17,6 +17,7 @@ from test_market_assemble import RAW as RAW_SLOT
 from test_market_assemble import TIDY, _seed_market
 
 from workflow_gps.desktop import DesktopService
+from workflow_gps.knowledge import NodeObservation, TraceStore, route_node_key
 from workflow_gps.metering.model_calls import (
     DEFAULT_MODEL_PRICES,
     ModelCallMeter,
@@ -346,7 +347,7 @@ def test_unreadable_advice_is_no_advice():
 # --------------------------------------------------------------------------- #
 # Surfaces: planning cost rides the preview and the budget judges the sum.     #
 # --------------------------------------------------------------------------- #
-def _desktop_with_market(tmp_path, *, proposal_model=None):
+def _desktop_with_market(tmp_path, *, proposal_model=None, trace_store=None):
     app, conn, ident, registry, *_rest = _build(tmp_path)
     _seed_market(app, ident, registry)
     # A second raw producer so the RAW pick is contested and worth advising.
@@ -364,6 +365,7 @@ def _desktop_with_market(tmp_path, *, proposal_model=None):
         app._durable,
         market=app._market,
         price_book=app._price_book,
+        trace_store=trace_store,
         proposal_model=proposal_model,
     )
     return app, svc, conn
@@ -422,4 +424,110 @@ def test_gateway_market_assemble_reports_planning_cost(tmp_path):
     assert response.body["budget"]["estimated"] == (
         response.body["estimated_gross_total"] + 0.03
     )
+    conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# Default wiring: with a trace store, the user's own history advises.          #
+# --------------------------------------------------------------------------- #
+def _record_run_level_evidence(store, *, context=""):
+    """Evidence only the RUN-LEVEL model can act on.
+
+    Every step succeeds, so per-node personalization sees the two
+    producers as identical — but the runs that contained the deluxe
+    exporter verified as wholes, and the runs that contained the original
+    failed as wholes. Only TraceProposalModel reads that distinction.
+    """
+    for name, run_success in (
+        ("raw exporter deluxe", True),
+        ("raw exporter deluxe", True),
+        ("raw exporter", False),
+        ("raw exporter", False),
+    ):
+        store.record_run(
+            goal="clean-the-books",
+            steps=[NodeObservation(route_node_key(name), ok=True)],
+            success=run_success,
+            context=context,
+        )
+
+
+def test_desktop_defaults_to_advising_from_the_users_own_runs(tmp_path):
+    store = TraceStore()
+    _record_run_level_evidence(store)
+    _app, svc, conn = _desktop_with_market(tmp_path, trace_store=store)
+
+    view = svc.assembly_preview(goal="clean-the-books", want=[TIDY])
+    # The name tie-break alone would pick "raw exporter"; the default
+    # trace-backed model knows which whole plans actually verified.
+    assert "raw exporter deluxe" in view.selected
+    assert "raw exporter" not in view.selected
+    assert view.planning_cost == 0.0  # advising from local history is free
+    store.close()
+    conn.close()
+
+
+def test_an_explicit_proposal_model_still_wins(tmp_path):
+    store = TraceStore()
+    _record_run_level_evidence(store)  # history says deluxe...
+    override = _StubModel({}, cost=0.02)  # ...but an explicit model is boss
+    _app, svc, conn = _desktop_with_market(
+        tmp_path, trace_store=store, proposal_model=override
+    )
+    view = svc.assembly_preview(goal="clean-the-books", want=[TIDY])
+    assert override.calls, "the explicit model should have been consulted"
+    assert "raw exporter" in view.selected  # neutral advice: tie-break rules
+    assert view.planning_cost == 0.02
+    store.close()
+    conn.close()
+
+
+def test_gateway_defaults_per_tenant_and_history_never_leaks(tmp_path):
+    from test_http_gateway import _req
+
+    app, conn, ident, registry, *_rest = _build(tmp_path)
+    _seed_market(app, ident, registry)
+    _contribute_and_publish(
+        app,
+        ident,
+        registry,
+        name="raw exporter deluxe",
+        noder="noder-deluxe",
+        price=0.10,
+        produces=[RAW_SLOT],
+        consumes=[],
+    )
+    store = TraceStore()
+    app._trace_store = store
+    _record_run_level_evidence(store, context="t2")
+    # A neighbor tenant's history says the OPPOSITE, loudly.
+    for _ in range(5):
+        store.record_run(
+            goal="clean-the-books",
+            steps=[NodeObservation(route_node_key("raw exporter"), ok=True)],
+            success=True,
+            context="t9",
+        )
+
+    def assemble(token):
+        return app.handle(
+            _req(
+                "POST",
+                "/v1/market/assemble",
+                token=token,
+                body={"goal": {"name": "clean-the-books", "want": [TIDY]}},
+            )
+        )
+
+    mine = assemble(ident.token("consumer", "t2"))
+    assert mine.status == 200, mine.body
+    # t2's own verified history picks deluxe — the neighbor's five loud
+    # successes for the original exporter never enter t2's evidence pool.
+    assert "raw exporter deluxe" in mine.body["selected"]
+    assert "raw exporter" not in mine.body["selected"]
+
+    neighbor = assemble(ident.token("someone", "t9"))
+    assert neighbor.status == 200, neighbor.body
+    assert "raw exporter" in neighbor.body["selected"]  # their history, their pick
+    store.close()
     conn.close()

@@ -107,7 +107,8 @@ class DesktopService:
         attribution=None,  # metering.AttributionStore
         trace_store=None,  # knowledge.TraceStore: confirmed runs sharpen picks
         rng=None,  # random.Random for explore-mode assembly; seedable
-        proposal_model=None,  # orchestrator.ProposalModel: advice as a prior
+        proposal_model=None,  # orchestrator.ProposalModel; None + trace_store
+        # -> TraceProposalModel over this desktop's own run history
         wallet_lookup=None,  # () -> the LINKED wallet's remaining balance | None
         session_manager=None,  # identity.SessionManager: loopback decisions
         hold_ttl_seconds=None,  # held contracts expire after this; None=never
@@ -130,7 +131,14 @@ class DesktopService:
         self._rng = rng or random.Random()
         # A model's opinion over producer picks — advisory (a prior over
         # the same posteriors), with its metered cost surfaced on previews
-        # as planning_cost so budgets judge advice as spend.
+        # as planning_cost so budgets judge advice as spend. An explicit
+        # model wins; with none, the desktop's own run history advises by
+        # default (free, evidence-only, ties broken toward what this
+        # user's verified plans actually contained).
+        if proposal_model is None and trace_store is not None:
+            from ..orchestrator.proposals import TraceProposalModel
+
+            proposal_model = TraceProposalModel(trace_store)
         self._proposal_model = proposal_model
         # A partial view of the user's assets by design: budgets never cap
         # on the linked balance, they only flag it for review.

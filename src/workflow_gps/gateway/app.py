@@ -175,7 +175,8 @@ class GatewayApp:
         contract_executors: dict[str, ActionExecutor] | None = None,
         trace_store: TraceStore | None = None,
         rng: random.Random | None = None,
-        proposal_model=None,  # orchestrator.ProposalModel: advice as a prior
+        proposal_model=None,  # orchestrator.ProposalModel; None + trace_store
+        # -> TraceProposalModel over the calling tenant's own run history
         wallet_lookup: Callable[[str, str], float | None] | None = None,
         payout_store: PayoutStore | None = None,
         payout_adapter: PayoutAdapter | None = None,
@@ -983,7 +984,7 @@ class GatewayApp:
             rng=self._rng if bool(body.get("explore", False)) else None,
             # A model's opinion enters picks as a prior; what the advice
             # cost rides the preview and the budget verdict below.
-            proposal_model=self._proposal_model,
+            proposal_model=self._proposal_model_for(session),
             cost_weight=self._cost_weight(body),
             budget=self._budget_policy(body),
             spend_lookup=lambda goal_class: self._spend_history(session, goal_class),
@@ -995,6 +996,19 @@ class GatewayApp:
     # Budget signals: what the caller declared, what the user has done,   #
     # and what the (possibly partial) linked wallet holds.                #
     # ------------------------------------------------------------------ #
+    def _proposal_model_for(self, session):
+        """The proposal model for one request. An explicitly configured
+        model wins; with none, the calling tenant's own recorded runs
+        advise (free, evidence-only) — constructed per request because
+        the evidence pool is the TENANT's history, never a neighbor's."""
+        if self._proposal_model is not None:
+            return self._proposal_model
+        if self._trace_store is None:
+            return None
+        from ..orchestrator.proposals import TraceProposalModel
+
+        return TraceProposalModel(self._trace_store, context=session.tenant_id)
+
     @staticmethod
     def _cost_weight(body: dict) -> float:
         raw = body.get("cost_weight", 0.0)
