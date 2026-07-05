@@ -34,6 +34,9 @@ from ..worker.leases import TrustLevel
 from ..worker.policy import IsolationPolicy
 from .views import (
     ActionView,
+    AssemblyPayoutView,
+    AssemblyPreviewView,
+    AssemblyStepView,
     AuditEntryView,
     AuditView,
     BlueprintView,
@@ -84,12 +87,16 @@ class DesktopService:
         vault: SecretVault | None = None,
         isolation: IsolationPolicy | None = None,
         docker_available: bool = True,
+        market=None,  # nodeplace.CandidateAssembler, when the shell has one
+        price_book=None,  # nodeplace.PriceBook
     ):
         self._durable = durable
         self._approval = approval_authority
         self._vault = vault or SecretVault()
         self._isolation = isolation or IsolationPolicy()
         self._docker_available = docker_available
+        self._market = market
+        self._price_book = price_book
         self._connections: dict[str, _Connection] = {}
 
     # ------------------------------------------------------------------ #
@@ -267,6 +274,65 @@ class DesktopService:
         self._vault.revoke(connection.credential_ref)
         connection.status = "disconnected"
         return self._connection_view(connection)
+
+    # ------------------------------------------------------------------ #
+    # Assembly preview: the plan, its prices, its payees — before running. #
+    # ------------------------------------------------------------------ #
+    def assembly_preview(
+        self,
+        *,
+        goal: str,
+        want: list[dict[str, Any]],
+        have: list[dict[str, Any]] | None = None,
+        query: str = "",
+        fill_gaps: bool = False,
+    ) -> AssemblyPreviewView:
+        """The assembly screen's data: one call, everything a non-developer
+        needs to decide — which nodes were picked, what each costs (with the
+        clearing forces spelled out), and exactly who gets paid on verified
+        success. Read-only: no price commits, no ledger writes, and the
+        returned ``contract`` is the runnable artifact the user confirms.
+        """
+        if self._market is None or self._price_book is None:
+            raise KeyError("market economics are not configured for this shell")
+        # Imported lazily so a shell without marketplace features never pays
+        # the nodeplace import.
+        from ..nodeplace.assembly import preview_assembly
+        from ..orchestrator.assembler import GoalSpec
+
+        spec = GoalSpec.model_validate({"name": goal, "want": want, "have": have or []})
+        preview = preview_assembly(
+            self._market, self._price_book, spec, query=query, fill_gaps=fill_gaps
+        )
+        return AssemblyPreviewView(
+            goal=goal,
+            complete=preview.complete,
+            selected=list(preview.selected),
+            gap_filled=list(preview.gap_filled),
+            missing=[slot.name for slot in preview.missing],
+            steps=[
+                AssemblyStepView(
+                    name=node.name,
+                    kind=node.kind,
+                    gap=node.gap,
+                    version_id=node.version_id,
+                    price=(node.cleared or {}).get("cleared"),
+                    price_notes=list((node.cleared or {}).get("notes", [])),
+                    payouts=[
+                        AssemblyPayoutView(noder=p.noder_principal, amount=p.amount)
+                        for p in node.payout_previews
+                    ],
+                )
+                for node in preview.nodes
+            ],
+            estimated_gross_total=preview.estimated_gross_total,
+            platform_margin_preview=preview.platform_margin_preview,
+            contract=(
+                preview.contract.model_dump(mode="json")
+                if preview.contract is not None
+                else None
+            ),
+        )
 
     # ------------------------------------------------------------------ #
     # Worker health + trusted/untrusted execution labeling.              #

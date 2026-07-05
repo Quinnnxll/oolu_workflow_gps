@@ -1,3 +1,9 @@
+from .assembly import (
+    AssemblyNodePreview,
+    AssemblyPreview,
+    PayoutPreviewEntry,
+    preview_assembly,
+)
 from .economics import (
     AssembledCandidate,
     CandidateAssembler,
@@ -79,7 +85,11 @@ __all__ = [
     "MODE_WEIGHTS",
     "NODEPLACE_SCHEMA_VERSION",
     "AssembledCandidate",
+    "AssemblyNodePreview",
+    "AssemblyPreview",
     "CandidateAssembler",
+    "PayoutPreviewEntry",
+    "preview_assembly",
     "CandidateEconomics",
     "LiveVersionStats",
     "VersionStats",

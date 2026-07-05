@@ -66,6 +66,21 @@ class DesktopLoopbackApp:
             if not intent:
                 raise _BadRequest("intent is required")
             return 201, self._svc.submit_task(intent).model_dump(mode="json")
+        if method == "POST" and path == "/v1/assembly/preview":
+            body = await _read_json(receive)
+            if not body.get("goal") or not body.get("want"):
+                raise _BadRequest("goal and want are required")
+            try:
+                view = self._svc.assembly_preview(
+                    goal=str(body["goal"]),
+                    want=list(body["want"]),
+                    have=list(body.get("have", [])),
+                    query=str(body.get("q", "")),
+                    fill_gaps=bool(body.get("fill_gaps", False)),
+                )
+            except (ValueError, TypeError) as exc:
+                raise _BadRequest(str(exc)) from exc
+            return 200, view.model_dump(mode="json")
         match = _TASK_RE.match(path)
         if match:
             return await self._task_route(

@@ -136,6 +136,46 @@ class WorkerHealthView(BaseModel):
     labels: list[ExecutionLabel] = Field(default_factory=list)
 
 
+class AssemblyPayoutView(BaseModel):
+    """Who would earn what if this step's run verifies. A forecast only."""
+
+    model_config = ConfigDict(frozen=True)
+
+    noder: str
+    amount: float
+
+
+class AssemblyStepView(BaseModel):
+    """One planned step: what runs, what it costs, who gets paid."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    kind: str  # actions | script | subgraph
+    gap: bool = False  # a synthesized fill-in for a slot nobody produces yet
+    version_id: str | None = None
+    price: float | None = None
+    price_notes: list[str] = Field(default_factory=list)  # the clearing forces
+    payouts: list[AssemblyPayoutView] = Field(default_factory=list)
+
+
+class AssemblyPreviewView(BaseModel):
+    """The assembly screen: the plan, its prices, and its payees — before
+    anything runs. ``contract`` is the runnable artifact the user confirms."""
+
+    model_config = ConfigDict(frozen=True)
+
+    goal: str
+    complete: bool
+    selected: list[str] = Field(default_factory=list)
+    gap_filled: list[str] = Field(default_factory=list)
+    missing: list[str] = Field(default_factory=list)  # slot names, human-scale
+    steps: list[AssemblyStepView] = Field(default_factory=list)
+    estimated_gross_total: float = 0.0
+    platform_margin_preview: float = 0.0
+    contract: dict[str, Any] | None = None
+
+
 class ExportBundle(BaseModel):
     """A local data export for one workflow — secrets are never included."""
 

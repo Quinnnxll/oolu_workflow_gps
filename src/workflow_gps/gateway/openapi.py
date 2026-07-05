@@ -27,6 +27,14 @@ def build_openapi() -> dict:
             ),
             "get": op("List runs for the caller's tenant (paginated)"),
         },
+        "/v1/runs/contract": {
+            "post": op(
+                "Execute an assembled contract directly: compiles to a DAG, "
+                "binds every marketplace node (aggregate lineage-weighted "
+                "shares), runs it, and audit-links the outcome; reserved "
+                "actions are refused — those need the approval flow"
+            ),
+        },
         "/v1/runs/{run_id}": {"get": op("Get a run's status")},
         "/v1/runs/{run_id}/questions": {"get": op("List clarification questions")},
         "/v1/runs/{run_id}/answers": {"post": op("Answer clarification questions")},

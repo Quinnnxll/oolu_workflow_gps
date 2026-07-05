@@ -17,6 +17,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from uuid import uuid4
 
 from ..billing import (
     BillingService,
@@ -25,7 +26,6 @@ from ..billing import (
     PayoutStatus,
     PayoutStore,
 )
-from ..billing.pricing import PricingEngine
 from ..durable.idempotency import IdempotencyLedger
 from ..durable.service import DurableWorkflowService
 from ..identity.errors import AuthenticationError, AuthorizationError
@@ -35,6 +35,7 @@ from ..identity.service import IdentityApprovalAuthority
 from ..identity.sessions import default_assurance
 from ..identity.tokens import OidcValidator
 from ..metering.attribution import AttributionStore
+from ..metering.models import NoderShare, RunBinding
 from ..nodeplace import (
     CandidateAssembler,
     ConsumerAccount,
@@ -52,16 +53,29 @@ from ..nodeplace import (
     UnverifiedRunError,
     Visibility,
     build_run_binding,
-    commission_rate,
     lineage_shares,
+    preview_assembly,
     reward_multiplier,
     utility,
 )
-from ..orchestrator import ContractAssembler, GoalSpec, OrchestratorError
-from ..orchestrator.state import PauseKind, Phase, ResumeInput, RunState, TaskContract
+from ..orchestrator import (
+    DagRouteRunner,
+    GoalSpec,
+    OrchestratorError,
+    contract_to_blueprint,
+)
+from ..orchestrator.state import (
+    PauseKind,
+    Phase,
+    ResumeInput,
+    RoutePlan,
+    RunState,
+    TaskContract,
+)
 from ..providers.vault import SecretVault
-from ..skills.contract import Slot, SubgraphBody
+from ..skills.contract import NodeContract, Slot, SubgraphBody
 from ..skills.models import ReusableSkill
+from ..skills.ports import ActionExecutor
 from .errors import GatewayError, WebhookError
 from .http import (
     Request,
@@ -139,6 +153,7 @@ class GatewayApp:
         market: CandidateAssembler | None = None,
         price_book: PriceBook | None = None,
         attribution: AttributionStore | None = None,
+        contract_executors: dict[str, ActionExecutor] | None = None,
         payout_store: PayoutStore | None = None,
         payout_adapter: PayoutAdapter | None = None,
         disputes: DisputeService | None = None,
@@ -155,6 +170,9 @@ class GatewayApp:
         self._market = market
         self._price_book = price_book
         self._attribution = attribution
+        self._contract_runner = (
+            DagRouteRunner(contract_executors) if contract_executors else None
+        )
         self._payout_store = payout_store
         self._payout_adapter = payout_adapter
         self._disputes = disputes
@@ -323,6 +341,7 @@ class GatewayApp:
         r.add("GET", "/v1/market/candidates", self._market_candidates)
         r.add("POST", "/v1/market/quotes", self._market_quote)
         r.add("POST", "/v1/market/assemble", self._market_assemble)
+        r.add("POST", "/v1/runs/contract", self._submit_contract_run)
         r.add("GET", "/v1/earnings", self._earnings_balance)
         r.add("GET", "/v1/earnings/entries", self._earnings_entries)
         r.add("GET", "/v1/payout-accounts", self._get_payout_account)
@@ -899,97 +918,157 @@ class GatewayApp:
         if not goal.want:
             raise GatewayError(400, "invalid_request", "goal.want must not be empty")
 
-        marketplace = assembler.contracts(str(body.get("q", "")))
-        by_id = {entry.contract.id: entry for entry in marketplace}
-        result = ContractAssembler(
-            [entry.contract for entry in marketplace],
-            fill_gaps_with_scripts=bool(body.get("fill_gaps", False)),
-        ).assemble(goal)
-
-        nodes = []
-        gross_total = 0.0
-        margin_total = 0.0
-        children = (
-            result.contract.body.nodes
-            if result.contract is not None
-            and isinstance(result.contract.body, SubgraphBody)
-            else []
+        preview = preview_assembly(
+            assembler,
+            book,
+            goal,
+            query=str(body.get("q", "")),
+            fill_gaps=bool(body.get("fill_gaps", False)),
         )
-        for child in children:
-            entry = by_id.get(child.id)
-            if entry is None:  # a synthesized gap node: no economics yet
-                nodes.append(
+        return json_response(200, preview.model_dump(mode="json"))
+
+    def _submit_contract_run(self, request, session, params) -> Response:
+        """Execute an assembled contract directly, with multi-node binding.
+
+        The counterpart to ``/v1/market/assemble``: post the contract it
+        returned and this compiles it to a DAG blueprint, binds every
+        marketplace node in it to the run (one aggregate ``RunBinding`` whose
+        shares merge each node's lineage split, weighted by its cleared
+        price — a real run, so prices commit), executes it on the configured
+        executors, and appends the outcome to the durable audit log — the
+        same event the metering deriver pays from on verified success.
+
+        Human control stays intact: a contract containing reserved actions is
+        refused here and must go through the orchestrator's approval flow.
+        """
+        if self._contract_runner is None:
+            raise GatewayError(404, "not_found", "contract execution is not enabled")
+        assembler, book = self._require_market()
+        if self._attribution is None:
+            raise GatewayError(404, "not_found", "market economics are not enabled")
+        body = request.body or {}
+        if not isinstance(body.get("contract"), dict):
+            raise GatewayError(400, "invalid_request", "a contract object is required")
+        try:
+            contract = NodeContract.model_validate(body["contract"])
+        except Exception as exc:
+            raise GatewayError(400, "invalid_request", f"bad contract: {exc}") from exc
+        try:
+            blueprint = contract_to_blueprint(contract)
+        except ValueError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        if any(item.reserved for item in blueprint.actions):
+            raise GatewayError(
+                403,
+                "forbidden",
+                "contract contains reserved actions; submit it through the "
+                "orchestrator flow so approval can be granted",
+            )
+
+        def submit() -> dict:
+            run_id = uuid4().hex
+            children = (
+                contract.body.nodes
+                if isinstance(contract.body, SubgraphBody)
+                else [contract]
+            )
+            market_nodes: list[dict] = []
+            merged: dict[str, float] = {}
+            gross_total = 0.0
+            cost_total = 0.0
+            representative: str | None = None
+            for child in children:
+                entry = assembler.assemble_version(child.id)
+                if entry is None:
+                    continue  # a local/gap node: no marketplace economics
+                candidate, signals = entry.candidate, entry.signals
+                cleared = book.clear(
+                    class_key=candidate.class_key,
+                    node_class=candidate.node_class,
+                    ask=candidate.cleared_price,
+                    cost=candidate.cost,
+                    substitutes=signals.substitutes,
+                )  # commit: a real run moves the market reference
+                representative = representative or candidate.version_id
+                gross_total += cleared.cleared
+                cost_total += candidate.cost.automation_cost
+                shares = lineage_shares(
+                    candidate.noder_principal,
+                    assembler.lineage_for(candidate.version_id),
+                    executing_multiplier=reward_multiplier(signals).multiplier,
+                )
+                for share in shares:
+                    merged[share.noder_principal] = merged.get(
+                        share.noder_principal, 0.0
+                    ) + (share.weight * share.multiplier * cleared.cleared)
+                market_nodes.append(
                     {
-                        "name": child.name,
-                        "kind": child.body.kind.value,
-                        "gap": True,
+                        "version_id": candidate.version_id,
+                        "cleared": cleared.cleared,
+                        "noders": [s.noder_principal for s in shares],
                     }
                 )
-                continue
-            candidate, signals = entry.assembled.candidate, entry.assembled.signals
-            cleared = book.clear(
-                class_key=candidate.class_key,
-                node_class=candidate.node_class,
-                ask=candidate.cleared_price,
-                cost=candidate.cost,
-                substitutes=signals.substitutes,
-                commit=False,  # planning must not move the market
-            )
-            breakdown = reward_multiplier(signals)
-            rho = commission_rate(
-                candidate.node_class,
-                scarcity_bonus=0.5 / (1.0 + max(0, signals.substitutes)),
-            )
-            shares = lineage_shares(
-                candidate.noder_principal,
-                assembler.lineage_for(candidate.version_id),
-                executing_multiplier=breakdown.multiplier,
-            )
-            split = PricingEngine(rho=rho).price(
-                gross=cleared.cleared,
-                provider_cost=candidate.cost.automation_cost,
-                shares=shares,
-            )
-            gross_total += cleared.cleared
-            margin_total += split.platform_micros / 1_000_000
-            nodes.append(
-                {
-                    "name": child.name,
-                    "kind": child.body.kind.value,
-                    "gap": False,
-                    "version_id": candidate.version_id,
-                    "cleared": cleared.model_dump(mode="json"),
-                    "payout_previews": [
-                        {
-                            "noder_principal": principal,
-                            "amount": micros / 1_000_000,
-                            "reason": (
-                                "preview: accrues only on platform-verified success"
-                            ),
-                        }
-                        for principal, micros in sorted(split.noder_micros.items())
-                    ],
-                    "platform_margin_preview": split.platform_micros / 1_000_000,
-                }
-            )
+            if representative is not None and gross_total > 0:
+                total_weight = sum(merged.values())
+                self._attribution.bind(
+                    RunBinding(
+                        run_id=run_id,
+                        version_id=representative,
+                        consumer_tenant=session.tenant_id,
+                        consumer_principal=session.principal_id,
+                        gross=gross_total,
+                        provider_cost=cost_total,
+                        shares=[
+                            NoderShare(
+                                noder_principal=principal,
+                                weight=weight / total_weight,
+                            )
+                            for principal, weight in sorted(merged.items())
+                        ],
+                    )
+                )
 
-        return json_response(
-            200,
-            {
-                "complete": result.complete,
-                "selected": result.selected,
-                "gap_filled": result.gap_filled,
-                "missing": [slot.model_dump(mode="json") for slot in result.missing],
-                "contract": (
-                    result.contract.model_dump(mode="json")
-                    if result.contract is not None
-                    else None
-                ),
-                "nodes": nodes,
-                "estimated_gross_total": gross_total,
-                "platform_margin_preview": margin_total,
-            },
+            record = self._contract_runner.execute(
+                RoutePlan(chosen=blueprint, alternatives=[], total_cost=0.0),
+                idempotency_key=f"{run_id}:exec:1",
+                attempt=1,
+            )
+            # The same audit event the deriver mints money from — but only
+            # on a verified success, exactly like orchestrated runs.
+            self._durable.audit.append(
+                "workflow.executed",
+                {
+                    "run_id": run_id,
+                    "status": record.status.value,
+                    "idempotency_key": record.idempotency_key,
+                },
+            )
+            self._metrics["contract_runs"] += 1
+            return {
+                "run_id": run_id,
+                "status": record.status.value,
+                "error": record.error,
+                "outcomes": [
+                    {"status": o.status.value, "error": o.error}
+                    for o in record.action_outcomes
+                ],
+                "market": {
+                    "gross": gross_total,
+                    "provider_cost": cost_total,
+                    "nodes": market_nodes,
+                    "noders": sorted(merged),
+                },
+            }
+
+        key = request.header("idempotency-key")
+        result = (
+            self._idem.run(
+                f"gw:contract:{session.tenant_id}:{key}", submit, scope="gateway"
+            )
+            if key
+            else submit()
         )
+        return json_response(200, result)
 
     def _market_quote(self, request, session, params) -> Response:
         """Quote a workflow off live economics. A forecast: no money moves,

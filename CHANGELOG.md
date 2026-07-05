@@ -57,6 +57,21 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- Direct contract execution + desktop assembly preview: `POST
+  /v1/runs/contract` takes the contract `/v1/market/assemble` returned,
+  compiles it to a DAG blueprint (`contract_to_blueprint`), and executes it
+  on the gateway's configured `contract_executors` (`DagRouteRunner`) —
+  every marketplace node in the subgraph clears at a *committed* price and
+  the run gets one aggregate `RunBinding` whose shares merge each node's
+  lineage split weighted by its cleared price, so the metering deriver pays
+  every noder in the chain from the same platform-verified audit event.
+  Reserved (irreversible) actions are refused with 403 — those still
+  require the orchestrator's approval flow. The shared preview computation
+  moved to `nodeplace.assembly.preview_assembly`, and the desktop shell
+  surfaces it: `DesktopService.assembly_preview` (optional
+  `market`/`price_book` wiring) maps it into the secret-free
+  `AssemblyPreviewView`, served over the loopback at
+  `POST /v1/assembly/preview` — read-only, prices never commit.
 - Slot vocabularies on listings + goal-based assembly over the marketplace:
   `Listing` gains typed `consumes`/`produces` slots — declared at
   contribution (service + gateway body fields) or derived from the skill
