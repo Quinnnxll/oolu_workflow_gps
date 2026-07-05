@@ -57,6 +57,17 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- Held approvals survive restarts: pending reserved contracts moved from
+  process memory into the shell's own durable database
+  (`desktop.pending.PendingContractStore`, table
+  `desktop_pending_contracts`) — a hold is a commitment the user made,
+  so it lives with the runs. The record stores the contract as posted
+  plus the budget knobs captured at confirm time; the compiled blueprint
+  is deliberately NOT persisted (script bodies mint fresh action ids per
+  compile) — whichever process decides the hold recompiles once and
+  executes exactly what it inspected. A fresh `DesktopService` over the
+  same durable connection lists and decides holds made before a restart,
+  and every service over that store sees decisions immediately.
 - Loopback route for the approval decision:
   `POST /v1/assembly/approvals/{pending_id}` with `{"approved": bool}`
   decides a held reserved contract from the desktop UI. The loopback
@@ -83,8 +94,6 @@ planner now grows automatically with the user's executions and learned skills.
   `nodeplace.execution` splits `compile_contract` (no reserved gate, for
   approval flows) + `reserved_operations` out of `compile_runnable`
   (which still refuses — the gateway's unattended path is unchanged).
-  Holds are in-memory like provider connections: re-confirm after a
-  shell restart.
 - Recency decay on spending profiles: history weighs `recency_decay`
   (default 0.9) less per run back, so comfort tracks where spending is
   *trending*. `SpendingProfile.typical` is now a recency-weighted median,

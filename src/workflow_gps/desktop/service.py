@@ -39,6 +39,7 @@ from ..orchestrator.state import (
 from ..providers.vault import SecretVault
 from ..worker.leases import TrustLevel
 from ..worker.policy import IsolationPolicy
+from .pending import PendingContractRecord, PendingContractStore
 from .views import (
     ActionView,
     AssemblyPayoutView,
@@ -87,42 +88,6 @@ class _Connection:
         self.connected_at = connected_at
 
 
-class _PendingContract:
-    """A reserved contract held for approval — compiled once, decided later."""
-
-    __slots__ = (
-        "pending_id",
-        "parsed",
-        "compiled",
-        "reserved",
-        "budget_cap",
-        "review_threshold",
-        "review_acknowledged",
-        "created_at",
-    )
-
-    def __init__(
-        self,
-        *,
-        pending_id,
-        parsed,
-        compiled,
-        reserved,
-        budget_cap,
-        review_threshold,
-        review_acknowledged,
-        created_at,
-    ):
-        self.pending_id = pending_id
-        self.parsed = parsed  # the validated NodeContract
-        self.compiled = compiled  # its CompiledContract (same action ids run)
-        self.reserved = reserved  # the operations that made it reserved
-        self.budget_cap = budget_cap
-        self.review_threshold = review_threshold
-        self.review_acknowledged = review_acknowledged
-        self.created_at = created_at
-
-
 class DesktopService:
     def __init__(
         self,
@@ -160,9 +125,11 @@ class DesktopService:
         self._sessions = session_manager
         self._connections: dict[str, _Connection] = {}
         self._confirmed: dict[str, AssemblyRunView] = {}
-        # Reserved contracts held for approval (in-memory, like connections:
-        # a held contract does not survive a shell restart — re-confirm it).
-        self._pending_contracts: dict[str, _PendingContract] = {}
+        # Reserved contracts held for approval live in the durable store —
+        # a hold survives a shell restart. The compiled artifact is a
+        # process-local cache: whichever process decides recompiles once.
+        self._pending = PendingContractStore(durable.conn)
+        self._compiled_holds: dict[str, tuple[Any, Any]] = {}
 
     # ------------------------------------------------------------------ #
     # Task entry + guided clarification.                                  #
@@ -232,20 +199,21 @@ class DesktopService:
                 )
             )
         # Reserved contracts held by confirm_assembly: approvable tasks,
-        # not dead ends. Decided via approve_assembly (identity-gated).
+        # not dead ends — durable, so they survive a shell restart.
+        # Decided via approve_assembly (identity-gated).
         if kind is None or kind == "contract-approval":
-            for entry in self._pending_contracts.values():
+            for record in self._pending.list():
                 items.append(
                     InboxItem(
-                        run_id=entry.pending_id,
+                        run_id=record.pending_id,
                         kind="contract-approval",
-                        intent=entry.parsed.name,
+                        intent=str(record.contract.get("name", "contract")),
                         prompt=(
                             "contract contains reserved actions ("
-                            + ", ".join(entry.reserved)
+                            + ", ".join(record.reserved)
                             + "); approve to run it"
                         ),
-                        created_at=entry.created_at,
+                        created_at=record.created_at,
                     )
                 )
         return items
@@ -490,18 +458,20 @@ class DesktopService:
         compiled = compile_contract(parsed)
         reserved = reserved_operations(compiled)
         if reserved:
-            # Not a dead end: hold it for an authorized approver.
+            # Not a dead end: hold it durably for an authorized approver.
             pending_id = uuid4().hex
-            self._pending_contracts[pending_id] = _PendingContract(
-                pending_id=pending_id,
-                parsed=parsed,
-                compiled=compiled,
-                reserved=reserved,
-                budget_cap=budget_cap,
-                review_threshold=review_threshold,
-                review_acknowledged=review_acknowledged,
-                created_at=datetime.now(UTC),
+            self._pending.add(
+                PendingContractRecord(
+                    pending_id=pending_id,
+                    contract=parsed.model_dump(mode="json"),
+                    reserved=reserved,
+                    budget_cap=budget_cap,
+                    review_threshold=review_threshold,
+                    review_acknowledged=review_acknowledged,
+                    created_at=datetime.now(UTC),
+                )
             )
+            self._compiled_holds[pending_id] = (parsed, compiled)
             view = AssemblyRunView(run_id=pending_id, status="awaiting_approval")
             if confirm_id:
                 self._confirmed[confirm_id] = view
@@ -532,13 +502,16 @@ class DesktopService:
         the contract stays held. Approval re-runs the budget gate (prices
         may have moved while it waited) and then executes through the same
         shared money path; declining removes it. Both outcomes are audited
-        with the decider's principal.
+        with the decider's principal. Holds are durable: a hold made before
+        a shell restart is still here to decide (the contract recompiles
+        once in the deciding process).
         """
-        entry = self._pending_contracts.get(pending_id)
+        entry = self._pending.get(pending_id)
         if entry is None:
             raise KeyError(pending_id)
         if not approved:
-            del self._pending_contracts[pending_id]
+            self._pending.remove(pending_id)
+            self._compiled_holds.pop(pending_id, None)
             self._durable.audit.append(
                 "contract.declined",
                 {"pending_id": pending_id, "by": session.principal_id},
@@ -546,21 +519,23 @@ class DesktopService:
             return AssemblyRunView(run_id=pending_id, status="declined")
         if self._approval is None:
             raise RuntimeError("no approval authority configured")
+        parsed, compiled = self._compiled_for(entry)
         record = self._approval.approve(
             session,
             run_id=pending_id,
-            policy=entry.parsed.name,
+            policy=parsed.name,
             requester_id="desktop",
             required_assurance=required_assurance,
         )
         self._enforce_contract_budget(
-            entry.parsed,
+            parsed,
             budget_cap=entry.budget_cap,
             review_threshold=entry.review_threshold,
             review_acknowledged=entry.review_acknowledged,
         )
-        view = self._execute_contract(entry.parsed, entry.compiled)
-        del self._pending_contracts[pending_id]
+        view = self._execute_contract(parsed, compiled)
+        self._pending.remove(pending_id)
+        self._compiled_holds.pop(pending_id, None)
         self._durable.audit.append(
             "contract.approved",
             {
@@ -572,6 +547,19 @@ class DesktopService:
             },
         )
         return view
+
+    def _compiled_for(self, entry: PendingContractRecord):
+        """The hold's runnable form — cached, or recompiled after a restart."""
+        cached = self._compiled_holds.get(entry.pending_id)
+        if cached is not None:
+            return cached
+        from ..nodeplace.execution import compile_contract
+        from ..skills.contract import NodeContract
+
+        parsed = NodeContract.model_validate(entry.contract)
+        compiled = compile_contract(parsed)
+        self._compiled_holds[entry.pending_id] = (parsed, compiled)
+        return parsed, compiled
 
     def decide_assembly(
         self,

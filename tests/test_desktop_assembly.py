@@ -382,6 +382,49 @@ def test_loopback_approval_without_session_manager_is_not_found(tmp_path):
     conn.close()
 
 
+def test_held_contracts_survive_a_shell_restart(tmp_path):
+    """A hold is a durable commitment: a NEW service over the same durable
+    store still lists it, and can decide it — recompiling once."""
+    authority, manager, token = _identity_tokens(tmp_path)
+    first_executor = _CliExecutor(("run", "delete_files"))
+    app, first, conn, metering, attribution, audit = _desktop(
+        tmp_path, executor=first_executor, authority=authority, sessions=manager
+    )
+    held = first.confirm_assembly(_destructive_contract())
+    assert held.status == "awaiting_approval"
+
+    # The shell restarts: a fresh service over the SAME durable connection,
+    # with a fresh executor — nothing in-memory carries over.
+    second_executor = _CliExecutor(("run", "delete_files"))
+    reborn = DesktopService(
+        app._durable,
+        approval_authority=authority,
+        market=app._market,
+        price_book=app._price_book,
+        contract_runner=DagRouteRunner({"cli": second_executor}),
+        attribution=attribution,
+        session_manager=manager,
+    )
+    (item,) = reborn.inbox(kind="contract-approval")
+    assert item.run_id == held.run_id
+    assert "cli/delete_files" in item.prompt
+
+    # Deciding over the reborn shell's loopback recompiles and runs it.
+    status, run = _call(
+        DesktopLoopbackApp(reborn),
+        "POST",
+        f"/v1/assembly/approvals/{held.run_id}",
+        body={"approved": True},
+        headers={"Authorization": f"Bearer {token('approver-1')}"},
+    )
+    assert status == 200 and run["status"] == "succeeded"
+    assert second_executor.calls == 1 and first_executor.calls == 0
+    assert reborn.inbox(kind="contract-approval") == []
+    # And the ORIGINAL service sees the durable truth too: the hold is gone.
+    assert first.inbox(kind="contract-approval") == []
+    conn.close()
+
+
 def test_declining_a_held_contract_removes_it(tmp_path):
     from test_desktop_shell import _identity
 
