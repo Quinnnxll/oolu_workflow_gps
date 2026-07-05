@@ -486,6 +486,10 @@ class DesktopService:
                 )
             )
             self._compiled_holds[pending_id] = (parsed, compiled)
+            self._durable.audit.append(
+                "contract.held",
+                {"pending_id": pending_id, "name": parsed.name, "reserved": reserved},
+            )
             view = AssemblyRunView(run_id=pending_id, status="awaiting_approval")
             if confirm_id:
                 self._confirmed[confirm_id] = view

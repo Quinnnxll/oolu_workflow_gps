@@ -43,6 +43,13 @@ def build_openapi() -> dict:
         "/v1/runs/contract/holds": {
             "get": op("List the caller tenant's held reserved contracts"),
         },
+        "/v1/runs/contract/holds/events": {
+            "get": op(
+                "SSE snapshot of the tenant's hold lifecycle "
+                "(held/approved/declined/expired) — the approver's feed; "
+                "'?after=<seq>' resumes past frames already seen"
+            ),
+        },
         "/v1/runs/contract/holds/{pending_id}": {
             "post": op(
                 "Decide a held reserved contract (requires approver "

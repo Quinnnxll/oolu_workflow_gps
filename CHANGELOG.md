@@ -57,6 +57,16 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- Approver notification — the holds SSE feed:
+  `GET /v1/runs/contract/holds/events` streams the tenant's hold
+  lifecycle so approvers subscribe instead of polling the listing. Same
+  snapshot semantics as the per-run event stream: frames are derived
+  from the audit log (`contract.held` is now audited at hold time on
+  both surfaces, and held/approved/declined/expired payloads carry the
+  tenant), so nothing is invented for the transport and the feed is
+  strictly tenant-scoped. Each frame carries `id: <seq>`; `?after=<seq>`
+  resumes past frames already seen (SSE Last-Event-ID semantics). The
+  request itself sweeps, so an expiry becomes an event, never silence.
 - Hold expiry: a held reserved contract carries an `expires_at` stamped
   at submission (the promise made then — TTL changes never retroactively
   extend old holds). Gateway: `GatewayConfig.contract_hold_ttl_seconds`

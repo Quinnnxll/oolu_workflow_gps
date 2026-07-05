@@ -810,6 +810,97 @@ def test_desktop_holds_expire_on_their_own_clock(tmp_path):
     conn.close()
 
 
+def test_hold_events_feed_notifies_approvers(tmp_path):
+    """The approver's feed: every hold transition (held/approved/declined/
+    expired) surfaces as an SSE frame, tenant-scoped, resumable by seq."""
+    import re
+    from datetime import timedelta
+
+    from test_http_gateway import NOW
+
+    from workflow_gps.gateway.app import GatewayConfig
+    from workflow_gps.gateway.http import Request
+
+    executor = _CliExecutor(("run", "delete_files"))
+    app, conn, ident, registry, *_rest = _build(
+        tmp_path,
+        executors={"cli": executor},
+        config=GatewayConfig(contract_hold_ttl_seconds=60),
+    )
+    _seed_chain(app, ident, registry)
+    consumer = ident.token("consumer", "t2")
+    _grant_approver(ident, "approver-2", "t2")
+    approver = ident.token("approver-2", "t2")
+
+    def feed(token, *, after=None, seconds=0):
+        return app.handle(
+            Request(
+                method="GET",
+                path="/v1/runs/contract/holds/events",
+                headers={"Authorization": f"Bearer {token}"},
+                query={"after": str(after)} if after is not None else {},
+                body=None,
+                now=NOW + timedelta(seconds=seconds),
+            )
+        )
+
+    def hold():
+        resp = app.handle(
+            _req(
+                "POST",
+                "/v1/runs/contract",
+                token=consumer,
+                body={"contract": _destructive()},
+            )
+        )
+        assert resp.status == 202
+        return resp.body["pending_id"]
+
+    first = hold()
+    stream = feed(approver)
+    assert stream.content_type == "text/event-stream"
+    assert "event: contract.held" in stream.body
+    assert first in stream.body and '"name": "wipe it"' in stream.body
+    # Another tenant hears nothing.
+    assert "contract.held" not in feed(ident.token("user", "t1")).body
+
+    # Decline surfaces; ?after= resumes past what was already seen.
+    (held_seq,) = [int(m) for m in re.findall(r"^id: (\d+)$", stream.body, re.M)]
+    app.handle(
+        _req(
+            "POST",
+            f"/v1/runs/contract/holds/{first}",
+            token=approver,
+            body={"approved": False},
+        )
+    )
+    resumed = feed(approver, after=held_seq)
+    assert "contract.held" not in resumed.body
+    assert "event: contract.declined" in resumed.body
+
+    # Approval carries the run id it released.
+    second = hold()
+    ran = app.handle(
+        _req(
+            "POST",
+            f"/v1/runs/contract/holds/{second}",
+            token=approver,
+            body={"approved": True},
+        )
+    )
+    assert ran.status == 200
+    assert f'"run_id": "{ran.body["run_id"]}"' in feed(approver).body
+
+    # Expiry becomes an event, never silence: fetching the feed late
+    # sweeps the stale hold and reports it.
+    third = hold()
+    late = feed(approver, seconds=120)
+    assert f'"pending_id": "{third}"' in late.body
+    assert "event: contract.expired" in late.body
+    assert executor.calls == 1  # only the approved hold ever ran
+    conn.close()
+
+
 def test_hold_decision_still_runs_the_budget_gate(tmp_path):
     """Approval grants the reserved actions, not the money: the submitter's
     review threshold still holds the priced run until acknowledged."""

@@ -97,6 +97,12 @@ from .http import (
 from .openapi import build_openapi
 from .webhooks import WebhookVerifier
 
+# The hold lifecycle as it appears on the audit log — and therefore on the
+# approver's SSE feed. Every transition is one of these; nothing is silent.
+_HOLD_EVENT_TYPES = frozenset(
+    {"contract.held", "contract.approved", "contract.declined", "contract.expired"}
+)
+
 _PAUSE_VALUE = {
     PauseKind.CLARIFICATION: "clarification",
     PauseKind.CONFIRMATION: "confirmation",
@@ -375,6 +381,7 @@ class GatewayApp:
         r.add("POST", "/v1/market/assemble", self._market_assemble)
         r.add("POST", "/v1/runs/contract", self._submit_contract_run)
         r.add("GET", "/v1/runs/contract/holds", self._list_contract_holds)
+        r.add("GET", "/v1/runs/contract/holds/events", self._hold_events)
         r.add(
             "POST",
             "/v1/runs/contract/holds/{pending_id}",
@@ -1064,6 +1071,21 @@ class GatewayApp:
                 )
                 self._compiled_holds[pending_id] = (contract, compiled)
                 self._metrics["contract_holds"] += 1
+                # The event approvers are notified by (the holds SSE
+                # stream is derived from these audit records).
+                self._durable.audit.append(
+                    "contract.held",
+                    {
+                        "pending_id": pending_id,
+                        "tenant": session.tenant_id,
+                        "submitted_by": session.principal_id,
+                        "name": contract.name,
+                        "reserved": reserved,
+                        "expires_at": (
+                            expires_at.isoformat() if expires_at is not None else None
+                        ),
+                    },
+                )
                 return {
                     "pending_id": pending_id,
                     "status": "awaiting_approval",
@@ -1153,11 +1175,46 @@ class GatewayApp:
                 "contract.expired",
                 {
                     "pending_id": record.pending_id,
+                    "tenant": record.consumer_tenant,
                     "submitted_by": record.consumer_principal,
                     "reserved": record.reserved,
                 },
             )
         return {record.pending_id for record in swept}
+
+    def _hold_events(self, request, session, params) -> Response:
+        """SSE snapshot of the tenant's hold lifecycle — the approver's feed.
+
+        Same snapshot semantics as the per-run event stream: derived from
+        the audit log, so held/approved/declined/expired all surface in
+        order and nothing is invented for the transport. Each frame carries
+        ``id: <seq>``; pass ``?after=<seq>`` to resume past what you have
+        already seen (SSE Last-Event-ID semantics). The request itself
+        sweeps, so an expiry becomes an event, never silence.
+        """
+        self._sweep_holds(request)
+        try:
+            after = int(request.query.get("after", "0"))
+        except ValueError as exc:
+            raise GatewayError(
+                400, "invalid_request", "after must be an integer seq"
+            ) from exc
+        frames = []
+        for record in self._durable.audit.records():
+            if record.event_type not in _HOLD_EVENT_TYPES:
+                continue
+            if record.payload.get("tenant") != session.tenant_id:
+                continue
+            if record.seq <= after:
+                continue
+            frames.append(
+                f"id: {record.seq}\nevent: {record.event_type}\ndata: "
+                + json.dumps(record.payload)
+                + "\n"
+            )
+        return Response(
+            status=200, body="\n".join(frames) + "\n", content_type="text/event-stream"
+        )
 
     def _list_contract_holds(self, request, session, params) -> Response:
         """Reserved contracts held for approval — the caller's tenant only."""
@@ -1208,7 +1265,11 @@ class GatewayApp:
             self._compiled_holds.pop(pending_id, None)
             self._durable.audit.append(
                 "contract.declined",
-                {"pending_id": pending_id, "by": session.principal_id},
+                {
+                    "pending_id": pending_id,
+                    "tenant": record.consumer_tenant,
+                    "by": session.principal_id,
+                },
             )
             return json_response(200, {"pending_id": pending_id, "status": "declined"})
         if self._contract_runner is None:
@@ -1287,6 +1348,7 @@ class GatewayApp:
             "contract.approved",
             {
                 "pending_id": pending_id,
+                "tenant": record.consumer_tenant,
                 "run_id": result.run_id,
                 "approval_id": approval.id,
                 "by": session.principal_id,
