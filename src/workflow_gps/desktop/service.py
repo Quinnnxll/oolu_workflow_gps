@@ -18,6 +18,7 @@ go through the approval flow like any other task.
 
 from __future__ import annotations
 
+import random
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -99,6 +100,7 @@ class DesktopService:
         contract_runner=None,  # orchestrator.DagRouteRunner over backend executors
         attribution=None,  # metering.AttributionStore
         trace_store=None,  # knowledge.TraceStore: confirmed runs sharpen picks
+        rng=None,  # random.Random for explore-mode assembly; seedable
     ):
         self._durable = durable
         self._approval = approval_authority
@@ -110,6 +112,7 @@ class DesktopService:
         self._contract_runner = contract_runner
         self._attribution = attribution
         self._trace_store = trace_store
+        self._rng = rng or random.Random()
         self._connections: dict[str, _Connection] = {}
         self._confirmed: dict[str, AssemblyRunView] = {}
 
@@ -300,6 +303,7 @@ class DesktopService:
         have: list[dict[str, Any]] | None = None,
         query: str = "",
         fill_gaps: bool = False,
+        explore: bool = False,
     ) -> AssemblyPreviewView:
         """The assembly screen's data: one call, everything a non-developer
         needs to decide — which nodes were picked, what each costs (with the
@@ -324,6 +328,9 @@ class DesktopService:
             # Picks carry this desktop's own confirmed-run history on top
             # of platform-verified counts (single user: the global bucket).
             trace_store=self._trace_store,
+            # explore: Thompson-sample picks so unproven alternatives get
+            # real chances proportional to their remaining uncertainty.
+            rng=self._rng if explore else None,
         )
         return AssemblyPreviewView(
             goal=goal,

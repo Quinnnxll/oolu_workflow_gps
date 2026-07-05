@@ -57,6 +57,17 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- Thompson-sampled assembly (`explore: true`): `preview_assembly` accepts
+  an `rng` and passes it to `ContractAssembler`, so producer picks are
+  sampled from the same personalized Beta posteriors instead of taken
+  greedily — unproven alternatives get chances proportional to their
+  remaining uncertainty, and exploration collapses onto the winner as
+  confirmed runs accumulate. Opt-in per request: `explore: true` on
+  `POST /v1/market/assemble` and on the desktop's
+  `POST /v1/assembly/preview` (`DesktopService.assembly_preview(...,
+  explore=True)`); the default stays deterministic (best posterior mean,
+  stable tie-breaks) — the right mode for a preview the user is about to
+  pay for. The gateway and shell hold a seedable `rng` (ctor param).
 - Confirmed runs feed the TraceStore: `execute_contract` accepts a
   `trace_store` (+ `trace_context`) and records one node-granular trace
   per run — each top-level child's verdict (a child succeeds only if

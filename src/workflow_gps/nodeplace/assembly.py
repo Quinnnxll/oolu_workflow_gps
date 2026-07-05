@@ -11,6 +11,8 @@ the same numbers from the same math.
 
 from __future__ import annotations
 
+import random
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..billing.pricing import PricingEngine
@@ -97,6 +99,7 @@ def preview_assembly(
     fill_gaps: bool = False,
     trace_store: TraceStore | None = None,
     trace_context: str = "",
+    rng: random.Random | None = None,
 ) -> AssemblyPreview:
     """Assemble a goal over the marketplace and price the plan, read-only.
 
@@ -104,6 +107,14 @@ def preview_assembly(
     caller's own confirmed-run history on top of platform-verified counts —
     so every executed contract sharpens the next assembly, per
     ``trace_context`` bucket (e.g. per tenant).
+
+    With an ``rng``, producer picks are Thompson-sampled from those same
+    posteriors instead of taken greedily: unproven alternatives get real
+    chances in proportion to how uncertain their quality still is, and the
+    exploration collapses onto the winner as confirmed runs accumulate.
+    Without one, picks are deterministic (best posterior mean, stable
+    tie-breaks) — the right default for a preview the user is about to pay
+    for.
     """
     marketplace = assembler.contracts(query)
     by_id = {entry.contract.id: entry for entry in marketplace}
@@ -112,6 +123,7 @@ def preview_assembly(
         library = [_personalize(c, trace_store, trace_context) for c in library]
     result = ContractAssembler(
         library,
+        rng=rng,
         fill_gaps_with_scripts=fill_gaps,
     ).assemble(goal)
 

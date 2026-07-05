@@ -79,6 +79,7 @@ class DesktopLoopbackApp:
                     have=list(body.get("have", [])),
                     query=str(body.get("q", "")),
                     fill_gaps=bool(body.get("fill_gaps", False)),
+                    explore=bool(body.get("explore", False)),
                 )
             except (ValueError, TypeError) as exc:
                 raise _BadRequest(str(exc)) from exc

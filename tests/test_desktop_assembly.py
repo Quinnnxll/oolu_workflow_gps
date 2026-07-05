@@ -94,6 +94,16 @@ def test_loopback_route_serves_the_preview(tmp_path):
     assert body["contract"] is not None
     assert {s["name"] for s in body["steps"]} == {"raw exporter", "invoice cleaner"}
 
+    # explore=true Thompson-samples the picks; with a single producer per
+    # slot the plan is the same — the flag just must flow through cleanly.
+    status, explored = _call(
+        app,
+        "POST",
+        "/v1/assembly/preview",
+        body={"goal": "clean-the-books", "want": [TIDY], "explore": True},
+    )
+    assert status == 200 and explored["complete"] is True
+
     status, _err = _call(app, "POST", "/v1/assembly/preview", body={"goal": "x"})
     assert status == 400  # want is required
 

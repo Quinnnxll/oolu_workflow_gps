@@ -53,7 +53,7 @@ class _CliExecutor:
         return None
 
 
-def _build(tmp_path, *, executors=None, trace_store=None):
+def _build(tmp_path, *, executors=None, trace_store=None, rng=None):
     base, conn, ident = _app(tmp_path)
     registry = RegistryStore(conn)
     metering = MeteringLedger(conn)
@@ -77,6 +77,7 @@ def _build(tmp_path, *, executors=None, trace_store=None):
         attribution=attribution,
         contract_executors=executors,
         trace_store=trace_store,
+        rng=rng,
     )
     return app, conn, ident, registry, metering, attribution, audit
 
@@ -303,6 +304,84 @@ def test_personal_history_flips_the_assembly_pick(tmp_path):
         )
     )
     assert "backup cleaner" in set(other.body["selected"])
+    traces.close()
+    conn.close()
+
+
+def test_explore_thompson_samples_assembly_picks(tmp_path):
+    """explore=true samples producer picks from the posteriors: with no
+    history both alternatives get tried; with history the winner dominates
+    — and without the flag, picks stay deterministic."""
+    import random
+
+    from workflow_gps.knowledge.traces import (
+        NodeObservation,
+        TraceStore,
+        route_node_key,
+    )
+
+    traces = TraceStore(tmp_path / "traces.db")
+    app, conn, ident, registry, *_rest = _build(
+        tmp_path, trace_store=traces, rng=random.Random(7)
+    )
+    _seed_chain(app, ident, registry)
+    _contribute_and_publish(
+        app,
+        ident,
+        registry,
+        name="backup cleaner",
+        noder="noder-backup",
+        price=0.20,
+        consumes=[RAW],
+        produces=[TIDY],
+    )
+    cleaners = {"invoice cleaner", "backup cleaner"}
+
+    def pick(explore):
+        resp = app.handle(
+            _req(
+                "POST",
+                "/v1/market/assemble",
+                token=ident.token("consumer", "t2"),
+                body={
+                    "goal": {"name": "clean-the-books", "want": [TIDY]},
+                    "q": "invoice",
+                    "explore": explore,
+                },
+            )
+        )
+        assert resp.status == 200, resp.body
+        (chosen,) = cleaners & set(resp.body["selected"])
+        return chosen
+
+    # Deterministic by default: the same pick, every time.
+    assert len({pick(explore=False) for _ in range(5)}) == 1
+
+    # No history yet: exploration gives both alternatives real chances.
+    unproven_picks = [pick(explore=True) for _ in range(20)]
+    assert set(unproven_picks) == cleaners
+
+    # History accumulates (as confirmed runs would record it): exploration
+    # collapses onto the proven producer.
+    for run in range(8):
+        traces.record_run(
+            goal="clean-the-books",
+            steps=[
+                NodeObservation(node_key=route_node_key("invoice cleaner"), ok=True),
+            ],
+            success=True,
+            context="t2",
+        )
+        traces.record_run(
+            goal="clean-the-books",
+            steps=[
+                NodeObservation(node_key=route_node_key("backup cleaner"), ok=False),
+            ],
+            success=False,
+            context="t2",
+        )
+    proven_picks = [pick(explore=True) for _ in range(20)]
+    assert proven_picks.count("invoice cleaner") >= 18
     traces.close()
     conn.close()
 

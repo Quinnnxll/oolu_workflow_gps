@@ -86,7 +86,9 @@ def build_openapi() -> dict:
             "post": op(
                 "Assemble a workflow from a goal's wanted slots via the "
                 "marketplace's slot vocabularies (planning preview with "
-                "lineage-aware payout previews; read-only)"
+                "lineage-aware payout previews; read-only). Picks are "
+                "greedy-by-posterior by default; 'explore: true' "
+                "Thompson-samples them from the caller's own run history"
             ),
         },
         "/v1/earnings": {"get": op("The caller's own earnings balance")},

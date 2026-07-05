@@ -13,6 +13,7 @@ database see one consistent set of runs.
 from __future__ import annotations
 
 import json
+import random
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -154,6 +155,7 @@ class GatewayApp:
         attribution: AttributionStore | None = None,
         contract_executors: dict[str, ActionExecutor] | None = None,
         trace_store: TraceStore | None = None,
+        rng: random.Random | None = None,
         payout_store: PayoutStore | None = None,
         payout_adapter: PayoutAdapter | None = None,
         disputes: DisputeService | None = None,
@@ -177,6 +179,9 @@ class GatewayApp:
         # contract child), not in the runner — attaching the store to the
         # runner too would double-count the whole-route outcome.
         self._trace_store = trace_store
+        # Thompson sampling for explore-mode assembly; injectable so tests
+        # (and reproducibility-minded operators) can seed it.
+        self._rng = rng or random.Random()
         self._payout_store = payout_store
         self._payout_adapter = payout_adapter
         self._disputes = disputes
@@ -932,6 +937,9 @@ class GatewayApp:
             # platform-verified counts — personalized per tenant bucket.
             trace_store=self._trace_store,
             trace_context=session.tenant_id,
+            # explore: Thompson-sample producer picks from those posteriors
+            # instead of taking the greedy best — opt-in per request.
+            rng=self._rng if bool(body.get("explore", False)) else None,
         )
         return json_response(200, preview.model_dump(mode="json"))
 
