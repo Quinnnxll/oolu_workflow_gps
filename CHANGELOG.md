@@ -57,6 +57,19 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- Desktop UI scaffolding (`desktop/ui.py`, served by the loopback at
+  `GET /`): one self-contained page — plain HTML + vanilla JS, no build
+  step — over the same loopback endpoints the tests drive, so the page
+  can never do anything the API cannot. Four screens: **Assemble** (goal
+  + slots + budget knobs + explore/fill-gaps, preview with per-step
+  prices/payouts, learned orderings, and the budget verdict; confirm
+  with review acknowledgement, rendering held-for-approval outcomes),
+  **Tasks** (submit + session task table), **Inbox** (all pause kinds;
+  contract-approval items get approve/decline buttons using a bearer
+  token held in page memory only — every decision is verified
+  server-side), and **Health**. Light/dark aware, XSS-escaped rendering.
+  Tests pin the page's wiring to the real routes and syntax-check the
+  inline script with node (skipped where node is absent).
 - Hardening passes: property-style fuzzing of the money invariants and
   concurrency stress on the shared stores (no new dependencies — seeded
   `random`, explicit seeds, failures replay exactly). The money machine

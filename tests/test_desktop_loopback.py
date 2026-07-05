@@ -146,6 +146,84 @@ def test_worker_health_and_offline_policy(tmp_path):
         rt.close()
 
 
+def _call_raw(app, method, path):
+    scope = {
+        "type": "http",
+        "method": method,
+        "path": path,
+        "query_string": b"",
+        "headers": [],
+    }
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    sent: list[dict] = []
+
+    async def send(m):
+        sent.append(m)
+
+    asyncio.run(app(scope, receive, send))
+    start = next(m for m in sent if m["type"] == "http.response.start")
+    headers = {k.decode(): v.decode() for k, v in start.get("headers", [])}
+    body = b"".join(
+        m.get("body", b"") for m in sent if m["type"] == "http.response.body"
+    )
+    return start["status"], headers, body.decode("utf-8")
+
+
+def test_scaffold_ui_is_served_at_the_root(tmp_path):
+    """GET / serves the self-contained shell page — and the page only
+    speaks routes this same loopback actually has."""
+    rt = _runtime(tmp_path)
+    app = DesktopLoopbackApp(rt.desktop)
+    try:
+        status, headers, body = _call_raw(app, "GET", "/")
+        assert status == 200
+        assert headers["content-type"].startswith("text/html")
+        assert "Workflow-GPS" in body
+        # The scaffold stays honest to the API it fronts.
+        for route in (
+            "/v1/assembly/preview",
+            "/v1/assembly/confirm",
+            "/v1/assembly/approvals/",
+            "/v1/tasks",
+            "/v1/inbox",
+            "/v1/worker-health",
+        ):
+            assert route in body, f"UI lost its wiring to {route}"
+
+        # /index.html is the same page; the JSON API is untouched by it.
+        assert _call_raw(app, "GET", "/index.html")[0] == 200
+        status, _view = _call(app, "GET", "/v1/inbox")
+        assert status == 200
+        status, _err = _call(app, "POST", "/")  # only GET serves the page
+        assert status == 404
+    finally:
+        rt.close()
+
+
+def test_ui_script_is_valid_javascript(tmp_path):
+    """The scaffold's inline script must at least parse — template edits
+    that break the page fail here, not in a user's browser."""
+    import re
+    import shutil
+    import subprocess
+
+    import pytest
+
+    from workflow_gps.desktop.ui import INDEX_HTML
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not available to syntax-check the UI script")
+    script = re.search(r"<script>\n(.*?)</script>", INDEX_HTML, re.S).group(1)
+    path = tmp_path / "ui.js"
+    path.write_text(script)
+    check = subprocess.run([node, "--check", str(path)], capture_output=True, text=True)
+    assert check.returncode == 0, check.stderr
+
+
 def test_websocket_streams_timeline(tmp_path):
     rt = _runtime(tmp_path)
     app = DesktopLoopbackApp(rt.desktop)

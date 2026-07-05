@@ -8,6 +8,7 @@ from urllib.parse import parse_qs
 
 from ..identity.errors import AuthenticationError, AuthorizationError
 from .service import DesktopService
+from .ui import INDEX_HTML
 
 # The desktop UI binds here over 127.0.0.1 only. This is the loopback boundary
 # ADR-0004 names: secret-free view-models, no execution path, and NO auth — the
@@ -40,6 +41,10 @@ class DesktopLoopbackApp:
             raise RuntimeError(f"unsupported scope type: {scope['type']}")
 
         method, path = scope["method"], scope["path"]
+        if method == "GET" and path in ("/", "/index.html"):
+            # The scaffold UI: one self-contained page over this same API.
+            await _send_html(send, INDEX_HTML)
+            return
         query = {
             k: v[0]
             for k, v in parse_qs(
@@ -259,6 +264,21 @@ async def _read_json(receive):
     except ValueError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+async def _send_html(send, body: str):
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [
+                (b"content-type", b"text/html; charset=utf-8"),
+                (b"x-content-type-options", b"nosniff"),
+                (b"cache-control", b"no-store"),
+            ],
+        }
+    )
+    await send({"type": "http.response.body", "body": body.encode("utf-8")})
 
 
 async def _send_json(send, status, payload):
