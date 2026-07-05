@@ -80,6 +80,8 @@ class DesktopLoopbackApp:
                     query=str(body.get("q", "")),
                     fill_gaps=bool(body.get("fill_gaps", False)),
                     explore=bool(body.get("explore", False)),
+                    budget_cap=_maybe_float(body.get("budget_cap")),
+                    review_threshold=_maybe_float(body.get("review_threshold")),
                 )
             except (ValueError, TypeError) as exc:
                 raise _BadRequest(str(exc)) from exc
@@ -90,9 +92,14 @@ class DesktopLoopbackApp:
                 raise _BadRequest("a contract object is required")
             confirm_id = str(body.get("confirm_id") or "") or None
             try:
-                # PermissionError (reserved actions) propagates -> 403.
+                # PermissionError propagates -> 403 (reserved actions,
+                # budget caps, unacknowledged review reasons alike).
                 view = self._svc.confirm_assembly(
-                    body["contract"], confirm_id=confirm_id
+                    body["contract"],
+                    confirm_id=confirm_id,
+                    budget_cap=_maybe_float(body.get("budget_cap")),
+                    review_threshold=_maybe_float(body.get("review_threshold")),
+                    review_acknowledged=bool(body.get("review_acknowledged", False)),
                 )
             except (ValueError, TypeError) as exc:
                 raise _BadRequest(str(exc)) from exc
@@ -177,6 +184,15 @@ class DesktopLoopbackApp:
 
 class _BadRequest(Exception):
     pass
+
+
+def _maybe_float(value) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise _BadRequest(f"not a number: {value!r}") from exc
 
 
 def _skill_card(entry, *, score=None):

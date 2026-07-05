@@ -57,6 +57,27 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- Cost-aware assembly budgets (`nodeplace.budget`): three signals with
+  three authorities judge an assembled plan's estimated cost. A
+  caller-set `hard_cap` refuses outright (`BudgetExceededError` -> 402
+  `budget_exceeded`; no acknowledgement overrides it); a user-set
+  `review_threshold` holds the run (`ReviewRequiredError` -> 409
+  `review_required`) until `review_acknowledged: true`; and a
+  **behavioral comfort ceiling** learned from the user's own committed
+  run grosses (`AttributionStore.consumer_spend`; review above BOTH
+  median x multiplier AND their demonstrated peak, never judged on
+  fewer than 3 runs) flags outliers even with no declared budget.
+  The linked wallet is deliberately the weakest signal — its balance may
+  be a slice of the user's true assets, so it NEVER caps or scales the
+  budget: an estimate above the remaining balance only adds a review
+  reason, and a large balance grants nothing. Estimation
+  (`estimate_contract_gross`) clears in preview mode, so the gate runs
+  BEFORE any price commits or binding writes. Reasons accumulate across
+  all signals like quote warnings. Wired everywhere: verdicts ride
+  `/v1/market/assemble` and the desktop preview (`budget` field, from a
+  `budget` request object / `budget_cap` + `review_threshold` params);
+  enforcement guards `POST /v1/runs/contract` and the desktop confirm
+  (403 at the loopback); `wallet_lookup` ctor hooks on both surfaces.
 - Trace-derived learned orderings in assembled subgraphs: when the
   caller's own runs consistently completed one child before another
   (`TraceStore.derive_edges`: enough observations, one direction nearly

@@ -177,6 +177,9 @@ class AssemblyPreviewView(BaseModel):
     # Orderings this desktop's own runs consistently exhibited, already
     # stamped onto the contract as learned edges the run will honor.
     learned_order: list[dict[str, str]] = Field(default_factory=list)
+    # The plan's cost judged against caps, thresholds, this desktop's own
+    # spending behavior, and the (possibly partial) linked wallet.
+    budget: dict[str, Any] | None = None
 
 
 class AssemblyRunStepView(BaseModel):

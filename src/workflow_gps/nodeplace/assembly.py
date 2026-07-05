@@ -26,6 +26,7 @@ from ..skills.contract import (
     SubgraphBody,
     derive_data_edges,
 )
+from .budget import BudgetPolicy, BudgetVerdict, assess_budget
 from .economics import CandidateAssembler
 from .market import PriceBook
 from .rewards import commission_rate, lineage_shares, reward_multiplier
@@ -71,6 +72,9 @@ class AssemblyPreview(BaseModel):
     # Orderings the caller's own runs consistently exhibited, stamped onto
     # the contract as learned edges: [{"first": name, "then": name}, ...].
     learned_order: list[dict[str, str]] = Field(default_factory=list)
+    # The plan's cost judged against caps, thresholds, spending behavior,
+    # and the (possibly partial) linked wallet.
+    budget: BudgetVerdict | None = None
 
 
 def _personalize(
@@ -163,6 +167,9 @@ def preview_assembly(
     trace_store: TraceStore | None = None,
     trace_context: str = "",
     rng: random.Random | None = None,
+    budget: BudgetPolicy | None = None,
+    spend_history: list[float] | None = None,
+    wallet_balance: float | None = None,
 ) -> AssemblyPreview:
     """Assemble a goal over the marketplace and price the plan, read-only.
 
@@ -264,4 +271,10 @@ def preview_assembly(
         estimated_gross_total=gross_total,
         platform_margin_preview=margin_total,
         learned_order=learned_order,
+        budget=assess_budget(
+            gross_total,
+            policy=budget,
+            spend_history=spend_history,
+            wallet_balance=wallet_balance,
+        ),
     )

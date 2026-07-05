@@ -257,6 +257,54 @@ def test_confirmed_runs_feed_the_trace_store_and_the_next_preview(tmp_path):
     conn.close()
 
 
+def test_desktop_budget_gates_the_confirm_button(tmp_path):
+    """The preview shows the verdict; the confirm enforces it — a review
+    threshold holds the run at 403 until acknowledged, and the (possibly
+    partial) linked wallet asks for review without ever refusing."""
+    executor = _CliExecutor()
+    app, conn, ident, registry, metering, attribution, audit = _build(tmp_path)
+    _seed_market(app, ident, registry)
+    svc = DesktopService(
+        app._durable,
+        market=app._market,
+        price_book=app._price_book,
+        contract_runner=DagRouteRunner({"cli": executor}),
+        attribution=attribution,
+        wallet_lookup=lambda: 0.001,  # a sliver of the user's true assets
+    )
+    loop = DesktopLoopbackApp(svc)
+
+    preview = svc.assembly_preview(
+        goal="clean-the-books", want=[TIDY], review_threshold=0.01
+    )
+    assert preview.budget is not None
+    assert preview.budget["needs_review"] is True
+    reasons = " ".join(preview.budget["reasons"])
+    assert "review threshold" in reasons and "may be partial" in reasons
+
+    status, body = _call(
+        loop,
+        "POST",
+        "/v1/assembly/confirm",
+        body={"contract": preview.contract, "review_threshold": 0.01},
+    )
+    assert status == 403 and executor.calls == 0  # held for review
+
+    status, run = _call(
+        loop,
+        "POST",
+        "/v1/assembly/confirm",
+        body={
+            "contract": preview.contract,
+            "review_threshold": 0.01,
+            "review_acknowledged": True,
+        },
+    )
+    assert status == 200 and run["status"] == "succeeded"
+    assert executor.calls == 2  # the wallet informed; it never blocked
+    conn.close()
+
+
 def test_confirm_without_runner_returns_not_found(tmp_path):
     _app, svc, conn, *_rest = _desktop(tmp_path)  # market yes, runner no
     status, _body = _call(

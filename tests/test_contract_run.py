@@ -53,7 +53,7 @@ class _CliExecutor:
         return None
 
 
-def _build(tmp_path, *, executors=None, trace_store=None, rng=None):
+def _build(tmp_path, *, executors=None, trace_store=None, rng=None, wallet_lookup=None):
     base, conn, ident = _app(tmp_path)
     registry = RegistryStore(conn)
     metering = MeteringLedger(conn)
@@ -78,6 +78,7 @@ def _build(tmp_path, *, executors=None, trace_store=None, rng=None):
         contract_executors=executors,
         trace_store=trace_store,
         rng=rng,
+        wallet_lookup=wallet_lookup,
     )
     return app, conn, ident, registry, metering, attribution, audit
 

@@ -37,6 +37,8 @@ from ..identity.tokens import OidcValidator
 from ..knowledge.traces import TraceStore
 from ..metering.attribution import AttributionStore
 from ..nodeplace import (
+    BudgetExceededError,
+    BudgetPolicy,
     CandidateAssembler,
     ConsumerAccount,
     ContributionError,
@@ -49,12 +51,16 @@ from ..nodeplace import (
     RatingError,
     RatingService,
     ReservedActionsError,
+    ReviewRequiredError,
     StepCandidates,
     SubscriptionPlan,
     UnverifiedRunError,
     Visibility,
+    assess_budget,
     build_run_binding,
     compile_runnable,
+    enforce_budget,
+    estimate_contract_gross,
     execute_contract,
     preview_assembly,
     reward_multiplier,
@@ -156,6 +162,7 @@ class GatewayApp:
         contract_executors: dict[str, ActionExecutor] | None = None,
         trace_store: TraceStore | None = None,
         rng: random.Random | None = None,
+        wallet_lookup: Callable[[str, str], float | None] | None = None,
         payout_store: PayoutStore | None = None,
         payout_adapter: PayoutAdapter | None = None,
         disputes: DisputeService | None = None,
@@ -182,6 +189,10 @@ class GatewayApp:
         # Thompson sampling for explore-mode assembly; injectable so tests
         # (and reproducibility-minded operators) can seed it.
         self._rng = rng or random.Random()
+        # (tenant, principal) -> the LINKED wallet's remaining balance, or
+        # None. A partial view of the user's assets by design: budgets never
+        # cap on it, they only flag it for review.
+        self._wallet_lookup = wallet_lookup
         self._payout_store = payout_store
         self._payout_adapter = payout_adapter
         self._disputes = disputes
@@ -940,8 +951,37 @@ class GatewayApp:
             # explore: Thompson-sample producer picks from those posteriors
             # instead of taking the greedy best — opt-in per request.
             rng=self._rng if bool(body.get("explore", False)) else None,
+            budget=self._budget_policy(body),
+            spend_history=self._spend_history(session),
+            wallet_balance=self._wallet_balance(session),
         )
         return json_response(200, preview.model_dump(mode="json"))
+
+    # ------------------------------------------------------------------ #
+    # Budget signals: what the caller declared, what the user has done,   #
+    # and what the (possibly partial) linked wallet holds.                #
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _budget_policy(body: dict) -> BudgetPolicy | None:
+        raw = body.get("budget")
+        if raw is None:
+            return None
+        if not isinstance(raw, dict):
+            raise GatewayError(400, "invalid_request", "budget must be an object")
+        try:
+            return BudgetPolicy.model_validate(raw)
+        except Exception as exc:
+            raise GatewayError(400, "invalid_request", f"bad budget: {exc}") from exc
+
+    def _spend_history(self, session) -> list[float] | None:
+        if self._attribution is None:
+            return None
+        return self._attribution.consumer_spend(session.tenant_id, session.principal_id)
+
+    def _wallet_balance(self, session) -> float | None:
+        if self._wallet_lookup is None:
+            return None
+        return self._wallet_lookup(session.tenant_id, session.principal_id)
 
     def _submit_contract_run(self, request, session, params) -> Response:
         """Execute an assembled contract directly, with multi-node binding.
@@ -976,6 +1016,25 @@ class GatewayApp:
         except ValueError as exc:
             raise GatewayError(400, "invalid_request", str(exc)) from exc
 
+        # Budget gate BEFORE anything commits: estimate in preview mode,
+        # judge it against the cap, the review threshold, the tenant's own
+        # spending behavior, and the (possibly partial) linked wallet.
+        verdict = assess_budget(
+            estimate_contract_gross(contract, assembler=assembler, price_book=book),
+            policy=self._budget_policy(body),
+            spend_history=self._spend_history(session),
+            wallet_balance=self._wallet_balance(session),
+        )
+        try:
+            enforce_budget(
+                verdict,
+                review_acknowledged=bool(body.get("review_acknowledged", False)),
+            )
+        except BudgetExceededError as exc:
+            raise GatewayError(402, "budget_exceeded", str(exc)) from exc
+        except ReviewRequiredError as exc:
+            raise GatewayError(409, "review_required", str(exc)) from exc
+
         def submit() -> dict:
             result = execute_contract(
                 contract,
@@ -991,7 +1050,9 @@ class GatewayApp:
                 trace_context=session.tenant_id,
             )
             self._metrics["contract_runs"] += 1
-            return result.model_dump(mode="json")
+            payload = result.model_dump(mode="json")
+            payload["budget"] = verdict.model_dump(mode="json")
+            return payload
 
         key = request.header("idempotency-key")
         result = (

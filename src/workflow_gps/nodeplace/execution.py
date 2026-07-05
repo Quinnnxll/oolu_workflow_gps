@@ -93,6 +93,39 @@ def compile_runnable(contract: NodeContract) -> CompiledContract:
     return CompiledContract(blueprint=blueprint, owners=owners)
 
 
+def estimate_contract_gross(
+    contract: NodeContract,
+    *,
+    assembler: CandidateAssembler,
+    price_book: PriceBook,
+) -> float:
+    """What this contract would cost to run, without committing anything.
+
+    The same per-child clearing the run performs, in preview mode — so a
+    budget can be enforced BEFORE any price moves the market or any
+    binding is written.
+    """
+    children = (
+        contract.body.nodes if isinstance(contract.body, SubgraphBody) else [contract]
+    )
+    total = 0.0
+    for child in children:
+        entry = assembler.assemble_version(child.id)
+        if entry is None:
+            continue
+        candidate, signals = entry.candidate, entry.signals
+        cleared = price_book.clear(
+            class_key=candidate.class_key,
+            node_class=candidate.node_class,
+            ask=candidate.cleared_price,
+            cost=candidate.cost,
+            substitutes=signals.substitutes,
+            commit=False,  # an estimate must not move the market
+        )
+        total += cleared.cleared
+    return total
+
+
 def execute_contract(
     contract: NodeContract,
     compiled: CompiledContract,

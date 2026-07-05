@@ -101,6 +101,7 @@ class DesktopService:
         attribution=None,  # metering.AttributionStore
         trace_store=None,  # knowledge.TraceStore: confirmed runs sharpen picks
         rng=None,  # random.Random for explore-mode assembly; seedable
+        wallet_lookup=None,  # () -> the LINKED wallet's remaining balance | None
     ):
         self._durable = durable
         self._approval = approval_authority
@@ -113,6 +114,9 @@ class DesktopService:
         self._attribution = attribution
         self._trace_store = trace_store
         self._rng = rng or random.Random()
+        # A partial view of the user's assets by design: budgets never cap
+        # on the linked balance, they only flag it for review.
+        self._wallet_lookup = wallet_lookup
         self._connections: dict[str, _Connection] = {}
         self._confirmed: dict[str, AssemblyRunView] = {}
 
@@ -304,6 +308,8 @@ class DesktopService:
         query: str = "",
         fill_gaps: bool = False,
         explore: bool = False,
+        budget_cap: float | None = None,
+        review_threshold: float | None = None,
     ) -> AssemblyPreviewView:
         """The assembly screen's data: one call, everything a non-developer
         needs to decide — which nodes were picked, what each costs (with the
@@ -316,6 +322,7 @@ class DesktopService:
         # Imported lazily so a shell without marketplace features never pays
         # the nodeplace import.
         from ..nodeplace.assembly import preview_assembly
+        from ..nodeplace.budget import BudgetPolicy
         from ..orchestrator.assembler import GoalSpec
 
         spec = GoalSpec.model_validate({"name": goal, "want": want, "have": have or []})
@@ -331,6 +338,9 @@ class DesktopService:
             # explore: Thompson-sample picks so unproven alternatives get
             # real chances proportional to their remaining uncertainty.
             rng=self._rng if explore else None,
+            budget=BudgetPolicy(hard_cap=budget_cap, review_threshold=review_threshold),
+            spend_history=self._spend_history(),
+            wallet_balance=self._wallet_balance(),
         )
         return AssemblyPreviewView(
             goal=goal,
@@ -361,10 +371,29 @@ class DesktopService:
                 else None
             ),
             learned_order=list(preview.learned_order),
+            budget=(
+                preview.budget.model_dump(mode="json")
+                if preview.budget is not None
+                else None
+            ),
         )
 
+    def _spend_history(self) -> list[float] | None:
+        if self._attribution is None:
+            return None
+        return self._attribution.consumer_spend("local", "desktop")
+
+    def _wallet_balance(self) -> float | None:
+        return self._wallet_lookup() if self._wallet_lookup is not None else None
+
     def confirm_assembly(
-        self, contract: dict[str, Any], *, confirm_id: str | None = None
+        self,
+        contract: dict[str, Any],
+        *,
+        confirm_id: str | None = None,
+        budget_cap: float | None = None,
+        review_threshold: float | None = None,
+        review_acknowledged: bool = False,
     ) -> AssemblyRunView:
         """The confirm button: run the contract the preview returned.
 
@@ -388,11 +417,33 @@ class DesktopService:
             return self._confirmed[confirm_id]
         # Imported lazily so a shell without marketplace features never pays
         # the nodeplace import.
-        from ..nodeplace.execution import compile_runnable, execute_contract
+        from ..nodeplace.budget import BudgetPolicy, assess_budget, enforce_budget
+        from ..nodeplace.execution import (
+            compile_runnable,
+            estimate_contract_gross,
+            execute_contract,
+        )
         from ..skills.contract import NodeContract
 
         parsed = NodeContract.model_validate(contract)
         compiled = compile_runnable(parsed)
+        # Budget gate BEFORE anything commits: a cap refuses outright;
+        # review reasons (threshold, spending behavior, a linked wallet
+        # that may only be partial) block until explicitly acknowledged.
+        # Both raise PermissionError subclasses -> 403 at the loopback.
+        enforce_budget(
+            assess_budget(
+                estimate_contract_gross(
+                    parsed, assembler=self._market, price_book=self._price_book
+                ),
+                policy=BudgetPolicy(
+                    hard_cap=budget_cap, review_threshold=review_threshold
+                ),
+                spend_history=self._spend_history(),
+                wallet_balance=self._wallet_balance(),
+            ),
+            review_acknowledged=review_acknowledged,
+        )
         result = execute_contract(
             parsed,
             compiled,

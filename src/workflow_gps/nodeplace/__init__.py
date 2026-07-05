@@ -4,6 +4,15 @@ from .assembly import (
     PayoutPreviewEntry,
     preview_assembly,
 )
+from .budget import (
+    BudgetExceededError,
+    BudgetPolicy,
+    BudgetVerdict,
+    ReviewRequiredError,
+    SpendingProfile,
+    assess_budget,
+    enforce_budget,
+)
 from .economics import (
     AssembledCandidate,
     CandidateAssembler,
@@ -27,6 +36,7 @@ from .execution import (
     ContractRunResult,
     ReservedActionsError,
     compile_runnable,
+    estimate_contract_gross,
     execute_contract,
 )
 from .market import (
@@ -89,6 +99,9 @@ from .service import ContributionResult, NodeplaceService
 from .store import RegistryStore
 
 __all__ = [
+    "BudgetExceededError",
+    "BudgetPolicy",
+    "BudgetVerdict",
     "CLASS_COMMISSION",
     "DEFAULT_POLICIES",
     "MODE_WEIGHTS",
@@ -141,20 +154,25 @@ __all__ = [
     "RatingStore",
     "RegistryStore",
     "ReservedActionsError",
+    "ReviewRequiredError",
     "RewardBreakdown",
     "RewardSignals",
     "SafetyReport",
     "SafetyViolation",
+    "SpendingProfile",
     "StepCandidates",
     "StepQuote",
     "SubscriptionPlan",
     "UnverifiedRunError",
     "Visibility",
     "WorkflowQuote",
+    "assess_budget",
     "build_run_binding",
     "commission_rate",
     "compile_runnable",
     "competition_index",
+    "enforce_budget",
+    "estimate_contract_gross",
     "estimate_user_value",
     "execute_contract",
     "gross_from_policy",
