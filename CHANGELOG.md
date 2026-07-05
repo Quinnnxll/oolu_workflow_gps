@@ -4,6 +4,32 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Thompson v2 — the learning loop gets honest about time, money, and proof:
+
+- `TraceStore` gained `recency_decay` (default 1.0 = today's exact
+  counting): every fresh observation of a node first discounts its
+  existing counts, so the posterior tracks what the node has done
+  *lately* — a node that regressed last month stops looking as good as
+  ever, old glory fades into honest uncertainty, and Thompson sampling
+  re-explores it. Posterior (and `NodeStats`) counts are floats now.
+- `ContractAssembler` (and previews on both surfaces, via `cost_weight`
+  in the request body) can rank picks by expected **utility** — quality
+  minus weighted personal cost — instead of quality alone, so a
+  slightly-less-proven cheap node can honestly beat a proven expensive
+  one, by exactly the trade the caller declared. Default 0 keeps cost a
+  tie-break, unchanged.
+- Previews now report `expected_success`: the plan's chance of verified
+  success in the caller's own hands (product of picked nodes' posterior
+  means over the personalized library; gap nodes count at their uniform
+  prior 0.5). Shown on the desktop assemble screen.
+- Added `knowledge.replay`: an offline harness where planner strategies
+  audition before they ship. `ReplayWorld`s (fittable from recorded
+  history via `from_trace_store`) run in drift-modeling phases,
+  `PosteriorStrategy` replays the assembler's exact pick math with its
+  own private trace store, and every strategy sees the same seeded
+  outcome stream — reports compare decisions, not luck. Pinned in tests:
+  decay adapts to drift faster, cost-awareness buys success cheaper.
+
 - Added the `ProposalModel` seam to `ContractAssembler`: a model may weigh
   in on contested producer picks, but only as a **prior** — its `[0, 1]`
   weights enter the same Beta posterior verified history feeds, as

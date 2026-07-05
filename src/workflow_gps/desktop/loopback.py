@@ -102,6 +102,7 @@ class DesktopLoopbackApp:
                     query=str(body.get("q", "")),
                     fill_gaps=bool(body.get("fill_gaps", False)),
                     explore=bool(body.get("explore", False)),
+                    cost_weight=float(body.get("cost_weight", 0.0)),
                     budget_cap=_maybe_float(body.get("budget_cap")),
                     review_threshold=_maybe_float(body.get("review_threshold")),
                 )

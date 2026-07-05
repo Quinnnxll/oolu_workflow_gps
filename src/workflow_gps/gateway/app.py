@@ -984,6 +984,7 @@ class GatewayApp:
             # A model's opinion enters picks as a prior; what the advice
             # cost rides the preview and the budget verdict below.
             proposal_model=self._proposal_model,
+            cost_weight=self._cost_weight(body),
             budget=self._budget_policy(body),
             spend_lookup=lambda goal_class: self._spend_history(session, goal_class),
             wallet_balance=self._wallet_balance(session),
@@ -994,6 +995,19 @@ class GatewayApp:
     # Budget signals: what the caller declared, what the user has done,   #
     # and what the (possibly partial) linked wallet holds.                #
     # ------------------------------------------------------------------ #
+    @staticmethod
+    def _cost_weight(body: dict) -> float:
+        raw = body.get("cost_weight", 0.0)
+        try:
+            weight = float(raw)
+        except (TypeError, ValueError):
+            raise GatewayError(
+                400, "invalid_request", "cost_weight must be a number"
+            ) from None
+        if weight < 0.0:
+            raise GatewayError(400, "invalid_request", "cost_weight must be >= 0")
+        return weight
+
     @staticmethod
     def _budget_policy(body: dict) -> BudgetPolicy | None:
         raw = body.get("budget")

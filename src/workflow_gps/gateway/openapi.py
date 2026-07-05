@@ -111,7 +111,9 @@ def build_openapi() -> dict:
                 "marketplace's slot vocabularies (planning preview with "
                 "lineage-aware payout previews; read-only). Picks are "
                 "greedy-by-posterior by default; 'explore: true' "
-                "Thompson-samples them from the caller's own run history"
+                "Thompson-samples them from the caller's own run history; "
+                "a positive 'cost_weight' ranks by expected utility "
+                "(quality minus weighted cost) instead of quality alone"
             ),
         },
         "/v1/earnings": {"get": op("The caller's own earnings balance")},

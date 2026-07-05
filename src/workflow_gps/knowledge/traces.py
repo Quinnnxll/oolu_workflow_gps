@@ -9,6 +9,11 @@ goals and sharpen with every run:
   string (empty = global). Selection among alternatives is Thompson sampling
   over these posteriors — the counts are the user's own history, so route
   choice is personalized by construction and keeps exploring under drift.
+  With ``recency_decay < 1`` the counts are *discounted*: every new
+  observation of a node first multiplies its existing counts by the decay,
+  so the posterior tracks what the node has done **lately** — a node that
+  regressed last month stops looking as good as ever, and old glory decays
+  into honest uncertainty that Thompson sampling then re-explores.
 - **A precedence matrix**: for every ordered pair of verified steps observed in
   a trace, a directed win counter. A hard edge is derived only when the order
   is *consistent* across enough observations; pairs with no consistent order
@@ -47,10 +52,14 @@ class NodeObservation:
 
 @dataclass(frozen=True, slots=True)
 class NodePosterior:
-    """Beta posterior parameters for a node's success (uniform Beta(1,1) prior)."""
+    """Beta posterior parameters for a node's success (uniform Beta(1,1) prior).
 
-    successes: int
-    failures: int
+    Counts are floats: under recency decay an old observation is worth a
+    fraction of a fresh one. With no decay they stay whole numbers.
+    """
+
+    successes: float
+    failures: float
 
     @property
     def alpha(self) -> float:
@@ -65,7 +74,7 @@ class NodePosterior:
         return self.alpha / (self.alpha + self.beta)
 
     @property
-    def observations(self) -> int:
+    def observations(self) -> float:
         return self.successes + self.failures
 
 
@@ -107,7 +116,14 @@ TRACE_STORE_MIGRATIONS: tuple[Migration, ...] = (Migration(up=_create, down=_dro
 class TraceStore:
     """SQLite-backed execution-trace statistics (thread-safe)."""
 
-    def __init__(self, path: str | Path = ":memory:"):
+    def __init__(self, path: str | Path = ":memory:", *, recency_decay: float = 1.0):
+        """``recency_decay`` discounts existing counts on every new
+        observation of a node (1.0 = never forget, today's default; 0.9 is
+        a sensible "trust the recent past" setting — the same knob shape as
+        the budget layer's behavioral profile)."""
+        if not 0.0 < recency_decay <= 1.0:
+            raise ValueError("recency_decay must be in (0, 1]")
+        self._decay = recency_decay
         self._lock = threading.RLock()
         location = (
             str(path) if str(path) == ":memory:" else str(Path(path).expanduser())
@@ -171,8 +187,11 @@ class TraceStore:
             "WHERE node_key = ? AND context = ?",
             (node_key, context),
         ).fetchone()
-        successes = (row["successes"] if row else 0) + (1 if ok else 0)
-        failures = (row["failures"] if row else 0) + (0 if ok else 1)
+        # Discounted counting: the past fades a little on every fresh
+        # observation, so the posterior tracks the node's recent self.
+        # With decay 1.0 this is exact integer counting, unchanged.
+        successes = (row["successes"] if row else 0) * self._decay + (1 if ok else 0)
+        failures = (row["failures"] if row else 0) * self._decay + (0 if ok else 1)
         ewma = row["cost_ewma"] if row else None
         if cost is not None:
             ewma = (

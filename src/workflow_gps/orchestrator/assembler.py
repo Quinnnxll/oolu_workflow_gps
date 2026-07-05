@@ -8,7 +8,9 @@ slots the user wants produced and the slots they already have;
    **verified history** (posterior success mean, then measured cost, then the
    fewest unresolved inputs, then name for determinism; pass an ``rng`` to
    Thompson-sample instead, which personalizes and explores exactly like the
-   route optimizer). A ``ProposalModel`` may weigh in, but only as a **prior**:
+   route optimizer; pass a positive ``cost_weight`` to rank by expected
+   *utility*, quality minus weighted cost, instead of quality alone). A
+   ``ProposalModel`` may weigh in, but only as a **prior**:
    its weights enter the same Beta posterior as pseudo-observations, so a
    model's opinion decides thin-history ties and washes out as verified runs
    accumulate — advice never outranks evidence, and a failing model never
@@ -131,12 +133,21 @@ class ContractAssembler:
         fill_gaps_with_scripts: bool = False,
         proposal_model: ProposalModel | None = None,
         proposal_strength: float = DEFAULT_PROPOSAL_STRENGTH,
+        cost_weight: float = 0.0,
     ):
         self._contracts = contracts
         self._rng = rng
         self._fill_gaps = fill_gaps_with_scripts
         self._proposal_model = proposal_model
         self._proposal_strength = proposal_strength
+        if cost_weight < 0.0:
+            raise ValueError("cost_weight must be >= 0")
+        # How much success probability one unit of money is worth giving
+        # up. 0 (the default) keeps cost a tie-break, exactly as before:
+        # a 99%-reliable node at 10x the price always wins. A positive
+        # weight ranks by expected UTILITY (quality - weight * cost), so
+        # a slightly-less-proven cheap node can honestly beat it.
+        self._cost_weight = cost_weight
 
     def _library(self) -> list[NodeContract]:
         if callable(self._contracts):
@@ -252,9 +263,11 @@ class ContractAssembler:
                 # the model had no opinion, so no-model picks are unchanged.
                 quality = (1.0 + successes) / (2.0 + successes + failures)
             cost = stats.cost_ewma if stats.cost_ewma is not None else 1.0
-            # Higher quality first; then cheaper; then fewer inputs to chase;
-            # then name, so ties are stable across runs.
-            return (-quality, cost, len(contract.consumes), contract.name)
+            # Highest expected utility first (with cost_weight 0 that is
+            # pure quality and cost stays a tie-break); then cheaper; then
+            # fewer inputs to chase; then name, so ties are stable.
+            utility = quality - self._cost_weight * cost
+            return (-utility, cost, len(contract.consumes), contract.name)
 
         return min(candidates, key=score), advice_cost
 

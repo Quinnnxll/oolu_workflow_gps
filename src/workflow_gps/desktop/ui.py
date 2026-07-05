@@ -251,7 +251,10 @@ function previewCard(p, form) {
       h("div", { class: "muted" },
         "estimated total: " + money(p.estimated_gross_total)
         + " · platform margin: " + money(p.platform_margin_preview)
-        + (p.planning_cost ? " · planning: " + money(p.planning_cost) : ""))),
+        + (p.planning_cost ? " · planning: " + money(p.planning_cost) : "")
+        + (p.expected_success != null
+            ? " · expected success: " + Math.round(p.expected_success * 100) + "%"
+            : ""))),
     h("table", {},
       h("tr", {}, h("th", {}, "step"), h("th", {}, "kind"),
         h("th", {}, "price"), h("th", {}, "payouts")),

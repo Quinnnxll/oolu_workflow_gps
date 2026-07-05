@@ -176,6 +176,9 @@ class AssemblyPreviewView(BaseModel):
     # What the proposal model's advice cost while assembling this plan —
     # not market gross, but real spend the budget verdict judged.
     planning_cost: float = 0.0
+    # The plan's chance of verified success in this desktop's own hands:
+    # the product of picked nodes' posterior means (gap nodes at 0.5).
+    expected_success: float | None = None
     contract: dict[str, Any] | None = None
     # Orderings this desktop's own runs consistently exhibited, already
     # stamped onto the contract as learned edges the run will honor.

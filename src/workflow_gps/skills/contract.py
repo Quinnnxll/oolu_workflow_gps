@@ -144,12 +144,17 @@ NodeBody = Union[ActionsBody, ScriptBody, SubgraphBody]
 
 
 class NodeStats(BaseModel):
-    """A snapshot of verified history (trace/metering posteriors)."""
+    """A snapshot of verified history (trace/metering posteriors).
+
+    Counts are floats: recency-decayed trace posteriors weigh an old
+    observation as a fraction of a fresh one. Marketplace-verified counts
+    stay whole numbers.
+    """
 
     model_config = ConfigDict(frozen=True)
 
-    successes: int = 0
-    failures: int = 0
+    successes: float = 0
+    failures: float = 0
     cost_ewma: float | None = None
 
     @property

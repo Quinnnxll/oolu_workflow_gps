@@ -26,6 +26,14 @@ from .remote import (
     TransportError,
     UrllibTransport,
 )
+from .replay import (
+    Arm,
+    BanditStrategy,
+    PosteriorStrategy,
+    ReplayWorld,
+    StrategyReport,
+    evaluate,
+)
 from .scrubbing import is_safe_identifier, is_safe_to_store, scrub
 from .signature import error_pattern_key, task_signature
 from .traces import (
@@ -64,4 +72,11 @@ __all__ = [
     "NodePosterior",
     "TraceStore",
     "route_node_key",
+    # offline replay: strategies audition on history before they ship
+    "Arm",
+    "BanditStrategy",
+    "PosteriorStrategy",
+    "ReplayWorld",
+    "StrategyReport",
+    "evaluate",
 ]

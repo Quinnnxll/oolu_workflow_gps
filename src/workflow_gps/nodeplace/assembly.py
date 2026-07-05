@@ -74,6 +74,12 @@ class AssemblyPreview(BaseModel):
     # Not part of the market gross (no noder earns it), but real money the
     # budget verdict below judges alongside the gross.
     planning_cost: float = 0.0
+    # The plan's chance of verified success in THIS caller's hands: the
+    # product of each picked node's posterior mean (personal history folded
+    # over marketplace counts; independence assumed, documented). A gap
+    # node counts at its uniform prior, 0.5 — unproven synthesis is a coin
+    # flip and the number should say so. None when nothing assembled.
+    expected_success: float | None = None
     # Orderings the caller's own runs consistently exhibited, stamped onto
     # the contract as learned edges: [{"first": name, "then": name}, ...].
     learned_order: list[dict[str, str]] = Field(default_factory=list)
@@ -173,6 +179,7 @@ def preview_assembly(
     trace_context: str = "",
     rng: random.Random | None = None,
     proposal_model: ProposalModel | None = None,
+    cost_weight: float = 0.0,
     budget: BudgetPolicy | None = None,
     # goal_class | None -> the caller's committed run grosses (None = all
     # classes). A lookup, not a list: the plan's class is only known after
@@ -199,6 +206,11 @@ def preview_assembly(
     prior over the same posteriors — and what the advice cost surfaces as
     ``planning_cost``, judged by the budget verdict together with the
     market gross: a plan that needed advice is honestly dearer.
+
+    A positive ``cost_weight`` makes picks cost-aware: candidates rank by
+    expected utility (quality minus weighted personal cost) instead of
+    quality alone, so a slightly-less-proven cheap node can honestly beat
+    a proven expensive one — by exactly the trade the caller declared.
     """
     marketplace = assembler.contracts(query)
     by_id = {entry.contract.id: entry for entry in marketplace}
@@ -210,7 +222,9 @@ def preview_assembly(
         rng=rng,
         fill_gaps_with_scripts=fill_gaps,
         proposal_model=proposal_model,
+        cost_weight=cost_weight,
     ).assemble(goal)
+    personalized = {c.id: c for c in library}
 
     contract = result.contract
     learned_order: list[dict[str, str]] = []
@@ -226,6 +240,16 @@ def preview_assembly(
         if contract is not None and isinstance(contract.body, SubgraphBody)
         else []
     )
+    expected_success: float | None = None
+    if contract is not None:
+        # The plan succeeds when every picked node does (independence
+        # assumed): the product of posterior means over the personalized
+        # library. Gap nodes carry no history — their uniform prior mean
+        # of 0.5 keeps the number honest about unproven synthesis.
+        expected_success = 1.0
+        for child in children:
+            stats = (personalized.get(child.id) or child).stats or NodeStats()
+            expected_success *= stats.success_mean
     for child in children:
         entry = by_id.get(child.id)
         if entry is None:  # a synthesized gap node: no economics yet
@@ -289,6 +313,7 @@ def preview_assembly(
         estimated_gross_total=gross_total,
         platform_margin_preview=margin_total,
         planning_cost=result.planning_cost,
+        expected_success=expected_success,
         learned_order=learned_order,
         budget=assess_budget(
             # Planning advice was real spend: budgets judge the whole cost

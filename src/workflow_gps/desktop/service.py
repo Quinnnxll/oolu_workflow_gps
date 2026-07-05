@@ -360,6 +360,7 @@ class DesktopService:
         query: str = "",
         fill_gaps: bool = False,
         explore: bool = False,
+        cost_weight: float = 0.0,
         budget_cap: float | None = None,
         review_threshold: float | None = None,
     ) -> AssemblyPreviewView:
@@ -393,6 +394,9 @@ class DesktopService:
             # A model's opinion enters picks as a prior; what the advice
             # cost surfaces as planning_cost on the view below.
             proposal_model=self._proposal_model,
+            # cost_weight > 0: rank picks by expected utility (quality
+            # minus weighted cost) instead of quality alone.
+            cost_weight=cost_weight,
             budget=BudgetPolicy(hard_cap=budget_cap, review_threshold=review_threshold),
             spend_lookup=self._spend_history,
             wallet_balance=self._wallet_balance(),
@@ -421,6 +425,7 @@ class DesktopService:
             estimated_gross_total=preview.estimated_gross_total,
             platform_margin_preview=preview.platform_margin_preview,
             planning_cost=preview.planning_cost,
+            expected_success=preview.expected_success,
             contract=(
                 preview.contract.model_dump(mode="json")
                 if preview.contract is not None
