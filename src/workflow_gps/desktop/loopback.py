@@ -73,6 +73,15 @@ class DesktopLoopbackApp:
             return 200, self._svc.worker_health().model_dump(mode="json")
         if method == "GET" and path == "/v1/earnings":
             return 200, self._svc.earnings().model_dump(mode="json")
+        if method == "GET" and path == "/v1/payout-account":
+            return 200, self._svc.payout_account().model_dump(mode="json")
+        if method == "POST" and path == "/v1/payout-account":
+            body = await _read_json(receive)
+            view = self._svc.onboard_payout_account(
+                country=str(body.get("country", "US")),
+                currency=str(body.get("currency", "usd")),
+            )
+            return 201, view.model_dump(mode="json")
         if method == "GET" and path == "/v1/offline-policy":
             return 200, self._svc.offline_policy()
         if method == "POST" and path == "/v1/tasks":

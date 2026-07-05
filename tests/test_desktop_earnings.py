@@ -122,6 +122,75 @@ def test_runtime_earnings_can_be_disabled(tmp_path):
         rt.close()
 
 
+def test_payout_account_onboarding_flow(tmp_path):
+    """Onboard -> pending KYC blocks payouts -> processor verifies -> the
+    shell mirrors it on the next read and persists the refresh."""
+    from workflow_gps.billing import FakePayoutAdapter, KycStatus
+
+    app, conn, *_rest = _build(tmp_path)
+    adapter = FakePayoutAdapter(kyc=KycStatus.PENDING)
+    svc = DesktopService(
+        app._durable,
+        earnings_ledger=EarningsLedger(conn),
+        payout_store=PayoutStore(conn),
+        payout_adapter=adapter,
+        noder_principal="me",
+        clock=lambda: NOW,
+    )
+    loop = DesktopLoopbackApp(svc)
+
+    # Not-onboarded is a rendered state, never an error.
+    status, body = _call(loop, "GET", "/v1/payout-account")
+    assert status == 200
+    assert body["onboarded"] is False and body["kyc_status"] == "not_onboarded"
+
+    status, account = _call(
+        loop, "POST", "/v1/payout-account", body={"country": "PT", "currency": "eur"}
+    )
+    assert status == 201
+    assert account["kyc_status"] == "pending"
+    assert account["payouts_enabled"] is False  # blocked until KYC verifies
+    assert account["country"] == "PT" and account["currency"] == "eur"
+    account_id = account["provider_account_id"]
+
+    # Idempotent: an account is an external resource, never minted twice.
+    _status, again = _call(loop, "POST", "/v1/payout-account", body={})
+    assert again["provider_account_id"] == account_id
+    (event,) = [
+        r for r in app._durable.audit.records() if r.event_type == "payout.onboarded"
+    ]
+    assert event.payload["provider_account_id"] == account_id
+
+    # KYC verifies on the processor's side; the shell mirrors it on the
+    # next read — and persists the refreshed status in the store.
+    adapter.accounts[account_id] = adapter.accounts[account_id].model_copy(
+        update={"kyc_status": KycStatus.VERIFIED}
+    )
+    _status, refreshed = _call(loop, "GET", "/v1/payout-account")
+    assert refreshed["kyc_status"] == "verified"
+    assert refreshed["payouts_enabled"] is True
+    assert svc._payout_store.get_account("me").kyc_status is KycStatus.VERIFIED
+    conn.close()
+
+
+def test_payout_account_configuration_gates(tmp_path):
+    app, conn, *_rest = _build(tmp_path)
+    # No payout store at all: the whole surface is a 404.
+    bare = DesktopService(app._durable)
+    status, _body = _call(DesktopLoopbackApp(bare), "GET", "/v1/payout-account")
+    assert status == 404
+    # A store without an adapter can SHOW state but cannot onboard.
+    view_only = DesktopService(
+        app._durable, payout_store=PayoutStore(conn), noder_principal="me"
+    )
+    loop = DesktopLoopbackApp(view_only)
+    status, body = _call(loop, "GET", "/v1/payout-account")
+    assert status == 200 and body["onboarded"] is False
+    status, _body = _call(loop, "POST", "/v1/payout-account", body={})
+    assert status == 404  # onboarding needs the processor adapter
+    conn.close()
+
+
 def test_earnings_over_the_loopback_and_unconfigured_404(tmp_path):
     app, conn, *_rest = _build(tmp_path)
     ledger = EarningsLedger(conn)

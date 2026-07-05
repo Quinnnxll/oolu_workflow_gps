@@ -336,6 +336,7 @@ def build_desktop_runtime(
     docker_available: bool = True,
     artifacts_dir: str | Path | None = None,
     noder_principal: str | None = "local-noder",
+    payout_adapter: Any = None,  # billing.PayoutAdapter: onboarding + KYC refresh
 ) -> DesktopRuntime:
     settings = settings or Settings()
     conn = DurableConnection(db_path)
@@ -363,6 +364,7 @@ def build_desktop_runtime(
         docker_available=docker_available,
         earnings_ledger=earnings,
         payout_store=payouts,
+        payout_adapter=payout_adapter,
         noder_principal=noder_principal,
     )
     return DesktopRuntime(

@@ -57,6 +57,17 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- Payout-account onboarding in the shell: `DesktopService.payout_account`
+  / `onboard_payout_account` (new `payout_adapter` ctor hook, also a
+  `build_desktop_runtime` passthrough) over `GET`/`POST
+  /v1/payout-account`. Not-onboarded is a rendered state (200), never an
+  error; onboarding is idempotent (an account is an external resource,
+  returned rather than minted twice) and audited (`payout.onboarded`);
+  the KYC status is refreshed from the processor on every read and the
+  refresh persisted — verification happens on THEIR side, the shell only
+  mirrors it, and `payouts_enabled` flips only on `verified`. The
+  Earnings screen gains a payout-account card: onboarding form when
+  absent, status badges ("payouts blocked until KYC verifies") after.
 - Earnings wired into `build_desktop_runtime`: shells get the earnings
   screen out of the box — the runtime creates an `EarningsLedger` and
   `PayoutStore` over its own durable connection (honest zeros until the

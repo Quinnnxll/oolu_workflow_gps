@@ -474,6 +474,60 @@ function inboxScreen() {
 }
 
 /* ------------------------------- earnings ------------------------------ */
+function payoutAccountCard() {
+  const box = h("div", { class: "card" },
+    h("strong", {}, "Payout account"), " ",
+    h("span", { class: "muted" }, "loading…"));
+
+  function accountRow(a) {
+    return h("div", {},
+      badge(a.kyc_status,
+        a.kyc_status === "verified" ? "ok"
+        : a.kyc_status === "rejected" ? "bad" : "warn"),
+      a.payouts_enabled
+        ? badge("payouts enabled", "ok")
+        : badge("payouts blocked until KYC verifies", "warn"),
+      h("div", { class: "muted" },
+        (a.country || "") + " / " + (a.currency || "")
+        + " · account " + (a.provider_account_id || "—")));
+  }
+
+  function onboardForm() {
+    const country = h("input", { type: "text", value: "US" });
+    const currency = h("input", { type: "text", value: "usd" });
+    const errorBox = h("div", { class: "error" });
+    return h("div", {},
+      h("div", { class: "muted" },
+        "no payout account yet — onboard one to receive settlements"),
+      h("div", { class: "row" },
+        h("div", {}, h("label", {}, "Country"), country),
+        h("div", {}, h("label", {}, "Currency"), currency)),
+      h("button", { onclick: async () => {
+        errorBox.textContent = "";
+        try {
+          const account = await api("POST", "/v1/payout-account",
+            { country: country.value, currency: currency.value });
+          box.replaceChildren(h("strong", {}, "Payout account"),
+            accountRow(account));
+        } catch (err) { errorBox.textContent = err.message; }
+      } }, "Onboard"),
+      errorBox);
+  }
+
+  (async () => {
+    try {
+      const account = await api("GET", "/v1/payout-account");
+      box.replaceChildren(h("strong", {}, "Payout account"),
+        account.onboarded ? accountRow(account) : onboardForm());
+    } catch (err) {
+      box.replaceChildren(h("strong", {}, "Payout account"),
+        h("div", { class: "muted" },
+          "payout onboarding is not configured (" + err.message + ")"));
+    }
+  })();
+  return box;
+}
+
 function earningsScreen() {
   const body = h("div", { class: "muted" }, "loading…");
   const tone = { accrual: "ok", payout: "", reserve: "warn", clawback: "bad" };
@@ -523,8 +577,8 @@ function earningsScreen() {
         "earnings are not configured for this shell (" + err.message + ")"));
     }
   })();
-  return h("section", {}, h("div", { class: "card" },
-    h("strong", {}, "Earnings"), body));
+  return h("section", {}, payoutAccountCard(),
+    h("div", { class: "card" }, h("strong", {}, "Earnings"), body));
 }
 
 /* -------------------------------- skills ------------------------------- */

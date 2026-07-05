@@ -55,6 +55,7 @@ from .views import (
     ExecutionLabel,
     ExportBundle,
     InboxItem,
+    PayoutAccountView,
     PayoutBatchView,
     ProviderConnectionView,
     QuestionView,
@@ -112,6 +113,7 @@ class DesktopService:
         clock=None,  # () -> datetime, injectable for tests
         earnings_ledger=None,  # billing.EarningsLedger, when the user is a noder
         payout_store=None,  # billing.PayoutStore: batch history for the screen
+        payout_adapter=None,  # billing.PayoutAdapter: onboarding + KYC refresh
         noder_principal=None,  # whose earnings this shell shows
     ):
         self._durable = durable
@@ -143,6 +145,7 @@ class DesktopService:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._earnings_ledger = earnings_ledger
         self._payout_store = payout_store
+        self._payout_adapter = payout_adapter
         self._noder_principal = noder_principal
 
     # ------------------------------------------------------------------ #
@@ -738,6 +741,72 @@ class DesktopService:
                 )
                 for batch in reversed(batches)
             ],
+        )
+
+    def payout_account(self) -> PayoutAccountView:
+        """Onboarding state for the earnings screen — refreshed, read-only.
+
+        Not-onboarded is a rendered state, never an error: the screen shows
+        the onboarding form. When an adapter is wired, the KYC status is
+        refreshed from the processor on every read (verification happens on
+        THEIR side; the shell only mirrors it).
+        """
+        if self._payout_store is None or self._noder_principal is None:
+            raise KeyError("payout accounts are not configured for this shell")
+        account = self._payout_store.get_account(self._noder_principal)
+        if account is None:
+            return PayoutAccountView(onboarded=False, kyc_status="not_onboarded")
+        if self._payout_adapter is not None:
+            fresh = self._payout_adapter.account_status(account.provider_account_id)
+            if fresh != account.kyc_status:
+                account = account.model_copy(update={"kyc_status": fresh})
+                self._payout_store.save_account(account)
+        return self._payout_account_view(account)
+
+    def onboard_payout_account(
+        self, *, country: str = "US", currency: str = "usd"
+    ) -> PayoutAccountView:
+        """Create the processor account that payouts will land in.
+
+        Idempotent: an account is an external resource, so an existing one
+        is returned rather than minted twice. Onboarding is audited; the
+        money itself still only moves through settlement.
+        """
+        if (
+            self._payout_store is None
+            or self._payout_adapter is None
+            or self._noder_principal is None
+        ):
+            raise KeyError("payout onboarding is not configured for this shell")
+        existing = self._payout_store.get_account(self._noder_principal)
+        if existing is not None:
+            return self._payout_account_view(existing)
+        account = self._payout_adapter.create_account(
+            noder_principal=self._noder_principal,
+            country=country,
+            currency=currency,
+        )
+        self._payout_store.save_account(account)
+        self._durable.audit.append(
+            "payout.onboarded",
+            {
+                "noder": self._noder_principal,
+                "provider_account_id": account.provider_account_id,
+                "country": country,
+                "currency": currency,
+            },
+        )
+        return self._payout_account_view(account)
+
+    @staticmethod
+    def _payout_account_view(account) -> PayoutAccountView:
+        return PayoutAccountView(
+            onboarded=True,
+            kyc_status=account.kyc_status.value,
+            payouts_enabled=account.kyc_status.value == "verified",
+            provider_account_id=account.provider_account_id,
+            country=account.country,
+            currency=account.currency,
         )
 
     # ------------------------------------------------------------------ #

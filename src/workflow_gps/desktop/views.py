@@ -227,6 +227,23 @@ class PayoutBatchView(BaseModel):
     created_at: datetime
 
 
+class PayoutAccountView(BaseModel):
+    """Onboarding state for receiving payouts — never a credential.
+
+    ``provider_account_id`` is an opaque management handle (like a vault
+    ref), not a secret; KYC itself happens on the processor's side.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    onboarded: bool
+    kyc_status: str  # not_onboarded | pending | verified | rejected
+    payouts_enabled: bool = False
+    provider_account_id: str | None = None
+    country: str | None = None
+    currency: str | None = None
+
+
 class EarningsView(BaseModel):
     """The earnings screen: what the local noder has earned, holds, and
     was paid — a projection of the shared ledger, never a write path."""
