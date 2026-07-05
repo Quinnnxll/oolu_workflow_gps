@@ -34,6 +34,7 @@ from .policy import (
     DEFAULT_MU_MAX,
     DEFAULT_RESERVE_FRACTION,
     DEFAULT_RHO,
+    DEFAULT_RISK_WINDOW_DAYS,
 )
 from .pricing import PricingEngine, PricingResult
 from .service import BillingService
@@ -56,6 +57,7 @@ __all__ = [
     "DEFAULT_MU_MAX",
     "DEFAULT_RESERVE_FRACTION",
     "DEFAULT_RHO",
+    "DEFAULT_RISK_WINDOW_DAYS",
     "DefaultFraudSignals",
     "FraudSignals",
     "FraudVerdict",

@@ -57,6 +57,15 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- Reserve release — the holdback is a loan, not a fee: the settlement
+  reserve target is now scoped to the chargeback **risk window**
+  (`risk_window_days`, default `DEFAULT_RISK_WINDOW_DAYS = 90`; `None`
+  restores accumulate-forever). The true-up is symmetric: fresh earnings
+  top the reserve up, and accruals that age out of the window release
+  their share back to the noder as one more RESERVE entry — paid out on
+  the next settlement, so the noder eventually receives 100% of
+  undisputed earnings. Aged-out accruals demand no reserve at all
+  (only at-risk earnings are held against).
 - Dispute deepening — reserve-funded clawbacks, final decisions:
   upholding a dispute still reverses every accrual the event minted
   (CLAWBACK entries, per noder), but a shortfall from already-paid

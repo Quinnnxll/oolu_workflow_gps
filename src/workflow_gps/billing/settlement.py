@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from ..durable.idempotency import IdempotencyLedger
@@ -11,7 +11,11 @@ from .guard import require_production_money
 from .ledger import BalanceProjection, EarningsLedger
 from .models import EarningsEntry, EarningsKind, PayoutBatch, PayoutStatus
 from .payout import PaymentError, PayoutAdapter
-from .policy import DEFAULT_MIN_PAYOUT_MICROS, DEFAULT_RESERVE_FRACTION
+from .policy import (
+    DEFAULT_MIN_PAYOUT_MICROS,
+    DEFAULT_RESERVE_FRACTION,
+    DEFAULT_RISK_WINDOW_DAYS,
+)
 
 
 class SettlementService:
@@ -26,6 +30,7 @@ class SettlementService:
         idempotency: IdempotencyLedger,
         reserve_fraction: float = DEFAULT_RESERVE_FRACTION,
         min_payout_micros: int = DEFAULT_MIN_PAYOUT_MICROS,
+        risk_window_days: int | None = DEFAULT_RISK_WINDOW_DAYS,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._ledger = ledger
@@ -36,6 +41,7 @@ class SettlementService:
         self._idem = idempotency
         self._reserve = reserve_fraction
         self._min_payout = min_payout_micros
+        self._risk_window_days = risk_window_days
         self._projection = BalanceProjection(ledger)
         self._clock = clock or (lambda: datetime.now(UTC))
 
@@ -175,20 +181,35 @@ class SettlementService:
         return summary
 
     def _top_up_reserve(self, noder_principal: str, now: datetime) -> None:
+        """True the reserve up (or DOWN) to the earnings still at risk.
+
+        The target is ``reserve_fraction`` of the net cleared earnings
+        inside the chargeback risk window — net of clawbacks (reversed
+        earnings no longer demand reserve, so a dispute is never silently
+        re-collected as a fresh top-up), and excluding accruals older than
+        the window (their chargeback risk has passed, so their share of
+        the reserve RELEASES back to the noder). A negative true-up is one
+        more RESERVE entry, so the balance projection stays one formula
+        and the noder eventually receives 100% of undisputed earnings.
+        ``risk_window_days=None`` holds the reserve forever.
+        """
         entries = self._ledger.entries(noder_principal)
-        # Net of clawbacks: earnings a dispute reversed no longer demand
-        # reserve — otherwise every clawback would be re-collected from the
-        # noder's future earnings as a fresh top-up.
-        cleared_net = sum(
+        window_start = (
+            now - timedelta(days=self._risk_window_days)
+            if self._risk_window_days is not None
+            else None
+        )
+        at_risk = sum(
             e.amount_micros
             for e in entries
             if e.kind in (EarningsKind.ACCRUAL, EarningsKind.CLAWBACK)
             and e.available_at <= now
+            and (window_start is None or e.available_at >= window_start)
         )
-        target = max(0, round(cleared_net * self._reserve))
+        target = max(0, round(at_risk * self._reserve))
         held = sum(e.amount_micros for e in entries if e.kind == EarningsKind.RESERVE)
         delta = target - held
-        if delta > 0:
+        if delta != 0:
             self._ledger.append(
                 EarningsEntry(
                     noder_principal=noder_principal,

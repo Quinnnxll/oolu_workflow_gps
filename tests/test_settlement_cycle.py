@@ -52,7 +52,7 @@ class _ScriptedPayout:
         )
 
 
-def _build(tmp_path, *, failing=()):
+def _build(tmp_path, *, failing=(), clock=None, risk_window_days=90):
     conn = DurableConnection(tmp_path / "settle.db")
     ledger = EarningsLedger(conn)
     accounts = PayoutStore(conn)
@@ -66,7 +66,8 @@ def _build(tmp_path, *, failing=()):
         ),
         providers=[],  # no HMAC verifiers: passes the production gate
         idempotency=IdempotencyLedger(conn),
-        clock=lambda: NOW,
+        risk_window_days=risk_window_days,
+        clock=clock or (lambda: NOW),
     )
     return conn, ledger, accounts, adapter, service
 
@@ -173,6 +174,79 @@ def test_failed_period_retries_and_paid_periods_replay(tmp_path):
     assert balance.available_micros == 0  # everything payable went out
     assert balance.reserved_micros == 5_000_000  # the 10% reserve held back
     assert balance.lifetime_paid_micros == 45_000_000
+    conn.close()
+
+
+def test_reserve_releases_after_the_risk_window(tmp_path):
+    """The holdback is a loan, not a fee: once the chargeback window
+    passes with no dispute, the reserve pays out — the noder eventually
+    receives 100% of undisputed earnings."""
+    from workflow_gps.billing import BalanceProjection
+
+    current = {"now": NOW}
+    conn, ledger, accounts, adapter, service = _build(
+        tmp_path, clock=lambda: current["now"]
+    )
+    _earn(ledger, "alice", 300_000_000)  # cleared 30 days ago
+    _account(accounts, "alice")
+
+    july = service.settle("alice", period_key="2026-07")
+    assert july["paid"] and july["amount_micros"] == 270_000_000  # 30M held
+
+    current["now"] = NOW + timedelta(days=120)  # the accrual is 150d old now
+    october = service.settle("alice", period_key="2026-10")
+    assert october["paid"] and october["amount_micros"] == 30_000_000
+
+    balance = BalanceProjection(ledger).balance("alice", now=current["now"])
+    assert balance.reserved_micros == 0
+    assert balance.available_micros == 0
+    assert balance.lifetime_paid_micros == 300_000_000  # every micro, eventually
+    conn.close()
+
+
+def test_only_at_risk_earnings_demand_reserve(tmp_path):
+    """The target is scoped to the window: aged-out accruals carry no
+    chargeback risk, so only fresh work is held against."""
+    from workflow_gps.billing import BalanceProjection
+
+    conn, ledger, accounts, adapter, service = _build(tmp_path)
+    ledger.append(
+        EarningsEntry(
+            noder_principal="alice",
+            event_id="evt-ancient",
+            amount_micros=200_000_000,
+            kind=EarningsKind.ACCRUAL,
+            available_at=NOW - timedelta(days=200),  # far outside the window
+        )
+    )
+    _earn(ledger, "alice", 100_000_000)  # fresh: inside the window
+    _account(accounts, "alice")
+
+    outcome = service.settle("alice", period_key="2026-07")
+    # 10% of the fresh 100M is held; the ancient 200M pays in full.
+    assert outcome["amount_micros"] == 290_000_000
+    balance = BalanceProjection(ledger).balance("alice", now=NOW)
+    assert balance.reserved_micros == 10_000_000
+    conn.close()
+
+
+def test_disabled_window_holds_the_reserve_forever(tmp_path):
+    """risk_window_days=None restores accumulate-forever semantics."""
+    from workflow_gps.billing import BalanceProjection
+
+    current = {"now": NOW}
+    conn, ledger, accounts, adapter, service = _build(
+        tmp_path, clock=lambda: current["now"], risk_window_days=None
+    )
+    _earn(ledger, "alice", 300_000_000)
+    _account(accounts, "alice")
+    service.settle("alice", period_key="2026-07")
+
+    current["now"] = NOW + timedelta(days=365)
+    later = service.settle("alice", period_key="2027-07")
+    assert later["paid"] is False and later["reason"] == "below_threshold"
+    balance = BalanceProjection(ledger).balance("alice", now=current["now"])
+    assert balance.reserved_micros == 30_000_000  # still held, a year on
     conn.close()
 
 
