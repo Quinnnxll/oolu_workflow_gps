@@ -145,7 +145,7 @@ class LiteLLMGateway:
             import litellm
         except ImportError as exc:
             raise GatewayUnavailable(
-                "litellm not installed (`pip install litellm`)"
+                "litellm not installed (`pip install 'workflow-gps[engine]'`)"
             ) from exc
         self._litellm = litellm
         # vLLM rejects unknown params; dropping them keeps tier configs portable.

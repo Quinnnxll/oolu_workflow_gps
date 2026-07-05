@@ -46,6 +46,15 @@ if not exist ".venv\Scripts\python.exe" (
     %PYTHON% -m venv .venv || goto :fail
 )
 
+rem Some Python builds create environments without pip (stripped-down
+rem installs, sandboxes). Bootstrap it rather than failing later with
+rem "No module named pip".
+".venv\Scripts\python.exe" -m pip --version >nul 2>nul
+if not %errorlevel%==0 (
+    echo This environment is missing pip; bootstrapping it ...
+    ".venv\Scripts\python.exe" -m ensurepip --upgrade --default-pip || goto :fail
+)
+
 echo Installing Workflow-GPS ^(first run can take a few minutes^) ...
 ".venv\Scripts\python.exe" -m pip install --quiet --upgrade pip || goto :fail
 ".venv\Scripts\python.exe" -m pip install --quiet -e ".[serve]" || goto :fail

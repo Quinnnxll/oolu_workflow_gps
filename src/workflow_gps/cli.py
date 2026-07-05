@@ -22,8 +22,27 @@ import os
 import sys
 import uuid
 
-from . import __version__
-from .telemetry import configure_logging, get_logger, render_result
+try:
+    from . import __version__
+    from .telemetry import configure_logging, get_logger, render_result
+except ImportError:
+    # Running the file directly (`python src/workflow_gps/cli.py`) strips the
+    # package context and the relative imports above fail with a traceback
+    # that blames the wrong thing. Fail with directions instead.
+    if __package__:
+        raise
+    sys.stderr.write(
+        "error: cli.py is part of the workflow_gps package and cannot run as "
+        "a bare file.\n"
+        "\n"
+        "  Easiest (no development tools needed): run setup.bat (Windows) or\n"
+        "  ./setup.sh (macOS/Linux) from the repository folder - it sets\n"
+        "  everything up and opens the app in your browser.\n"
+        "\n"
+        '  Developers:  pip install -e ".[serve]"   then   wfgps --help\n'
+        "               (or: python -m workflow_gps.cli --help)\n"
+    )
+    sys.exit(2)
 
 _DEFAULT_KNOWLEDGE_DB = os.path.expanduser("~/.workflow-gps/knowledge.db")
 _DEFAULT_SCRIPT_CACHE_DB = os.path.expanduser("~/.workflow-gps/script-cache.db")
@@ -88,6 +107,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument(
         "--json", action="store_true", help="emit the result as JSON instead of a panel"
+    )
+    run.add_argument(
+        "--no-preflight",
+        action="store_true",
+        help="skip the engine/model-server checks that run before the intent",
     )
 
     telegram = sub.add_parser(
@@ -315,6 +339,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("show-config", help="print the effective settings").add_argument(
         "--config", metavar="PATH", help="path to a models.yaml settings file"
     )
+    sub.add_parser(
+        "doctor", help="check this installation and say exactly what to fix"
+    ).add_argument("--config", metavar="PATH", help="path to a models.yaml file")
     sub.add_parser("version", help="print the version")
     return parser
 
@@ -375,6 +402,175 @@ def _build_script_cache(kind: str, db_path: str):
 
 
 # --------------------------------------------------------------------------- #
+# Defensive validation: fail with directions, never with a socket traceback.  #
+# --------------------------------------------------------------------------- #
+def _module_available(name: str) -> bool:
+    import importlib.util
+
+    return importlib.util.find_spec(name) is not None
+
+
+def _probe_endpoint(api_base: str, timeout_s: float = 3.0) -> str | None:
+    """None when an HTTP server answers at ``api_base`` — ANY status counts
+    (401/404 still prove something is listening); an error string otherwise."""
+    import urllib.error
+    import urllib.request
+
+    url = api_base.rstrip("/") + "/models"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout_s):
+            return None
+    except urllib.error.HTTPError:
+        return None  # the server answered; auth/path problems are not "down"
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        return str(getattr(exc, "reason", exc))
+
+
+def _needs_openai_key(tier) -> bool:
+    return tier.model.startswith("openai/") and "api_key" not in tier.extra_params
+
+
+def _preflight_run(settings) -> None:
+    """The three traps every fresh install falls into, caught up front:
+    missing engine extras, no model server listening, no API key. Each
+    failure names its one-line fix; ``--no-preflight`` bypasses all three."""
+    missing = [m for m in ("langgraph", "litellm") if not _module_available(m)]
+    if missing:
+        raise _CliError(
+            "`wfgps run` needs the model engine, which is not installed "
+            f"(missing: {', '.join(missing)}).\n"
+            '  fix : pip install "workflow-gps[engine]"\n'
+            "  then: wfgps doctor   (checks the rest of your setup)"
+        )
+    fast = settings.routing.fast
+    if fast.api_base:
+        error = _probe_endpoint(fast.api_base)
+        if error is not None:
+            raise _CliError(
+                f"no model server is answering at {fast.api_base} ({error}).\n"
+                "  Workflow-GPS defaults to a LOCAL OpenAI-compatible server "
+                "(vLLM / Ollama / LM Studio)\n"
+                f"  serving {fast.model}.\n"
+                "  fix : start one there, or point at your own endpoint with "
+                "--config models.yaml\n"
+                "  more: wfgps doctor   (skip this check with --no-preflight)"
+            )
+    if _needs_openai_key(fast) and not os.environ.get("OPENAI_API_KEY"):
+        raise _CliError(
+            "OPENAI_API_KEY is not set. litellm requires it even for local "
+            "servers — any value\n"
+            "  works for vLLM (e.g. set OPENAI_API_KEY=EMPTY). Skip this "
+            "check with --no-preflight."
+        )
+
+
+def _cmd_doctor(args, out) -> int:
+    """Every silent installation trap, made loud — with its fix."""
+    settings = _load_settings(args)
+    failures = 0
+
+    def check(ok: bool, label: str, detail: str, hint: str | None = None) -> None:
+        nonlocal failures
+        out.write(f"  [{'ok' if ok else 'XX'}] {label}: {detail}\n")
+        if not ok:
+            failures += 1
+            if hint:
+                out.write(f"       fix: {hint}\n")
+
+    def note(label: str, detail: str, hint: str) -> None:
+        out.write(f"  [--] {label}: {detail}\n")
+        out.write(f"       {hint}\n")
+
+    out.write("Workflow-GPS doctor\n")
+    check(
+        sys.version_info >= (3, 11),
+        "python",
+        sys.version.split()[0],
+        "install Python 3.11+ from https://www.python.org/downloads/",
+    )
+
+    data_dir = os.path.expanduser("~/.workflow-gps")
+    try:
+        os.makedirs(data_dir, exist_ok=True)
+        probe_path = os.path.join(data_dir, ".doctor-probe")
+        with open(probe_path, "w", encoding="utf-8") as probe:
+            probe.write("ok")
+        os.remove(probe_path)
+        check(True, "data dir", f"{data_dir} is writable")
+    except OSError as exc:
+        check(
+            False,
+            "data dir",
+            f"{data_dir}: {exc}",
+            "fix the directory's permissions (app data lives there)",
+        )
+
+    if _module_available("uvicorn"):
+        check(True, "desktop shell", "uvicorn installed")
+    else:
+        note(
+            "desktop shell",
+            "uvicorn not installed",
+            "needed for `wfgps desktop` / `wfgps serve`: "
+            'pip install "workflow-gps[serve]"',
+        )
+
+    engine_missing = [m for m in ("langgraph", "litellm") if not _module_available(m)]
+    if engine_missing:
+        note(
+            "model engine",
+            "not installed: " + ", ".join(engine_missing),
+            'needed only for `wfgps run`: pip install "workflow-gps[engine]"',
+        )
+    else:
+        check(True, "model engine", "langgraph + litellm installed")
+        for name in ("fast", "reasoning"):
+            tier = getattr(settings.routing, name)
+            if not tier.api_base:
+                out.write(
+                    f"  [--] {name} tier: {tier.model} via the provider default\n"
+                )
+                continue
+            error = _probe_endpoint(tier.api_base)
+            check(
+                error is None,
+                f"{name} tier",
+                f"{tier.model} @ {tier.api_base}"
+                + ("" if error is None else f" — {error}"),
+                "start a local OpenAI-compatible model server (vLLM / Ollama / "
+                "LM Studio) there, or point at your own endpoint with "
+                "--config models.yaml",
+            )
+        if _needs_openai_key(settings.routing.fast):
+            check(
+                bool(os.environ.get("OPENAI_API_KEY")),
+                "api key",
+                "OPENAI_API_KEY "
+                + ("is set" if os.environ.get("OPENAI_API_KEY") else "is not set"),
+                "litellm requires it even for local servers; any value works "
+                "for vLLM (e.g. OPENAI_API_KEY=EMPTY)",
+            )
+
+    for module, extra, what in (
+        ("playwright", "browser", "browser skills"),
+        ("docker", "docker", "the docker backend"),
+    ):
+        if not _module_available(module):
+            note(
+                what,
+                f"{module} not installed",
+                f'optional: pip install "workflow-gps[{extra}]"',
+            )
+
+    out.write("\n")
+    if failures:
+        out.write(f"{failures} problem(s) found — fixes above.\n")
+        return 1
+    out.write("Everything this machine needs is in place.\n")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
 # Commands.                                                                    #
 # --------------------------------------------------------------------------- #
 def _result_to_dict(result) -> dict:
@@ -395,10 +591,15 @@ def _result_to_dict(result) -> dict:
     }
 
 
-def _cmd_run(args, builder, out) -> int:
+def _cmd_run(args, builder, out, *, preflight: bool = False) -> int:
     configure_logging(level=args.log_level)
     log = get_logger("cli")
     settings = _load_settings(args)
+    if preflight:
+        # Catch the classic fresh-install traps (missing engine extra, no
+        # model server, no API key) with directions, before any engine
+        # machinery produces a misleading traceback.
+        _preflight_run(settings)
     knowledge = _build_knowledge(args.knowledge, args.knowledge_db)
     script_cache = _build_script_cache(args.script_cache, args.script_cache_db)
     log.info("navigating: %s", args.intent)
@@ -409,6 +610,12 @@ def _cmd_run(args, builder, out) -> int:
     try:
         engine = builder(settings, **builder_kwargs)
         result = engine.run(args.intent)
+    except ModuleNotFoundError as exc:
+        if exc.name in ("langgraph", "litellm"):
+            raise _CliError(
+                f'missing dependency {exc.name!r} — pip install "workflow-gps[engine]"'
+            ) from exc
+        raise
     finally:
         if knowledge is not None and hasattr(knowledge, "close"):
             knowledge.close()  # flushes best-effort remote uploads
@@ -1008,11 +1215,14 @@ def main(argv: list[str] | None = None, *, builder=None, out=None) -> int:
     args = build_parser().parse_args(argv)
     try:
         if args.command == "run":
+            # Preflight guards the real engine only: an injected builder is
+            # a test/embedding context that brings its own model stack.
+            preflight = builder is None and not args.no_preflight
             if builder is None:
                 from .config import build_workflow_gps
 
                 builder = build_workflow_gps
-            return _cmd_run(args, builder, out)
+            return _cmd_run(args, builder, out, preflight=preflight)
         if args.command == "record":
             return _cmd_record(args, out)
         if args.command == "skill-register":
@@ -1023,6 +1233,8 @@ def main(argv: list[str] | None = None, *, builder=None, out=None) -> int:
             return _cmd_desktop(args, out)
         if args.command == "show-config":
             return _cmd_show_config(args, out)
+        if args.command == "doctor":
+            return _cmd_doctor(args, out)
         if args.command == "telegram":
             return _cmd_telegram(args)
         if args.command == "reply-teach":

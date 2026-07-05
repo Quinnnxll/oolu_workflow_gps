@@ -4,6 +4,42 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Onboarding hardening (from a field DX audit) — every install trap grows
+directions:
+
+- Added **`wfgps doctor`**: checks Python version, data-dir writability,
+  each optional stack (with the exact `pip install "workflow-gps[…]"` to
+  run), the configured model endpoints (a probe that treats any HTTP
+  answer as alive — 401 is not "down"), and the API-key requirement.
+  Missing *optional* stacks are guidance, not failure: a desktop-only
+  machine reports healthy. Exit 1 only on real problems, each with its
+  one-line fix.
+- **`wfgps run` preflights** the three classic fresh-install traps before
+  any engine machinery can produce a misleading traceback: missing
+  `[engine]` extras, no model server answering at the configured
+  `api_base` (the silent `localhost:8000` trap — the error now names
+  vLLM/Ollama/LM Studio and `--config models.yaml`), and an unset
+  `OPENAI_API_KEY` (any value works for vLLM). `--no-preflight` bypasses;
+  injected builders (tests, embedders) are never preflighted.
+- **Dead ends answer with directions**: running
+  `python src/workflow_gps/cli.py` as a bare file now prints how to run
+  it properly (setup scripts / `wfgps` / `python -m`) instead of a
+  relative-import traceback, and `uvicorn workflow_gps.gateway.asgi:app`
+  serves a 503 signpost explaining that `GatewayASGI` is a class needing
+  a wired `GatewayApp` — with the real local commands — instead of
+  uvicorn's "Attribute 'app' not found".
+- **Setup scripts bootstrap pip**: a `.venv` created by a stripped-down
+  Python (no pip) is repaired via `ensurepip` instead of failing later
+  with "No module named pip".
+- Added the **`ci` GitHub Actions workflow** (lint + full test suite on
+  every push/PR and on demand via `workflow_dispatch`); all three
+  workflows are hand-dispatchable, pinned by a test.
+- Moved model-call pricing from `metering.model_calls` to
+  **`billing.model_calls`** — the metering package's own tested invariant
+  is that it exposes no money symbols (metering counts usage; billing
+  prices it), and the meter violated the layering. Import paths change;
+  behavior does not.
+
 - The learned planner is now **wired in by default**: when a surface has
   a `trace_store` and no explicit `proposal_model`, producer picks are
   advised by `TraceProposalModel` over the caller's own recorded runs —
@@ -103,7 +139,7 @@ Thompson v2 — the learning loop gets honest about time, money, and proof:
   construction: unknown ids are dropped, wild weights clamp, exceptions
   (including a dead model endpoint) downgrade to verified-history-only
   assembly, and a single-candidate pick never spends a model call.
-- Added `metering.model_calls`: `ModelCallMeter` records every completion's
+- Added `billing.model_calls`: `ModelCallMeter` records every completion's
   token telemetry under a purpose tag and a `ModelPriceTable` (per-tier
   cost per million tokens; unknown tiers priced conservatively) turns it
   into money — model calls are never free.

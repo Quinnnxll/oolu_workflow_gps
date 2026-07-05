@@ -43,6 +43,14 @@ if [ ! -x ".venv/bin/python" ]; then
     "$PYTHON" -m venv .venv
 fi
 
+# Some Python builds create environments without pip (Debian/Ubuntu's
+# python3-minimal, stripped-down sandboxes). Bootstrap it rather than
+# failing later with "No module named pip".
+if ! .venv/bin/python -m pip --version >/dev/null 2>&1; then
+    echo "This environment is missing pip; bootstrapping it ..."
+    .venv/bin/python -m ensurepip --upgrade --default-pip
+fi
+
 echo "Installing Workflow-GPS (first run can take a few minutes) ..."
 .venv/bin/python -m pip install --quiet --upgrade pip
 .venv/bin/python -m pip install --quiet -e ".[serve]"

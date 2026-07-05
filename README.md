@@ -32,6 +32,32 @@ gone.
 The full model engine (LLM synthesis, sandboxed execution) is optional and
 configured separately — see **Installation** and **Configuration** below.
 
+### If something goes wrong
+
+Run the built-in check-up — it tests everything this machine needs and
+prints the exact fix for anything missing:
+
+```bash
+wfgps doctor          # or: .venv/bin/python -m workflow_gps.cli doctor
+```
+
+The traps it catches (and `wfgps run` now catches up front, with the same
+directions instead of a traceback):
+
+- **`wfgps run` needs the model engine** — install it with
+  `pip install "workflow-gps[engine]"` (`langgraph` + `litellm`).
+- **No model server answering** — by default the engine talks to a *local*
+  OpenAI-compatible server (vLLM / Ollama / LM Studio) at
+  `http://localhost:8000/v1`. Start one there, or point at your own endpoint
+  with `--config models.yaml` (see **Configuration**).
+- **`OPENAI_API_KEY` is not set** — litellm requires it even for local
+  servers; any value works for vLLM (e.g. `OPENAI_API_KEY=EMPTY`).
+- **Running `python src/workflow_gps/cli.py` directly** doesn't work
+  (relative imports need the package context) — use `wfgps …` after
+  installing, or `python -m workflow_gps.cli …`.
+- **A `.venv` without pip** (some stripped-down Python builds) — the setup
+  scripts now bootstrap pip automatically via `ensurepip`.
+
 ### Native app (single-file executable)
 
 Prefer a double-clickable app with no Python visible at all? Build one:

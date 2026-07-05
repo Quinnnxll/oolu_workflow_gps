@@ -211,3 +211,49 @@ class GatewayASGI:
             elif message["type"] == "lifespan.shutdown":
                 await send({"type": "lifespan.shutdown.complete"})
                 return
+
+
+_SIGNPOST = b"""Workflow-GPS: this is a signpost, not the gateway.
+
+`uvicorn workflow_gps.gateway.asgi:app` cannot start a usable gateway:
+GatewayASGI is a class that must be wired with a configured GatewayApp
+(identity validator, resolver, stores) before it can serve anything.
+
+To use Workflow-GPS locally:
+  non-developers : run setup.bat (Windows) or ./setup.sh (macOS/Linux)
+                   from the repository folder
+  developers     : wfgps desktop --open    (the local shell)
+                   wfgps serve             (the skills API)
+                   wfgps doctor            (check your installation)
+
+To embed the multi-tenant gateway, construct GatewayApp yourself and wrap
+it: GatewayASGI(app). See README.md.
+"""
+
+
+async def app(scope: dict, receive: Any, send: Any) -> None:
+    """The classic dead end (`uvicorn ...asgi:app`), turned into directions.
+
+    Instead of uvicorn's "Attribute 'app' not found", every request gets a
+    503 explaining what this module is and how to actually start the
+    product. Deliberately NOT a working gateway: it has no identity or
+    stores, and pretending otherwise would be worse than failing.
+    """
+    if scope["type"] == "lifespan":
+        while True:
+            message = await receive()
+            if message["type"] == "lifespan.startup":
+                await send({"type": "lifespan.startup.complete"})
+            elif message["type"] == "lifespan.shutdown":
+                await send({"type": "lifespan.shutdown.complete"})
+                return
+    if scope["type"] != "http":
+        return
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 503,
+            "headers": [(b"content-type", b"text/plain; charset=utf-8")],
+        }
+    )
+    await send({"type": "http.response.body", "body": _SIGNPOST})
