@@ -20,6 +20,14 @@ from .errors import (
     SafetyViolation,
     UnverifiedRunError,
 )
+from .execution import (
+    ContractMarket,
+    ContractNodeOutcome,
+    ContractRunResult,
+    ReservedActionsError,
+    compile_runnable,
+    execute_contract,
+)
 from .market import (
     DEFAULT_POLICIES,
     MODE_WEIGHTS,
@@ -96,6 +104,9 @@ __all__ = [
     "classify_listing",
     "ClearedPrice",
     "ConsumerAccount",
+    "ContractMarket",
+    "ContractNodeOutcome",
+    "ContractRunResult",
     "ContributionError",
     "ContributionResult",
     "CostRecovery",
@@ -127,6 +138,7 @@ __all__ = [
     "RatingService",
     "RatingStore",
     "RegistryStore",
+    "ReservedActionsError",
     "RewardBreakdown",
     "RewardSignals",
     "SafetyReport",
@@ -139,8 +151,10 @@ __all__ = [
     "WorkflowQuote",
     "build_run_binding",
     "commission_rate",
+    "compile_runnable",
     "competition_index",
     "estimate_user_value",
+    "execute_contract",
     "gross_from_policy",
     "is_duplicate_hash",
     "is_plagiarism",

@@ -46,6 +46,8 @@ class DesktopLoopbackApp:
             status, payload = await self._route(method, path, query, receive)
         except KeyError:
             status, payload = 404, {"error": "not_found"}
+        except PermissionError as exc:
+            status, payload = 403, {"error": str(exc)}
         except _BadRequest as exc:
             status, payload = 400, {"error": str(exc)}
         await _send_json(send, status, payload)
@@ -77,6 +79,19 @@ class DesktopLoopbackApp:
                     have=list(body.get("have", [])),
                     query=str(body.get("q", "")),
                     fill_gaps=bool(body.get("fill_gaps", False)),
+                )
+            except (ValueError, TypeError) as exc:
+                raise _BadRequest(str(exc)) from exc
+            return 200, view.model_dump(mode="json")
+        if method == "POST" and path == "/v1/assembly/confirm":
+            body = await _read_json(receive)
+            if not isinstance(body.get("contract"), dict):
+                raise _BadRequest("a contract object is required")
+            confirm_id = str(body.get("confirm_id") or "") or None
+            try:
+                # PermissionError (reserved actions) propagates -> 403.
+                view = self._svc.confirm_assembly(
+                    body["contract"], confirm_id=confirm_id
                 )
             except (ValueError, TypeError) as exc:
                 raise _BadRequest(str(exc)) from exc

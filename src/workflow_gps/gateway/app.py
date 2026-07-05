@@ -17,7 +17,6 @@ from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from uuid import uuid4
 
 from ..billing import (
     BillingService,
@@ -35,7 +34,6 @@ from ..identity.service import IdentityApprovalAuthority
 from ..identity.sessions import default_assurance
 from ..identity.tokens import OidcValidator
 from ..metering.attribution import AttributionStore
-from ..metering.models import NoderShare, RunBinding
 from ..nodeplace import (
     CandidateAssembler,
     ConsumerAccount,
@@ -48,12 +46,14 @@ from ..nodeplace import (
     QuoteMode,
     RatingError,
     RatingService,
+    ReservedActionsError,
     StepCandidates,
     SubscriptionPlan,
     UnverifiedRunError,
     Visibility,
     build_run_binding,
-    lineage_shares,
+    compile_runnable,
+    execute_contract,
     preview_assembly,
     reward_multiplier,
     utility,
@@ -62,18 +62,16 @@ from ..orchestrator import (
     DagRouteRunner,
     GoalSpec,
     OrchestratorError,
-    contract_to_blueprint,
 )
 from ..orchestrator.state import (
     PauseKind,
     Phase,
     ResumeInput,
-    RoutePlan,
     RunState,
     TaskContract,
 )
 from ..providers.vault import SecretVault
-from ..skills.contract import NodeContract, Slot, SubgraphBody
+from ..skills.contract import NodeContract, Slot
 from ..skills.models import ReusableSkill
 from ..skills.ports import ActionExecutor
 from .errors import GatewayError, WebhookError
@@ -954,111 +952,26 @@ class GatewayApp:
         except Exception as exc:
             raise GatewayError(400, "invalid_request", f"bad contract: {exc}") from exc
         try:
-            blueprint = contract_to_blueprint(contract)
+            blueprint = compile_runnable(contract)
+        except ReservedActionsError as exc:
+            raise GatewayError(403, "forbidden", str(exc)) from exc
         except ValueError as exc:
             raise GatewayError(400, "invalid_request", str(exc)) from exc
-        if any(item.reserved for item in blueprint.actions):
-            raise GatewayError(
-                403,
-                "forbidden",
-                "contract contains reserved actions; submit it through the "
-                "orchestrator flow so approval can be granted",
-            )
 
         def submit() -> dict:
-            run_id = uuid4().hex
-            children = (
-                contract.body.nodes
-                if isinstance(contract.body, SubgraphBody)
-                else [contract]
-            )
-            market_nodes: list[dict] = []
-            merged: dict[str, float] = {}
-            gross_total = 0.0
-            cost_total = 0.0
-            representative: str | None = None
-            for child in children:
-                entry = assembler.assemble_version(child.id)
-                if entry is None:
-                    continue  # a local/gap node: no marketplace economics
-                candidate, signals = entry.candidate, entry.signals
-                cleared = book.clear(
-                    class_key=candidate.class_key,
-                    node_class=candidate.node_class,
-                    ask=candidate.cleared_price,
-                    cost=candidate.cost,
-                    substitutes=signals.substitutes,
-                )  # commit: a real run moves the market reference
-                representative = representative or candidate.version_id
-                gross_total += cleared.cleared
-                cost_total += candidate.cost.automation_cost
-                shares = lineage_shares(
-                    candidate.noder_principal,
-                    assembler.lineage_for(candidate.version_id),
-                    executing_multiplier=reward_multiplier(signals).multiplier,
-                )
-                for share in shares:
-                    merged[share.noder_principal] = merged.get(
-                        share.noder_principal, 0.0
-                    ) + (share.weight * share.multiplier * cleared.cleared)
-                market_nodes.append(
-                    {
-                        "version_id": candidate.version_id,
-                        "cleared": cleared.cleared,
-                        "noders": [s.noder_principal for s in shares],
-                    }
-                )
-            if representative is not None and gross_total > 0:
-                total_weight = sum(merged.values())
-                self._attribution.bind(
-                    RunBinding(
-                        run_id=run_id,
-                        version_id=representative,
-                        consumer_tenant=session.tenant_id,
-                        consumer_principal=session.principal_id,
-                        gross=gross_total,
-                        provider_cost=cost_total,
-                        shares=[
-                            NoderShare(
-                                noder_principal=principal,
-                                weight=weight / total_weight,
-                            )
-                            for principal, weight in sorted(merged.items())
-                        ],
-                    )
-                )
-
-            record = self._contract_runner.execute(
-                RoutePlan(chosen=blueprint, alternatives=[], total_cost=0.0),
-                idempotency_key=f"{run_id}:exec:1",
-                attempt=1,
-            )
-            # The same audit event the deriver mints money from — but only
-            # on a verified success, exactly like orchestrated runs.
-            self._durable.audit.append(
-                "workflow.executed",
-                {
-                    "run_id": run_id,
-                    "status": record.status.value,
-                    "idempotency_key": record.idempotency_key,
-                },
+            result = execute_contract(
+                contract,
+                blueprint,
+                runner=self._contract_runner,
+                assembler=assembler,
+                price_book=book,
+                attribution=self._attribution,
+                audit=self._durable.audit,
+                consumer_tenant=session.tenant_id,
+                consumer_principal=session.principal_id,
             )
             self._metrics["contract_runs"] += 1
-            return {
-                "run_id": run_id,
-                "status": record.status.value,
-                "error": record.error,
-                "outcomes": [
-                    {"status": o.status.value, "error": o.error}
-                    for o in record.action_outcomes
-                ],
-                "market": {
-                    "gross": gross_total,
-                    "provider_cost": cost_total,
-                    "nodes": market_nodes,
-                    "noders": sorted(merged),
-                },
-            }
+            return result.model_dump(mode="json")
 
         key = request.header("idempotency-key")
         result = (

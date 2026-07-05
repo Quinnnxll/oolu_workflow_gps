@@ -57,6 +57,18 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- Desktop confirm button: `DesktopService.confirm_assembly` runs the
+  contract the preview returned — through the shared
+  `nodeplace.execution.execute_contract`, the exact code path behind the
+  gateway's `POST /v1/runs/contract` (extracted in this change), so there
+  is one place where contract runs turn into money: committed per-node
+  clearing, one aggregate lineage-weighted `RunBinding`, and the
+  deriver-payable `workflow.executed` audit event. Served over the
+  loopback at `POST /v1/assembly/confirm`; reserved actions are refused
+  with 403 (`ReservedActionsError`, a `PermissionError`), executors are
+  backend-configured (never UI-supplied), and a client `confirm_id` makes
+  the click idempotent — double-clicks replay the first result without
+  re-executing.
 - Direct contract execution + desktop assembly preview: `POST
   /v1/runs/contract` takes the contract `/v1/market/assemble` returned,
   compiles it to a DAG blueprint (`contract_to_blueprint`), and executes it

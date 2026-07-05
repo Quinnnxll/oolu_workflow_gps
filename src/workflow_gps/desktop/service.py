@@ -7,8 +7,13 @@ are driven via the durable service's resume path (so the orchestrator's executio
 preflight still applies), approvals are minted only from an authorized identity
 session, and provider secrets live in the vault and never appear in a view.
 
-There is deliberately **no execute method here** — the shell cannot run code or
-bypass policy; it can only request backend operations and present their results.
+There is deliberately **no general execute method here** — the shell cannot run
+arbitrary code or bypass policy; it can only request backend operations and
+present their results. The one narrow exception is ``confirm_assembly``: it runs
+a previewed marketplace contract, but only on the backend-configured executors,
+only through the same shared money path as the gateway's ``/v1/runs/contract``,
+and never for contracts containing reserved actions — those are refused and must
+go through the approval flow like any other task.
 """
 
 from __future__ import annotations
@@ -36,6 +41,8 @@ from .views import (
     ActionView,
     AssemblyPayoutView,
     AssemblyPreviewView,
+    AssemblyRunStepView,
+    AssemblyRunView,
     AssemblyStepView,
     AuditEntryView,
     AuditView,
@@ -89,6 +96,8 @@ class DesktopService:
         docker_available: bool = True,
         market=None,  # nodeplace.CandidateAssembler, when the shell has one
         price_book=None,  # nodeplace.PriceBook
+        contract_runner=None,  # orchestrator.DagRouteRunner over backend executors
+        attribution=None,  # metering.AttributionStore
     ):
         self._durable = durable
         self._approval = approval_authority
@@ -97,7 +106,10 @@ class DesktopService:
         self._docker_available = docker_available
         self._market = market
         self._price_book = price_book
+        self._contract_runner = contract_runner
+        self._attribution = attribution
         self._connections: dict[str, _Connection] = {}
+        self._confirmed: dict[str, AssemblyRunView] = {}
 
     # ------------------------------------------------------------------ #
     # Task entry + guided clarification.                                  #
@@ -333,6 +345,63 @@ class DesktopService:
                 else None
             ),
         )
+
+    def confirm_assembly(
+        self, contract: dict[str, Any], *, confirm_id: str | None = None
+    ) -> AssemblyRunView:
+        """The confirm button: run the contract the preview returned.
+
+        Executes through the same shared money path as the gateway's
+        ``POST /v1/runs/contract`` — every marketplace node clears at a
+        committed price, the run binds once with the lineage-weighted
+        aggregate split, and earnings accrue only on platform-verified
+        success. Reserved actions are refused (``PermissionError`` -> 403
+        at the loopback); executors are backend-configured, never
+        UI-supplied. A ``confirm_id`` makes the click idempotent: replays
+        return the first result without running anything twice.
+        """
+        if (
+            self._market is None
+            or self._price_book is None
+            or self._contract_runner is None
+            or self._attribution is None
+        ):
+            raise KeyError("contract execution is not configured for this shell")
+        if confirm_id and confirm_id in self._confirmed:
+            return self._confirmed[confirm_id]
+        # Imported lazily so a shell without marketplace features never pays
+        # the nodeplace import.
+        from ..nodeplace.execution import compile_runnable, execute_contract
+        from ..skills.contract import NodeContract
+
+        parsed = NodeContract.model_validate(contract)
+        blueprint = compile_runnable(parsed)
+        result = execute_contract(
+            parsed,
+            blueprint,
+            runner=self._contract_runner,
+            assembler=self._market,
+            price_book=self._price_book,
+            attribution=self._attribution,
+            audit=self._durable.audit,
+            consumer_tenant="local",
+            consumer_principal="desktop",
+        )
+        view = AssemblyRunView(
+            run_id=result.run_id,
+            status=result.status,
+            error=result.error,
+            steps=[
+                AssemblyRunStepView(status=o["status"], error=o["error"])
+                for o in result.outcomes
+            ],
+            gross=result.market.gross,
+            provider_cost=result.market.provider_cost,
+            noders=list(result.market.noders),
+        )
+        if confirm_id:
+            self._confirmed[confirm_id] = view
+        return view
 
     # ------------------------------------------------------------------ #
     # Worker health + trusted/untrusted execution labeling.              #

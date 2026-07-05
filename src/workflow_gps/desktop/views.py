@@ -176,6 +176,30 @@ class AssemblyPreviewView(BaseModel):
     contract: dict[str, Any] | None = None
 
 
+class AssemblyRunStepView(BaseModel):
+    """One executed action's outcome inside a confirmed assembly run."""
+
+    model_config = ConfigDict(frozen=True)
+
+    status: str
+    error: str | None = None
+
+
+class AssemblyRunView(BaseModel):
+    """What the confirm button gets back: the run's outcome plus the
+    committed economics (who is owed what once the platform verifies it)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    run_id: str
+    status: str
+    error: str | None = None
+    steps: list[AssemblyRunStepView] = Field(default_factory=list)
+    gross: float = 0.0
+    provider_cost: float = 0.0
+    noders: list[str] = Field(default_factory=list)
+
+
 class ExportBundle(BaseModel):
     """A local data export for one workflow — secrets are never included."""
 
