@@ -107,6 +107,7 @@ class DesktopService:
         attribution=None,  # metering.AttributionStore
         trace_store=None,  # knowledge.TraceStore: confirmed runs sharpen picks
         rng=None,  # random.Random for explore-mode assembly; seedable
+        proposal_model=None,  # orchestrator.ProposalModel: advice as a prior
         wallet_lookup=None,  # () -> the LINKED wallet's remaining balance | None
         session_manager=None,  # identity.SessionManager: loopback decisions
         hold_ttl_seconds=None,  # held contracts expire after this; None=never
@@ -127,6 +128,10 @@ class DesktopService:
         self._attribution = attribution
         self._trace_store = trace_store
         self._rng = rng or random.Random()
+        # A model's opinion over producer picks — advisory (a prior over
+        # the same posteriors), with its metered cost surfaced on previews
+        # as planning_cost so budgets judge advice as spend.
+        self._proposal_model = proposal_model
         # A partial view of the user's assets by design: budgets never cap
         # on the linked balance, they only flag it for review.
         self._wallet_lookup = wallet_lookup
@@ -385,6 +390,9 @@ class DesktopService:
             # explore: Thompson-sample picks so unproven alternatives get
             # real chances proportional to their remaining uncertainty.
             rng=self._rng if explore else None,
+            # A model's opinion enters picks as a prior; what the advice
+            # cost surfaces as planning_cost on the view below.
+            proposal_model=self._proposal_model,
             budget=BudgetPolicy(hard_cap=budget_cap, review_threshold=review_threshold),
             spend_lookup=self._spend_history,
             wallet_balance=self._wallet_balance(),
@@ -412,6 +420,7 @@ class DesktopService:
             ],
             estimated_gross_total=preview.estimated_gross_total,
             platform_margin_preview=preview.platform_margin_preview,
+            planning_cost=preview.planning_cost,
             contract=(
                 preview.contract.model_dump(mode="json")
                 if preview.contract is not None

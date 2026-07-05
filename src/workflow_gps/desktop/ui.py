@@ -250,7 +250,8 @@ function previewCard(p, form) {
         ? h("div", { class: "muted" }, "missing: " + p.missing.join(", ")) : null,
       h("div", { class: "muted" },
         "estimated total: " + money(p.estimated_gross_total)
-        + " · platform margin: " + money(p.platform_margin_preview))),
+        + " · platform margin: " + money(p.platform_margin_preview)
+        + (p.planning_cost ? " · planning: " + money(p.planning_cost) : ""))),
     h("table", {},
       h("tr", {}, h("th", {}, "step"), h("th", {}, "kind"),
         h("th", {}, "price"), h("th", {}, "payouts")),

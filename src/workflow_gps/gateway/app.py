@@ -175,6 +175,7 @@ class GatewayApp:
         contract_executors: dict[str, ActionExecutor] | None = None,
         trace_store: TraceStore | None = None,
         rng: random.Random | None = None,
+        proposal_model=None,  # orchestrator.ProposalModel: advice as a prior
         wallet_lookup: Callable[[str, str], float | None] | None = None,
         payout_store: PayoutStore | None = None,
         payout_adapter: PayoutAdapter | None = None,
@@ -202,6 +203,10 @@ class GatewayApp:
         # Thompson sampling for explore-mode assembly; injectable so tests
         # (and reproducibility-minded operators) can seed it.
         self._rng = rng or random.Random()
+        # A model's opinion over producer picks — advisory (a prior over
+        # the same posteriors), and its metered cost rides the preview's
+        # planning_cost so budgets judge advice as spend.
+        self._proposal_model = proposal_model
         # (tenant, principal) -> the LINKED wallet's remaining balance, or
         # None. A partial view of the user's assets by design: budgets never
         # cap on it, they only flag it for review.
@@ -976,6 +981,9 @@ class GatewayApp:
             # explore: Thompson-sample producer picks from those posteriors
             # instead of taking the greedy best — opt-in per request.
             rng=self._rng if bool(body.get("explore", False)) else None,
+            # A model's opinion enters picks as a prior; what the advice
+            # cost rides the preview and the budget verdict below.
+            proposal_model=self._proposal_model,
             budget=self._budget_policy(body),
             spend_lookup=lambda goal_class: self._spend_history(session, goal_class),
             wallet_balance=self._wallet_balance(session),

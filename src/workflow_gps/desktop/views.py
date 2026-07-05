@@ -173,6 +173,9 @@ class AssemblyPreviewView(BaseModel):
     steps: list[AssemblyStepView] = Field(default_factory=list)
     estimated_gross_total: float = 0.0
     platform_margin_preview: float = 0.0
+    # What the proposal model's advice cost while assembling this plan —
+    # not market gross, but real spend the budget verdict judged.
+    planning_cost: float = 0.0
     contract: dict[str, Any] | None = None
     # Orderings this desktop's own runs consistently exhibited, already
     # stamped onto the contract as learned edges the run will honor.

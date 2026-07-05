@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..billing.pricing import PricingEngine
 from ..knowledge.traces import TraceStore, route_node_key
-from ..orchestrator.assembler import ContractAssembler, GoalSpec
+from ..orchestrator.assembler import ContractAssembler, GoalSpec, ProposalModel
 from ..skills.contract import (
     ContractEdge,
     NodeContract,
@@ -70,6 +70,10 @@ class AssemblyPreview(BaseModel):
     nodes: list[AssemblyNodePreview] = Field(default_factory=list)
     estimated_gross_total: float = 0.0
     platform_margin_preview: float = 0.0
+    # What the proposal model's advice cost while assembling this plan.
+    # Not part of the market gross (no noder earns it), but real money the
+    # budget verdict below judges alongside the gross.
+    planning_cost: float = 0.0
     # Orderings the caller's own runs consistently exhibited, stamped onto
     # the contract as learned edges: [{"first": name, "then": name}, ...].
     learned_order: list[dict[str, str]] = Field(default_factory=list)
@@ -168,6 +172,7 @@ def preview_assembly(
     trace_store: TraceStore | None = None,
     trace_context: str = "",
     rng: random.Random | None = None,
+    proposal_model: ProposalModel | None = None,
     budget: BudgetPolicy | None = None,
     # goal_class | None -> the caller's committed run grosses (None = all
     # classes). A lookup, not a list: the plan's class is only known after
@@ -189,6 +194,11 @@ def preview_assembly(
     Without one, picks are deterministic (best posterior mean, stable
     tie-breaks) — the right default for a preview the user is about to pay
     for.
+
+    With a ``proposal_model``, a model's opinion enters each pick as a
+    prior over the same posteriors — and what the advice cost surfaces as
+    ``planning_cost``, judged by the budget verdict together with the
+    market gross: a plan that needed advice is honestly dearer.
     """
     marketplace = assembler.contracts(query)
     by_id = {entry.contract.id: entry for entry in marketplace}
@@ -199,6 +209,7 @@ def preview_assembly(
         library,
         rng=rng,
         fill_gaps_with_scripts=fill_gaps,
+        proposal_model=proposal_model,
     ).assemble(goal)
 
     contract = result.contract
@@ -277,9 +288,12 @@ def preview_assembly(
         nodes=nodes,
         estimated_gross_total=gross_total,
         platform_margin_preview=margin_total,
+        planning_cost=result.planning_cost,
         learned_order=learned_order,
         budget=assess_budget(
-            gross_total,
+            # Planning advice was real spend: budgets judge the whole cost
+            # of the plan, not just the market's share of it.
+            gross_total + result.planning_cost,
             policy=budget,
             spend_history=spend_lookup(None) if spend_lookup else None,
             class_history=(

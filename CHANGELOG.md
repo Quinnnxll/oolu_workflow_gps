@@ -2,6 +2,32 @@
 
 All notable changes to Workflow-GPS are documented here.
 
+## Unreleased
+
+- Added the `ProposalModel` seam to `ContractAssembler`: a model may weigh
+  in on contested producer picks, but only as a **prior** — its `[0, 1]`
+  weights enter the same Beta posterior verified history feeds, as
+  pseudo-observations (`proposal_strength`, default 3) that decide
+  thin-history ties and wash out as real evidence accumulates. Advisory by
+  construction: unknown ids are dropped, wild weights clamp, exceptions
+  (including a dead model endpoint) downgrade to verified-history-only
+  assembly, and a single-candidate pick never spends a model call.
+- Added `metering.model_calls`: `ModelCallMeter` records every completion's
+  token telemetry under a purpose tag and a `ModelPriceTable` (per-tier
+  cost per million tokens; unknown tiers priced conservatively) turns it
+  into money — model calls are never free.
+- Added `orchestrator.proposals.GatewayProposalModel`: the seam implemented
+  over the same routing `Gateway` the synthesis engine uses (frozen
+  cache-safe system prompt, fast tier, small completion budget, strongest
+  candidates shortlisted), with defensive weight parsing — unreadable
+  advice is no advice — and every call metered.
+- Assembly previews now surface `planning_cost` (what the advice cost,
+  distinct from market gross since no noder earns it) on both surfaces,
+  and the budget verdict judges **gross + planning cost**: a plan that
+  needed advice is honestly dearer. New ctor knob `proposal_model` on
+  `GatewayApp`, `DesktopService`, and `build_desktop_runtime`; the desktop
+  assemble screen shows the planning line when it is nonzero.
+
 ## v0.6.0 — 2026-07-05
 
 Release notes: `docs/releases/v0.6.0.md`.

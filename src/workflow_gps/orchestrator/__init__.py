@@ -22,9 +22,12 @@ from .adaptive import (
     apply_sop_to_blueprint,
 )
 from .assembler import (
+    DEFAULT_PROPOSAL_STRENGTH,
     AssemblyResult,
     ContractAssembler,
     GoalSpec,
+    Proposal,
+    ProposalModel,
     contract_from_registered,
 )
 from .contract import compile_with_owners, contract_to_blueprint
@@ -49,6 +52,12 @@ from .ports import (
     ResumeError,
     RouteOptimizer,
     WorkflowExecutor,
+)
+from .proposals import (
+    PROPOSAL_PURPOSE,
+    PROPOSAL_SYSTEM_PROMPT,
+    GatewayProposalModel,
+    parse_weights,
 )
 from .scheduler import DagRouteRunner, action_node_key
 from .state import (
@@ -94,7 +103,10 @@ __all__ = [
     "TraceFeedbackSink",
     "AssemblyResult",
     "ContractAssembler",
+    "DEFAULT_PROPOSAL_STRENGTH",
     "GoalSpec",
+    "Proposal",
+    "ProposalModel",
     "action_node_key",
     "apply_sop_to_blueprint",
     "compile_with_owners",
@@ -111,8 +123,12 @@ __all__ = [
     "HeuristicIntaker",
     "HumanControlDecision",
     "HumanControlPolicy",
+    "GatewayProposalModel",
     "InMemoryRunStateStore",
     "Incident",
+    "PROPOSAL_PURPOSE",
+    "PROPOSAL_SYSTEM_PROMPT",
+    "parse_weights",
     "Intaker",
     "IntakeModel",
     "LeastCostRouteOptimizer",

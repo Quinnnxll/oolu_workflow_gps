@@ -8,7 +8,11 @@ slots the user wants produced and the slots they already have;
    **verified history** (posterior success mean, then measured cost, then the
    fewest unresolved inputs, then name for determinism; pass an ``rng`` to
    Thompson-sample instead, which personalizes and explores exactly like the
-   route optimizer);
+   route optimizer). A ``ProposalModel`` may weigh in, but only as a **prior**:
+   its weights enter the same Beta posterior as pseudo-observations, so a
+   model's opinion decides thin-history ties and washes out as verified runs
+   accumulate — advice never outranks evidence, and a failing model never
+   blocks assembly;
 2. the chosen producer's ``consumes`` become new wants, minus what is on hand
    and what other selected contracts already produce — recursively, until the
    plan closes;
@@ -26,8 +30,9 @@ keeps its one job.
 
 from __future__ import annotations
 
+import logging
 import random
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Protocol, Sequence, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -41,7 +46,45 @@ from ..skills.contract import (
 )
 from ..skills.registry import RegisteredSkill
 
+logger = logging.getLogger(__name__)
+
 _MAX_ROUNDS = 32  # a plan deeper than this is a modelling error, not a plan
+
+# A full endorsement is worth this many verified observations: enough to
+# decide a thin-history tie, few enough that a handful of real runs
+# overrides the model's opinion.
+DEFAULT_PROPOSAL_STRENGTH = 3.0
+
+
+class Proposal(BaseModel):
+    """A model's opinion about one pick — and what forming it cost.
+
+    ``weights`` maps candidate contract ids to endorsements in ``[0, 1]``
+    (1 = strongly recommended, 0 = strongly advised against; an absent id
+    is "no opinion"). ``cost`` is what the model call itself cost, so
+    planning advice enters the same budget math as the plan it shaped.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    weights: dict[str, float] = Field(default_factory=dict)
+    cost: float = 0.0
+
+
+@runtime_checkable
+class ProposalModel(Protocol):
+    """Advises the assembler on producer picks. Advisory by contract:
+    implementations may raise or return garbage and assembly still proceeds
+    on verified history alone."""
+
+    def propose(
+        self,
+        *,
+        goal: GoalSpec,
+        slot: Slot,
+        selected: Sequence[str],
+        candidates: Sequence[NodeContract],
+    ) -> Proposal: ...
 
 
 class GoalSpec(BaseModel):
@@ -63,6 +106,9 @@ class AssemblyResult(BaseModel):
     selected: list[str] = Field(default_factory=list)  # contract names, in pick order
     gap_filled: list[str] = Field(default_factory=list)  # slot names given script nodes
     missing: list[Slot] = Field(default_factory=list)
+    # What the proposal model's advice cost, summed over every consulted
+    # pick — planning is not free, and budgets get to see that.
+    planning_cost: float = 0.0
 
     @property
     def complete(self) -> bool:
@@ -83,10 +129,14 @@ class ContractAssembler:
         *,
         rng: random.Random | None = None,
         fill_gaps_with_scripts: bool = False,
+        proposal_model: ProposalModel | None = None,
+        proposal_strength: float = DEFAULT_PROPOSAL_STRENGTH,
     ):
         self._contracts = contracts
         self._rng = rng
         self._fill_gaps = fill_gaps_with_scripts
+        self._proposal_model = proposal_model
+        self._proposal_strength = proposal_strength
 
     def _library(self) -> list[NodeContract]:
         if callable(self._contracts):
@@ -102,6 +152,7 @@ class ContractAssembler:
         missing: list[Slot] = []
         frontier: list[Slot] = list(goal.want)
         rounds = 0
+        planning_cost = 0.0
 
         def satisfied(slot: Slot) -> bool:
             if any(owned.matches(slot) for owned in have):
@@ -117,7 +168,10 @@ class ContractAssembler:
             slot = frontier.pop(0)
             if satisfied(slot) or any(m == slot for m in missing):
                 continue
-            producer = self._pick_producer(slot, library, exclude=set(selected))
+            producer, advice_cost = self._pick_producer(
+                goal, slot, library, selected=selected_order, exclude=set(selected)
+            )
+            planning_cost += advice_cost
             if producer is None:
                 missing.append(slot)
                 continue
@@ -143,6 +197,7 @@ class ContractAssembler:
                 selected=selected_order,
                 gap_filled=gap_filled,
                 missing=missing or list(goal.want),
+                planning_cost=planning_cost,
             )
         return AssemblyResult(
             contract=NodeContract(
@@ -155,12 +210,19 @@ class ContractAssembler:
             ),
             selected=selected_order,
             gap_filled=gap_filled,
+            planning_cost=planning_cost,
         )
 
     # ------------------------------------------------------------------ #
     def _pick_producer(
-        self, slot: Slot, library: list[NodeContract], *, exclude: set[str]
-    ) -> NodeContract | None:
+        self,
+        goal: GoalSpec,
+        slot: Slot,
+        library: list[NodeContract],
+        *,
+        selected: list[str],
+        exclude: set[str],
+    ) -> tuple[NodeContract | None, float]:
         candidates = [
             contract
             for contract in library
@@ -168,22 +230,74 @@ class ContractAssembler:
             and any(produced.matches(slot) for produced in contract.produces)
         ]
         if not candidates:
-            return None
+            return None, 0.0
+
+        weights, advice_cost = self._proposal(goal, slot, selected, candidates)
 
         def score(contract: NodeContract) -> tuple:
             stats = contract.stats or NodeStats()
+            successes, failures = float(stats.successes), float(stats.failures)
+            endorsement = weights.get(contract.id)
+            if endorsement is not None:
+                # The model's opinion enters the SAME Beta posterior that
+                # verified history feeds, as pseudo-observations — a prior
+                # that decides thin-history ties and washes out as real
+                # evidence accumulates.
+                successes += self._proposal_strength * endorsement
+                failures += self._proposal_strength * (1.0 - endorsement)
             if self._rng is not None:
-                quality = self._rng.betavariate(
-                    1.0 + stats.successes, 1.0 + stats.failures
-                )
+                quality = self._rng.betavariate(1.0 + successes, 1.0 + failures)
             else:
-                quality = stats.success_mean
+                # The posterior mean — identical to stats.success_mean when
+                # the model had no opinion, so no-model picks are unchanged.
+                quality = (1.0 + successes) / (2.0 + successes + failures)
             cost = stats.cost_ewma if stats.cost_ewma is not None else 1.0
             # Higher quality first; then cheaper; then fewer inputs to chase;
             # then name, so ties are stable across runs.
             return (-quality, cost, len(contract.consumes), contract.name)
 
-        return min(candidates, key=score)
+        return min(candidates, key=score), advice_cost
+
+    def _proposal(
+        self,
+        goal: GoalSpec,
+        slot: Slot,
+        selected: list[str],
+        candidates: list[NodeContract],
+    ) -> tuple[dict[str, float], float]:
+        """Ask the proposal model, defensively. Bad advice becomes no advice.
+
+        A single candidate is never worth a model call — there is no choice
+        to make. Unknown ids are dropped, weights clamp to [0, 1], and any
+        exception downgrades to verified-history-only assembly: the model
+        advises the marketplace, it can never take it down.
+        """
+        if self._proposal_model is None or len(candidates) < 2:
+            return {}, 0.0
+        try:
+            proposal = self._proposal_model.propose(
+                goal=goal,
+                slot=slot,
+                selected=list(selected),
+                candidates=list(candidates),
+            )
+        except Exception:
+            logger.warning(
+                "proposal model failed for slot %r; assembling on verified history",
+                slot.name,
+                exc_info=True,
+            )
+            return {}, 0.0
+        ids = {contract.id for contract in candidates}
+        weights: dict[str, float] = {}
+        for contract_id, weight in proposal.weights.items():
+            if contract_id not in ids:
+                continue
+            try:
+                weights[contract_id] = min(1.0, max(0.0, float(weight)))
+            except (TypeError, ValueError):
+                continue
+        return weights, max(0.0, float(proposal.cost))
 
 
 def _gap_script(goal: GoalSpec, slot: Slot) -> NodeContract:
