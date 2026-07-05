@@ -25,7 +25,7 @@ moves only when the geometry above checks out.
 
 from __future__ import annotations
 
-from ...skills.contract import ActionsBody, NodeContract, Slot
+from ...skills.contract import ActionsBody, NodeContract, Slot, ValueInput
 from ...skills.models import ActionEvent
 from .verify import GeometrySpec
 
@@ -100,6 +100,140 @@ def cad_starter_pack() -> list[NodeContract]:
                     parameters={
                         "stl": "bracket.stl",
                         "spec": BRACKET_SPEC.model_dump(mode="json"),
+                    },
+                )
+            ]
+        ),
+    )
+    return [render, verify]
+
+
+# --------------------------------------------------------------------------- #
+# The parametric plate: the creative step as declared inputs.                  #
+# --------------------------------------------------------------------------- #
+# The scaffolding of a mechanical-design workflow is deterministic; the
+# creative step is VALUES. This node declares them — with defaults and hard
+# bounds — and its verification spec is derived from the bounds so that
+# EVERY admissible fill verifies:
+#
+#   volume = t·(w·d − A₆₄(r)) with A₆₄(r) = 32·r²·sin(π/32)  (inscribed 64-gon)
+#     min over the box: t=3, w·d=450, r=4 → 3·(450 − 50.19) ≈ 1199.4
+#     max over the box: t=6, w·d=1800, r→0 → < 10800
+#   genus = 1 for every fill: the hole is centered and r ≤ 4 < depth_min/2,
+#     so it never breaches an edge, and the cutting cylinder spans
+#     [-1, t+1] so it always passes through.
+#
+# A value patcher (LLM, user, default) chooses WITHIN the box the spec
+# already covers — creativity inside verified walls.
+PARAMETRIC_PLATE_SCAD = """\
+$fn = 64;
+difference() {
+    cube([{width}, {depth}, {thickness}]);
+    translate([{width}/2, {depth}/2, -1])
+        cylinder(h = {thickness} + 2, r = {hole_radius});
+}
+"""
+
+PARAMETRIC_PLATE_INPUTS = [
+    ValueInput(
+        name="width",
+        description="plate width in mm",
+        default=40.0,
+        minimum=30.0,
+        maximum=60.0,
+    ),
+    ValueInput(
+        name="depth",
+        description="plate depth in mm",
+        default=20.0,
+        minimum=15.0,
+        maximum=30.0,
+    ),
+    ValueInput(
+        name="thickness",
+        description="plate thickness in mm",
+        default=4.0,
+        minimum=3.0,
+        maximum=6.0,
+    ),
+    ValueInput(
+        name="hole_radius",
+        description="central bolt-hole radius in mm",
+        default=3.0,
+        minimum=2.0,
+        maximum=4.0,
+    ),
+]
+
+PARAMETRIC_PLATE_SPEC = GeometrySpec(
+    require_watertight=True,
+    min_volume=1150.0,  # below the bounds-minimum 1199.4, above nonsense
+    max_volume=10801.0,  # the bounds-maximum box, hole only subtracts
+    fits_within=(60.01, 30.01, 6.01),
+    at_least=(29.99, 14.99, 2.99),
+    expected_genus=1,  # exactly one through-hole, for EVERY admissible fill
+)
+
+PLATE_STL = Slot(
+    name="plate_stl",
+    value_type="path",
+    role="stl",
+    description="rendered parametric plate",
+)
+PLATE_REPORT = Slot(
+    name="plate_report",
+    value_type="json",
+    role="geometry-report",
+    description="measured geometry with a pass/fail verdict",
+)
+
+
+def parametric_plate_pack() -> list[NodeContract]:
+    """Render + verify for the parametric plate — creative values enter
+    through declared inputs, verification stays sovereign."""
+    render = NodeContract(
+        id="cad.plate.render",
+        name="model parametric plate",
+        description=(
+            "renders a plate whose width/depth/thickness/hole are declared "
+            "inputs a value patcher fills within hard bounds"
+        ),
+        provenance="human",
+        inputs=list(PARAMETRIC_PLATE_INPUTS),
+        produces=[PLATE_STL],
+        body=ActionsBody(
+            actions=[
+                ActionEvent(
+                    correlation_id="cad-plate",
+                    adapter="cad",
+                    operation="render_stl",
+                    parameters={
+                        "source": {"$template": PARAMETRIC_PLATE_SCAD},
+                        "output": "plate.stl",
+                    },
+                )
+            ]
+        ),
+    )
+    verify = NodeContract(
+        id="cad.plate.verify",
+        name="verify parametric plate geometry",
+        description=(
+            "checks the rendered plate against bounds-derived spec: every "
+            "admissible fill verifies, everything else fails the run"
+        ),
+        provenance="human",
+        consumes=[PLATE_STL],
+        produces=[PLATE_REPORT],
+        body=ActionsBody(
+            actions=[
+                ActionEvent(
+                    correlation_id="cad-plate",
+                    adapter="cad",
+                    operation="verify_geometry",
+                    parameters={
+                        "stl": "plate.stl",
+                        "spec": PARAMETRIC_PLATE_SPEC.model_dump(mode="json"),
                     },
                 )
             ]

@@ -24,6 +24,7 @@ from .contract import (
     ScriptBody,
     Slot,
     SubgraphBody,
+    ValueInput,
     classify_risk,
     derive_data_edges,
 )
@@ -33,6 +34,13 @@ from .discovery import (
     ToolSpec,
     discover_tools,
     resolve_file,
+)
+from .inputs import (
+    BoundInput,
+    bind_inputs,
+    inputs_manifest,
+    resolve_values,
+    validate_value,
 )
 from .learner import (
     LearnedSkill,
@@ -168,6 +176,12 @@ __all__ = [
     "ForbidRule",
     "NodeContract",
     "NodeStats",
+    "BoundInput",
+    "ValueInput",
+    "bind_inputs",
+    "inputs_manifest",
+    "resolve_values",
+    "validate_value",
     "ScriptBody",
     "Slot",
     "StandardOperatingProcedure",

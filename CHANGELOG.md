@@ -2,6 +2,60 @@
 
 All notable changes to Workflow-GPS are documented here.
 
+## Unreleased
+
+Value patching — the mechanical-design scenario: deterministic
+scaffolding (open the app, open the file, select the tool) chains by
+slots, and at the creative step the run pulls the node's declared input
+list and lets a smart plugin fill the values:
+
+- **`ValueInput` on `NodeContract.inputs`**: a node declares its creative
+  values — name, description, type (`number` / `string` / `choice`), an
+  honest default, hard `minimum`/`maximum` bounds or a closed choice set —
+  instead of hardcoding them. Actions reference them with two placeholder
+  forms inside parameters: `{"$input": name}` (whole-value) and
+  `{"$template": "...{hole}..."}` (named holes in source text; **numbers
+  and choices only** — free strings in templates are refused at bind time
+  as an injection vector).
+- **`skills/inputs.py`**: `inputs_manifest` (qualified `"<node>.<name>"`
+  names across a subgraph; duplicate child names refused), `validate_value`
+  (numbers clamp into bounds, hallucinated choices revert to the default),
+  `resolve_values` (precedence **user > patcher > default**, strict
+  unknown-key refusal, garbage degrades to the default), and `bind_inputs`
+  (substitutes resolved values into every placeholder; identity when there
+  are none).
+- **`orchestrator/patchers.py`** — the smart plugin seam: `ValuePatcher`
+  protocol, `DefaultValuePatcher` (defaults, free), and
+  `GatewayValuePatcher`, which fills the WHOLE manifest with **one batched
+  model call** (the node adapts the model via its declared descriptions,
+  defaults, and bounds), meters it under `values.patch`, and boxes every
+  returned value through `validate_value` — unknown names drop, unusable
+  output means defaults. `patch_or_defaults` guards the run path: no
+  patcher, a raising patcher, or a dead endpoint all mean the declared
+  defaults run; a creative model can improve a run, never block one.
+- **Gateway wiring**: listings carry `inputs` (`POST /v1/nodeplace`
+  passthrough to the marketplace `NodeContract`), `/v1/market/assemble`
+  previews now list the assembled plan's needed inputs with defaults and
+  bounds, and `POST /v1/runs/contract` accepts `{"inputs": {...}}`,
+  patches + binds **before** compilation (held reserved contracts store
+  the concrete values an approver will actually judge), adds the metered
+  `patch_cost` to the budget-gated estimate, and surfaces it on the run
+  response. Contract-run `outcomes` now include each action's `evidence`,
+  so callers see what verification measured.
+- **CAD**: `parametric_plate_pack()` — a plate whose width, depth,
+  thickness, and hole radius are declared bounded inputs feeding a
+  `$template` OpenSCAD source, with a verification spec derived from the
+  bounds so EVERY admissible fill verifies (volume brackets computed from
+  `t·(w·d − A₆₄(r))`, genus 1 provable for the whole box); and
+  `rect_plate_with_hole` — an exact watertight genus-1 reference solid
+  matching the closed form to 1e-9, used as the test instrument.
+- Tests: `tests/test_value_patching.py` proves the scenario end to end
+  through the public gateway — five marketplace nodes assembled by slots
+  alone, scaffolding executed in order before the creative step, an LLM
+  patch (one metered call) clamped into bounds with invented parameters
+  dropped, user values outranking the model, defaults outlasting a dead
+  one, and the rendered geometry verified against the analytic spec.
+
 ## v0.7.0 — 2026-07-05
 
 Release notes: `docs/releases/v0.7.0.md`.

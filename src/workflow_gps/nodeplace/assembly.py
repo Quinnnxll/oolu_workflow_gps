@@ -27,6 +27,7 @@ from ..skills.contract import (
     SubgraphBody,
     derive_data_edges,
 )
+from ..skills.inputs import inputs_manifest
 from .budget import BudgetPolicy, BudgetVerdict, assess_budget
 from .economics import CandidateAssembler
 from .market import PriceBook
@@ -74,6 +75,12 @@ class AssemblyPreview(BaseModel):
     # Not part of the market gross (no noder earns it), but real money the
     # budget verdict below judges alongside the gross.
     planning_cost: float = 0.0
+    # The declared creative inputs of the assembled plan — name (qualified
+    # per node), description, type, default, and bounds — so a surface can
+    # show exactly which values a run will need and what happens if nobody
+    # fills them (the defaults). Fill them via POST /v1/runs/contract
+    # {"inputs": {...}} or leave them to the configured value patcher.
+    inputs: list[dict] = Field(default_factory=list)
     # The plan's chance of verified success in THIS caller's hands: the
     # product of each picked node's posterior mean (personal history folded
     # over marketplace counts; independence assumed, documented). A gap
@@ -314,6 +321,23 @@ def preview_assembly(
         platform_margin_preview=margin_total,
         planning_cost=result.planning_cost,
         expected_success=expected_success,
+        inputs=(
+            [
+                {
+                    "name": entry.qualified,
+                    "node": entry.node_name,
+                    "description": entry.spec.description,
+                    "value_type": entry.spec.value_type,
+                    "default": entry.spec.default,
+                    "minimum": entry.spec.minimum,
+                    "maximum": entry.spec.maximum,
+                    "choices": entry.spec.choices,
+                }
+                for entry in inputs_manifest(contract)
+            ]
+            if contract is not None
+            else []
+        ),
         learned_order=learned_order,
         budget=assess_budget(
             # Planning advice was real spend: budgets judge the whole cost

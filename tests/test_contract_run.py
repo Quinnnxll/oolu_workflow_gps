@@ -63,6 +63,7 @@ def _build(
     rng=None,
     wallet_lookup=None,
     config=None,
+    value_patcher=None,
 ):
     base, conn, ident = _app(tmp_path)
     registry = RegistryStore(conn)
@@ -90,6 +91,7 @@ def _build(
         rng=rng,
         wallet_lookup=wallet_lookup,
         config=config,
+        value_patcher=value_patcher,
     )
     return app, conn, ident, registry, metering, attribution, audit
 

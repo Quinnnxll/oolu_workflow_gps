@@ -195,6 +195,7 @@ class CandidateAssembler:
                         provenance="marketplace",
                         consumes=list(listing.consumes),
                         produces=list(listing.produces),
+                        inputs=list(listing.inputs),
                         body=ActionsBody(actions=list(skill.actions)),
                         stats=NodeStats(
                             successes=entry.candidate.verified_successes,

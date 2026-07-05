@@ -73,6 +73,7 @@ from ..orchestrator import (
     DagRouteRunner,
     GoalSpec,
     OrchestratorError,
+    patch_or_defaults,
 )
 from ..orchestrator.state import (
     PauseKind,
@@ -83,6 +84,7 @@ from ..orchestrator.state import (
 )
 from ..providers.vault import SecretVault
 from ..skills.contract import NodeContract, Slot
+from ..skills.inputs import bind_inputs, inputs_manifest
 from ..skills.models import ReusableSkill
 from ..skills.ports import ActionExecutor
 from .errors import GatewayError, WebhookError
@@ -183,6 +185,7 @@ class GatewayApp:
         disputes: DisputeService | None = None,
         webhook_verifier: WebhookVerifier | None = None,
         accounts=None,  # identity.LocalAccountService: local multi-user login
+        value_patcher=None,  # orchestrator.ValuePatcher: fills creative inputs
         isolation=None,  # worker.IsolationPolicy: powers /v1/worker-health
         docker_available: bool = True,
         clock: Callable[[], datetime] | None = None,
@@ -211,6 +214,10 @@ class GatewayApp:
         # the same posteriors), and its metered cost rides the preview's
         # planning_cost so budgets judge advice as spend.
         self._proposal_model = proposal_model
+        # Fills declared creative inputs at run submission (user values
+        # outrank it; defaults outlast it). Its metered cost joins the
+        # budget-gated estimate: creative help is spend too.
+        self._value_patcher = value_patcher
         # (tenant, principal) -> the LINKED wallet's remaining balance, or
         # None. A partial view of the user's assets by design: budgets never
         # cap on it, they only flag it for review.
@@ -829,6 +836,7 @@ class GatewayApp:
                 derived_from=body.get("derived_from"),
                 consumes=self._parse_slots(body.get("consumes")),
                 produces=self._parse_slots(body.get("produces")),
+                inputs=self._parse_inputs(body.get("inputs")),
             )
         except ContributionError as exc:
             raise GatewayError(400, "invalid_request", str(exc)) from exc
@@ -986,6 +994,19 @@ class GatewayApp:
         return json_response(200, {"mode": mode.value, "items": items})
 
     @staticmethod
+    def _parse_inputs(raw) -> list | None:
+        if raw is None:
+            return None
+        if not isinstance(raw, list):
+            raise GatewayError(400, "invalid_request", "inputs must be a list")
+        from ..skills.contract import ValueInput
+
+        try:
+            return [ValueInput.model_validate(item) for item in raw]
+        except Exception as exc:
+            raise GatewayError(400, "invalid_request", f"bad input: {exc}") from exc
+
+    @staticmethod
     def _parse_slots(raw) -> list[Slot] | None:
         if raw is None:
             return None
@@ -1121,6 +1142,24 @@ class GatewayApp:
             contract = NodeContract.model_validate(body["contract"])
         except Exception as exc:
             raise GatewayError(400, "invalid_request", f"bad contract: {exc}") from exc
+        # Creative inputs fill BEFORE anything compiles: user-provided
+        # values outrank the patcher, the patcher outranks declared
+        # defaults — and a held reserved contract stores the CONCRETE
+        # values, so an approver decides on what will actually run.
+        user_inputs = body.get("inputs") or {}
+        if not isinstance(user_inputs, dict):
+            raise GatewayError(400, "invalid_request", "inputs must be an object")
+        patch_cost = 0.0
+        try:
+            manifest = inputs_manifest(contract)
+            if manifest:
+                filled = patch_or_defaults(
+                    self._value_patcher, goal=contract.name, manifest=manifest
+                )
+                patch_cost = filled.cost
+                contract = bind_inputs(contract, {**filled.values, **user_inputs})
+        except ValueError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
         try:
             compiled = compile_contract(contract)
         except ValueError as exc:
@@ -1198,7 +1237,9 @@ class GatewayApp:
             contract, assembler=assembler, price_book=book
         )
         verdict = assess_budget(
-            estimate.gross,
+            # Creative help is spend too: the patcher's metered model
+            # call rides the same budget gate as the market gross.
+            estimate.gross + patch_cost,
             policy=self._budget_policy(body),
             spend_history=self._spend_history(session),
             class_history=(
@@ -1236,6 +1277,7 @@ class GatewayApp:
             self._metrics["contract_runs"] += 1
             payload = result.model_dump(mode="json")
             payload["budget"] = verdict.model_dump(mode="json")
+            payload["patch_cost"] = patch_cost
             return payload
 
         key = request.header("idempotency-key")

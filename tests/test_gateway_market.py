@@ -58,12 +58,15 @@ def _contribute_and_publish(
     derived_from=None,
     consumes=None,
     produces=None,
+    inputs=None,
+    actions=None,
 ):
     skill = ReusableSkill(
         name=name,
         description=f"{name} cleans invoices",
         signature=SkillSignature(application="cli", adapter="cli"),
-        actions=[ActionEvent(correlation_id="c", adapter="cli", operation="run")],
+        actions=actions
+        or [ActionEvent(correlation_id="c", adapter="cli", operation="run")],
     )
     body = {
         "skill": skill.model_dump(mode="json"),
@@ -80,6 +83,8 @@ def _contribute_and_publish(
         body["consumes"] = consumes
     if produces is not None:
         body["produces"] = produces
+    if inputs is not None:
+        body["inputs"] = inputs
     created = app.handle(
         _req(
             "POST",

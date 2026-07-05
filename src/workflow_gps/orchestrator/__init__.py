@@ -39,6 +39,15 @@ from .intake import (
     LiteLLMIntakeModel,
     ModelBackedIntaker,
 )
+from .patchers import (
+    PATCH_PURPOSE,
+    DefaultValuePatcher,
+    GatewayValuePatcher,
+    ValuePatch,
+    ValuePatcher,
+    parse_patch,
+    patch_or_defaults,
+)
 from .planner import RegistryGrounder, SkillRegistryPlanner, classify_risk
 from .ports import (
     FeedbackSink,
@@ -127,7 +136,14 @@ __all__ = [
     "GatewayProposalModel",
     "InMemoryRunStateStore",
     "Incident",
+    "PATCH_PURPOSE",
     "PROPOSAL_PURPOSE",
+    "DefaultValuePatcher",
+    "GatewayValuePatcher",
+    "ValuePatch",
+    "ValuePatcher",
+    "parse_patch",
+    "patch_or_defaults",
     "PROPOSAL_SYSTEM_PROMPT",
     "parse_weights",
     "Intaker",

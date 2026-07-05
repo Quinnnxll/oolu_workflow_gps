@@ -286,7 +286,11 @@ def execute_contract(
         status=record.status.value,
         error=record.error,
         outcomes=[
-            {"status": o.status.value, "error": o.error} for o in record.action_outcomes
+            # Evidence rides along so the caller sees what verification
+            # actually measured (e.g. a geometry report's numbers), the
+            # same way the browser and skills surfaces expose it.
+            {"status": o.status.value, "error": o.error, "evidence": o.evidence}
+            for o in record.action_outcomes
         ],
         market=ContractMarket(
             gross=gross_total,

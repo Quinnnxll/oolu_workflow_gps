@@ -92,6 +92,34 @@ class Slot(BaseModel):
         return True
 
 
+class ValueInput(BaseModel):
+    """One declared creative input: the hole a value patcher may fill.
+
+    The deterministic scaffolding of a workflow (open the app, open the
+    file, select the tool) is parameterized actions; the *creative* part
+    is values — dimensions, coordinates, text. A node declares those
+    values here instead of hardcoding them: name, type, an honest
+    default, and the bounds within which ANY filler (a user, an LLM
+    patcher, a default) must stay. The node adapts the model — via the
+    description, the default, and the bounds — never the other way
+    around, and the verification predicate stays sovereign because
+    admissible values are boxed in at declaration time.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    description: str = ""
+    value_type: Literal["number", "string", "choice"] = "number"
+    default: float | str | None = None
+    # Numbers clamp into [minimum, maximum]; a filler cannot leave the box.
+    minimum: float | None = None
+    maximum: float | None = None
+    # For value_type="choice": the closed set of admissible strings.
+    choices: list[str] | None = None
+    required: bool = True
+
+
 class BodyKind(str, Enum):
     ACTIONS = "actions"
     SCRIPT = "script"
@@ -179,6 +207,10 @@ class NodeContract(BaseModel):
 
     consumes: list[Slot] = Field(default_factory=list)
     produces: list[Slot] = Field(default_factory=list)
+    # Declared creative inputs: the values a patcher (user, LLM, default)
+    # fills before execution. Actions reference them via {"$input": name}
+    # / {"$template": "..."} placeholders in their parameters.
+    inputs: list[ValueInput] = Field(default_factory=list)
     preconditions: list[ConstraintSpec] = Field(default_factory=list)
     validators: list[ConstraintSpec] = Field(default_factory=list)
 

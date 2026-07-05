@@ -57,6 +57,7 @@ class NodeplaceService:
         derived_from: str | None = None,
         consumes: list[Slot] | None = None,
         produces: list[Slot] | None = None,
+        inputs: list | None = None,  # ValueInput: declared creative holes
     ) -> ContributionResult:
         if visibility == Visibility.PRIVATE:
             raise ContributionError(
@@ -117,6 +118,7 @@ class NodeplaceService:
             tags=tags or [],
             consumes=list(consumes),
             produces=list(produces),
+            inputs=list(inputs or []),
             status=ListingStatus.DRAFT,
         )
         self._store.add_listing(listing)
