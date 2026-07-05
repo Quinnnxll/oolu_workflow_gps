@@ -29,8 +29,8 @@ import json
 import re
 from typing import Sequence
 
+from ..billing.model_calls import ModelCallMeter
 from ..knowledge.traces import RecordedRun, TraceStore, route_node_key
-from ..metering.model_calls import ModelCallMeter
 from ..models import ModelTier
 from ..routing.gateway import Gateway, extract_script
 from ..routing.matrix import RoutingConfig, RoutingDecision, default_routing_config

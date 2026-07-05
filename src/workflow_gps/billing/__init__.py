@@ -4,6 +4,12 @@ from .disputes import DisputeService, DisputeStore
 from .fraud import DefaultFraudSignals, FraudSignals, FraudVerdict
 from .guard import MoneyModeError, is_production_money, require_production_money
 from .ledger import BalanceProjection, EarningsLedger
+from .model_calls import (
+    DEFAULT_MODEL_PRICES,
+    ModelCallMeter,
+    ModelCallRecord,
+    ModelPriceTable,
+)
 from .models import (
     BILLING_SCHEMA_VERSION,
     MICROS_PER_UNIT,
@@ -75,6 +81,10 @@ __all__ = [
     "PayoutReceipt",
     "PayoutStatus",
     "PayoutStore",
+    "DEFAULT_MODEL_PRICES",
+    "ModelCallMeter",
+    "ModelCallRecord",
+    "ModelPriceTable",
     "PricingEngine",
     "PricingResult",
     "SettlementService",

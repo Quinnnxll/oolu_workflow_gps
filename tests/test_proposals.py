@@ -16,13 +16,13 @@ from test_gateway_market import _build, _contribute_and_publish
 from test_market_assemble import RAW as RAW_SLOT
 from test_market_assemble import TIDY, _seed_market
 
-from workflow_gps.desktop import DesktopService
-from workflow_gps.knowledge import NodeObservation, TraceStore, route_node_key
-from workflow_gps.metering.model_calls import (
+from workflow_gps.billing.model_calls import (
     DEFAULT_MODEL_PRICES,
     ModelCallMeter,
     ModelPriceTable,
 )
+from workflow_gps.desktop import DesktopService
+from workflow_gps.knowledge import NodeObservation, TraceStore, route_node_key
 from workflow_gps.models import ModelTier
 from workflow_gps.orchestrator import ContractAssembler, GoalSpec, Proposal
 from workflow_gps.orchestrator.proposals import (
