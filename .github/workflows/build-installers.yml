@@ -15,8 +15,8 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
       - name: Build the shell app
@@ -24,7 +24,7 @@ jobs:
       - name: Smoke-check the binary exists
         shell: bash
         run: ls dist/WorkflowGPS-Shell*
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: WorkflowGPS-Shell-${{ runner.os }}
           path: dist/WorkflowGPS-Shell*

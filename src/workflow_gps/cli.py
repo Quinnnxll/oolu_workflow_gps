@@ -335,6 +335,12 @@ def build_parser() -> argparse.ArgumentParser:
         dest="open_browser",
         help="open the shell in the default browser once serving",
     )
+    desktop.add_argument(
+        "--unified",
+        action="store_true",
+        help="serve the multi-user gateway shell locally, auto signed in "
+        "(preview of the unified surface; still loopback-only)",
+    )
 
     web = sub.add_parser(
         "web",
@@ -1211,6 +1217,9 @@ def _cmd_desktop(args, out) -> int:
             "127.0.0.1-only (it has no auth and serves an unauthenticated user)"
         )
 
+    if args.unified:
+        return _cmd_desktop_unified(args, out)
+
     settings = Settings.load(args.config)
     db_path = args.db or ".workflow-gps/desktop.db"
 
@@ -1254,6 +1263,72 @@ def _cmd_desktop(args, out) -> int:
         runtime.close()
         if registry is not None:
             registry.close()
+    return 0
+
+
+def _cmd_desktop_unified(args, out) -> int:
+    """Migration step 1 (opt-in): the desktop over the UNIFIED surface.
+
+    The same multi-tenant gateway `wfgps host` serves — same routes, same
+    front-end, same identity semantics — bound to loopback with a local
+    user auto-provisioned and signed in: the browser opens straight into
+    the shell, no sign-in screen, because on this machine the loopback
+    bind (OS ownership), not a password, is the trust boundary.
+
+    Ephemeral credentials per start are deliberate: the signing secret,
+    the local user's password, and the auto-auth link are all re-minted
+    on every launch, so nothing durable can leak. The DATA still lives
+    in one directory and survives restarts like any host.
+    """
+    import secrets as secrets_module
+    from pathlib import Path
+
+    from .assembly import build_host_runtime
+    from .config import Settings
+
+    data_dir = (
+        Path(args.db).parent / "unified" if args.db else Path(".workflow-gps/unified")
+    )
+    runtime = build_host_runtime(
+        Settings.load(args.config),
+        data_dir=data_dir,
+        secret=secrets_module.token_urlsafe(32),
+        # A desktop session should outlive a workday without re-auth.
+        token_ttl_seconds=7 * 24 * 3600,
+    )
+    password = secrets_module.token_urlsafe(16)
+    if not runtime.accounts.bootstrap(
+        tenant="local", username="local", password=password
+    ):
+        # Second launch: the user exists with last launch's (discarded)
+        # password. Rotate it to this launch's — same trust boundary.
+        runtime.accounts.change_password("local", password)
+    login = runtime.accounts.login("local", password)
+
+    try:
+        import uvicorn
+    except ImportError as exc:
+        runtime.close()
+        raise _CliError(
+            "uvicorn not installed (`pip install 'workflow-gps[serve]'`)"
+        ) from exc
+
+    url = f"http://{args.host}:{args.port}/#auth={login.token}"
+    out.write(
+        "Workflow-GPS unified shell (preview) is starting.\n"
+        f"  open {url}\n"
+        f"  (data: {data_dir}; signed in automatically as 'local')\n"
+        "  press Ctrl+C to stop\n"
+    )
+    if args.open_browser:
+        import threading
+        import webbrowser
+
+        threading.Timer(1.0, webbrowser.open, [url]).start()
+    try:
+        uvicorn.run(runtime.asgi, host=args.host, port=args.port, log_level="info")
+    finally:
+        runtime.close()
     return 0
 
 

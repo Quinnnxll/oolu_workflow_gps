@@ -4,6 +4,32 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Unified-surface migration, step 1 — plus field fixes:
+
+- Added **`wfgps desktop --unified`** (opt-in preview): the desktop shell
+  served over the SAME multi-tenant gateway `wfgps host` uses — same
+  routes, same front-end, same identity semantics — bound to loopback
+  with a `local` user auto-provisioned and signed in. The browser opens
+  straight into the shell via a `#auth=<token>` bootstrap (the token
+  moves into sessionStorage and out of the URL immediately): zero
+  ceremony locally, because the loopback bind — not a password — is the
+  trust boundary on the user's own machine. Credentials are ephemeral
+  per launch by design (fresh secret, rotated password); the data
+  directory persists like any host. The default `wfgps desktop` is
+  unchanged; the loopback surface remains until the remaining screens
+  are ported (step 2).
+- **GitHub Actions**: bumped `checkout` v4→v5, `setup-python` v5→v6,
+  `upload-artifact` v4→v5, `setup-node` v4→v5 across all workflows
+  (the Node 20 runtime deprecation), and the Tauri frontend toolchain
+  Node 20→22 (Node 20 is end-of-life). Pinned by a test so a stale
+  major cannot creep back.
+- **Startup schema guarantee, pinned**: new tests prove a fresh data
+  directory answers every read surface before any write (the packaged
+  app's exact startup path), restarts reopen and migrate cleanly (the
+  admin created before a host restart still signs in after), and every
+  SQLite store creates its schema at CONSTRUCTION time — "no such
+  table" is structurally impossible on a fresh install.
+
 The multi-user gateway grows a face:
 
 - Replaced the gateway front-end (served by `GatewayASGI` at `GET /`)

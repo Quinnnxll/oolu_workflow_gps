@@ -457,6 +457,18 @@ function render() {
   guard(mount, () => Promise.resolve(route[2]()));
 }
 
+/* Local auto-auth: `wfgps desktop --unified` opens the shell with
+   #auth=<token>. The token moves into sessionStorage and leaves the URL
+   immediately, so the local user never sees a sign-in screen — the
+   loopback bind, not a password, is the trust boundary on their own
+   machine. */
+(function bootstrapLocalAuth() {
+  const match = location.hash.match(/^#auth=(.+)$/);
+  if (!match) return;
+  session.signIn(decodeURIComponent(match[1]), "local", "local");
+  history.replaceState(null, "", location.pathname + "#/runs");
+})();
+
 window.addEventListener("hashchange", render);
 render();
 </script>
