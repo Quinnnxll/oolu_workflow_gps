@@ -71,6 +71,8 @@ class DesktopLoopbackApp:
             return 200, self._skills(query)
         if method == "GET" and path == "/v1/worker-health":
             return 200, self._svc.worker_health().model_dump(mode="json")
+        if method == "GET" and path == "/v1/earnings":
+            return 200, self._svc.earnings().model_dump(mode="json")
         if method == "GET" and path == "/v1/offline-policy":
             return 200, self._svc.offline_policy()
         if method == "POST" and path == "/v1/tasks":

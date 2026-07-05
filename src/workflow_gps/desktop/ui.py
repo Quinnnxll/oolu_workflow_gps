@@ -78,6 +78,7 @@ INDEX_HTML = r"""<!doctype html>
     <a href="#/assemble">Assemble</a>
     <a href="#/tasks">Tasks</a>
     <a href="#/inbox">Inbox</a>
+    <a href="#/earnings">Earnings</a>
     <a href="#/skills">Skills</a>
     <a href="#/health">Health</a>
   </nav>
@@ -134,6 +135,7 @@ const routes = [
   [/^#\/tasks$/, () => tasksScreen()],
   [/^#\/task\/([^/]+)$/, (m) => taskScreen(m[1])],
   [/^#\/inbox$/, () => inboxScreen()],
+  [/^#\/earnings$/, () => earningsScreen()],
   [/^#\/skills$/, () => skillsScreen()],
   [/^#\/health$/, () => healthScreen()],
 ];
@@ -469,6 +471,60 @@ function inboxScreen() {
     h("div", { class: "card" }, h("strong", {}, "Inbox"), " ",
       h("button", { class: "quiet", onclick: load }, "Refresh"),
       listBox, errorBox));
+}
+
+/* ------------------------------- earnings ------------------------------ */
+function earningsScreen() {
+  const body = h("div", { class: "muted" }, "loading…");
+  const tone = { accrual: "ok", payout: "", reserve: "warn", clawback: "bad" };
+
+  (async () => {
+    try {
+      const e = await api("GET", "/v1/earnings");
+      const tile = (label, value, cls) => h("div", { class: "card" },
+        h("div", { class: "muted" }, label),
+        h("strong", { class: cls || "" }, money(value)));
+      body.replaceChildren(
+        h("div", { class: "muted" }, "noder: " + e.noder),
+        h("div", { class: "row" },
+          tile("available", e.available, e.available < 0 ? "bad" : "ok"),
+          tile("pending", e.pending),
+          tile("reserved (held against risk)", e.reserved, "warn"),
+          tile("lifetime paid", e.lifetime_paid)),
+        e.available < 0
+          ? h("div", { class: "error" },
+              "negative balance: a clawback exceeded the reserve — new "
+              + "earnings repay this before anything pays out")
+          : null,
+        h("div", { class: "card" }, h("strong", {}, "Ledger"),
+          e.entries.length ? h("table", {},
+            h("tr", {}, h("th", {}, "kind"), h("th", {}, "amount"),
+              h("th", {}, "event"), h("th", {}, "available at")),
+            e.entries.map(entry => h("tr", {},
+              h("td", {}, badge(entry.kind, tone[entry.kind])),
+              h("td", {}, money(entry.amount)),
+              h("td", { class: "muted" }, entry.event_id || "—"),
+              h("td", { class: "muted" }, entry.available_at))))
+          : h("div", { class: "muted" }, "no ledger entries yet")),
+        h("div", { class: "card" }, h("strong", {}, "Payout batches"),
+          e.batches.length ? h("table", {},
+            h("tr", {}, h("th", {}, "status"), h("th", {}, "amount"),
+              h("th", {}, "reference"), h("th", {}, "created")),
+            e.batches.map(batch => h("tr", {},
+              h("td", {}, badge(batch.status,
+                batch.status === "paid" ? "ok"
+                : batch.status === "failed" ? "bad" : "warn")),
+              h("td", {}, money(batch.amount)),
+              h("td", { class: "muted" }, batch.provider_ref || "—"),
+              h("td", { class: "muted" }, batch.created_at))))
+          : h("div", { class: "muted" }, "no payouts yet")));
+    } catch (err) {
+      body.replaceChildren(h("div", { class: "muted" },
+        "earnings are not configured for this shell (" + err.message + ")"));
+    }
+  })();
+  return h("section", {}, h("div", { class: "card" },
+    h("strong", {}, "Earnings"), body));
 }
 
 /* -------------------------------- skills ------------------------------- */

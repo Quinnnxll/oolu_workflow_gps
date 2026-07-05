@@ -206,6 +206,42 @@ class AssemblyRunView(BaseModel):
     noders: list[str] = Field(default_factory=list)
 
 
+class EarningsEntryView(BaseModel):
+    """One ledger line, in currency units (micros stay in the ledger)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: str  # accrual | reserve | clawback | payout
+    amount: float
+    event_id: str | None = None
+    available_at: datetime
+
+
+class PayoutBatchView(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    batch_id: str
+    amount: float
+    status: str  # pending | paid | failed
+    provider_ref: str | None = None
+    created_at: datetime
+
+
+class EarningsView(BaseModel):
+    """The earnings screen: what the local noder has earned, holds, and
+    was paid — a projection of the shared ledger, never a write path."""
+
+    model_config = ConfigDict(frozen=True)
+
+    noder: str
+    available: float
+    pending: float
+    reserved: float
+    lifetime_paid: float
+    entries: list[EarningsEntryView] = Field(default_factory=list)
+    batches: list[PayoutBatchView] = Field(default_factory=list)
+
+
 class ExportBundle(BaseModel):
     """A local data export for one workflow — secrets are never included."""
 

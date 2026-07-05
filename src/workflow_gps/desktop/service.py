@@ -50,9 +50,12 @@ from .views import (
     AuditEntryView,
     AuditView,
     BlueprintView,
+    EarningsEntryView,
+    EarningsView,
     ExecutionLabel,
     ExportBundle,
     InboxItem,
+    PayoutBatchView,
     ProviderConnectionView,
     QuestionView,
     RoutePreview,
@@ -107,6 +110,9 @@ class DesktopService:
         session_manager=None,  # identity.SessionManager: loopback decisions
         hold_ttl_seconds=None,  # held contracts expire after this; None=never
         clock=None,  # () -> datetime, injectable for tests
+        earnings_ledger=None,  # billing.EarningsLedger, when the user is a noder
+        payout_store=None,  # billing.PayoutStore: batch history for the screen
+        noder_principal=None,  # whose earnings this shell shows
     ):
         self._durable = durable
         self._approval = approval_authority
@@ -135,6 +141,9 @@ class DesktopService:
         self._compiled_holds: dict[str, tuple[Any, Any]] = {}
         self._hold_ttl_seconds = hold_ttl_seconds
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._earnings_ledger = earnings_ledger
+        self._payout_store = payout_store
+        self._noder_principal = noder_principal
 
     # ------------------------------------------------------------------ #
     # Task entry + guided clarification.                                  #
@@ -678,6 +687,57 @@ class DesktopService:
             gross=result.market.gross,
             provider_cost=result.market.provider_cost,
             noders=list(result.market.noders),
+        )
+
+    # ------------------------------------------------------------------ #
+    # Earnings: what the local noder earned, holds, and was paid.         #
+    # ------------------------------------------------------------------ #
+    def earnings(self, *, limit: int = 100) -> EarningsView:
+        """The earnings screen's data — a read-only projection.
+
+        Amounts cross the loopback in currency units; the ledger keeps its
+        integer micros. The shell can show the money but never move it:
+        settlement and disputes stay operator/backend flows.
+        """
+        if self._earnings_ledger is None or self._noder_principal is None:
+            raise KeyError("earnings are not configured for this shell")
+        from ..billing import BalanceProjection
+
+        noder = self._noder_principal
+        balance = BalanceProjection(self._earnings_ledger).balance(
+            noder, now=self._clock()
+        )
+        entries = self._earnings_ledger.entries(noder)[-limit:]
+        batches = (
+            self._payout_store.batches(noder)[-limit:]
+            if self._payout_store is not None
+            else []
+        )
+        return EarningsView(
+            noder=noder,
+            available=balance.available_micros / 1_000_000,
+            pending=balance.pending_micros / 1_000_000,
+            reserved=balance.reserved_micros / 1_000_000,
+            lifetime_paid=balance.lifetime_paid_micros / 1_000_000,
+            entries=[
+                EarningsEntryView(
+                    kind=entry.kind.value,
+                    amount=entry.amount_micros / 1_000_000,
+                    event_id=entry.event_id,
+                    available_at=entry.available_at,
+                )
+                for entry in reversed(entries)  # most recent first
+            ],
+            batches=[
+                PayoutBatchView(
+                    batch_id=batch.batch_id,
+                    amount=batch.amount_micros / 1_000_000,
+                    status=batch.status.value,
+                    provider_ref=batch.provider_ref,
+                    created_at=batch.created_at,
+                )
+                for batch in reversed(batches)
+            ],
         )
 
     # ------------------------------------------------------------------ #

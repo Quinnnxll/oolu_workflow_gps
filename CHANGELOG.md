@@ -57,6 +57,17 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- Desktop earnings screen: `DesktopService.earnings()` (new
+  `earnings_ledger` / `payout_store` / `noder_principal` ctor wiring)
+  projects the local noder's ledger into a secret-free `EarningsView` —
+  available/pending/reserved/lifetime-paid balance tiles, the ledger
+  lines (kind, amount, event, availability; most recent first), and
+  payout batch history — served at `GET /v1/earnings` (404 when the
+  shell has no earnings wiring). Amounts cross the loopback in currency
+  units; the ledger keeps its integer micros, and the shell can show
+  the money but never move it. The front-end gains an Earnings screen
+  with color-coded entry kinds and an explicit negative-balance
+  explainer (a clawback exceeded the reserve; new earnings repay first).
 - Desktop front-end (replacing the scaffold screen by screen, still one
   self-contained page with no build step): a DOM-builder kernel (`h()`)
   replaces innerHTML templates — every dynamic value is a text node, so

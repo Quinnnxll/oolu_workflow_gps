@@ -191,6 +191,7 @@ def test_scaffold_ui_is_served_at_the_root(tmp_path):
             "/v1/assembly/approvals/",
             "/v1/tasks",
             "/v1/inbox",
+            "/v1/earnings",
             "/v1/skills",
             "/v1/worker-health",
             "/v1/offline-policy",
