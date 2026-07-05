@@ -55,7 +55,15 @@ class _CliExecutor:
         return None
 
 
-def _build(tmp_path, *, executors=None, trace_store=None, rng=None, wallet_lookup=None):
+def _build(
+    tmp_path,
+    *,
+    executors=None,
+    trace_store=None,
+    rng=None,
+    wallet_lookup=None,
+    config=None,
+):
     base, conn, ident = _app(tmp_path)
     registry = RegistryStore(conn)
     metering = MeteringLedger(conn)
@@ -81,6 +89,7 @@ def _build(tmp_path, *, executors=None, trace_store=None, rng=None, wallet_looku
         trace_store=trace_store,
         rng=rng,
         wallet_lookup=wallet_lookup,
+        config=config,
     )
     return app, conn, ident, registry, metering, attribution, audit
 
@@ -686,6 +695,117 @@ def test_gateway_holds_survive_a_restart_and_decline_removes(tmp_path):
     assert (
         app.handle(_req("GET", "/v1/runs/contract/holds", token=consumer)).body["items"]
         == []
+    )
+    conn.close()
+
+
+def test_stale_holds_expire_and_cannot_be_released(tmp_path):
+    """The queue cannot rot: past its TTL a hold is swept (audited) — it
+    disappears from listings, and a late decision is a 410, never a run."""
+    from datetime import timedelta
+
+    from test_http_gateway import NOW
+
+    from workflow_gps.gateway.app import GatewayConfig
+    from workflow_gps.gateway.http import Request
+
+    executor = _CliExecutor(("run", "delete_files"))
+    app, conn, ident, registry, metering, attribution, audit = _build(
+        tmp_path,
+        executors={"cli": executor},
+        config=GatewayConfig(contract_hold_ttl_seconds=60),
+    )
+    _seed_chain(app, ident, registry)
+    consumer = ident.token("consumer", "t2")
+    _grant_approver(ident, "approver-2", "t2")
+    approver = ident.token("approver-2", "t2")
+
+    held = app.handle(
+        _req(
+            "POST",
+            "/v1/runs/contract",
+            token=consumer,
+            body={"contract": _destructive()},
+        )
+    )
+    assert held.status == 202
+    assert held.body["expires_at"] == (NOW + timedelta(seconds=60)).isoformat()
+    pending_id = held.body["pending_id"]
+
+    def later(method, path, token, body=None, *, seconds):
+        return app.handle(
+            Request(
+                method=method,
+                path=path,
+                headers={"Authorization": f"Bearer {token}"},
+                query={},
+                body=body,
+                now=NOW + timedelta(seconds=seconds),
+            )
+        )
+
+    # Still decidable within the TTL window (listing shows it).
+    fresh = later("GET", "/v1/runs/contract/holds", consumer, seconds=30)
+    assert [h["pending_id"] for h in fresh.body["items"]] == [pending_id]
+
+    # Past the TTL: a late decision is a 410, and nothing ever ran.
+    expired = later(
+        "POST",
+        f"/v1/runs/contract/holds/{pending_id}",
+        approver,
+        {"approved": True},
+        seconds=120,
+    )
+    assert expired.status == 410
+    assert expired.body["error"]["code"] == "expired"
+    assert executor.calls == 0
+
+    # Swept everywhere, and the expiry is on the audit record.
+    gone = later("GET", "/v1/runs/contract/holds", consumer, seconds=121)
+    assert gone.body["items"] == []
+    (event,) = [r for r in audit.records() if r.event_type == "contract.expired"]
+    assert event.payload["pending_id"] == pending_id
+    assert event.payload["submitted_by"] == "consumer"
+    conn.close()
+
+
+def test_desktop_holds_expire_on_their_own_clock(tmp_path):
+    """The shell's TTL sweeps stale holds out of the inbox; deciding one
+    after expiry is a 404, audited as contract.expired."""
+    from datetime import UTC, datetime, timedelta
+
+    import pytest
+    from test_desktop_shell import _identity
+
+    from workflow_gps.desktop import DesktopService
+    from workflow_gps.orchestrator import DagRouteRunner
+
+    _store, authority, approver, _intruder = _identity(tmp_path)
+    executor = _CliExecutor(("run", "delete_files"))
+    app, conn, ident, registry, metering, attribution, audit = _build(tmp_path)
+    current = {"now": datetime(2026, 6, 29, tzinfo=UTC)}
+    svc = DesktopService(
+        app._durable,
+        approval_authority=authority,
+        market=app._market,
+        price_book=app._price_book,
+        contract_runner=DagRouteRunner({"cli": executor}),
+        attribution=attribution,
+        hold_ttl_seconds=60,
+        clock=lambda: current["now"],
+    )
+    held = svc.confirm_assembly(_destructive())
+    assert held.status == "awaiting_approval"
+    assert len(svc.inbox(kind="contract-approval")) == 1
+
+    current["now"] += timedelta(seconds=120)  # the intent goes cold
+    assert svc.inbox(kind="contract-approval") == []
+    with pytest.raises(KeyError):
+        svc.approve_assembly(held.run_id, session=approver)
+    assert executor.calls == 0
+    assert any(
+        r.event_type == "contract.expired" and r.payload["pending_id"] == held.run_id
+        for r in app._durable.audit.records()
     )
     conn.close()
 

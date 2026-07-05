@@ -17,7 +17,7 @@ import random
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from ..billing import (
@@ -123,6 +123,10 @@ class GatewayConfig:
     max_runs_per_tenant: int = 10_000
     page_size_default: int = 20
     page_size_max: int = 100
+    # How long a held reserved contract stays decidable. After this it is
+    # swept (audited as contract.expired) — a stale hold must never be
+    # released long after the submitter's intent went cold. None = never.
+    contract_hold_ttl_seconds: int | None = 7 * 24 * 3600
 
 
 class _TokenBucket:
@@ -1039,6 +1043,9 @@ class GatewayApp:
 
             def hold() -> dict:
                 pending_id = uuid4().hex
+                now = request.now or self._clock()
+                ttl = self._config.contract_hold_ttl_seconds
+                expires_at = now + timedelta(seconds=ttl) if ttl is not None else None
                 self._holds.add(
                     PendingContractRecord(
                         pending_id=pending_id,
@@ -1051,7 +1058,8 @@ class GatewayApp:
                         review_acknowledged=bool(
                             body.get("review_acknowledged", False)
                         ),
-                        created_at=self._clock(),
+                        created_at=now,
+                        expires_at=expires_at,
                     )
                 )
                 self._compiled_holds[pending_id] = (contract, compiled)
@@ -1060,6 +1068,9 @@ class GatewayApp:
                     "pending_id": pending_id,
                     "status": "awaiting_approval",
                     "reserved": reserved,
+                    "expires_at": (
+                        expires_at.isoformat() if expires_at is not None else None
+                    ),
                 }
 
             key = request.header("idempotency-key")
@@ -1132,8 +1143,25 @@ class GatewayApp:
         )
         return json_response(200, result)
 
+    def _sweep_holds(self, request) -> set[str]:
+        """Lazily expire stale holds; every sweep is audited per hold."""
+        swept = self._holds.sweep_expired(request.now or self._clock())
+        for record in swept:
+            self._compiled_holds.pop(record.pending_id, None)
+            self._metrics["contract_holds_expired"] += 1
+            self._durable.audit.append(
+                "contract.expired",
+                {
+                    "pending_id": record.pending_id,
+                    "submitted_by": record.consumer_principal,
+                    "reserved": record.reserved,
+                },
+            )
+        return {record.pending_id for record in swept}
+
     def _list_contract_holds(self, request, session, params) -> Response:
         """Reserved contracts held for approval — the caller's tenant only."""
+        self._sweep_holds(request)
         items = [
             {
                 "pending_id": record.pending_id,
@@ -1141,6 +1169,11 @@ class GatewayApp:
                 "reserved": record.reserved,
                 "submitted_by": record.consumer_principal,
                 "created_at": record.created_at.isoformat(),
+                "expires_at": (
+                    record.expires_at.isoformat()
+                    if record.expires_at is not None
+                    else None
+                ),
             }
             for record in self._holds.list(tenant=session.tenant_id)
         ]
@@ -1158,6 +1191,9 @@ class GatewayApp:
         the consumer seat. Declining removes the hold. Both outcomes are
         audited with the decider's principal.
         """
+        swept = self._sweep_holds(request)
+        if params["pending_id"] in swept:
+            raise GatewayError(410, "expired", "the hold expired before it was decided")
         record = self._holds.get(params["pending_id"])
         if record is None or record.consumer_tenant != session.tenant_id:
             raise GatewayError(404, "not_found", "no such held contract")

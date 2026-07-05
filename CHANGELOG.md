@@ -57,6 +57,16 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- Hold expiry: a held reserved contract carries an `expires_at` stamped
+  at submission (the promise made then — TTL changes never retroactively
+  extend old holds). Gateway: `GatewayConfig.contract_hold_ttl_seconds`
+  (default 7 days; `None` = never), `expires_at` on the 202 response and
+  hold listings, and a late decision returns 410 `expired`. Desktop:
+  `hold_ttl_seconds` (+ injectable `clock`) ctor knobs, default never.
+  Expiry is lazy — `PendingContractStore.sweep_expired` runs on every
+  list/inbox and decision, so a stale hold can never rot in the queue or
+  be released long after the submitter's intent went cold; each sweep is
+  audited per hold as `contract.expired`.
 - Gateway hold-for-approval for reserved contracts: `POST
   /v1/runs/contract` no longer 403s a contract with reserved actions —
   it HOLDS it (202 `awaiting_approval` with a `pending_id`, idempotent

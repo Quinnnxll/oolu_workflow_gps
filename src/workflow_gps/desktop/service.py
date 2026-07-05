@@ -20,7 +20,7 @@ an approval from an authorized identity session, like any other approval.
 from __future__ import annotations
 
 import random
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -105,6 +105,8 @@ class DesktopService:
         rng=None,  # random.Random for explore-mode assembly; seedable
         wallet_lookup=None,  # () -> the LINKED wallet's remaining balance | None
         session_manager=None,  # identity.SessionManager: loopback decisions
+        hold_ttl_seconds=None,  # held contracts expire after this; None=never
+        clock=None,  # () -> datetime, injectable for tests
     ):
         self._durable = durable
         self._approval = approval_authority
@@ -128,8 +130,11 @@ class DesktopService:
         # Reserved contracts held for approval live in the durable store —
         # a hold survives a shell restart. The compiled artifact is a
         # process-local cache: whichever process decides recompiles once.
+        # With a TTL, stale holds are swept lazily on every inbox/decision.
         self._pending = PendingContractStore(durable.conn)
         self._compiled_holds: dict[str, tuple[Any, Any]] = {}
+        self._hold_ttl_seconds = hold_ttl_seconds
+        self._clock = clock or (lambda: datetime.now(UTC))
 
     # ------------------------------------------------------------------ #
     # Task entry + guided clarification.                                  #
@@ -202,6 +207,7 @@ class DesktopService:
         # not dead ends — durable, so they survive a shell restart.
         # Decided via approve_assembly (identity-gated).
         if kind is None or kind == "contract-approval":
+            self._sweep_holds()
             for record in self._pending.list():
                 items.append(
                     InboxItem(
@@ -460,6 +466,7 @@ class DesktopService:
         if reserved:
             # Not a dead end: hold it durably for an authorized approver.
             pending_id = uuid4().hex
+            now = self._clock()
             self._pending.add(
                 PendingContractRecord(
                     pending_id=pending_id,
@@ -470,7 +477,12 @@ class DesktopService:
                     budget_cap=budget_cap,
                     review_threshold=review_threshold,
                     review_acknowledged=review_acknowledged,
-                    created_at=datetime.now(UTC),
+                    created_at=now,
+                    expires_at=(
+                        now + timedelta(seconds=self._hold_ttl_seconds)
+                        if self._hold_ttl_seconds is not None
+                        else None
+                    ),
                 )
             )
             self._compiled_holds[pending_id] = (parsed, compiled)
@@ -506,8 +518,10 @@ class DesktopService:
         shared money path; declining removes it. Both outcomes are audited
         with the decider's principal. Holds are durable: a hold made before
         a shell restart is still here to decide (the contract recompiles
-        once in the deciding process).
+        once in the deciding process) — unless it expired first, in which
+        case it was swept (audited) and the decision is a KeyError -> 404.
         """
+        self._sweep_holds()
         entry = self._pending.get(pending_id)
         if entry is None:
             raise KeyError(pending_id)
@@ -549,6 +563,15 @@ class DesktopService:
             },
         )
         return view
+
+    def _sweep_holds(self) -> None:
+        """Lazily expire stale holds; every sweep is audited per hold."""
+        for record in self._pending.sweep_expired(self._clock()):
+            self._compiled_holds.pop(record.pending_id, None)
+            self._durable.audit.append(
+                "contract.expired",
+                {"pending_id": record.pending_id, "reserved": record.reserved},
+            )
 
     def _compiled_for(self, entry: PendingContractRecord):
         """The hold's runnable form — cached, or recompiled after a restart."""

@@ -42,6 +42,9 @@ class PendingContractRecord(BaseModel):
     review_threshold: float | None = None
     review_acknowledged: bool = False
     created_at: datetime
+    # The promise made at submission: decidable until then, gone after.
+    # None = the hold never expires (single-user shells may choose this).
+    expires_at: datetime | None = None
 
 
 class PendingContractStore:
@@ -88,6 +91,23 @@ class PendingContractStore:
             PendingContractRecord.model_validate_json(row["payload_json"])
             for row in rows
         ]
+
+    def sweep_expired(self, now: datetime) -> list[PendingContractRecord]:
+        """Remove and return every hold past its ``expires_at``.
+
+        Expiry is lazy — surfaces sweep whenever they list or decide, so a
+        stale hold can never rot in the queue or be released long after the
+        submitter's intent went cold. Auditing the sweep is the surface's
+        job (each has its own audit log).
+        """
+        expired = [
+            record
+            for record in self.list()
+            if record.expires_at is not None and record.expires_at <= now
+        ]
+        for record in expired:
+            self.remove(record.pending_id)
+        return expired
 
     def remove(self, pending_id: str) -> bool:
         with self._conn.transaction() as db:
