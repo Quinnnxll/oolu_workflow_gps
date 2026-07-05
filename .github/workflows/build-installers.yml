@@ -1,0 +1,30 @@
+# Builds the single-file Workflow-GPS shell app for every desktop platform.
+# PyInstaller cannot cross-compile, so each OS builds its own binary; the
+# artifacts are what a release attaches as downloadable "installers".
+name: build-installers
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build the shell app
+        run: python packaging/build_installer.py
+      - name: Smoke-check the binary exists
+        shell: bash
+        run: ls dist/WorkflowGPS-Shell*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WorkflowGPS-Shell-${{ runner.os }}
+          path: dist/WorkflowGPS-Shell*

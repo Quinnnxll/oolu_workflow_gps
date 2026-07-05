@@ -32,6 +32,21 @@ gone.
 The full model engine (LLM synthesis, sandboxed execution) is optional and
 configured separately — see **Installation** and **Configuration** below.
 
+### Native app (single-file executable)
+
+Prefer a double-clickable app with no Python visible at all? Build one:
+
+```bash
+python packaging/build_installer.py
+```
+
+This produces `dist/WorkflowGPS-Shell` (`WorkflowGPS-Shell.exe` on Windows) —
+a single self-contained file you can copy anywhere and double-click. It starts
+the same shell, opens your browser, and keeps its data in `~/.workflow-gps`.
+PyInstaller cannot cross-compile, so build on each platform you target; the
+`build-installers` GitHub Actions workflow builds all three (Windows, macOS,
+Linux) on every version tag and attaches them as downloadable artifacts.
+
 ## Core ideas
 
 - **"Recalculating…" self-healing.** Failures are normal outcomes, not dead ends. The

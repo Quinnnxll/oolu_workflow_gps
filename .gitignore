@@ -40,3 +40,4 @@ Thumbs.db
 
 # Git bundles (transfer artifacts, never tracked)
 *.bundle
+.pyinstaller-work/

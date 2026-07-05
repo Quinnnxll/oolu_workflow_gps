@@ -57,6 +57,22 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- Native installer packaging (`packaging/`): `python packaging/build_installer.py`
+  produces a single self-contained executable (`dist/WorkflowGPS-Shell`,
+  `.exe` on Windows) via PyInstaller — copy it anywhere, double-click,
+  the shell starts, the browser opens, data lives in `~/.workflow-gps`.
+  The frozen launcher (`shell_launcher.py`) is a thin wrapper over the
+  same `wfgps desktop` invocation the setup scripts use (one launch path
+  to keep honest), with a free-port fallback so a busy 8765 never turns
+  into an error dialog. The spec bundles the starter-pack data
+  (importlib.resources inside the frozen app) and uvicorn's dynamic
+  imports statically, and excludes every heavy optional stack.
+  PyInstaller cannot cross-compile, so `.github/workflows/
+  build-installers.yml` builds Windows/macOS/Linux binaries on every
+  version tag. Validated live: the Linux binary built here serves the
+  UI, seeded skills, and earnings standalone. `tests/test_packaging.py`
+  pins the launcher argv against the real CLI, the port fallback, the
+  spec's bundling, and the CI wiring.
 - One-step setup for non-developers: download the repo ZIP, unzip, and
   run `setup.bat` (Windows, double-clickable) or `./setup.sh`
   (macOS/Linux). The scripts find Python 3.11+ (with a friendly pointer
