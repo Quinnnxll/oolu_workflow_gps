@@ -2,6 +2,7 @@ from .economics import (
     AssembledCandidate,
     CandidateAssembler,
     LiveVersionStats,
+    MarketplaceContract,
     VersionStats,
     classify_listing,
 )
@@ -95,6 +96,7 @@ __all__ = [
     "LineageLink",
     "LineageRecord",
     "MAX_LINEAGE_DEPTH",
+    "MarketplaceContract",
     "Listing",
     "ListingStatus",
     "Node",

@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from ..skills.contract import NodeContract, Slot
 from ..skills.models import ReusableSkill
 from .errors import ContributionError, OwnershipError, SafetyViolation
 from .models import (
@@ -54,12 +55,21 @@ class NodeplaceService:
         backend: str = "docker",
         requires_approval: bool = True,
         derived_from: str | None = None,
+        consumes: list[Slot] | None = None,
+        produces: list[Slot] | None = None,
     ) -> ContributionResult:
         if visibility == Visibility.PRIVATE:
             raise ContributionError(
                 "contribute is opt-in sharing; a private workflow is never published"
             )
         lineage = self._lineage_for(derived_from) if derived_from else []
+        # The slot vocabulary the goal assembler plans over: explicit when the
+        # noder declares one, otherwise derived from the skill itself (induced
+        # parameters -> consumes; artifact validators -> produces).
+        if consumes is None or produces is None:
+            implied = NodeContract.from_skill(skill)
+            consumes = implied.consumes if consumes is None else consumes
+            produces = implied.produces if produces is None else produces
         report = self._safety.review(
             skill.actions, backend=backend, requires_approval=requires_approval
         )
@@ -105,6 +115,8 @@ class NodeplaceService:
             title=title,
             summary=summary,
             tags=tags or [],
+            consumes=list(consumes),
+            produces=list(produces),
             status=ListingStatus.DRAFT,
         )
         self._store.add_listing(listing)

@@ -6,6 +6,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..skills.contract import Slot
+
 NODEPLACE_SCHEMA_VERSION = 1
 
 
@@ -99,6 +101,11 @@ class Listing(BaseModel):
     title: str
     summary: str
     tags: list[str] = Field(default_factory=list)
+    # The slot vocabulary: what this node consumes and produces, in the same
+    # typed terms the goal assembler plans over. Defaults are derived from
+    # the contributed skill; noders may declare richer vocabularies.
+    consumes: list[Slot] = Field(default_factory=list)
+    produces: list[Slot] = Field(default_factory=list)
     maturity_label: str = "experimental"
     status: ListingStatus = ListingStatus.DRAFT
     created_at: datetime = Field(default_factory=_now)

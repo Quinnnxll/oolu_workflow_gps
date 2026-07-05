@@ -74,6 +74,13 @@ def build_openapi() -> dict:
                 "Quote a workflow from live economics (forecast; no money moves)"
             ),
         },
+        "/v1/market/assemble": {
+            "post": op(
+                "Assemble a workflow from a goal's wanted slots via the "
+                "marketplace's slot vocabularies (planning preview with "
+                "lineage-aware payout previews; read-only)"
+            ),
+        },
         "/v1/earnings": {"get": op("The caller's own earnings balance")},
         "/v1/earnings/entries": {"get": op("The caller's own earnings ledger entries")},
         "/v1/payout-accounts": {

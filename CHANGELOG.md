@@ -57,6 +57,19 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- Slot vocabularies on listings + goal-based assembly over the marketplace:
+  `Listing` gains typed `consumes`/`produces` slots — declared at
+  contribution (service + gateway body fields) or derived from the skill
+  itself (induced parameters -> consumes, artifact validators ->
+  produces). `CandidateAssembler.contracts(query)` turns every active
+  public listing into an assembler-ready `NodeContract` (listing slots as
+  typed I/O, the sanitized skill's actions as the executable body,
+  verified history as stats). `POST /v1/market/assemble` backward-chains
+  a goal's wanted slots through those vocabularies and returns the
+  assembled subgraph contract with per-node cleared-price previews and
+  lineage-aware payout previews — read-only: the price book never moves,
+  and no money does either. Missing slots report honestly, or
+  (`fill_gaps: true`) become synthesized script gap nodes.
 - Goal-directed assembly: `orchestrator/assembler.py` adds
   `ContractAssembler` — give it a `GoalSpec` (wanted slots + slots on hand)
   and a contract library (a list, or a callable over a live registry via

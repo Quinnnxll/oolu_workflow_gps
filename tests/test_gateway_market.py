@@ -48,7 +48,16 @@ def _build(tmp_path):
 
 
 def _contribute_and_publish(
-    app, ident, registry, *, name, noder, price, derived_from=None
+    app,
+    ident,
+    registry,
+    *,
+    name,
+    noder,
+    price,
+    derived_from=None,
+    consumes=None,
+    produces=None,
 ):
     skill = ReusableSkill(
         name=name,
@@ -67,6 +76,10 @@ def _contribute_and_publish(
     }
     if derived_from is not None:
         body["derived_from"] = derived_from
+    if consumes is not None:
+        body["consumes"] = consumes
+    if produces is not None:
+        body["produces"] = produces
     created = app.handle(
         _req(
             "POST",

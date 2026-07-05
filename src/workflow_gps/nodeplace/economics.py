@@ -34,7 +34,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..durable.audit import DurableAuditLog
 from ..metering.attribution import AttributionStore
 from ..metering.store import MeteringLedger
-from ..skills.models import ExecutionStatus
+from ..skills.contract import ActionsBody, NodeContract, NodeStats
+from ..skills.models import ExecutionStatus, ReusableSkill
 from .market import CandidateEconomics, CostVector, NodeClass
 from .pricing import gross_from_policy
 from .ratings import RatingService
@@ -123,6 +124,15 @@ class AssembledCandidate(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
+class MarketplaceContract(BaseModel):
+    """A listing as an assembler-ready contract, with its live economics."""
+
+    model_config = ConfigDict(frozen=True)
+
+    contract: NodeContract
+    assembled: AssembledCandidate
+
+
 def _slug(text: str) -> str:
     return _SLUG_RE.sub("_", text.strip().lower()).strip("_") or "listing"
 
@@ -154,6 +164,48 @@ class CandidateAssembler:
         self._stats = stats
         self._ratings = ratings
         self._clock = clock or (lambda: datetime.now(UTC))
+
+    def contracts(self, query: str = "") -> list["MarketplaceContract"]:
+        """The marketplace as an assembler library.
+
+        Each active public listing becomes a ``NodeContract``: the listing's
+        slot vocabulary is the typed I/O, the sanitized skill's actions are
+        the executable body, and verified history rides in as stats — so the
+        goal assembler plans over marketplace nodes with the same machinery
+        it uses for local contracts, and its picks keep their economics.
+        """
+        results: list[MarketplaceContract] = []
+        for entry in self.assemble(query):
+            version = self._registry.get_version(entry.candidate.version_id)
+            listing = self._registry.get_listing(entry.listing_id)
+            if version is None or listing is None:
+                continue
+            try:
+                skill = ReusableSkill.model_validate_json(version.sanitized_skill_json)
+            except ValueError:
+                continue
+            if not skill.actions:
+                continue
+            results.append(
+                MarketplaceContract(
+                    contract=NodeContract(
+                        id=entry.candidate.version_id,
+                        name=entry.title,
+                        description=listing.summary,
+                        provenance="marketplace",
+                        consumes=list(listing.consumes),
+                        produces=list(listing.produces),
+                        body=ActionsBody(actions=list(skill.actions)),
+                        stats=NodeStats(
+                            successes=entry.candidate.verified_successes,
+                            failures=entry.candidate.verified_failures,
+                            cost_ewma=entry.candidate.cost.automation_cost or None,
+                        ),
+                    ),
+                    assembled=entry,
+                )
+            )
+        return results
 
     def lineage_for(self, version_id: str) -> list[LineageLink]:
         """The version's recorded royalty ancestors, ready for a run binding."""

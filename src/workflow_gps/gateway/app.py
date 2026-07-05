@@ -25,6 +25,7 @@ from ..billing import (
     PayoutStatus,
     PayoutStore,
 )
+from ..billing.pricing import PricingEngine
 from ..durable.idempotency import IdempotencyLedger
 from ..durable.service import DurableWorkflowService
 from ..identity.errors import AuthenticationError, AuthorizationError
@@ -51,12 +52,15 @@ from ..nodeplace import (
     UnverifiedRunError,
     Visibility,
     build_run_binding,
+    commission_rate,
+    lineage_shares,
     reward_multiplier,
     utility,
 )
-from ..orchestrator import OrchestratorError
+from ..orchestrator import ContractAssembler, GoalSpec, OrchestratorError
 from ..orchestrator.state import PauseKind, Phase, ResumeInput, RunState, TaskContract
 from ..providers.vault import SecretVault
+from ..skills.contract import Slot, SubgraphBody
 from ..skills.models import ReusableSkill
 from .errors import GatewayError, WebhookError
 from .http import (
@@ -318,6 +322,7 @@ class GatewayApp:
         r.add("GET", "/v1/versions/{version_id}/ratings", self._list_ratings)
         r.add("GET", "/v1/market/candidates", self._market_candidates)
         r.add("POST", "/v1/market/quotes", self._market_quote)
+        r.add("POST", "/v1/market/assemble", self._market_assemble)
         r.add("GET", "/v1/earnings", self._earnings_balance)
         r.add("GET", "/v1/earnings/entries", self._earnings_entries)
         r.add("GET", "/v1/payout-accounts", self._get_payout_account)
@@ -705,6 +710,8 @@ class GatewayApp:
                 backend=str(body.get("backend", "docker")),
                 requires_approval=bool(body.get("requires_approval", True)),
                 derived_from=body.get("derived_from"),
+                consumes=self._parse_slots(body.get("consumes")),
+                produces=self._parse_slots(body.get("produces")),
             )
         except ContributionError as exc:
             raise GatewayError(400, "invalid_request", str(exc)) from exc
@@ -860,6 +867,129 @@ class GatewayApp:
             )
         items.sort(key=lambda item: item["utility"], reverse=True)
         return json_response(200, {"mode": mode.value, "items": items})
+
+    @staticmethod
+    def _parse_slots(raw) -> list[Slot] | None:
+        if raw is None:
+            return None
+        if not isinstance(raw, list):
+            raise GatewayError(400, "invalid_request", "slots must be a list")
+        try:
+            return [Slot.model_validate(item) for item in raw]
+        except Exception as exc:
+            raise GatewayError(400, "invalid_request", f"bad slot: {exc}") from exc
+
+    def _market_assemble(self, request, session, params) -> Response:
+        """Goal in, assembled marketplace workflow out — a planning preview.
+
+        Backward-chains the wanted slots through the marketplace's slot
+        vocabularies. Read-only: prices preview without moving the book, and
+        payout previews use the same lineage-aware split settlement will.
+        """
+        assembler, book = self._require_market()
+        body = request.body or {}
+        if not isinstance(body.get("goal"), dict):
+            raise GatewayError(
+                400, "invalid_request", "a goal object with name and want is required"
+            )
+        try:
+            goal = GoalSpec.model_validate(body["goal"])
+        except Exception as exc:
+            raise GatewayError(400, "invalid_request", f"bad goal: {exc}") from exc
+        if not goal.want:
+            raise GatewayError(400, "invalid_request", "goal.want must not be empty")
+
+        marketplace = assembler.contracts(str(body.get("q", "")))
+        by_id = {entry.contract.id: entry for entry in marketplace}
+        result = ContractAssembler(
+            [entry.contract for entry in marketplace],
+            fill_gaps_with_scripts=bool(body.get("fill_gaps", False)),
+        ).assemble(goal)
+
+        nodes = []
+        gross_total = 0.0
+        margin_total = 0.0
+        children = (
+            result.contract.body.nodes
+            if result.contract is not None
+            and isinstance(result.contract.body, SubgraphBody)
+            else []
+        )
+        for child in children:
+            entry = by_id.get(child.id)
+            if entry is None:  # a synthesized gap node: no economics yet
+                nodes.append(
+                    {
+                        "name": child.name,
+                        "kind": child.body.kind.value,
+                        "gap": True,
+                    }
+                )
+                continue
+            candidate, signals = entry.assembled.candidate, entry.assembled.signals
+            cleared = book.clear(
+                class_key=candidate.class_key,
+                node_class=candidate.node_class,
+                ask=candidate.cleared_price,
+                cost=candidate.cost,
+                substitutes=signals.substitutes,
+                commit=False,  # planning must not move the market
+            )
+            breakdown = reward_multiplier(signals)
+            rho = commission_rate(
+                candidate.node_class,
+                scarcity_bonus=0.5 / (1.0 + max(0, signals.substitutes)),
+            )
+            shares = lineage_shares(
+                candidate.noder_principal,
+                assembler.lineage_for(candidate.version_id),
+                executing_multiplier=breakdown.multiplier,
+            )
+            split = PricingEngine(rho=rho).price(
+                gross=cleared.cleared,
+                provider_cost=candidate.cost.automation_cost,
+                shares=shares,
+            )
+            gross_total += cleared.cleared
+            margin_total += split.platform_micros / 1_000_000
+            nodes.append(
+                {
+                    "name": child.name,
+                    "kind": child.body.kind.value,
+                    "gap": False,
+                    "version_id": candidate.version_id,
+                    "cleared": cleared.model_dump(mode="json"),
+                    "payout_previews": [
+                        {
+                            "noder_principal": principal,
+                            "amount": micros / 1_000_000,
+                            "reason": (
+                                "preview: accrues only on platform-verified success"
+                            ),
+                        }
+                        for principal, micros in sorted(split.noder_micros.items())
+                    ],
+                    "platform_margin_preview": split.platform_micros / 1_000_000,
+                }
+            )
+
+        return json_response(
+            200,
+            {
+                "complete": result.complete,
+                "selected": result.selected,
+                "gap_filled": result.gap_filled,
+                "missing": [slot.model_dump(mode="json") for slot in result.missing],
+                "contract": (
+                    result.contract.model_dump(mode="json")
+                    if result.contract is not None
+                    else None
+                ),
+                "nodes": nodes,
+                "estimated_gross_total": gross_total,
+                "platform_margin_preview": margin_total,
+            },
+        )
 
     def _market_quote(self, request, session, params) -> Response:
         """Quote a workflow off live economics. A forecast: no money moves,
