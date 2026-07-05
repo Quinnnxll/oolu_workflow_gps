@@ -4,6 +4,27 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Unified-surface migration, step 2 — task-flow parity:
+
+- The unified front-end's run detail now makes **every pause kind
+  actionable**: clarification questions render as a form (suggested
+  values as placeholders) posting `/answers`; route confirmation shows
+  the chosen blueprint, estimated cost, and reserved actions with
+  Confirm/Decline posting `/confirmation`; approval shows
+  granted-of-required with an Approve button (self-approval refusals
+  surface as the server's own error); incidents list with Retry/Abort
+  posting `/incidents`; and any non-terminal run has a Cancel button.
+- Added the **Skills screen** (`/v1/listings?q=` search over published
+  marketplace nodes — title, summary, status, tags), degrading honestly
+  where nodeplace is not wired.
+- A real-Chromium test drives a run that pauses twice — clarification,
+  then route confirmation — to completion entirely from the browser,
+  via the paste-a-token sign-in path an IdP-fronted host would use.
+  Route pins cover every new fragment the page calls.
+  With this, the unified surface covers the loopback shell's task flow;
+  what remains before flipping the default is the payout-onboarding
+  screen and worker health (the Health screen shows gateway metrics).
+
 Unified-surface migration, step 1 — plus field fixes:
 
 - Added **`wfgps desktop --unified`** (opt-in preview): the desktop shell

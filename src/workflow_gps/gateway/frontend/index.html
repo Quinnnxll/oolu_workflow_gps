@@ -203,6 +203,83 @@ async function runsScreen() {
   return h("div", {}, form, listing);
 }
 
+/* Pause panels: whatever the run is waiting on becomes an actionable card. */
+async function pausePanel(run) {
+  const base = "/v1/runs/" + run.run_id;
+  const err = h("div", { class: "error" });
+  const act = async (method, path, body) => {
+    err.textContent = "";
+    try { await api(method, path, body); render(); }
+    catch (e) { err.textContent = e.message; }
+  };
+
+  if (run.awaiting === "clarification") {
+    const data = await api("GET", base + "/questions");
+    const fields = data.questions.map((q) => ({
+      parameter: q.parameter,
+      input: h("input", {
+        id: "q-" + q.parameter,
+        placeholder: q.suggested_values.join(" / ") || q.question,
+      }),
+      question: q.question,
+    }));
+    return h("form", { class: "card", onsubmit: (e) => {
+      e.preventDefault();
+      const answers = {};
+      for (const f of fields) answers[f.parameter] = f.input.value;
+      act("POST", base + "/answers", { answers });
+    } },
+      h("h2", {}, "needs clarification"),
+      fields.map((f) => [h("label", { for: "q-" + f.parameter }, f.question), f.input]),
+      h("button", { type: "submit" }, "Answer"), err);
+  }
+
+  if (run.awaiting === "confirmation") {
+    const route = await api("GET", base + "/route");
+    return h("div", { class: "card" },
+      h("h2", {}, "confirm the route"),
+      route.route === null ? h("p", { class: "muted" }, "no route preview") : h("div", {},
+        h("div", {}, badge(route.chosen), h("span", { class: "muted" },
+          " estimated cost " + money(route.total_cost))),
+        route.reserved_actions.length
+          ? h("div", {}, route.reserved_actions.map((a) => badge(a, "bad")))
+          : null),
+      h("button", { class: "small", onclick: () =>
+        act("POST", base + "/confirmation", { approved: true }) }, "Confirm"),
+      " ",
+      h("button", { class: "small", onclick: () =>
+        act("POST", base + "/confirmation", { approved: false }) }, "Decline"),
+      err);
+  }
+
+  if (run.awaiting === "approval") {
+    const approvals = await api("GET", base + "/approvals");
+    return h("div", { class: "card" },
+      h("h2", {}, "needs approval"),
+      h("p", { class: "muted" },
+        approvals.granted + " of " + approvals.required + " approvals granted"
+        + " — an authorized approver (not the submitter) must decide"),
+      h("button", { class: "small", onclick: () =>
+        act("POST", base + "/approvals", {}) }, "Approve"),
+      err);
+  }
+
+  if (run.awaiting === "incident") {
+    const data = await api("GET", base + "/incidents");
+    return h("div", { class: "card" },
+      h("h2", {}, "incident"),
+      h("ul", { class: "plain" }, data.incidents.map((i) =>
+        h("li", { class: "muted" }, i.reason + (i.resolution ? " — " + i.resolution : "")))),
+      h("button", { class: "small", onclick: () =>
+        act("POST", base + "/incidents", { decision: "retry" }) }, "Retry"),
+      " ",
+      h("button", { class: "small", onclick: () =>
+        act("POST", base + "/incidents", { decision: "abort" }) }, "Abort"),
+      err);
+  }
+  return null;
+}
+
 async function runDetail(runId) {
   const run = await api("GET", "/v1/runs/" + runId);
   const audit = await api("GET", "/v1/runs/" + runId + "/audit");
@@ -221,14 +298,55 @@ async function runDetail(runId) {
         "live: " + frame.event_type + " (" + frame.phase + ")"));
     };
   } catch { /* the live stream is a bonus, never a requirement */ }
+  const terminal = ["completed", "failed", "cancelled"].includes(run.phase);
+  const cancelErr = h("div", { class: "error" });
   return h("div", {},
     h("div", { class: "card" },
       badge(run.phase, run.phase === "failed" ? "bad" : "ok"),
       run.awaiting ? badge("awaiting " + run.awaiting) : null,
       h("p", {}, run.intent),
       run.failure_reason ? h("div", { class: "error" }, run.failure_reason) : null,
-      run.result ? h("p", { class: "muted" }, JSON.stringify(run.result)) : null),
+      run.result ? h("p", { class: "muted" }, JSON.stringify(run.result)) : null,
+      terminal ? null : h("button", { class: "small", onclick: async () => {
+        try { await api("POST", "/v1/runs/" + runId + "/cancel", {}); render(); }
+        catch (e) { cancelErr.textContent = e.message; }
+      } }, "Cancel run"),
+      cancelErr),
+    await pausePanel(run),
     h("h2", {}, "timeline"), live, timeline);
+}
+
+/* ---- skills: the marketplace's published listings ---- */
+function skillsScreen() {
+  const query = h("input", { id: "q", placeholder: "search published nodes" });
+  const out = h("div", {});
+  async function search(event) {
+    if (event) event.preventDefault();
+    out.replaceChildren();
+    try {
+      const data = await api(
+        "GET", "/v1/listings?q=" + encodeURIComponent(query.value || ""));
+      out.append(data.items.length
+        ? h("table", {},
+            h("tr", {}, h("th", {}, "listing"), h("th", {}, "summary"),
+              h("th", {}, "status"), h("th", {}, "tags")),
+            data.items.map((item) => h("tr", {},
+              h("td", {}, item.title),
+              h("td", { class: "muted" }, item.summary),
+              h("td", {}, badge(item.status)),
+              h("td", {}, (item.tags || []).map((t) => badge(t))))))
+        : h("p", { class: "muted" }, "No published nodes match."));
+    } catch (e) {
+      out.append(e.status === 404
+        ? notEnabled()
+        : h("div", { class: "error" }, e.message));
+    }
+  }
+  search();
+  return h("div", {},
+    h("form", { onsubmit: search }, h("label", { for: "q" }, "Search"), query,
+      h("button", { type: "submit" }, "Search")),
+    out);
 }
 
 /* ---- assemble ---- */
@@ -428,6 +546,7 @@ const ROUTES = [
   ["#/runs", "Runs", runsScreen],
   ["#/assemble", "Assemble", assembleScreen],
   ["#/inbox", "Inbox", inboxScreen],
+  ["#/skills", "Skills", skillsScreen],
   ["#/earnings", "Earnings", earningsScreen],
   ["#/users", "Users", usersScreen],
   ["#/health", "Health", healthScreen],
