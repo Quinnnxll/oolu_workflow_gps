@@ -55,6 +55,30 @@ All state lives in one volume (`/data`). **Terminate TLS in front**
 (Caddy / nginx / Traefik) — the token is a bearer secret and must not
 travel over plain HTTP outside your machine.
 
+#### Multi-user hosting (accounts, not a shared token)
+
+`wfgps web` is one shared token, one trust domain. For a host where every
+person has their own username, password, and authority, serve the full
+multi-tenant gateway with **local accounts**:
+
+```bash
+WFGPS_HOST_SECRET=$(openssl rand -base64 32) \
+WFGPS_ADMIN_PASSWORD=change-me-soon \
+wfgps host --data .workflow-gps/host
+```
+
+Sign in with `POST /v1/auth/login {"username", "password"}` to get a
+short-lived bearer token for every `/v1/*` surface (runs, marketplace,
+approvals, earnings). Admins provision users in their own tenant via
+`POST /v1/auth/users` (and disable them via
+`POST /v1/auth/users/{name}/disabled`). Identity semantics are unchanged
+from an IdP-fronted deployment: tokens are validated, authority comes
+from **stored** grants — never token claims — and passwords are
+scrypt-hashed with uniform login failures and brief lockouts. The only
+local part is who signs the tokens: this install's own secret (HMAC),
+which `assert_production_identity` deliberately refuses for
+production-money deployments.
+
 ### If something goes wrong
 
 Run the built-in check-up — it tests everything this machine needs and

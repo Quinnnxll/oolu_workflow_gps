@@ -358,6 +358,38 @@ def build_parser() -> argparse.ArgumentParser:
         "(a fresh token is generated and printed when unset)",
     )
 
+    host = sub.add_parser(
+        "host",
+        help="multi-user web hosting: the full gateway with local accounts",
+    )
+    host.add_argument("--config", metavar="PATH", help="path to a models.yaml file")
+    host.add_argument(
+        "--data",
+        metavar="DIR",
+        default=".workflow-gps/host",
+        help="data directory (all state lives here; default: .workflow-gps/host)",
+    )
+    host.add_argument("--host", default="0.0.0.0")
+    host.add_argument("--port", type=int, default=8788)
+    host.add_argument("--tenant", default="main", help="tenant for the bootstrap admin")
+    host.add_argument(
+        "--admin", default="admin", metavar="USERNAME", help="bootstrap admin username"
+    )
+    host.add_argument(
+        "--secret-env",
+        default="WFGPS_HOST_SECRET",
+        metavar="NAME",
+        help="environment variable holding the token-signing secret "
+        "(generated if unset — tokens then die with the process)",
+    )
+    host.add_argument(
+        "--admin-password-env",
+        default="WFGPS_ADMIN_PASSWORD",
+        metavar="NAME",
+        help="environment variable holding the first admin's password "
+        "(generated and printed once if unset)",
+    )
+
     sub.add_parser("show-config", help="print the effective settings").add_argument(
         "--config", metavar="PATH", help="path to a models.yaml settings file"
     )
@@ -1298,6 +1330,79 @@ def _cmd_web(args, out) -> int:
     return 0
 
 
+def _cmd_host(args, out) -> int:
+    """Multi-user web hosting: the full multi-tenant gateway, local accounts.
+
+    Unlike `wfgps web` (one shared token, one trust domain), every person
+    gets their own username, password, and authority — the same identity
+    semantics as an IdP-fronted deployment, with this install signing its
+    own tokens.
+    """
+    import secrets as secrets_module
+
+    from .assembly import build_host_runtime
+    from .config import Settings
+
+    secret = os.environ.get(args.secret_env)
+    ephemeral_secret = secret is None
+    if ephemeral_secret:
+        secret = secrets_module.token_urlsafe(32)
+    try:
+        runtime = build_host_runtime(
+            Settings.load(args.config), data_dir=args.data, secret=secret
+        )
+    except ValueError as exc:
+        raise _CliError(str(exc)) from exc
+
+    admin_password = os.environ.get(args.admin_password_env)
+    generated_password = admin_password is None
+    if generated_password:
+        admin_password = secrets_module.token_urlsafe(12)
+    created = runtime.accounts.bootstrap(
+        tenant=args.tenant, username=args.admin, password=admin_password
+    )
+
+    try:
+        import uvicorn
+    except ImportError as exc:
+        runtime.close()
+        raise _CliError(
+            "uvicorn not installed (`pip install 'workflow-gps[serve]'`)"
+        ) from exc
+
+    shown = "<this-host>" if args.host in ("0.0.0.0", "::") else args.host
+    out.write(
+        f"Workflow-GPS multi-user host is starting on {args.host}:{args.port}.\n"
+        f"  data    : {args.data}\n"
+        f"  sign in : POST http://{shown}:{args.port}/v1/auth/login "
+        '{"username": "%s", "password": "..."}\n' % args.admin
+    )
+    if created and generated_password:
+        out.write(
+            f"  admin   : {args.admin} / {admin_password}   "
+            "(shown ONCE — change it, or set "
+            f"{args.admin_password_env} before first start)\n"
+        )
+    elif not created:
+        out.write(f"  admin   : {args.admin} already exists (password unchanged)\n")
+    if ephemeral_secret:
+        out.write(
+            f"  NOTE: {args.secret_env} is not set, so the token-signing secret\n"
+            "  is ephemeral — every sign-in dies with this process. Set it for\n"
+            "  logins that survive restarts.\n"
+        )
+    out.write(
+        "  IMPORTANT: expose this only behind HTTPS (a reverse proxy such as\n"
+        "  Caddy or nginx) — passwords and tokens travel with every request.\n"
+        "  press Ctrl+C to stop\n"
+    )
+    try:
+        uvicorn.run(runtime.asgi, host=args.host, port=args.port, log_level="info")
+    finally:
+        runtime.close()
+    return 0
+
+
 def _version() -> str:
     return __version__
 
@@ -1328,6 +1433,8 @@ def main(argv: list[str] | None = None, *, builder=None, out=None) -> int:
             return _cmd_desktop(args, out)
         if args.command == "web":
             return _cmd_web(args, out)
+        if args.command == "host":
+            return _cmd_host(args, out)
         if args.command == "show-config":
             return _cmd_show_config(args, out)
         if args.command == "doctor":

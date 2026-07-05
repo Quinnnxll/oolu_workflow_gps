@@ -4,6 +4,32 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Multi-user web hosting — accounts, not a shared token:
+
+- Added `identity.accounts`: **local user accounts** as the identity
+  provider a self-hoster lacks. Passwords are scrypt-hashed (stdlib;
+  per-user salt, cost parameters recorded next to the hash), login mints
+  a short-lived HS256 token through the SAME `OidcValidator` path an
+  external IdP would use, and **roles become stored grants** — a forged
+  token claim still buys nothing. Login failures are uniform ("invalid
+  credentials" for unknown / wrong-password / disabled alike — no account
+  enumeration), unknown users cost the same scrypt work as wrong
+  passwords (decoy verification), and repeated failures lock the username
+  briefly.
+- New gateway routes (answering only when accounts are configured —
+  IdP-fronted installs keep their 404): public `POST /v1/auth/login`;
+  `GET/POST /v1/auth/users` and `POST /v1/auth/users/{name}/disabled`
+  behind stored `users:manage` authority, tenant-scoped (admins provision
+  their own tenant; the tenant comes from the session, never the body).
+- Added `build_host_runtime(data_dir=, secret=)`: the full multi-tenant
+  gateway (runs, marketplace, ratings, pricing, traces, approvals) over
+  one backupable data directory, wired with local accounts. Refuses
+  secrets under 32 characters.
+- Added **`wfgps host`**: serves it, bootstraps the first admin
+  (idempotently — never resets an existing password) from
+  `WFGPS_ADMIN_PASSWORD` or a generated password shown once, warns when
+  the signing secret is ephemeral, and says loudly to put HTTPS in front.
+
 The self-host runner for online web users:
 
 - Added **`wfgps web`**: the desktop shell served over the network,

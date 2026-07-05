@@ -182,6 +182,7 @@ class GatewayApp:
         payout_adapter: PayoutAdapter | None = None,
         disputes: DisputeService | None = None,
         webhook_verifier: WebhookVerifier | None = None,
+        accounts=None,  # identity.LocalAccountService: local multi-user login
         clock: Callable[[], datetime] | None = None,
     ):
         self._durable = durable
@@ -221,6 +222,10 @@ class GatewayApp:
         self._payout_adapter = payout_adapter
         self._disputes = disputes
         self._webhook_verifier = webhook_verifier
+        # Local user accounts (self-hosted multi-user): /v1/auth/* routes
+        # answer only when this is configured — installs fronted by a real
+        # IdP keep a 404 there and lose nothing.
+        self._accounts = accounts
         self._vault = vault or SecretVault()
         self._config = config or GatewayConfig()
         self._idem = idempotency or durable.idempotency
@@ -399,6 +404,28 @@ class GatewayApp:
         r.add("POST", "/v1/payout-accounts", self._create_payout_account)
         r.add("GET", "/v1/disputes/{event_id}", self._list_disputes)
         r.add("POST", "/v1/webhooks/processor", self._processor_webhook, public=True)
+        # Local accounts (self-hosted multi-user). Login is public by
+        # nature; management requires stored users:manage authority (the
+        # bootstrap admin's role holds "*").
+        r.add("POST", "/v1/auth/login", self._auth_login, public=True)
+        r.add(
+            "GET",
+            "/v1/auth/users",
+            self._auth_list_users,
+            requires_permission="users:manage",
+        )
+        r.add(
+            "POST",
+            "/v1/auth/users",
+            self._auth_create_user,
+            requires_permission="users:manage",
+        )
+        r.add(
+            "POST",
+            "/v1/auth/users/{username}/disabled",
+            self._auth_set_disabled,
+            requires_permission="users:manage",
+        )
 
     # ------------------------------------------------------------------ #
     # Handlers.                                                           #
@@ -1535,6 +1562,98 @@ class GatewayApp:
             f"webhook:{headers['X-Webhook-Id']}", process, scope="webhooks"
         )
         return json_response(200, result)
+
+    # ------------------------------------------------------------------ #
+    # Local accounts: self-hosted multi-user login and management.        #
+    # ------------------------------------------------------------------ #
+    def _require_accounts(self):
+        if self._accounts is None:
+            raise GatewayError(404, "not_found", "local accounts are not configured")
+        return self._accounts
+
+    def _auth_login(self, request, session, params) -> Response:
+        """Username + password in, a short-lived bearer token out.
+
+        Public by nature; the account service equalizes timing between
+        unknown users and wrong passwords, keeps the failure message
+        uniform (no account enumeration), and locks a username briefly
+        after repeated failures.
+        """
+        accounts = self._require_accounts()
+        body = request.body or {}
+        username = str(body.get("username", ""))
+        password = str(body.get("password", ""))
+        if not username or not password:
+            raise GatewayError(
+                400, "invalid_request", "username and password are required"
+            )
+        try:
+            result = accounts.login(
+                username, password, now=request.now or self._clock()
+            )
+        except AuthenticationError as exc:
+            raise GatewayError(401, "unauthorized", str(exc)) from exc
+        return json_response(
+            200,
+            {
+                "token": result.token,
+                "expires_at": result.expires_at.isoformat(),
+                "tenant": result.tenant_id,
+                "principal": result.principal,
+            },
+        )
+
+    @staticmethod
+    def _user_view(user) -> dict:
+        return {
+            "username": user.username,
+            "roles": list(user.roles),
+            "disabled": user.disabled,
+            "created_at": user.created_at.isoformat(),
+        }
+
+    def _auth_list_users(self, request, session, params) -> Response:
+        accounts = self._require_accounts()
+        return json_response(
+            200,
+            {"items": [self._user_view(u) for u in accounts.users(session.tenant_id)]},
+        )
+
+    def _auth_create_user(self, request, session, params) -> Response:
+        """Admins provision users in THEIR OWN tenant only — the tenant is
+        taken from the session, never from the request body."""
+        accounts = self._require_accounts()
+        body = request.body or {}
+        username = str(body.get("username", ""))
+        password = str(body.get("password", ""))
+        roles = body.get("roles", [])
+        if not isinstance(roles, list) or not all(isinstance(r, str) for r in roles):
+            raise GatewayError(400, "invalid_request", "roles must be a string list")
+        try:
+            user = accounts.create_user(
+                username,
+                password,
+                tenant=session.tenant_id,
+                roles=tuple(roles),
+                granted_by=session.principal_id,
+            )
+        except ValueError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(201, self._user_view(user))
+
+    def _auth_set_disabled(self, request, session, params) -> Response:
+        accounts = self._require_accounts()
+        body = request.body or {}
+        if not isinstance(body.get("disabled"), bool):
+            raise GatewayError(
+                400, "invalid_request", "disabled (true or false) is required"
+            )
+        user = accounts.user(params["username"])
+        # A user in another tenant is indistinguishable from a missing one.
+        if user is None or user.tenant_id != session.tenant_id:
+            raise GatewayError(404, "not_found", "user not found")
+        accounts.set_disabled(user.username, body["disabled"])
+        return json_response(200, self._user_view(accounts.user(user.username)))
 
     # ------------------------------------------------------------------ #
     # Helpers.                                                            #

@@ -321,6 +321,148 @@ def build_orchestrator_factory(
     return factory
 
 
+LOCAL_ISSUER = "wfgps-local"
+LOCAL_AUDIENCE = "wfgps"
+
+
+@dataclass
+class HostRuntime:
+    """Everything `wfgps host` serves, over one data directory."""
+
+    gateway: Any  # gateway.GatewayApp
+    asgi: Any  # gateway.GatewayASGI — what uvicorn runs
+    accounts: Any  # identity.LocalAccountService
+    identity: Any  # identity.IdentityStore
+    conn: DurableConnection
+    _closers: tuple[Any, ...] = ()
+
+    def close(self) -> None:
+        for closer in self._closers:
+            closer.close()
+        self.conn.close()
+
+
+def build_host_runtime(
+    settings: Settings | None = None,
+    *,
+    data_dir: str | Path,
+    secret: str,
+    token_ttl_seconds: int = 8 * 3600,
+    intake_model: IntakeModel | None = None,
+    skills: list[ReusableSkill] | None = None,
+    blueprints: list[Blueprint] | None = None,
+    grounding_map: dict[str, str] | None = None,
+    executors: dict[str, ActionExecutor] | None = None,
+    config: Any = None,  # gateway.GatewayConfig
+) -> HostRuntime:
+    """The multi-user web host: the full multi-tenant gateway over one
+    data directory, with LOCAL accounts as the identity provider.
+
+    Identity semantics are unchanged from a real-IdP deployment — bearer
+    tokens through ``OidcValidator``, authority from stored grants — the
+    only local part is who signs the tokens: this install's own HMAC
+    secret (the self-host trade; ``assert_production_identity`` still
+    refuses this shape for production-money deployments). Everything
+    lives under ``data_dir``: one folder to back up.
+    """
+    if len(secret) < 32:
+        raise ValueError("the host secret must be at least 32 characters")
+    settings = settings or Settings()
+    data = Path(data_dir)
+    data.mkdir(parents=True, exist_ok=True)
+
+    # Imported lazily so shells without the gateway never pay for it.
+    from .gateway import GatewayApp
+    from .gateway.asgi import GatewayASGI
+    from .identity import (
+        AuthorityResolver,
+        Hs256Signer,
+        Hs256Verifier,
+        IdentityStore,
+        LocalAccountService,
+        LocalUserStore,
+        OidcValidator,
+        ProviderConfig,
+    )
+    from .knowledge import TraceStore
+    from .metering import AttributionStore, MeteringLedger
+    from .nodeplace import (
+        CandidateAssembler,
+        LiveVersionStats,
+        NodeplaceService,
+        PriceBook,
+        RatingService,
+        RatingStore,
+        RegistryStore,
+    )
+
+    conn = DurableConnection(data / "host.db")
+    factory = build_orchestrator_factory(
+        settings,
+        intake_model=intake_model,
+        skills=skills,
+        blueprints=blueprints,
+        grounding_map=grounding_map,
+        executors=executors,
+    )
+    durable = DurableWorkflowService(conn, factory)
+
+    identity = IdentityStore(data / "identity.db")
+    users = LocalUserStore(data / "users.db")
+    signer = Hs256Signer(secret=secret, issuer=LOCAL_ISSUER, audience=LOCAL_AUDIENCE)
+    validator = OidcValidator(
+        [
+            ProviderConfig(
+                issuer=LOCAL_ISSUER,
+                audiences=frozenset({LOCAL_AUDIENCE}),
+                verifier=Hs256Verifier(secret),
+            )
+        ]
+    )
+    resolver = AuthorityResolver(identity)
+    accounts = LocalAccountService(
+        users, identity, signer, token_ttl_seconds=token_ttl_seconds
+    )
+
+    registry = RegistryStore(conn)
+    metering = MeteringLedger(conn)
+    attribution = AttributionStore(conn)
+    ratings = RatingService(RatingStore(conn), verified_run=metering.verified_run)
+    market = CandidateAssembler(
+        registry=registry,
+        stats=LiveVersionStats(
+            metering=metering, audit=durable.audit, attribution=attribution
+        ),
+        ratings=ratings,
+    )
+    price_book = PriceBook(data / "prices.db")
+    traces = TraceStore(data / "traces.db")
+
+    gateway = GatewayApp(
+        durable,
+        validator=validator,
+        resolver=resolver,
+        approval_authority=IdentityApprovalAuthority(resolver),
+        config=config,
+        nodeplace=NodeplaceService(registry),
+        ratings=ratings,
+        market=market,
+        price_book=price_book,
+        attribution=attribution,
+        trace_store=traces,
+        contract_executors=executors,
+        accounts=accounts,
+    )
+    return HostRuntime(
+        gateway=gateway,
+        asgi=GatewayASGI(gateway),
+        accounts=accounts,
+        identity=identity,
+        conn=conn,
+        _closers=(users, identity, price_book, traces),
+    )
+
+
 def build_desktop_runtime(
     settings: Settings | None = None,
     *,

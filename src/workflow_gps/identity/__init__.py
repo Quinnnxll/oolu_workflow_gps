@@ -6,6 +6,15 @@ authority is derived from stored tenant/role/grant records, never from caller te
 and every store query is tenant-scoped. See ``docs/ADAPTER_MATURITY.md``.
 """
 
+from .accounts import (
+    ADMIN_ROLE,
+    LocalAccountService,
+    LocalUserStore,
+    LoginResult,
+    UserAccount,
+    hash_password,
+    verify_password,
+)
 from .errors import (
     AuthenticationError,
     AuthorizationError,
@@ -45,9 +54,16 @@ from .tokens import (
 )
 
 __all__ = [
+    "ADMIN_ROLE",
     "IDENTITY_MIGRATIONS",
     "IDENTITY_SCHEMA_VERSION",
     "AuthenticationError",
+    "LocalAccountService",
+    "LocalUserStore",
+    "LoginResult",
+    "UserAccount",
+    "hash_password",
+    "verify_password",
     "AuthorityGrant",
     "AuthorityResolver",
     "AuthorizationError",
