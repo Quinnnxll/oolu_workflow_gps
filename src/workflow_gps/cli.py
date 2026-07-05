@@ -305,6 +305,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="load the built-in starter pack if the registry is empty",
     )
+    desktop.add_argument(
+        "--open",
+        action="store_true",
+        dest="open_browser",
+        help="open the shell in the default browser once serving",
+    )
 
     sub.add_parser("show-config", help="print the effective settings").add_argument(
         "--config", metavar="PATH", help="path to a models.yaml settings file"
@@ -969,9 +975,18 @@ def _cmd_desktop(args, out) -> int:
             "uvicorn not installed (`pip install 'workflow-gps[serve]'`)"
         ) from exc
 
+    url = f"http://{args.host}:{args.port}"
     out.write(
-        f"serving desktop loopback on http://{args.host}:{args.port} (db: {db_path})\n"
+        f"Workflow-GPS shell is starting.\n"
+        f"  open {url} in your browser (db: {db_path})\n"
+        f"  press Ctrl+C to stop\n"
     )
+    if args.open_browser:
+        import threading
+        import webbrowser
+
+        # Give uvicorn a moment to bind before the browser asks for /.
+        threading.Timer(1.0, webbrowser.open, [url]).start()
     try:
         uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     finally:

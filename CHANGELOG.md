@@ -57,6 +57,19 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- One-step setup for non-developers: download the repo ZIP, unzip, and
+  run `setup.bat` (Windows, double-clickable) or `./setup.sh`
+  (macOS/Linux). The scripts find Python 3.11+ (with a friendly pointer
+  when it's missing), create a private `.venv` inside the folder,
+  install only the `serve` extra (the shell never needs the heavy
+  `engine`), and launch `wfgps desktop --seed-starter --open` — which
+  now auto-opens the browser (new `--open` flag) and prints a
+  human-readable startup message. Idempotent: re-running reuses the
+  environment and just starts the shell; nothing lands outside the
+  folder. The README opens with a "Quickstart — download → run" section,
+  and `tests/test_setup_scripts.py` pins every link of the story (the
+  scripts' install command and launch flags against the CLI parser, the
+  README pointers) so the setup path can never silently rot.
 - Browser-level end-to-end tests (`tests/test_browser_e2e.py`): a real
   Chromium drives the real front-end over a minimal in-test ASGI HTTP
   server (no external server dependency). The tour: assemble the seeded

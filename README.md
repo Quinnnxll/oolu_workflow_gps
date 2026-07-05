@@ -9,6 +9,29 @@ drift — the engine doesn't give up: it captures the error, **"recalculates,"**
 route (e.g. auto-installs a dependency, re-synthesizes the code), and keeps driving toward
 the goal.
 
+## Quickstart — download → run (no development tools needed)
+
+1. **Download** this repository as a ZIP (the green **Code** button → *Download ZIP*)
+   and unzip it anywhere.
+2. **Install Python 3.11+** if you don't have it: <https://www.python.org/downloads/>
+   (on Windows, tick *“Add python.exe to PATH”* in the installer).
+3. **Run the setup script** in the unzipped folder:
+   - **Windows:** double-click `setup.bat`
+   - **macOS / Linux:** open a terminal in the folder and run `./setup.sh`
+
+That's the whole setup. The first run creates a private environment in `.venv`
+inside the folder and installs everything into it (a few minutes); every run
+after that starts instantly. Your browser opens the **Workflow-GPS shell** at
+`http://127.0.0.1:8765` — submit tasks, assemble marketplace workflows with
+budget verdicts, decide approvals from the inbox, browse the skill library,
+and track earnings. All data stays on your machine (in `.workflow-gps/`);
+press **Ctrl+C** in the setup window to stop, and re-run the script to start
+again. Nothing is installed outside the folder — delete it and everything is
+gone.
+
+The full model engine (LLM synthesis, sandboxed execution) is optional and
+configured separately — see **Installation** and **Configuration** below.
+
 ## Core ideas
 
 - **"Recalculating…" self-healing.** Failures are normal outcomes, not dead ends. The

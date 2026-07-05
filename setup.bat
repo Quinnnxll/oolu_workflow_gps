@@ -1,0 +1,66 @@
+@echo off
+rem =========================================================================
+rem  Workflow-GPS one-step setup for Windows.
+rem  Double-click this file (or run it in a terminal) from the unzipped
+rem  repository folder. It will:
+rem    1. find Python 3.11+ (and tell you where to get it if missing),
+rem    2. create a private virtual environment in .venv (first run only),
+rem    3. install Workflow-GPS into it,
+rem    4. start the desktop shell and open it in your browser.
+rem  Nothing is installed outside this folder. Run it again any time —
+rem  it reuses the environment and just starts the shell.
+rem =========================================================================
+setlocal
+cd /d "%~dp0"
+
+where py >nul 2>nul
+if %errorlevel%==0 (
+    set "PYTHON=py -3"
+) else (
+    where python >nul 2>nul
+    if %errorlevel%==0 (
+        set "PYTHON=python"
+    ) else (
+        echo.
+        echo   Python was not found on this computer.
+        echo   Please install Python 3.11 or newer from https://www.python.org/downloads/
+        echo   ^(tick "Add python.exe to PATH" in the installer^), then run this file again.
+        echo.
+        pause
+        exit /b 1
+    )
+)
+
+%PYTHON% -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)" >nul 2>nul
+if not %errorlevel%==0 (
+    echo.
+    echo   Your Python is too old. Workflow-GPS needs Python 3.11 or newer.
+    echo   Please install it from https://www.python.org/downloads/ and run this file again.
+    echo.
+    pause
+    exit /b 1
+)
+
+if not exist ".venv\Scripts\python.exe" (
+    echo Creating a private environment in .venv ...
+    %PYTHON% -m venv .venv || goto :fail
+)
+
+echo Installing Workflow-GPS ^(first run can take a few minutes^) ...
+".venv\Scripts\python.exe" -m pip install --quiet --upgrade pip || goto :fail
+".venv\Scripts\python.exe" -m pip install --quiet -e ".[serve]" || goto :fail
+
+echo.
+echo Starting the Workflow-GPS shell ... your browser will open shortly.
+echo Keep this window open while you use it; press Ctrl+C here to stop.
+echo.
+".venv\Scripts\python.exe" -m workflow_gps.cli desktop ^
+    --registry .workflow-gps\skills.db --seed-starter --open
+exit /b %errorlevel%
+
+:fail
+echo.
+echo   Something went wrong during setup. The messages above have details.
+echo.
+pause
+exit /b 1
