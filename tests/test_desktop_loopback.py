@@ -9,12 +9,15 @@ from workflow_gps.skills.models import ActionEvent, ReusableSkill, SkillSignatur
 from workflow_gps.skills.registry import SkillRegistry
 
 
-def _call(app, method, path, *, query=b"", body=None):
+def _call(app, method, path, *, query=b"", body=None, headers=None):
     scope = {
         "type": "http",
         "method": method,
         "path": path,
         "query_string": query if isinstance(query, bytes) else query.encode(),
+        "headers": [
+            (k.lower().encode(), v.encode()) for k, v in (headers or {}).items()
+        ],
     }
     payload = json.dumps(body).encode() if body is not None else b""
 

@@ -139,6 +139,7 @@ class DesktopService:
         trace_store=None,  # knowledge.TraceStore: confirmed runs sharpen picks
         rng=None,  # random.Random for explore-mode assembly; seedable
         wallet_lookup=None,  # () -> the LINKED wallet's remaining balance | None
+        session_manager=None,  # identity.SessionManager: loopback decisions
     ):
         self._durable = durable
         self._approval = approval_authority
@@ -154,6 +155,9 @@ class DesktopService:
         # A partial view of the user's assets by design: budgets never cap
         # on the linked balance, they only flag it for review.
         self._wallet_lookup = wallet_lookup
+        # Lets the loopback turn a bearer token into a verified Session for
+        # approval decisions — the loopback itself never trusts caller text.
+        self._sessions = session_manager
         self._connections: dict[str, _Connection] = {}
         self._confirmed: dict[str, AssemblyRunView] = {}
         # Reserved contracts held for approval (in-memory, like connections:
@@ -568,6 +572,32 @@ class DesktopService:
             },
         )
         return view
+
+    def decide_assembly(
+        self,
+        pending_id: str,
+        *,
+        token: str,
+        approved: bool,
+        required_assurance: int = 1,
+    ) -> AssemblyRunView:
+        """The loopback's approval decision: a bearer token, verified here.
+
+        The loopback boundary has no auth of its own, so the decision
+        carries an identity token and this method turns it into a verified
+        :class:`Session` (``AuthenticationError`` if it cannot) before
+        handing off to :meth:`approve_assembly` — the caller's text never
+        becomes authority.
+        """
+        if self._sessions is None:
+            raise KeyError("no session manager configured for this shell")
+        session = self._sessions.login(token, now=datetime.now(UTC))
+        return self.approve_assembly(
+            pending_id,
+            session=session,
+            approved=approved,
+            required_assurance=required_assurance,
+        )
 
     def _enforce_contract_budget(
         self,

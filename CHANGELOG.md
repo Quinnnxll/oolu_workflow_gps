@@ -57,6 +57,18 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- Loopback route for the approval decision:
+  `POST /v1/assembly/approvals/{pending_id}` with `{"approved": bool}`
+  decides a held reserved contract from the desktop UI. The loopback
+  stays a no-auth boundary with one deliberate exception: this route
+  REQUIRES an `Authorization: Bearer` token, which
+  `DesktopService.decide_assembly` turns into a verified identity
+  session (`SessionManager.login`) before handing off to
+  `approve_assembly` — caller text never becomes authority. Missing/bad
+  token -> 401, valid-but-unauthorized principal -> 403 (the hold
+  survives every failed attempt), missing `approved` field -> 400,
+  unknown or already-decided hold -> 404, no session manager wired ->
+  404. New `session_manager` ctor hook on the shell.
 - Desktop reserved contracts become approvable inbox tasks: confirming a
   contract with reserved (irreversible) actions no longer 403s — it is
   HELD (`awaiting_approval`) and appears in the inbox as kind

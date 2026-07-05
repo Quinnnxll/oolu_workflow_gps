@@ -6,13 +6,17 @@ import re
 from typing import Any
 from urllib.parse import parse_qs
 
+from ..identity.errors import AuthenticationError, AuthorizationError
 from .service import DesktopService
 
 # The desktop UI binds here over 127.0.0.1 only. This is the loopback boundary
 # ADR-0004 names: secret-free view-models, no execution path, and NO auth — the
-# multi-tenant OIDC gateway remains the door for web/mobile. Never bind this to a
-# non-loopback interface.
+# multi-tenant OIDC gateway remains the door for web/mobile. Never bind this to
+# a non-loopback interface. The single exception to "no auth": the approval
+# decision route REQUIRES a bearer token, because approvals must mint from a
+# verified identity even locally — the service validates it, never this layer.
 _TASK_RE = re.compile(r"^/v1/tasks/(?P<run_id>[^/]+)(?P<rest>/[a-z-]+)?$")
+_APPROVAL_RE = re.compile(r"^/v1/assembly/approvals/(?P<pending_id>[^/]+)$")
 _JSON = {
     "Content-Type": "application/json",
     "X-Content-Type-Options": "nosniff",
@@ -43,16 +47,18 @@ class DesktopLoopbackApp:
             ).items()
         }
         try:
-            status, payload = await self._route(method, path, query, receive)
+            status, payload = await self._route(method, path, query, receive, scope)
         except KeyError:
             status, payload = 404, {"error": "not_found"}
-        except PermissionError as exc:
+        except AuthenticationError as exc:
+            status, payload = 401, {"error": str(exc)}
+        except (AuthorizationError, PermissionError) as exc:
             status, payload = 403, {"error": str(exc)}
         except _BadRequest as exc:
             status, payload = 400, {"error": str(exc)}
         await _send_json(send, status, payload)
 
-    async def _route(self, method, path, query, receive):
+    async def _route(self, method, path, query, receive, scope=None):
         if method == "GET" and path == "/v1/inbox":
             items = self._svc.inbox(query.get("kind"))
             return 200, {"items": [i.model_dump(mode="json") for i in items]}
@@ -85,6 +91,24 @@ class DesktopLoopbackApp:
                 )
             except (ValueError, TypeError) as exc:
                 raise _BadRequest(str(exc)) from exc
+            return 200, view.model_dump(mode="json")
+        approval = _APPROVAL_RE.match(path)
+        if method == "POST" and approval:
+            body = await _read_json(receive)
+            if "approved" not in body:
+                raise _BadRequest("approved (true or false) is required")
+            token = _bearer(scope)
+            if not token:
+                raise AuthenticationError(
+                    "an Authorization bearer token is required to decide "
+                    "a held contract"
+                )
+            view = self._svc.decide_assembly(
+                approval["pending_id"],
+                token=token,
+                approved=bool(body["approved"]),
+                required_assurance=int(body.get("required_assurance", 1)),
+            )
             return 200, view.model_dump(mode="json")
         if method == "POST" and path == "/v1/assembly/confirm":
             body = await _read_json(receive)
@@ -185,6 +209,17 @@ class DesktopLoopbackApp:
 
 class _BadRequest(Exception):
     pass
+
+
+def _bearer(scope) -> str | None:
+    """The Authorization bearer token from the request headers, if any."""
+    for name, value in (scope or {}).get("headers") or []:
+        if name.lower() == b"authorization":
+            text = value.decode("latin1").strip()
+            if text.lower().startswith("bearer "):
+                return text[7:].strip() or None
+            return None
+    return None
 
 
 def _maybe_float(value) -> float | None:

@@ -22,7 +22,9 @@ from workflow_gps.metering.deriver import MeteringDeriver
 from workflow_gps.orchestrator import DagRouteRunner
 
 
-def _desktop(tmp_path, *, executor=None, trace_store=None, authority=None):
+def _desktop(
+    tmp_path, *, executor=None, trace_store=None, authority=None, sessions=None
+):
     app, conn, ident, registry, metering, attribution, audit = _build(tmp_path)
     _seed_market(app, ident, registry)
     svc = DesktopService(
@@ -35,6 +37,7 @@ def _desktop(tmp_path, *, executor=None, trace_store=None, authority=None):
         ),
         attribution=attribution,
         trace_store=trace_store,
+        session_manager=sessions,
     )
     return app, svc, conn, metering, attribution, audit
 
@@ -165,6 +168,57 @@ def test_confirm_runs_the_previewed_contract_and_binds_the_money(tmp_path):
     conn.close()
 
 
+def _identity_tokens(tmp_path):
+    """Identity wiring that also mints raw bearer tokens (loopback tests)."""
+    from datetime import UTC, datetime
+
+    from workflow_gps.identity import (
+        AuthorityGrant,
+        AuthorityResolver,
+        Hs256Signer,
+        Hs256Verifier,
+        IdentityApprovalAuthority,
+        IdentityStore,
+        OidcValidator,
+        ProviderConfig,
+        Role,
+        SessionManager,
+        Tenant,
+    )
+
+    secret, issuer, audience = "idp-secret", "https://idp", "wfgps"
+    store = IdentityStore(tmp_path / "identity.db")
+    store.add_tenant(Tenant(tenant_id="t1", name="t1"))
+    store.add_role(
+        Role(tenant_id="t1", name="approver", permissions=frozenset({"approve:*"}))
+    )
+    store.add_grant(
+        AuthorityGrant(
+            tenant_id="t1",
+            principal_id="approver-1",
+            role_name="approver",
+            granted_by="admin",
+        )
+    )
+    validator = OidcValidator(
+        [
+            ProviderConfig(
+                issuer=issuer,
+                audiences=frozenset({audience}),
+                verifier=Hs256Verifier(secret),
+            )
+        ]
+    )
+    manager = SessionManager(store, validator)
+    signer = Hs256Signer(secret=secret, issuer=issuer, audience=audience)
+    authority = IdentityApprovalAuthority(AuthorityResolver(store))
+
+    def token(subject):
+        return signer.mint(subject=subject, tenant_id="t1", now=datetime.now(UTC))
+
+    return authority, manager, token
+
+
 def _destructive_contract():
     from workflow_gps.skills.contract import ActionsBody, NodeContract
     from workflow_gps.skills.models import ActionEvent
@@ -234,6 +288,97 @@ def test_reserved_contract_becomes_an_approvable_inbox_task(tmp_path):
     assert approved_event.payload["by"] == "approver-1"
     assert approved_event.payload["run_id"] == run.run_id
     assert approved_event.payload["reserved"] == ["cli/delete_files"]
+    conn.close()
+
+
+def test_loopback_approval_decision_end_to_end(tmp_path):
+    """The UI's whole approval journey over the loopback: hold -> inbox ->
+    decide with a bearer token. Bad or missing tokens never release it."""
+    authority, manager, token = _identity_tokens(tmp_path)
+    executor = _CliExecutor(("run", "delete_files"))
+    _app, svc, conn, *_rest = _desktop(
+        tmp_path, executor=executor, authority=authority, sessions=manager
+    )
+    loop = DesktopLoopbackApp(svc)
+
+    status, held = _call(
+        loop,
+        "POST",
+        "/v1/assembly/confirm",
+        body={"contract": _destructive_contract()},
+    )
+    assert status == 200 and held["status"] == "awaiting_approval"
+    pending_id = held["run_id"]
+
+    def decide(approved, *, bearer=None, pid=pending_id):
+        headers = {"Authorization": f"Bearer {bearer}"} if bearer else None
+        return _call(
+            loop,
+            "POST",
+            f"/v1/assembly/approvals/{pid}",
+            body={"approved": approved},
+            headers=headers,
+        )
+
+    # No token -> 401; a garbage token -> 401; a valid but unauthorized
+    # principal -> 403. The hold survives every failed attempt.
+    assert decide(True)[0] == 401
+    assert decide(True, bearer="garbage")[0] == 401
+    assert decide(True, bearer=token("nobody"))[0] == 403
+    assert executor.calls == 0
+    assert len(svc.inbox(kind="contract-approval")) == 1
+
+    # Deciding without the approved field is a 400, not a silent decline.
+    status, _err = _call(
+        loop,
+        "POST",
+        f"/v1/assembly/approvals/{pending_id}",
+        body={},
+        headers={"Authorization": f"Bearer {token('approver-1')}"},
+    )
+    assert status == 400
+
+    # The authorized approver releases it; the run happens exactly once.
+    status, run = decide(True, bearer=token("approver-1"))
+    assert status == 200 and run["status"] == "succeeded"
+    assert executor.calls == 1
+
+    # Unknown (already decided) hold -> 404.
+    assert decide(True, bearer=token("approver-1"))[0] == 404
+
+    # And a decline over the loopback removes a fresh hold without running.
+    _status, second = _call(
+        loop,
+        "POST",
+        "/v1/assembly/confirm",
+        body={"contract": _destructive_contract()},
+    )
+    status, declined = decide(False, bearer=token("approver-1"), pid=second["run_id"])
+    assert status == 200 and declined["status"] == "declined"
+    assert executor.calls == 1  # nothing else ran
+    conn.close()
+
+
+def test_loopback_approval_without_session_manager_is_not_found(tmp_path):
+    authority, _manager, token = _identity_tokens(tmp_path)
+    _app, svc, conn, *_rest = _desktop(
+        tmp_path, executor=_CliExecutor(("run", "delete_files")), authority=authority
+    )
+    loop = DesktopLoopbackApp(svc)
+    _status, held = _call(
+        loop,
+        "POST",
+        "/v1/assembly/confirm",
+        body={"contract": _destructive_contract()},
+    )
+    status, _body = _call(
+        loop,
+        "POST",
+        f"/v1/assembly/approvals/{held['run_id']}",
+        body={"approved": True},
+        headers={"Authorization": f"Bearer {token('approver-1')}"},
+    )
+    assert status == 404  # no session manager wired: the route cannot exist
     conn.close()
 
 
