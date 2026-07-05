@@ -2,7 +2,9 @@
 
 All notable changes to Workflow-GPS are documented here.
 
-## Unreleased
+## v0.7.0 — 2026-07-05
+
+Release notes: `docs/releases/v0.7.0.md`.
 
 Unified-surface migration, final step — the loopback surface is gone:
 
