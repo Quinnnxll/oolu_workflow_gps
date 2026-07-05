@@ -31,15 +31,17 @@ from workflow_gps.skills.models import ActionEvent, ExecutionOutcome, ExecutionS
 
 
 class _CliExecutor:
-    """Succeeds every 'run' and counts calls, so replays are observable."""
+    """Succeeds every operation it is capable of; counts calls, so replays
+    are observable."""
 
     name = "cli"
 
-    def __init__(self):
+    def __init__(self, capabilities=("run",)):
+        self._caps = frozenset(capabilities)
         self.calls = 0
 
     def capabilities(self):
-        return frozenset({"run"})
+        return self._caps
 
     def execute(self, action, *, idempotency_key):
         self.calls += 1

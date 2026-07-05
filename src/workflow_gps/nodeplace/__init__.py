@@ -36,9 +36,11 @@ from .execution import (
     ContractNodeOutcome,
     ContractRunResult,
     ReservedActionsError,
+    compile_contract,
     compile_runnable,
     estimate_contract_gross,
     execute_contract,
+    reserved_operations,
 )
 from .market import (
     DEFAULT_POLICIES,
@@ -171,6 +173,7 @@ __all__ = [
     "assess_budget",
     "build_run_binding",
     "commission_rate",
+    "compile_contract",
     "compile_runnable",
     "competition_index",
     "enforce_budget",
@@ -183,6 +186,7 @@ __all__ = [
     "lineage_shares",
     "mu_from_ratings",
     "rank_candidates",
+    "reserved_operations",
     "reward_multiplier",
     "sanitize_skill",
     "similarity",

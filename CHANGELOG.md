@@ -57,6 +57,22 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- Desktop reserved contracts become approvable inbox tasks: confirming a
+  contract with reserved (irreversible) actions no longer 403s — it is
+  HELD (`awaiting_approval`) and appears in the inbox as kind
+  `contract-approval`, naming the reserved operations.
+  `DesktopService.approve_assembly(pending_id, session=...)` decides it:
+  approval mints from a verified identity session (same
+  `IdentityApprovalAuthority` gate as run approvals — an unauthorized
+  session raises and the hold survives), re-runs the budget gate (prices
+  may have moved while held; approval grants the reserved actions, not
+  the money), then executes through the shared money path; declining
+  removes it. Both outcomes are audited with the decider's principal.
+  `nodeplace.execution` splits `compile_contract` (no reserved gate, for
+  approval flows) + `reserved_operations` out of `compile_runnable`
+  (which still refuses — the gateway's unattended path is unchanged).
+  Holds are in-memory like provider connections: re-confirm after a
+  shell restart.
 - Recency decay on spending profiles: history weighs `recency_decay`
   (default 0.9) less per run back, so comfort tracks where spending is
   *trending*. `SpendingProfile.typical` is now a recency-weighted median,

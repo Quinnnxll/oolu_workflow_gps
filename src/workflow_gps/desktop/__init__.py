@@ -6,8 +6,10 @@ inboxes, timeline/cancellation/audit, provider connection management over the
 credential vault, worker health with trusted-vs-untrusted labels, and offline data
 export/deletion — all as secret-free, serializable views. The shell cannot execute
 arbitrary code or bypass backend policy; ``confirm_assembly`` — the one execution
-door — runs only previewed marketplace contracts on backend-configured executors
-and refuses reserved actions. See ``docs/ADAPTER_MATURITY.md``.
+door — runs only previewed marketplace contracts on backend-configured executors,
+and holds reserved contracts in the inbox for identity-gated approval
+(``approve_assembly``) instead of running them unattended.
+See ``docs/ADAPTER_MATURITY.md``.
 """
 
 from .loopback import DesktopLoopbackApp

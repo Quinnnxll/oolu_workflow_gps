@@ -12,8 +12,9 @@ arbitrary code or bypass policy; it can only request backend operations and
 present their results. The one narrow exception is ``confirm_assembly``: it runs
 a previewed marketplace contract, but only on the backend-configured executors,
 only through the same shared money path as the gateway's ``/v1/runs/contract``,
-and never for contracts containing reserved actions — those are refused and must
-go through the approval flow like any other task.
+and never unattended for contracts containing reserved actions — those are HELD
+in the inbox as approvable tasks and run only after ``approve_assembly`` mints
+an approval from an authorized identity session, like any other approval.
 """
 
 from __future__ import annotations
@@ -86,6 +87,42 @@ class _Connection:
         self.connected_at = connected_at
 
 
+class _PendingContract:
+    """A reserved contract held for approval — compiled once, decided later."""
+
+    __slots__ = (
+        "pending_id",
+        "parsed",
+        "compiled",
+        "reserved",
+        "budget_cap",
+        "review_threshold",
+        "review_acknowledged",
+        "created_at",
+    )
+
+    def __init__(
+        self,
+        *,
+        pending_id,
+        parsed,
+        compiled,
+        reserved,
+        budget_cap,
+        review_threshold,
+        review_acknowledged,
+        created_at,
+    ):
+        self.pending_id = pending_id
+        self.parsed = parsed  # the validated NodeContract
+        self.compiled = compiled  # its CompiledContract (same action ids run)
+        self.reserved = reserved  # the operations that made it reserved
+        self.budget_cap = budget_cap
+        self.review_threshold = review_threshold
+        self.review_acknowledged = review_acknowledged
+        self.created_at = created_at
+
+
 class DesktopService:
     def __init__(
         self,
@@ -119,6 +156,9 @@ class DesktopService:
         self._wallet_lookup = wallet_lookup
         self._connections: dict[str, _Connection] = {}
         self._confirmed: dict[str, AssemblyRunView] = {}
+        # Reserved contracts held for approval (in-memory, like connections:
+        # a held contract does not survive a shell restart — re-confirm it).
+        self._pending_contracts: dict[str, _PendingContract] = {}
 
     # ------------------------------------------------------------------ #
     # Task entry + guided clarification.                                  #
@@ -187,6 +227,23 @@ class DesktopService:
                     created_at=state.pause.created_at,
                 )
             )
+        # Reserved contracts held by confirm_assembly: approvable tasks,
+        # not dead ends. Decided via approve_assembly (identity-gated).
+        if kind is None or kind == "contract-approval":
+            for entry in self._pending_contracts.values():
+                items.append(
+                    InboxItem(
+                        run_id=entry.pending_id,
+                        kind="contract-approval",
+                        intent=entry.parsed.name,
+                        prompt=(
+                            "contract contains reserved actions ("
+                            + ", ".join(entry.reserved)
+                            + "); approve to run it"
+                        ),
+                        created_at=entry.created_at,
+                    )
+                )
         return items
 
     def confirm(self, run_id: str, *, approved: bool) -> TaskView:
@@ -403,8 +460,11 @@ class DesktopService:
         ``POST /v1/runs/contract`` — every marketplace node clears at a
         committed price, the run binds once with the lineage-weighted
         aggregate split, and earnings accrue only on platform-verified
-        success. Reserved actions are refused (``PermissionError`` -> 403
-        at the loopback); executors are backend-configured, never
+        success. A contract containing reserved actions is not refused
+        here — it is HELD: the view comes back ``awaiting_approval`` and
+        the contract lands in the inbox (kind ``contract-approval``),
+        runnable only through :meth:`approve_assembly` with an authorized
+        identity session. Executors are backend-configured, never
         UI-supplied. A ``confirm_id`` makes the click idempotent: replays
         return the first result without running anything twice.
         """
@@ -419,20 +479,111 @@ class DesktopService:
             return self._confirmed[confirm_id]
         # Imported lazily so a shell without marketplace features never pays
         # the nodeplace import.
-        from ..nodeplace.budget import BudgetPolicy, assess_budget, enforce_budget
-        from ..nodeplace.execution import (
-            compile_runnable,
-            estimate_contract_gross,
-            execute_contract,
-        )
+        from ..nodeplace.execution import compile_contract, reserved_operations
         from ..skills.contract import NodeContract
 
         parsed = NodeContract.model_validate(contract)
-        compiled = compile_runnable(parsed)
+        compiled = compile_contract(parsed)
+        reserved = reserved_operations(compiled)
+        if reserved:
+            # Not a dead end: hold it for an authorized approver.
+            pending_id = uuid4().hex
+            self._pending_contracts[pending_id] = _PendingContract(
+                pending_id=pending_id,
+                parsed=parsed,
+                compiled=compiled,
+                reserved=reserved,
+                budget_cap=budget_cap,
+                review_threshold=review_threshold,
+                review_acknowledged=review_acknowledged,
+                created_at=datetime.now(UTC),
+            )
+            view = AssemblyRunView(run_id=pending_id, status="awaiting_approval")
+            if confirm_id:
+                self._confirmed[confirm_id] = view
+            return view
+        self._enforce_contract_budget(
+            parsed,
+            budget_cap=budget_cap,
+            review_threshold=review_threshold,
+            review_acknowledged=review_acknowledged,
+        )
+        view = self._execute_contract(parsed, compiled)
+        if confirm_id:
+            self._confirmed[confirm_id] = view
+        return view
+
+    def approve_assembly(
+        self,
+        pending_id: str,
+        *,
+        session: Session,
+        approved: bool = True,
+        required_assurance: int = 1,
+    ) -> AssemblyRunView:
+        """Decide a held reserved contract — approval mints from identity.
+
+        Like :meth:`approve`, the decision comes from a verified identity
+        session, never from caller text: an unauthorized session raises and
+        the contract stays held. Approval re-runs the budget gate (prices
+        may have moved while it waited) and then executes through the same
+        shared money path; declining removes it. Both outcomes are audited
+        with the decider's principal.
+        """
+        entry = self._pending_contracts.get(pending_id)
+        if entry is None:
+            raise KeyError(pending_id)
+        if not approved:
+            del self._pending_contracts[pending_id]
+            self._durable.audit.append(
+                "contract.declined",
+                {"pending_id": pending_id, "by": session.principal_id},
+            )
+            return AssemblyRunView(run_id=pending_id, status="declined")
+        if self._approval is None:
+            raise RuntimeError("no approval authority configured")
+        record = self._approval.approve(
+            session,
+            run_id=pending_id,
+            policy=entry.parsed.name,
+            requester_id="desktop",
+            required_assurance=required_assurance,
+        )
+        self._enforce_contract_budget(
+            entry.parsed,
+            budget_cap=entry.budget_cap,
+            review_threshold=entry.review_threshold,
+            review_acknowledged=entry.review_acknowledged,
+        )
+        view = self._execute_contract(entry.parsed, entry.compiled)
+        del self._pending_contracts[pending_id]
+        self._durable.audit.append(
+            "contract.approved",
+            {
+                "pending_id": pending_id,
+                "run_id": view.run_id,
+                "approval_id": record.id,
+                "by": session.principal_id,
+                "reserved": entry.reserved,
+            },
+        )
+        return view
+
+    def _enforce_contract_budget(
+        self,
+        parsed,
+        *,
+        budget_cap: float | None,
+        review_threshold: float | None,
+        review_acknowledged: bool,
+    ) -> None:
         # Budget gate BEFORE anything commits: a cap refuses outright;
         # review reasons (threshold, spending behavior, a linked wallet
         # that may only be partial) block until explicitly acknowledged.
         # Both raise PermissionError subclasses -> 403 at the loopback.
+        from ..nodeplace.budget import BudgetPolicy, assess_budget, enforce_budget
+        from ..nodeplace.execution import estimate_contract_gross
+
         estimate = estimate_contract_gross(
             parsed, assembler=self._market, price_book=self._price_book
         )
@@ -453,6 +604,10 @@ class DesktopService:
             ),
             review_acknowledged=review_acknowledged,
         )
+
+    def _execute_contract(self, parsed, compiled) -> AssemblyRunView:
+        from ..nodeplace.execution import execute_contract
+
         result = execute_contract(
             parsed,
             compiled,
@@ -465,7 +620,7 @@ class DesktopService:
             consumer_principal="desktop",
             trace_store=self._trace_store,
         )
-        view = AssemblyRunView(
+        return AssemblyRunView(
             run_id=result.run_id,
             status=result.status,
             error=result.error,
@@ -477,9 +632,6 @@ class DesktopService:
             provider_cost=result.market.provider_cost,
             noders=list(result.market.noders),
         )
-        if confirm_id:
-            self._confirmed[confirm_id] = view
-        return view
 
     # ------------------------------------------------------------------ #
     # Worker health + trusted/untrusted execution labeling.              #

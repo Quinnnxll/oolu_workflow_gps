@@ -77,6 +77,29 @@ class ContractRunResult(BaseModel):
     market: ContractMarket = Field(default_factory=ContractMarket)
 
 
+def compile_contract(contract: NodeContract) -> CompiledContract:
+    """Compile without the reserved gate (raises ``ValueError`` if broken).
+
+    For surfaces that HOLD reserved contracts for explicit approval rather
+    than refusing them — the approval flow calls this after an authorized
+    identity session grants the approval. Unattended paths must use
+    :func:`compile_runnable` instead.
+    """
+    blueprint, owners = compile_with_owners(contract)
+    return CompiledContract(blueprint=blueprint, owners=owners)
+
+
+def reserved_operations(compiled: CompiledContract) -> list[str]:
+    """The reserved (irreversible) operations a compiled contract contains."""
+    return sorted(
+        {
+            f"{item.action.adapter}/{item.action.operation}"
+            for item in compiled.blueprint.actions
+            if item.reserved
+        }
+    )
+
+
 def compile_runnable(contract: NodeContract) -> CompiledContract:
     """Compile for direct execution; reserved actions are refused loudly.
 
@@ -84,13 +107,13 @@ def compile_runnable(contract: NodeContract) -> CompiledContract:
     :class:`ReservedActionsError` when any action is reserved — direct paths
     never get to skip the orchestrator's approval flow.
     """
-    blueprint, owners = compile_with_owners(contract)
-    if any(item.reserved for item in blueprint.actions):
+    compiled = compile_contract(contract)
+    if reserved_operations(compiled):
         raise ReservedActionsError(
             "contract contains reserved actions; submit it through the "
             "orchestrator flow so approval can be granted"
         )
-    return CompiledContract(blueprint=blueprint, owners=owners)
+    return compiled
 
 
 class ContractEstimate(NamedTuple):

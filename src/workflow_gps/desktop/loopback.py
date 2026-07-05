@@ -92,8 +92,9 @@ class DesktopLoopbackApp:
                 raise _BadRequest("a contract object is required")
             confirm_id = str(body.get("confirm_id") or "") or None
             try:
-                # PermissionError propagates -> 403 (reserved actions,
-                # budget caps, unacknowledged review reasons alike).
+                # PermissionError propagates -> 403 (budget caps and
+                # unacknowledged review reasons; reserved contracts are
+                # HELD as approvable inbox tasks, not refused).
                 view = self._svc.confirm_assembly(
                     body["contract"],
                     confirm_id=confirm_id,

@@ -22,11 +22,12 @@ from workflow_gps.metering.deriver import MeteringDeriver
 from workflow_gps.orchestrator import DagRouteRunner
 
 
-def _desktop(tmp_path, *, executor=None, trace_store=None):
+def _desktop(tmp_path, *, executor=None, trace_store=None, authority=None):
     app, conn, ident, registry, metering, attribution, audit = _build(tmp_path)
     _seed_market(app, ident, registry)
     svc = DesktopService(
         app._durable,
+        approval_authority=authority,
         market=app._market,
         price_book=app._price_book,
         contract_runner=(
@@ -164,12 +165,11 @@ def test_confirm_runs_the_previewed_contract_and_binds_the_money(tmp_path):
     conn.close()
 
 
-def test_confirm_refuses_reserved_contracts(tmp_path):
+def _destructive_contract():
     from workflow_gps.skills.contract import ActionsBody, NodeContract
     from workflow_gps.skills.models import ActionEvent
 
-    _app, svc, conn, *_rest = _desktop(tmp_path, executor=_CliExecutor())
-    destructive = NodeContract(
+    return NodeContract(
         name="wipe it",
         body=ActionsBody(
             actions=[
@@ -178,17 +178,115 @@ def test_confirm_refuses_reserved_contracts(tmp_path):
         ),
     ).model_dump(mode="json")
 
-    with pytest.raises(PermissionError, match="reserved"):
-        svc.confirm_assembly(destructive)
 
-    # And over the loopback the same refusal is a 403, not a crash.
+def test_reserved_contract_becomes_an_approvable_inbox_task(tmp_path):
+    """Not a dead end: confirming a reserved contract holds it in the inbox,
+    an unauthorized session cannot release it, an authorized one runs it."""
+    from test_desktop_shell import _identity
+
+    from workflow_gps.identity.errors import AuthorizationError
+
+    _store, authority, approver, intruder = _identity(tmp_path)
+    executor = _CliExecutor(("run", "delete_files"))
+    app, svc, conn, *_rest = _desktop(tmp_path, executor=executor, authority=authority)
+    destructive = _destructive_contract()
+
+    held = svc.confirm_assembly(destructive, confirm_id="click-1")
+    assert held.status == "awaiting_approval"
+    assert executor.calls == 0  # nothing ran unattended
+
+    # It sits in the inbox as an approvable task, naming what is reserved.
+    (item,) = svc.inbox(kind="contract-approval")
+    assert item.run_id == held.run_id
+    assert item.intent == "wipe it"
+    assert "cli/delete_files" in item.prompt
+
+    # A double-clicked confirm replays the hold; the inbox has ONE entry.
+    again = svc.confirm_assembly(destructive, confirm_id="click-1")
+    assert again.run_id == held.run_id
+    assert len(svc.inbox(kind="contract-approval")) == 1
+
+    # Over the loopback the hold is a 200 view, not a 403 refusal.
     status, body = _call(
         DesktopLoopbackApp(svc),
         "POST",
         "/v1/assembly/confirm",
         body={"contract": destructive},
     )
-    assert status == 403 and "reserved" in body["error"]
+    assert status == 200 and body["status"] == "awaiting_approval"
+
+    # An unauthorized session cannot release it; the hold survives.
+    with pytest.raises(AuthorizationError):
+        svc.approve_assembly(held.run_id, session=intruder)
+    assert executor.calls == 0
+    assert len(svc.inbox(kind="contract-approval")) == 2  # ours + loopback's
+
+    # An authorized approver runs it through the shared money path.
+    run = svc.approve_assembly(held.run_id, session=approver)
+    assert run.status == "succeeded"
+    assert executor.calls == 1
+    assert all(i.run_id != held.run_id for i in svc.inbox())
+
+    # The decision is audited with the approver's principal.
+    (approved_event,) = [
+        r for r in app._durable.audit.records() if r.event_type == "contract.approved"
+    ]
+    assert approved_event.payload["by"] == "approver-1"
+    assert approved_event.payload["run_id"] == run.run_id
+    assert approved_event.payload["reserved"] == ["cli/delete_files"]
+    conn.close()
+
+
+def test_declining_a_held_contract_removes_it(tmp_path):
+    from test_desktop_shell import _identity
+
+    _store, authority, approver, _intruder = _identity(tmp_path)
+    executor = _CliExecutor()
+    app, svc, conn, *_rest = _desktop(tmp_path, executor=executor, authority=authority)
+    held = svc.confirm_assembly(_destructive_contract())
+
+    declined = svc.approve_assembly(held.run_id, session=approver, approved=False)
+    assert declined.status == "declined"
+    assert executor.calls == 0
+    assert svc.inbox(kind="contract-approval") == []
+    assert any(
+        r.event_type == "contract.declined" and r.payload["by"] == "approver-1"
+        for r in app._durable.audit.records()
+    )
+    # Deciding it twice is a KeyError -> 404 at any surface.
+    with pytest.raises(KeyError):
+        svc.approve_assembly(held.run_id, session=approver)
+    conn.close()
+
+
+def test_approval_still_runs_the_budget_gate(tmp_path):
+    """Approval grants the RESERVED actions, not the money: the budget's
+    review threshold still holds the run until acknowledged."""
+    from test_desktop_shell import _identity
+
+    _store, authority, approver, _intruder = _identity(tmp_path)
+    executor = _CliExecutor(("run", "delete_files"))
+    _app, svc, conn, *_rest = _desktop(tmp_path, executor=executor, authority=authority)
+    # A marketplace chain (it costs money) PLUS a reserved local node.
+    preview = svc.assembly_preview(goal="clean-the-books", want=[TIDY])
+    hybrid = preview.contract
+    hybrid["body"]["nodes"].append(_destructive_contract())
+
+    held = svc.confirm_assembly(hybrid, review_threshold=0.000001)
+    assert held.status == "awaiting_approval"  # reserved: held, not priced
+    with pytest.raises(PermissionError, match="review threshold"):
+        svc.approve_assembly(held.run_id, session=approver)
+    assert executor.calls == 0
+    assert len(svc.inbox(kind="contract-approval")) == 1  # still held
+
+    # Acknowledged at confirm time: approval releases the whole hybrid.
+    acknowledged = svc.confirm_assembly(
+        hybrid, review_threshold=0.000001, review_acknowledged=True
+    )
+    run = svc.approve_assembly(acknowledged.run_id, session=approver)
+    assert run.status == "succeeded"
+    assert executor.calls == 3  # two marketplace steps + the approved one
+    assert run.gross > 0  # the marketplace children committed their prices
     conn.close()
 
 
