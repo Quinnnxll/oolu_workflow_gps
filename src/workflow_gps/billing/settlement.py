@@ -176,12 +176,16 @@ class SettlementService:
 
     def _top_up_reserve(self, noder_principal: str, now: datetime) -> None:
         entries = self._ledger.entries(noder_principal)
-        cleared_gross = sum(
+        # Net of clawbacks: earnings a dispute reversed no longer demand
+        # reserve — otherwise every clawback would be re-collected from the
+        # noder's future earnings as a fresh top-up.
+        cleared_net = sum(
             e.amount_micros
             for e in entries
-            if e.kind == EarningsKind.ACCRUAL and e.available_at <= now
+            if e.kind in (EarningsKind.ACCRUAL, EarningsKind.CLAWBACK)
+            and e.available_at <= now
         )
-        target = round(cleared_gross * self._reserve)
+        target = max(0, round(cleared_net * self._reserve))
         held = sum(e.amount_micros for e in entries if e.kind == EarningsKind.RESERVE)
         delta = target - held
         if delta > 0:

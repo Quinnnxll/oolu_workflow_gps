@@ -57,6 +57,20 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- Dispute deepening — reserve-funded clawbacks, final decisions:
+  upholding a dispute still reverses every accrual the event minted
+  (CLAWBACK entries, per noder), but a shortfall from already-paid
+  earnings is now funded from the noder's RESERVE first — the settlement
+  holdback finally doing the job it exists for — via a negative RESERVE
+  release entry, so the balance projection stays one formula. Only what
+  the reserve cannot cover remains as honest negative balance (debt)
+  that future accruals repay before anything pays out again. The
+  settlement reserve target now nets clawbacks (reversed earnings no
+  longer demand reserve, so a clawback isn't re-collected as a fresh
+  top-up). Decisions are final: uphold-after-reject and
+  reject-after-uphold raise, the same decision twice is a no-op/replay,
+  and both resolutions are audited (`dispute.upheld` with clawed/drawn/
+  debt micros, `dispute.rejected`). Uphold reports a per-noder breakdown.
 - Settlement cycles + payment-failure containment:
   `SettlementService.settle_all(period_key=...)` settles every noder on
   the ledger (`EarningsLedger.principals()`) for one period — outcomes
