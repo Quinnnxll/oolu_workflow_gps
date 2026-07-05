@@ -9,15 +9,21 @@ authority:
   is fine to run, but only after the user acknowledges the review
   (:class:`ReviewRequiredError` until they do);
 - a **behavioral comfort ceiling** learned from the user's own committed
-  spending (median and peak of their bound run grosses): a plan well above
-  anything their history demonstrates needs review even when no explicit
-  threshold was set. New users (too little history) are never judged by it.
+  spending (recency-weighted median and peak of their bound run grosses): a
+  plan well above anything their history demonstrates needs review even when
+  no explicit threshold was set. New users (too little history) are never
+  judged by it.
   Behavior is judged **per class of goal** when the class has its own
   history: someone who spends lucratively on gifts but keeps everyday
   automation tight is two different spenders, and neither habit should
   loosen — or flag — the other. A class without enough history falls back
   to the global profile (so a first lavish run in a new class gets one
   review, and from then on the class speaks for itself).
+  History **decays with recency**: each run back weighs ``recency_decay``
+  less, so the typical tracks where spending is trending, and the ceiling
+  uses a decaying peak — one lavish run long ago stops waving outliers
+  through as it ages, and a user who has tightened gets a ceiling that
+  followed them down. ``recency_decay=1.0`` restores flat history.
 
 The linked wallet is deliberately the weakest signal: its remaining balance
 may be a small slice of the user's true assets, so it NEVER caps or scales
@@ -27,8 +33,6 @@ balance is a logistics note.
 """
 
 from __future__ import annotations
-
-from statistics import median
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -49,19 +53,42 @@ class BudgetPolicy(BaseModel):
     hard_cap: float | None = None  # refuse above this; never overridable
     review_threshold: float | None = None  # review above this
     # Behavior: review when the estimate exceeds BOTH typical * multiplier
-    # and the user's demonstrated peak — growth within habit passes free.
+    # and the user's demonstrated (recent) peak — growth within current
+    # habit passes free.
     behavior_multiplier: float = 2.0
     min_history: int = 3  # runs before behavior may judge at all
+    # Each run back in history weighs this much less. Comfort tracks where
+    # spending is trending; 1.0 = flat history (no decay).
+    recency_decay: float = Field(default=0.9, gt=0.0, le=1.0)
+
+
+def _weighted_median(values: list[float], weights: list[float]) -> float:
+    """The value at half the total weight (values need not be sorted)."""
+    pairs = sorted(zip(values, weights))
+    half = sum(weights) / 2.0
+    accumulated = 0.0
+    for value, weight in pairs:
+        accumulated += weight
+        if accumulated >= half:
+            return float(value)
+    return float(pairs[-1][0])  # pragma: no cover - half is always reached
 
 
 class SpendingProfile(BaseModel):
-    """What the user's committed run history says they normally spend."""
+    """What the user's committed run history says they normally spend.
+
+    Recency-weighted: ``typical`` is the weighted median (recent runs count
+    more), ``recent_peak`` is a decaying maximum — the ceiling an aging
+    lavish run can still justify — and ``peak`` stays the raw historical
+    maximum for honest display.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     runs: int = 0
-    typical: float = 0.0  # median committed gross per run
-    peak: float = 0.0
+    typical: float = 0.0  # recency-weighted median gross per run
+    peak: float = 0.0  # raw historical maximum (display)
+    recent_peak: float = 0.0  # decayed maximum (drives the ceiling)
     # None until there is enough history to judge anyone by it.
     comfort_ceiling: float | None = None
 
@@ -72,14 +99,28 @@ class SpendingProfile(BaseModel):
         *,
         multiplier: float = 2.0,
         min_history: int = 3,
+        decay: float = 0.9,
     ) -> "SpendingProfile":
+        """``grosses`` must be most-recent-first (as ``consumer_spend``
+        returns them); each step back in history weighs ``decay`` less."""
         spent = [g for g in grosses if g > 0]
         if not spent:
             return cls()
-        typical = float(median(spent))
-        peak = float(max(spent))
-        ceiling = max(typical * multiplier, peak) if len(spent) >= min_history else None
-        return cls(runs=len(spent), typical=typical, peak=peak, comfort_ceiling=ceiling)
+        weights = [decay**i for i in range(len(spent))]
+        typical = _weighted_median(spent, weights)
+        recent_peak = max(g * w for g, w in zip(spent, weights))
+        ceiling = (
+            max(typical * multiplier, recent_peak)
+            if len(spent) >= min_history
+            else None
+        )
+        return cls(
+            runs=len(spent),
+            typical=typical,
+            peak=float(max(spent)),
+            recent_peak=recent_peak,
+            comfort_ceiling=ceiling,
+        )
 
 
 class BudgetVerdict(BaseModel):
@@ -125,12 +166,14 @@ def assess_budget(
         spend_history or [],
         multiplier=policy.behavior_multiplier,
         min_history=policy.min_history,
+        decay=policy.recency_decay,
     )
     class_profile = (
         SpendingProfile.from_history(
             class_history or [],
             multiplier=policy.behavior_multiplier,
             min_history=policy.min_history,
+            decay=policy.recency_decay,
         )
         if goal_class is not None
         else None
@@ -157,8 +200,8 @@ def assess_budget(
         needs_review = True
         reasons.append(
             f"estimated cost {estimated:.2f} is well above {scope} "
-            f"(typical {judge.typical:.2f} per run, highest so "
-            f"far {judge.peak:.2f})"
+            f"(typically {judge.typical:.2f} per run lately; recent "
+            f"peak {judge.recent_peak:.2f})"
         )
     if wallet_balance is not None and estimated > wallet_balance:
         # The wallet may be a slice of the user's true assets: never a cap,

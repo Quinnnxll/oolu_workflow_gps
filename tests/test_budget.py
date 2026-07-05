@@ -37,11 +37,33 @@ def test_profile_needs_history_before_it_judges():
 
 
 def test_growth_within_demonstrated_habit_passes_free():
-    # One big past run raises the ceiling: the user has shown they do this.
-    profile = SpendingProfile.from_history([1.0, 1.0, 10.0])
+    # A big RECENT run raises the ceiling: the user has shown they do this.
+    # (History is most-recent-first, as consumer_spend returns it.)
+    profile = SpendingProfile.from_history([10.0, 1.0, 1.0])
     assert profile.comfort_ceiling == 10.0
-    verdict = assess_budget(9.0, spend_history=[1.0, 1.0, 10.0])
+    verdict = assess_budget(9.0, spend_history=[10.0, 1.0, 1.0])
     assert verdict.allowed and not verdict.needs_review
+
+
+def test_comfort_tightens_as_lavish_history_ages():
+    """Recency decay: one lavish run long ago stops waving outliers
+    through as it ages — the ceiling follows a tightening user down."""
+    aged_lavish = [1.0, 1.0, 1.0, 1.0, 50.0]  # the 50 is five runs back
+    profile = SpendingProfile.from_history(aged_lavish)
+    assert profile.peak == 50.0  # display stays honest
+    assert profile.recent_peak == pytest.approx(50.0 * 0.9**4)
+    assert profile.comfort_ceiling < 50.0
+
+    verdict = assess_budget(40.0, spend_history=aged_lavish)
+    assert verdict.needs_review  # 40 was habit once; it is not anymore
+
+    # Flat history (recency_decay=1.0) restores the old behavior exactly.
+    flat = assess_budget(
+        40.0,
+        policy=BudgetPolicy(recency_decay=1.0),
+        spend_history=aged_lavish,
+    )
+    assert not flat.needs_review
 
 
 def test_hard_cap_refuses_and_acknowledgement_never_overrides():

@@ -57,6 +57,16 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- Recency decay on spending profiles: history weighs `recency_decay`
+  (default 0.9) less per run back, so comfort tracks where spending is
+  *trending*. `SpendingProfile.typical` is now a recency-weighted median,
+  and the ceiling is driven by `recent_peak` — a decaying maximum — so
+  one lavish run long ago stops waving outliers through as it ages, and
+  a user who has tightened gets a ceiling that followed them down; `peak`
+  stays the raw historical maximum for honest display. Applies to global
+  and class profiles alike (histories are most-recent-first, as
+  `consumer_spend` returns them); `recency_decay: 1.0` in the budget
+  policy restores flat history exactly.
 - Per-goal-class spending profiles: behavioral budgets are judged within
   the plan's own class of goal — spending lucratively on gifts while
   keeping everyday automation tight is two different spenders, and
