@@ -66,3 +66,16 @@ class IdempotencyLedger:
                 (json.dumps(result), key),
             )
         return result
+
+    def release(self, key: str) -> bool:
+        """Drop a claim so the key may run again.
+
+        For callers whose ``fn`` FAILED partway: ``run`` claims before it
+        executes, so a raised exception leaves a claim with no result and
+        every retry would return ``None`` forever. A caller that catches
+        the failure, rolls back its own effects, and releases the key makes
+        the operation honestly retryable instead of silently poisoned.
+        """
+        with self._conn.transaction() as db:
+            cursor = db.execute("DELETE FROM idempotency WHERE key = ?", (key,))
+            return cursor.rowcount > 0

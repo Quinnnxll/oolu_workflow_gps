@@ -51,6 +51,15 @@ class EarningsLedger:
             ).fetchall()
         return [self._row(row) for row in rows]
 
+    def principals(self) -> list[str]:
+        """Every noder that has ever earned — the settlement cycle's roster."""
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                "SELECT DISTINCT noder_principal FROM earnings_entries"
+                " ORDER BY noder_principal"
+            ).fetchall()
+        return [row["noder_principal"] for row in rows]
+
     def entries_for_event(self, event_id: str) -> list[EarningsEntry]:
         with self._conn.lock:
             rows = self._conn.db.execute(

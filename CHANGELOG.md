@@ -57,6 +57,20 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- Settlement cycles + payment-failure containment:
+  `SettlementService.settle_all(period_key=...)` settles every noder on
+  the ledger (`EarningsLedger.principals()`) for one period — outcomes
+  are per-noder and independent, so one processor failure never blocks
+  anyone else's payout; the cycle summary (paid/failed/skipped counts
+  and paid micros) is appended to the durable audit as
+  `settlement.cycle`. A `PaymentError` inside `settle` is now a
+  first-class outcome instead of a crash: the batch is marked FAILED for
+  the record, the ledger is never debited, and the period's idempotency
+  claim is released via the new `IdempotencyLedger.release(key)` — fixing
+  a real poisoning bug where a raised `fn` left a claim that replayed
+  `None` forever. Re-running the same period IS the retry mechanism:
+  paid noders replay their cached receipts (the processor is never
+  called twice), failed ones get a fresh attempt with a fresh batch.
 - Approver notification — the holds SSE feed:
   `GET /v1/runs/contract/holds/events` streams the tenant's hold
   lifecycle so approvers subscribe instead of polling the listing. Same
