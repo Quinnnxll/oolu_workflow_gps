@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .billing import EarningsLedger, PayoutStore
 from .config import Settings
 from .desktop.service import DesktopService
 from .durable.artifacts import FilesystemArtifactStore
@@ -68,6 +69,10 @@ class DesktopRuntime:
     desktop: DesktopService
     durable: DurableWorkflowService
     conn: DurableConnection
+    # The same ledger objects the shell reads — hand THESE to a settlement
+    # job so the earnings screen and the money pipeline share one truth.
+    earnings: EarningsLedger | None = None
+    payouts: PayoutStore | None = None
 
     def close(self) -> None:
         self.conn.close()
@@ -330,9 +335,14 @@ def build_desktop_runtime(
     isolation: IsolationPolicy | None = None,
     docker_available: bool = True,
     artifacts_dir: str | Path | None = None,
+    noder_principal: str | None = "local-noder",
 ) -> DesktopRuntime:
     settings = settings or Settings()
     conn = DurableConnection(db_path)
+    # Earnings are wired by default: the screen shows honest zeros until
+    # the user's contributions earn. Pass noder_principal=None to disable.
+    earnings = EarningsLedger(conn) if noder_principal is not None else None
+    payouts = PayoutStore(conn) if noder_principal is not None else None
     artifacts = (
         FilesystemArtifactStore(artifacts_dir) if artifacts_dir is not None else None
     )
@@ -351,5 +361,14 @@ def build_desktop_runtime(
         vault=vault,
         isolation=isolation,
         docker_available=docker_available,
+        earnings_ledger=earnings,
+        payout_store=payouts,
+        noder_principal=noder_principal,
     )
-    return DesktopRuntime(desktop=desktop, durable=durable, conn=conn)
+    return DesktopRuntime(
+        desktop=desktop,
+        durable=durable,
+        conn=conn,
+        earnings=earnings,
+        payouts=payouts,
+    )

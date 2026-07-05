@@ -86,6 +86,42 @@ def test_earnings_view_projects_the_ledger(tmp_path):
     conn.close()
 
 
+def test_runtime_wires_earnings_by_default(tmp_path):
+    """build_desktop_runtime ships the screen out of the box: honest zeros
+    until the user's contributions earn — and the runtime exposes the SAME
+    ledger objects, so a settlement job and the screen share one truth."""
+    from workflow_gps.assembly import build_desktop_runtime
+
+    rt = build_desktop_runtime(db_path=tmp_path / "shell.db")
+    try:
+        status, body = _call(DesktopLoopbackApp(rt.desktop), "GET", "/v1/earnings")
+        assert status == 200
+        assert body["noder"] == "local-noder"
+        assert body["available"] == 0.0 and body["entries"] == []
+
+        # Money written through the runtime's ledger shows on the screen.
+        rt.earnings.append(
+            _entry("local-noder", 12_000_000, EarningsKind.ACCRUAL, event="e1")
+        )
+        status, body = _call(DesktopLoopbackApp(rt.desktop), "GET", "/v1/earnings")
+        assert body["available"] == 12.0
+        assert body["entries"][0]["kind"] == "accrual"
+    finally:
+        rt.close()
+
+
+def test_runtime_earnings_can_be_disabled(tmp_path):
+    from workflow_gps.assembly import build_desktop_runtime
+
+    rt = build_desktop_runtime(db_path=tmp_path / "shell.db", noder_principal=None)
+    try:
+        assert rt.earnings is None and rt.payouts is None
+        status, _body = _call(DesktopLoopbackApp(rt.desktop), "GET", "/v1/earnings")
+        assert status == 404
+    finally:
+        rt.close()
+
+
 def test_earnings_over_the_loopback_and_unconfigured_404(tmp_path):
     app, conn, *_rest = _build(tmp_path)
     ledger = EarningsLedger(conn)

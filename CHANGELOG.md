@@ -57,6 +57,14 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- Earnings wired into `build_desktop_runtime`: shells get the earnings
+  screen out of the box — the runtime creates an `EarningsLedger` and
+  `PayoutStore` over its own durable connection (honest zeros until the
+  user's contributions earn), passes them to the shell under the new
+  `noder_principal` parameter (default `"local-noder"`; `None`
+  disables), and exposes them on `DesktopRuntime.earnings` /
+  `.payouts` — hand THOSE to a settlement job so the screen and the
+  money pipeline share one truth.
 - Desktop earnings screen: `DesktopService.earnings()` (new
   `earnings_ledger` / `payout_store` / `noder_principal` ctor wiring)
   projects the local noder's ledger into a secret-free `EarningsView` —
