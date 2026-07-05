@@ -1,0 +1,21 @@
+# Self-hosting Workflow-GPS for online web users:
+#
+#   WFGPS_WEB_TOKEN=$(openssl rand -base64 24) docker compose up -d
+#   docker compose logs workflow-gps   # shows the sign-in URL
+#
+# Terminate TLS in front of this (Caddy, nginx, Traefik, a cloud load
+# balancer): the access token is a bearer secret and must not travel
+# over plain HTTP outside your machine.
+services:
+  workflow-gps:
+    build: .
+    ports:
+      - "8765:8765"
+    environment:
+      WFGPS_WEB_TOKEN: ${WFGPS_WEB_TOKEN:?set WFGPS_WEB_TOKEN to a long random secret}
+    volumes:
+      - wfgps-data:/data
+    restart: unless-stopped
+
+volumes:
+  wfgps-data:

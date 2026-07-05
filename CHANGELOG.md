@@ -4,6 +4,24 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The self-host runner for online web users:
+
+- Added **`wfgps web`**: the desktop shell served over the network,
+  wrapped in `desktop.web.TokenGuardedApp` — the one property that makes
+  a non-loopback bind defensible: nobody without the access token gets
+  anything. Browsers sign in once at `/login?token=…` (HttpOnly /
+  SameSite=Lax session cookie; sessions are in-memory, so a restart signs
+  everyone out), API clients send `Authorization: Bearer <token>`, and
+  WebSocket upgrades ride the cookie (4401 without). Token comparison is
+  constant-time; the 401 page is deliberately information-free. The token
+  comes from `WFGPS_WEB_TOKEN` (or is generated and printed once), must be
+  ≥16 characters, and the startup banner says loudly to put HTTPS in
+  front. `wfgps desktop` stays loopback-only, unchanged.
+- Added a **`Dockerfile` + `docker-compose.yml`**: the shell behind the
+  token on one backupable `/data` volume; compose refuses to start
+  without `WFGPS_WEB_TOKEN`. Both pinned by tests, documented in the
+  README's "Self-hosting for online web users".
+
 Onboarding hardening (from a field DX audit) — every install trap grows
 directions:
 

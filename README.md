@@ -32,6 +32,29 @@ gone.
 The full model engine (LLM synthesis, sandboxed execution) is optional and
 configured separately — see **Installation** and **Configuration** below.
 
+### Self-hosting for online web users
+
+The desktop shell is loopback-only by design (it has no auth). To serve it
+to browsers **elsewhere**, use the token-gated web mode:
+
+```bash
+wfgps web --seed-starter          # prints a one-time sign-in URL
+WFGPS_WEB_TOKEN=<long secret> wfgps web   # or bring a stable token
+```
+
+Nobody without the token gets anything: browsers sign in once at
+`/login?token=…` (session cookie), API clients send
+`Authorization: Bearer <token>`. Or run the bundled container:
+
+```bash
+WFGPS_WEB_TOKEN=$(openssl rand -base64 24) docker compose up -d
+docker compose logs workflow-gps    # shows the sign-in URL
+```
+
+All state lives in one volume (`/data`). **Terminate TLS in front**
+(Caddy / nginx / Traefik) — the token is a bearer secret and must not
+travel over plain HTTP outside your machine.
+
 ### If something goes wrong
 
 Run the built-in check-up — it tests everything this machine needs and

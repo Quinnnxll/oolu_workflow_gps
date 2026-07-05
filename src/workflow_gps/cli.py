@@ -336,6 +336,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="open the shell in the default browser once serving",
     )
 
+    web = sub.add_parser(
+        "web",
+        help="self-host the shell for web users (token-gated; put HTTPS in front)",
+    )
+    web.add_argument("--config", metavar="PATH", help="path to a models.yaml file")
+    web.add_argument("--db", metavar="PATH", help="durable workflow SQLite path")
+    web.add_argument("--registry", metavar="PATH", help="skill registry SQLite path")
+    web.add_argument("--host", default="0.0.0.0")
+    web.add_argument("--port", type=int, default=8765)
+    web.add_argument(
+        "--seed-starter",
+        action="store_true",
+        help="load the built-in starter pack if the registry is empty",
+    )
+    web.add_argument(
+        "--token-env",
+        default="WFGPS_WEB_TOKEN",
+        metavar="NAME",
+        help="environment variable holding the access token "
+        "(a fresh token is generated and printed when unset)",
+    )
+
     sub.add_parser("show-config", help="print the effective settings").add_argument(
         "--config", metavar="PATH", help="path to a models.yaml settings file"
     )
@@ -1203,6 +1225,79 @@ def _cmd_desktop(args, out) -> int:
     return 0
 
 
+def _cmd_web(args, out) -> int:
+    """Self-host the shell for online web users.
+
+    Exactly the desktop shell, wrapped in ``TokenGuardedApp``: the ONLY
+    difference from `wfgps desktop` is that nothing is served to anyone
+    without the access token, which is what makes a non-loopback bind
+    defensible. Data layout matches the desktop command, so a self-host
+    and a local shell can share a folder.
+    """
+    import secrets as secrets_module
+
+    from .config import Settings
+    from .desktop.loopback import DesktopLoopbackApp
+    from .desktop.web import MIN_TOKEN_LENGTH, TokenGuardedApp
+
+    token = os.environ.get(args.token_env)
+    generated = token is None
+    if generated:
+        token = secrets_module.token_urlsafe(24)
+    if len(token) < MIN_TOKEN_LENGTH:
+        raise _CliError(
+            f"{args.token_env} must be at least {MIN_TOKEN_LENGTH} characters — "
+            "short secrets are guessable"
+        )
+
+    settings = Settings.load(args.config)
+    db_path = args.db or ".workflow-gps/desktop.db"
+    registry = None
+    if args.registry:
+        from .skills.registry import SkillRegistry
+
+        registry = SkillRegistry(args.registry)
+        if args.seed_starter and not registry.list(limit=1):
+            from .skills.pack import load_starter_pack
+
+            load_starter_pack(registry)
+
+    from .assembly import build_desktop_runtime
+
+    runtime = build_desktop_runtime(settings, db_path=db_path)
+    app = TokenGuardedApp(DesktopLoopbackApp(runtime.desktop, registry=registry), token)
+
+    try:
+        import uvicorn
+    except ImportError as exc:
+        raise _CliError(
+            "uvicorn not installed (`pip install 'workflow-gps[serve]'`)"
+        ) from exc
+
+    shown_host = "<this-host>" if args.host in ("0.0.0.0", "::") else args.host
+    out.write(
+        f"Workflow-GPS web shell is starting on {args.host}:{args.port}.\n"
+        f"  sign in : http://{shown_host}:{args.port}/login?token={token}\n"
+    )
+    if generated:
+        out.write(
+            f"  (one-time token — set {args.token_env} to keep it stable "
+            "across restarts)\n"
+        )
+    out.write(
+        "  IMPORTANT: expose this only behind HTTPS (a reverse proxy such as\n"
+        "  Caddy or nginx) — the token travels with every request.\n"
+        "  press Ctrl+C to stop\n"
+    )
+    try:
+        uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    finally:
+        runtime.close()
+        if registry is not None:
+            registry.close()
+    return 0
+
+
 def _version() -> str:
     return __version__
 
@@ -1231,6 +1326,8 @@ def main(argv: list[str] | None = None, *, builder=None, out=None) -> int:
             return _cmd_serve(args, out)
         if args.command == "desktop":
             return _cmd_desktop(args, out)
+        if args.command == "web":
+            return _cmd_web(args, out)
         if args.command == "show-config":
             return _cmd_show_config(args, out)
         if args.command == "doctor":
