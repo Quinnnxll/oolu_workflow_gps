@@ -57,6 +57,23 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- NodeContract unification (build-order item 6 — the review is complete):
+  `skills/contract.py` defines the one node schema the three vocabularies
+  converge on — typed `Slot` consumes/produces, three body kinds
+  (`ActionsBody` | `ScriptBody` | `SubgraphBody`), the existing
+  `ConstraintSpec` preconditions/validators, a verified-history `NodeStats`
+  snapshot, a `fallback` contract, and the canonical `classify_risk` (the
+  orchestrator now re-exports it). `NodeContract.from_skill`/`to_skill`
+  round-trip losslessly; `derive_data_edges` orders subgraph children from
+  slot unification (unrelated children stay parallel; mutual production is
+  rejected as a cycle, never silently reordered).
+  `orchestrator/contract.py::contract_to_blueprint` compiles any contract
+  into an executable DAG blueprint: script bodies become node-cached
+  `NodeScriptRunner` actions keyed by the contract id, subgraphs flatten
+  recursively, and fallback contracts become repair branches. The
+  scheduler's fallback substitution now gates dependents on the *entire*
+  multi-step repair (all of a failed trigger's fallback targets), and a
+  route only counts repaired when the whole repair verified.
 - Node-granular script caching (build-order item 4):
   `runtime/script_node.py` adds `NodeScriptRunner`, an `ActionExecutor`
   (adapter `"script"`) that makes synthesized code a third node body kind

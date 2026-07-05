@@ -223,29 +223,36 @@ class DagRouteRunner:
         def activate_fallbacks() -> bool:
             """Resolve dormant fallback targets whose triggers have settled.
 
-            A trigger that terminally failed activates its fallback, and every
-            node that depended on the failed trigger is rewritten to depend on
-            the fallback instead (substitution: the branch downstream of a
-            failure waits for the repair rather than being cancelled). A
-            trigger set that fully verified retires its fallback as satisfied.
+            A trigger that terminally failed activates its fallback branch,
+            and every node that depended on the failed trigger is rewritten
+            to depend on ALL of that trigger's fallback targets
+            (substitution: the branch downstream of a failure waits for the
+            *whole* repair — a multi-step repair gates dependents on its last
+            step, not its first). A trigger set that fully verified retires
+            its fallback as satisfied.
             """
             progressed = False
+            substitutions: dict[str, set[str]] = {}
             for target in sorted(dormant):
                 triggers = fallback_triggers[target]
                 failed = {t for t in triggers if status.get(t) in _TERMINAL_BAD}
                 if failed:
                     dormant.discard(target)
                     pending.add(target)
-                    for node_deps in deps.values():
-                        if node_deps & failed:
-                            node_deps -= failed
-                            node_deps.add(target)
+                    for trigger in failed:
+                        substitutions.setdefault(trigger, set()).add(target)
                     progressed = True
                 elif all(status.get(t) is ExecutionStatus.SUCCEEDED for t in triggers):
                     # Every trigger verified: the fallback is not needed.
                     dormant.discard(target)
                     status[target] = ExecutionStatus.SUCCEEDED
                     progressed = True
+            if substitutions:
+                for node_deps in deps.values():
+                    for trigger, targets in substitutions.items():
+                        if trigger in node_deps:
+                            node_deps.discard(trigger)
+                            node_deps |= targets
             return progressed
 
         def cascade_skips() -> bool:
@@ -355,15 +362,16 @@ class DagRouteRunner:
                     settle(node, future.result())
 
         def effective_ok(node: str, seen: frozenset[str] = frozenset()) -> bool:
-            """A node counts as ok if it verified, or a fallback repaired it."""
+            """A node counts as ok if it verified, or its ENTIRE fallback
+            branch did — a half-finished repair is not a repair."""
             if status.get(node) is ExecutionStatus.SUCCEEDED:
                 return True
             if node in seen:
                 return False
-            return any(
-                effective_ok(target, seen | {node})
-                for target in fallbacks_of.get(node, ())
-            )
+            targets = fallbacks_of.get(node)
+            if not targets:
+                return False
+            return all(effective_ok(target, seen | {node}) for target in targets)
 
         succeeded = all(effective_ok(node) for node in status)
         return outcomes, first_error, succeeded

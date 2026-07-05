@@ -284,7 +284,19 @@ own?" — because they promoted it.
 | 3 | SOP compiler: YAML → ConstraintSpecs + hard edges + approval gates + risk budget | `skills/sop.py`, `orchestrator/adaptive.py` | **Implemented** (`parse_sop`, `apply_sop_to_blueprint`, `apply_sop_to_skill`; tests in `test_sop.py`) |
 | 4 | Node-granular script cache + single-node re-synthesis via the graph engine | `cache/signature.py`, `runtime/script_node.py` | **Implemented** (`NodeScriptRunner` — an `ActionExecutor` for script-bodied nodes, keyed by node + bindings + environment; stale scripts re-synthesize through `GraphEngineSynthesizer` without touching sibling nodes; tests in `test_node_script_cache.py`) |
 | 5 | Trace statistics: Beta posteriors + precedence matrix; Thompson selection among alternatives | `knowledge/traces.py`, `orchestrator/adaptive.py` | **Implemented** (`TraceStore`, `AdaptivePlanner`, `ThompsonRouteOptimizer`; tests in `test_trace_store.py`, `test_adaptive_planner.py`) |
-| 6 | Unify `Node`/`ReusableSkill`/`ReservedAction` into one `NodeContract` | `skills/models.py` outward | Open — do last, mechanically, now that 1–3 and 5 prove the shape |
+| 6 | Unify `Node`/`ReusableSkill`/`ReservedAction` into one `NodeContract` | `skills/contract.py`, `orchestrator/contract.py` | **Implemented** (typed `Slot` consumes/produces; three body kinds; `derive_data_edges` orders subgraphs from slot flow; fallback contracts compile to repair branches; `contract_to_blueprint` feeds the DAG runner; canonical `classify_risk`; tests in `test_node_contract.py`) |
+
+**All six items are implemented.** The proposal's central claim now runs
+end-to-end in one type: a `NodeContract` declares what it consumes and
+produces as typed slots, so a subgraph's fan-out/fan-in DAG — the case the
+Node Sorting prototype had to hardcode — falls out of `derive_data_edges`
+with no trace counting at all
+(`test_node_contract.py::test_subgraph_compiles_to_a_parallel_dag_and_executes`).
+Learned skills, synthesized node-cached scripts, and composed super-nodes
+are the same contract with different bodies; SOP edges, learned edges, and
+data edges stay distinguishable by provenance all the way into the
+scheduler; and a contract carries its own fallback, which compiles to the
+runner's substitution-semantics repair branches.
 
 Items 1–3 and 5 shipped pure-Python, deterministic, and tested with stub
 executors; no model in the loop. The growth loop is closed end-to-end:

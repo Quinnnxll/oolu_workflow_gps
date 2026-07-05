@@ -1,24 +1,11 @@
 from __future__ import annotations
 
+from ..skills.contract import classify_risk
 from ..skills.models import ReusableSkill
 from ..skills.requirements import RequirementBrief
 from .state import Blueprint, ReservedAction, SemanticEdge, SemanticGrounding
 
-_READ = frozenset(
-    {"get", "list", "read", "search", "fetch", "describe", "show", "query", "view"}
-)
-_IRREVERSIBLE = frozenset(
-    {"delete", "remove", "drop", "destroy", "purge", "revoke", "wipe"}
-)
-
-
-def classify_risk(operation: str) -> str:
-    verb = operation.split(".")[-1].split("_")[0].split("-")[0].lower()
-    if verb in _IRREVERSIBLE:
-        return "irreversible"
-    if verb in _READ:
-        return "read"
-    return "write"
+__all__ = ["RegistryGrounder", "SkillRegistryPlanner", "classify_risk"]
 
 
 def _reserved_action(action) -> ReservedAction:

@@ -21,6 +21,7 @@ from .adaptive import (
     TraceFeedbackSink,
     apply_sop_to_blueprint,
 )
+from .contract import contract_to_blueprint
 from .engine import WorkflowOrchestrator
 from .intake import (
     INTAKE_SYSTEM_PROMPT,
@@ -87,6 +88,7 @@ __all__ = [
     "TraceFeedbackSink",
     "action_node_key",
     "apply_sop_to_blueprint",
+    "contract_to_blueprint",
     "CapabilityGrounder",
     "CollectingFeedbackSink",
     "ConfirmationRecord",
