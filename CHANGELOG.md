@@ -2,7 +2,9 @@
 
 All notable changes to Workflow-GPS are documented here.
 
-## Unreleased
+## v0.6.0 — 2026-07-05
+
+Release notes: `docs/releases/v0.6.0.md`.
 
 Reward & pricing system (`claude/oolu-workflow-planning-review`) — the
 economic layer for Noders and route planning; design in
