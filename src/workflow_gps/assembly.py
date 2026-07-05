@@ -5,10 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .billing import EarningsLedger, PayoutStore
 from .config import Settings
-from .desktop.service import DesktopService
-from .durable.artifacts import FilesystemArtifactStore
 from .durable.audit import DurableAuditLog
 from .durable.connection import DurableConnection
 from .durable.service import DurableWorkflowService, OrchestratorFactory
@@ -28,11 +25,9 @@ from .orchestrator import (
 )
 from .orchestrator.intake import IntakeModel
 from .orchestrator.state import Blueprint, RoutePlan, SemanticEdge, SemanticGrounding
-from .providers.vault import SecretVault
 from .skills.models import ReusableSkill
 from .skills.ports import ActionExecutor
 from .skills.requirements import RequirementBrief
-from .worker.policy import IsolationPolicy
 
 if TYPE_CHECKING:
     from .skills.registry import SkillRegistry
@@ -62,26 +57,6 @@ class PlanningOnlyOptimizer:
             ),
             alternatives=[],
         )
-
-
-@dataclass
-class DesktopRuntime:
-    desktop: DesktopService
-    durable: DurableWorkflowService
-    conn: DurableConnection
-    # The same ledger objects the shell reads — hand THESE to a settlement
-    # job so the earnings screen and the money pipeline share one truth.
-    earnings: EarningsLedger | None = None
-    payouts: PayoutStore | None = None
-
-    def close(self) -> None:
-        self.conn.close()
-
-    def __enter__(self) -> "DesktopRuntime":
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self.close()
 
 
 def build_cli_executor(
@@ -460,61 +435,4 @@ def build_host_runtime(
         identity=identity,
         conn=conn,
         _closers=(users, identity, price_book, traces),
-    )
-
-
-def build_desktop_runtime(
-    settings: Settings | None = None,
-    *,
-    db_path: str | Path,
-    intake_model: IntakeModel | None = None,
-    skills: list[ReusableSkill] | None = None,
-    blueprints: list[Blueprint] | None = None,
-    grounding_map: dict[str, str] | None = None,
-    executors: dict[str, ActionExecutor] | None = None,
-    approval_authority: IdentityApprovalAuthority | None = None,
-    vault: SecretVault | None = None,
-    isolation: IsolationPolicy | None = None,
-    docker_available: bool = True,
-    artifacts_dir: str | Path | None = None,
-    noder_principal: str | None = "local-noder",
-    payout_adapter: Any = None,  # billing.PayoutAdapter: onboarding + KYC refresh
-    proposal_model: Any = None,  # orchestrator.ProposalModel: advice as a prior
-) -> DesktopRuntime:
-    settings = settings or Settings()
-    conn = DurableConnection(db_path)
-    # Earnings are wired by default: the screen shows honest zeros until
-    # the user's contributions earn. Pass noder_principal=None to disable.
-    earnings = EarningsLedger(conn) if noder_principal is not None else None
-    payouts = PayoutStore(conn) if noder_principal is not None else None
-    artifacts = (
-        FilesystemArtifactStore(artifacts_dir) if artifacts_dir is not None else None
-    )
-    factory = build_orchestrator_factory(
-        settings,
-        intake_model=intake_model,
-        skills=skills,
-        blueprints=blueprints,
-        grounding_map=grounding_map,
-        executors=executors,
-    )
-    durable = DurableWorkflowService(conn, factory, artifacts=artifacts)
-    desktop = DesktopService(
-        durable,
-        approval_authority=approval_authority,
-        vault=vault,
-        isolation=isolation,
-        docker_available=docker_available,
-        earnings_ledger=earnings,
-        payout_store=payouts,
-        payout_adapter=payout_adapter,
-        noder_principal=noder_principal,
-        proposal_model=proposal_model,
-    )
-    return DesktopRuntime(
-        desktop=desktop,
-        durable=durable,
-        conn=conn,
-        earnings=earnings,
-        payouts=payouts,
     )

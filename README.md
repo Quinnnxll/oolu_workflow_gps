@@ -34,32 +34,9 @@ configured separately — see **Installation** and **Configuration** below.
 
 ### Self-hosting for online web users
 
-The desktop shell is loopback-only by design (it has no auth). To serve it
-to browsers **elsewhere**, use the token-gated web mode:
-
-```bash
-wfgps web --seed-starter          # prints a one-time sign-in URL
-WFGPS_WEB_TOKEN=<long secret> wfgps web   # or bring a stable token
-```
-
-Nobody without the token gets anything: browsers sign in once at
-`/login?token=…` (session cookie), API clients send
-`Authorization: Bearer <token>`. Or run the bundled container:
-
-```bash
-WFGPS_WEB_TOKEN=$(openssl rand -base64 24) docker compose up -d
-docker compose logs workflow-gps    # shows the sign-in URL
-```
-
-All state lives in one volume (`/data`). **Terminate TLS in front**
-(Caddy / nginx / Traefik) — the token is a bearer secret and must not
-travel over plain HTTP outside your machine.
-
-#### Multi-user hosting (accounts, not a shared token)
-
-`wfgps web` is one shared token, one trust domain. For a host where every
-person has their own username, password, and authority, serve the full
-multi-tenant gateway with **local accounts**:
+The desktop shell is loopback-only by design. To serve browsers on
+**other machines**, run the same gateway with **local user accounts** —
+every person gets their own username, password, and authority:
 
 ```bash
 WFGPS_HOST_SECRET=$(openssl rand -base64 32) \
@@ -67,17 +44,29 @@ WFGPS_ADMIN_PASSWORD=change-me-soon \
 wfgps host --data .workflow-gps/host
 ```
 
-Sign in with `POST /v1/auth/login {"username", "password"}` to get a
-short-lived bearer token for every `/v1/*` surface (runs, marketplace,
+Browsers sign in at `/` (the built-in page); API clients sign in with
+`POST /v1/auth/login {"username", "password"}` and send the returned
+short-lived bearer token to every `/v1/*` surface (runs, marketplace,
 approvals, earnings). Admins provision users in their own tenant via
 `POST /v1/auth/users` (and disable them via
-`POST /v1/auth/users/{name}/disabled`). Identity semantics are unchanged
-from an IdP-fronted deployment: tokens are validated, authority comes
-from **stored** grants — never token claims — and passwords are
-scrypt-hashed with uniform login failures and brief lockouts. The only
-local part is who signs the tokens: this install's own secret (HMAC),
-which `assert_production_identity` deliberately refuses for
-production-money deployments.
+`POST /v1/auth/users/{name}/disabled`) — or from the shell's Users
+screen. Or run the bundled container:
+
+```bash
+WFGPS_HOST_SECRET=$(openssl rand -base64 32) \
+WFGPS_ADMIN_PASSWORD=change-me-soon docker compose up -d
+docker compose logs workflow-gps    # shows the admin sign-in details
+```
+
+All state lives in one volume (`/data`). **Terminate TLS in front**
+(Caddy / nginx / Traefik) — passwords and tokens must not travel over
+plain HTTP outside your machine. Identity semantics are unchanged from
+an IdP-fronted deployment: tokens are validated, authority comes from
+**stored** grants — never token claims — and passwords are scrypt-hashed
+with uniform login failures and brief lockouts. The only local part is
+who signs the tokens: this install's own secret (HMAC), which
+`assert_production_identity` deliberately refuses for production-money
+deployments.
 
 ### If something goes wrong
 

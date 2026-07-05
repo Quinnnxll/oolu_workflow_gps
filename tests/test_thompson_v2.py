@@ -21,7 +21,6 @@ from test_http_gateway import _req
 from test_market_assemble import RAW as RAW_SLOT
 from test_market_assemble import TIDY, _seed_market
 
-from workflow_gps.desktop import DesktopService
 from workflow_gps.knowledge import NodeObservation, TraceStore, route_node_key
 from workflow_gps.knowledge.replay import (
     Arm,
@@ -209,7 +208,7 @@ def test_replay_is_deterministic_under_a_seed():
 # --------------------------------------------------------------------------- #
 # Surfaces: expected_success and cost_weight ride the previews.                 #
 # --------------------------------------------------------------------------- #
-def _desktop_with_market(tmp_path, *, trace_store=None, second_raw_producer=False):
+def _gateway_with_market(tmp_path, *, trace_store=None, second_raw_producer=False):
     app, conn, ident, registry, *_rest = _build(tmp_path)
     _seed_market(app, ident, registry)
     if second_raw_producer:
@@ -223,57 +222,77 @@ def _desktop_with_market(tmp_path, *, trace_store=None, second_raw_producer=Fals
             produces=[RAW_SLOT],
             consumes=[],
         )
-    svc = DesktopService(
-        app._durable,
-        market=app._market,
-        price_book=app._price_book,
-        trace_store=trace_store,
+    app._trace_store = trace_store
+    return app, conn, ident
+
+
+def _preview(app, ident, body):
+    response = app.handle(
+        _req(
+            "POST",
+            "/v1/market/assemble",
+            token=ident.token("consumer", "t2"),
+            body=body,
+        )
     )
-    return app, svc, conn, ident
+    assert response.status == 200, response.body
+    return response.body
 
 
 def test_preview_reports_the_plans_expected_success(tmp_path):
     store = TraceStore()
-    _app, svc, conn, _ident = _desktop_with_market(tmp_path, trace_store=store)
+    app, conn, ident = _gateway_with_market(tmp_path, trace_store=store)
+    goal = {"goal": {"name": "clean-the-books", "want": [TIDY]}}
 
-    fresh = svc.assembly_preview(goal="clean-the-books", want=[TIDY])
+    fresh = _preview(app, ident, goal)
     # Two picked nodes, no history anywhere: 0.5 * 0.5.
-    assert fresh.expected_success == pytest.approx(0.25)
+    assert fresh["expected_success"] == pytest.approx(0.25)
 
+    # Personal history recorded in the caller's tenant bucket.
     for name in ("raw exporter", "invoice cleaner"):
         for _ in range(3):
-            _observe(store, route_node_key(name), True)
-    proven = svc.assembly_preview(goal="clean-the-books", want=[TIDY])
+            _observe(store, route_node_key(name), True, context="t2")
+    proven = _preview(app, ident, goal)
     # Three personal wins each: posterior mean 4/5 per node.
-    assert proven.expected_success == pytest.approx(0.8 * 0.8)
-    assert proven.expected_success > fresh.expected_success
+    assert proven["expected_success"] == pytest.approx(0.8 * 0.8)
+    assert proven["expected_success"] > fresh["expected_success"]
 
-    impossible = svc.assembly_preview(
-        goal="impossible", want=[{"name": "unicorn", "value_type": "path"}]
+    impossible = _preview(
+        app,
+        ident,
+        {
+            "goal": {
+                "name": "impossible",
+                "want": [{"name": "unicorn", "value_type": "path"}],
+            }
+        },
     )
-    assert impossible.expected_success is None  # nothing assembled, no claim
+    assert impossible["expected_success"] is None  # nothing assembled, no claim
     store.close()
     conn.close()
 
 
-def test_cost_weight_flips_the_desktop_pick_by_the_declared_trade(tmp_path):
+def test_cost_weight_flips_the_pick_by_the_declared_trade(tmp_path):
     store = TraceStore()
     # Personal history: the original exporter is more proven but dear;
     # the deluxe one is a little shakier and a tenth the price.
     for ok, cost in ((True, 5.0), (True, 5.0), (True, 5.0), (True, 5.0)):
-        _observe(store, route_node_key("raw exporter"), ok, cost=cost)
+        _observe(store, route_node_key("raw exporter"), ok, cost=cost, context="t2")
     for ok, cost in ((True, 0.5), (True, 0.5), (False, 0.5)):
-        _observe(store, route_node_key("raw exporter deluxe"), ok, cost=cost)
-    _app, svc, conn, _ident = _desktop_with_market(
+        _observe(
+            store, route_node_key("raw exporter deluxe"), ok, cost=cost, context="t2"
+        )
+    app, conn, ident = _gateway_with_market(
         tmp_path, trace_store=store, second_raw_producer=True
     )
+    goal = {"goal": {"name": "clean-the-books", "want": [TIDY]}}
 
-    quality = svc.assembly_preview(goal="clean-the-books", want=[TIDY])
-    assert "raw exporter" in quality.selected
-    assert "raw exporter deluxe" not in quality.selected
+    quality = _preview(app, ident, goal)
+    assert "raw exporter" in quality["selected"]
+    assert "raw exporter deluxe" not in quality["selected"]
 
-    thrifty = svc.assembly_preview(goal="clean-the-books", want=[TIDY], cost_weight=0.1)
-    assert "raw exporter deluxe" in thrifty.selected
+    thrifty = _preview(app, ident, dict(goal, cost_weight=0.1))
+    assert "raw exporter deluxe" in thrifty["selected"]
     store.close()
     conn.close()
 

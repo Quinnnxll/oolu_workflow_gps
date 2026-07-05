@@ -21,7 +21,6 @@ from workflow_gps.billing.model_calls import (
     ModelCallMeter,
     ModelPriceTable,
 )
-from workflow_gps.desktop import DesktopService
 from workflow_gps.knowledge import NodeObservation, TraceStore, route_node_key
 from workflow_gps.models import ModelTier
 from workflow_gps.orchestrator import ContractAssembler, GoalSpec, Proposal
@@ -347,10 +346,10 @@ def test_unreadable_advice_is_no_advice():
 # --------------------------------------------------------------------------- #
 # Surfaces: planning cost rides the preview and the budget judges the sum.     #
 # --------------------------------------------------------------------------- #
-def _desktop_with_market(tmp_path, *, proposal_model=None, trace_store=None):
+def _gateway_with_market(tmp_path):
+    """The unified surface with a contested RAW pick worth advising."""
     app, conn, ident, registry, *_rest = _build(tmp_path)
     _seed_market(app, ident, registry)
-    # A second raw producer so the RAW pick is contested and worth advising.
     _contribute_and_publish(
         app,
         ident,
@@ -361,36 +360,43 @@ def _desktop_with_market(tmp_path, *, proposal_model=None, trace_store=None):
         produces=[RAW_SLOT],
         consumes=[],
     )
-    svc = DesktopService(
-        app._durable,
-        market=app._market,
-        price_book=app._price_book,
-        trace_store=trace_store,
-        proposal_model=proposal_model,
+    return app, conn, ident
+
+
+def _assemble(app, ident, body):
+    from test_http_gateway import _req
+
+    return app.handle(
+        _req(
+            "POST",
+            "/v1/market/assemble",
+            token=ident.token("consumer", "t2"),
+            body=body,
+        )
     )
-    return app, svc, conn
 
 
-def test_desktop_preview_surfaces_planning_cost_and_budgets_judge_the_sum(tmp_path):
+def test_preview_surfaces_planning_cost_and_budgets_judge_the_sum(tmp_path):
     model = _StubModel({}, cost=0.05)
-    _app, svc, conn = _desktop_with_market(tmp_path, proposal_model=model)
+    app, conn, ident = _gateway_with_market(tmp_path)
+    app._proposal_model = model
+    goal = {"goal": {"name": "clean-the-books", "want": [TIDY]}}
 
-    view = svc.assembly_preview(goal="clean-the-books", want=[TIDY])
-    assert view.complete is True
+    preview = _assemble(app, ident, goal).body
+    assert preview["complete"] is True
     assert model.calls, "the contested RAW pick should have been advised"
-    assert view.planning_cost == 0.05
+    assert preview["planning_cost"] == 0.05
 
     # A threshold between the market gross and gross+planning: only the
     # planning charge tips it over, proving budgets judge the whole cost.
-    threshold = view.estimated_gross_total + 0.01
-    judged = svc.assembly_preview(
-        goal="clean-the-books", want=[TIDY], review_threshold=threshold
+    threshold = preview["estimated_gross_total"] + 0.01
+    judged = _assemble(
+        app, ident, dict(goal, budget={"review_threshold": threshold})
+    ).body
+    assert judged["budget"]["estimated"] == (
+        judged["estimated_gross_total"] + judged["planning_cost"]
     )
-    assert judged.budget is not None
-    assert judged.budget["estimated"] == (
-        judged.estimated_gross_total + judged.planning_cost
-    )
-    assert judged.budget["needs_review"] is True
+    assert judged["budget"]["needs_review"] is True
     conn.close()
 
 
@@ -452,32 +458,38 @@ def _record_run_level_evidence(store, *, context=""):
         )
 
 
-def test_desktop_defaults_to_advising_from_the_users_own_runs(tmp_path):
+def test_the_surface_defaults_to_advising_from_the_users_own_runs(tmp_path):
     store = TraceStore()
-    _record_run_level_evidence(store)
-    _app, svc, conn = _desktop_with_market(tmp_path, trace_store=store)
+    _record_run_level_evidence(store, context="t2")
+    app, conn, ident = _gateway_with_market(tmp_path)
+    app._trace_store = store
 
-    view = svc.assembly_preview(goal="clean-the-books", want=[TIDY])
+    view = _assemble(
+        app, ident, {"goal": {"name": "clean-the-books", "want": [TIDY]}}
+    ).body
     # The name tie-break alone would pick "raw exporter"; the default
     # trace-backed model knows which whole plans actually verified.
-    assert "raw exporter deluxe" in view.selected
-    assert "raw exporter" not in view.selected
-    assert view.planning_cost == 0.0  # advising from local history is free
+    assert "raw exporter deluxe" in view["selected"]
+    assert "raw exporter" not in view["selected"]
+    assert view["planning_cost"] == 0.0  # advising from local history is free
     store.close()
     conn.close()
 
 
 def test_an_explicit_proposal_model_still_wins(tmp_path):
     store = TraceStore()
-    _record_run_level_evidence(store)  # history says deluxe...
+    _record_run_level_evidence(store, context="t2")  # history says deluxe...
     override = _StubModel({}, cost=0.02)  # ...but an explicit model is boss
-    _app, svc, conn = _desktop_with_market(
-        tmp_path, trace_store=store, proposal_model=override
-    )
-    view = svc.assembly_preview(goal="clean-the-books", want=[TIDY])
+    app, conn, ident = _gateway_with_market(tmp_path)
+    app._trace_store = store
+    app._proposal_model = override
+
+    view = _assemble(
+        app, ident, {"goal": {"name": "clean-the-books", "want": [TIDY]}}
+    ).body
     assert override.calls, "the explicit model should have been consulted"
-    assert "raw exporter" in view.selected  # neutral advice: tie-break rules
-    assert view.planning_cost == 0.02
+    assert "raw exporter" in view["selected"]  # neutral advice: tie-break rules
+    assert view["planning_cost"] == 0.02
     store.close()
     conn.close()
 

@@ -4,6 +4,30 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Unified-surface migration, final step — the loopback surface is gone:
+
+- **Removed** the `workflow_gps.desktop` package (`DesktopService`, the
+  loopback app, its view-models and inline UI), `build_desktop_runtime`,
+  the `--legacy-loopback` / `--unified` flags, and **`wfgps web`** (the
+  shared-token mode built on the loopback shell — superseded by
+  `wfgps host`, which is multi-user with real accounts). One surface
+  remains: the multi-tenant gateway, with `wfgps desktop` (loopback,
+  auto signed in) and `wfgps host` (network, accounts) as its two
+  bindings. `wfgps desktop` keeps its flags, port, and data layout — the
+  setup scripts and the packaged app work unchanged.
+- The `Dockerfile` / `docker-compose.yml` now run `wfgps host`
+  (`WFGPS_HOST_SECRET` + `WFGPS_ADMIN_PASSWORD` instead of
+  `WFGPS_WEB_TOKEN`); the README's self-hosting section is rewritten
+  around accounts.
+- Tests moved with the code they prove: the desktop-runtime lifecycle
+  tests (planning-only failure, model-driven clarification, injected
+  planner end-to-end, CLI-executor confirmation, reopen persistence) are
+  ported to the host runtime through real gateway routes; the
+  planning-cost/expected-success/cost-weight/default-advising surface
+  tests are ported to `/v1/market/assemble`; the loopback-only suites
+  (~57 tests whose behaviors have gateway twins) are deleted; the shared
+  browser harness moved to `tests/browser_harness.py`.
+
 Unified-surface migration, step 3 — the flip:
 
 - **`wfgps desktop` now serves the unified gateway surface by default**:

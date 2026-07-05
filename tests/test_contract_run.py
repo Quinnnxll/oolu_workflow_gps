@@ -769,47 +769,6 @@ def test_stale_holds_expire_and_cannot_be_released(tmp_path):
     conn.close()
 
 
-def test_desktop_holds_expire_on_their_own_clock(tmp_path):
-    """The shell's TTL sweeps stale holds out of the inbox; deciding one
-    after expiry is a 404, audited as contract.expired."""
-    from datetime import UTC, datetime, timedelta
-
-    import pytest
-    from test_desktop_shell import _identity
-
-    from workflow_gps.desktop import DesktopService
-    from workflow_gps.orchestrator import DagRouteRunner
-
-    _store, authority, approver, _intruder = _identity(tmp_path)
-    executor = _CliExecutor(("run", "delete_files"))
-    app, conn, ident, registry, metering, attribution, audit = _build(tmp_path)
-    current = {"now": datetime(2026, 6, 29, tzinfo=UTC)}
-    svc = DesktopService(
-        app._durable,
-        approval_authority=authority,
-        market=app._market,
-        price_book=app._price_book,
-        contract_runner=DagRouteRunner({"cli": executor}),
-        attribution=attribution,
-        hold_ttl_seconds=60,
-        clock=lambda: current["now"],
-    )
-    held = svc.confirm_assembly(_destructive())
-    assert held.status == "awaiting_approval"
-    assert len(svc.inbox(kind="contract-approval")) == 1
-
-    current["now"] += timedelta(seconds=120)  # the intent goes cold
-    assert svc.inbox(kind="contract-approval") == []
-    with pytest.raises(KeyError):
-        svc.approve_assembly(held.run_id, session=approver)
-    assert executor.calls == 0
-    assert any(
-        r.event_type == "contract.expired" and r.payload["pending_id"] == held.run_id
-        for r in app._durable.audit.records()
-    )
-    conn.close()
-
-
 def test_hold_events_feed_notifies_approvers(tmp_path):
     """The approver's feed: every hold transition (held/approved/declined/
     expired) surfaces as an SSE frame, tenant-scoped, resumable by seq."""

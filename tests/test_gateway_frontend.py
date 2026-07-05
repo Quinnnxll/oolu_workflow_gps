@@ -17,8 +17,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from browser_harness import _AsgiHttpServer, _launch
 from playwright.sync_api import expect, sync_playwright
-from test_browser_e2e import _AsgiHttpServer, _launch
 
 from workflow_gps.assembly import build_host_runtime
 

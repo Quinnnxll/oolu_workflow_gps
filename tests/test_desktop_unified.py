@@ -15,8 +15,8 @@ import io
 import re
 from pathlib import Path
 
+from browser_harness import _AsgiHttpServer, _launch
 from playwright.sync_api import expect, sync_playwright
-from test_browser_e2e import _AsgiHttpServer, _launch
 
 from workflow_gps import cli
 from workflow_gps.assembly import build_host_runtime
@@ -37,7 +37,7 @@ def _run_unified(monkeypatch, tmp_path, argv=()):
     monkeypatch.setattr(uvicorn, "run", fake_run)
     out = io.StringIO()
     code = cli.main(
-        ["desktop", "--unified", "--db", str(tmp_path / "d" / "desktop.db"), *argv],
+        ["desktop", "--db", str(tmp_path / "d" / "desktop.db"), *argv],
         out=out,
     )
     return code, out.getvalue(), served
@@ -55,7 +55,7 @@ def test_unified_serves_the_gateway_signed_in_on_loopback(monkeypatch, tmp_path)
 
 
 def test_unified_still_refuses_non_loopback_hosts(capsys):
-    code = cli.main(["desktop", "--unified", "--host", "0.0.0.0"])
+    code = cli.main(["desktop", "--host", "0.0.0.0"])
     assert code == 2
     assert "loopback" in capsys.readouterr().err
 
@@ -120,28 +120,6 @@ def test_unified_is_now_the_default_surface(monkeypatch, tmp_path):
     assert code == 0
     assert isinstance(served["app"], GatewayASGI)
     assert "#auth=" in out.getvalue()
-
-
-def test_legacy_loopback_stays_available_behind_a_flag(monkeypatch, tmp_path):
-    import uvicorn
-
-    from workflow_gps.desktop.loopback import DesktopLoopbackApp
-
-    served = {}
-    monkeypatch.setattr(
-        uvicorn, "run", lambda app, **kw: served.update({"app": app, **kw})
-    )
-    code = cli.main(
-        [
-            "desktop",
-            "--legacy-loopback",
-            "--db",
-            str(tmp_path / "d" / "desktop.db"),
-        ],
-        out=io.StringIO(),
-    )
-    assert code == 0
-    assert isinstance(served["app"], DesktopLoopbackApp)
 
 
 def test_the_default_surface_still_seeds_the_starter_pack(monkeypatch, tmp_path):
