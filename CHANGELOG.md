@@ -57,6 +57,18 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- Desktop front-end (replacing the scaffold screen by screen, still one
+  self-contained page with no build step): a DOM-builder kernel (`h()`)
+  replaces innerHTML templates — every dynamic value is a text node, so
+  the page is XSS-safe by construction; a hash router gives each screen
+  and each task a deep-linkable address (`#/task/{run_id}`). The screens
+  now drive the WHOLE loopback surface: the new task-detail screen
+  answers clarification questions, previews and approves/declines
+  routes, resolves incidents (retry/abort), cancels, and streams the
+  live timeline over the websocket; Assemble renders per-step clearing
+  forces and keeps its form across navigation; Inbox links run pauses to
+  their task screens; a new Skills screen searches the library. The
+  wiring test now pins all of it.
 - Desktop UI scaffolding (`desktop/ui.py`, served by the loopback at
   `GET /`): one self-contained page — plain HTML + vanilla JS, no build
   step — over the same loopback endpoints the tests drive, so the page

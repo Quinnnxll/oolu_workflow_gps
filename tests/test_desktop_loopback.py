@@ -182,14 +182,24 @@ def test_scaffold_ui_is_served_at_the_root(tmp_path):
         assert status == 200
         assert headers["content-type"].startswith("text/html")
         assert "Workflow-GPS" in body
-        # The scaffold stays honest to the API it fronts.
+        # The front-end stays honest to the API it fronts — including the
+        # task-driving routes (answers/confirm/incident/cancel), the live
+        # timeline websocket, and the skills library.
         for route in (
             "/v1/assembly/preview",
             "/v1/assembly/confirm",
             "/v1/assembly/approvals/",
             "/v1/tasks",
             "/v1/inbox",
+            "/v1/skills",
             "/v1/worker-health",
+            "/v1/offline-policy",
+            "/answers",
+            "/confirm",
+            "/resolve-incident",
+            "/cancel",
+            "/route",
+            "/events",
         ):
             assert route in body, f"UI lost its wiring to {route}"
 
