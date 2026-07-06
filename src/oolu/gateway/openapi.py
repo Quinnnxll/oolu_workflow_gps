@@ -18,6 +18,13 @@ def build_openapi() -> dict:
         return entry
 
     paths = {
+        "/v1/chat": {
+            "post": op(
+                "One conversational turn with the OoLu assistant: replies "
+                "in kind, and when the message is work, starts a run and "
+                "returns its id alongside the reply"
+            ),
+        },
         "/v1/runs": {
             "post": op(
                 "Submit a task contract (async; returns 202 with a run id). "

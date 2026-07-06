@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
-use tauri_plugin_shell::process::CommandChild;
+use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
 struct Sidecar(Mutex<Option<CommandChild>>);
@@ -22,6 +22,37 @@ fn free_port() -> u16 {
         .local_addr()
         .unwrap()
         .port()
+}
+
+/// Scan the sidecar's startup output for the per-launch `#auth=<token>`
+/// link and return the token. Bounded by `timeout`; a sidecar that dies or
+/// never prints the banner yields None (the UI then simply gets 401s, the
+/// same failure it would have had with no token at all).
+fn read_auth_token(
+    mut rx: tauri::async_runtime::Receiver<CommandEvent>,
+    timeout: Duration,
+) -> Option<String> {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        let event = tauri::async_runtime::block_on(rx.recv())?;
+        let line = match event {
+            CommandEvent::Stdout(bytes) | CommandEvent::Stderr(bytes) => {
+                String::from_utf8_lossy(&bytes).into_owned()
+            }
+            CommandEvent::Terminated(_) => return None,
+            _ => continue,
+        };
+        if let Some(pos) = line.find("#auth=") {
+            let token: String = line[pos + "#auth=".len()..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
+                .collect();
+            if !token.is_empty() {
+                return Some(token);
+            }
+        }
+    }
+    None
 }
 
 fn wait_ready(port: u16, timeout: Duration) -> bool {
@@ -42,6 +73,7 @@ fn main() {
         .setup(|app| {
             // A non-empty build-time server URL selects remote mode.
             let remote = SERVER_URL.filter(|url| !url.is_empty());
+            let mut engine_token: Option<String> = None;
             let api_base = match remote {
                 Some(url) => {
                     // Remote: talk to the online host directly — no sidecar,
@@ -51,20 +83,27 @@ fn main() {
                 None => {
                     // Local: spawn the loopback engine and point the app at it.
                     let port = free_port();
-                    let (_rx, child) = app
+                    let (rx, child) = app
                         .shell()
                         .sidecar("oolu")?
                         .args(["desktop", "--host", "127.0.0.1", "--port", &port.to_string()])
                         .spawn()?;
                     app.state::<Sidecar>().0.lock().unwrap().replace(child);
+                    // The engine mints an ephemeral auth token per launch and
+                    // prints it in its startup banner (the `#auth=` link);
+                    // the webview needs it to talk to the engine at all.
+                    engine_token = read_auth_token(rx, Duration::from_secs(20));
                     wait_ready(port, Duration::from_secs(20));
                     format!("http://127.0.0.1:{port}")
                 }
             };
 
             let is_remote = remote.is_some();
+            let token_inject = engine_token
+                .map(|t| format!(" window.__OOLU_ENGINE_TOKEN__ = '{t}';"))
+                .unwrap_or_default();
             let inject = format!(
-                "window.__OOLU_API__ = '{api_base}'; window.__OOLU_REMOTE__ = {is_remote};"
+                "window.__OOLU_API__ = '{api_base}'; window.__OOLU_REMOTE__ = {is_remote};{token_inject}"
             );
             WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
                 .title("OoLu")

@@ -19,13 +19,16 @@ class FakeWebSocket {
 
 beforeEach(() => {
   localStorage.clear();
+  sessionStorage.clear();
   vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
   window.__OOLU_API__ = "https://host.example";
+  window.__OOLU_REMOTE__ = true;
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
   delete window.__OOLU_API__;
+  delete window.__OOLU_REMOTE__;
 });
 
 describe("timelineSocket", () => {
@@ -36,6 +39,14 @@ describe("timelineSocket", () => {
     const ws = FakeWebSocket.last!;
     expect(ws.url).toBe("wss://host.example/v1/runs/r1/events");
     expect(ws.protocols).toEqual(["bearer", "tok123"]);
+  });
+
+  it("uses the engine token in local mode", () => {
+    window.__OOLU_REMOTE__ = false;
+    window.__OOLU_API__ = "http://127.0.0.1:8765";
+    sessionStorage.setItem("oolu_engine_token", "eng456");
+    timelineSocket("r1", () => {});
+    expect(FakeWebSocket.last!.protocols).toEqual(["bearer", "eng456"]);
   });
 
   it("omits the subprotocol when there is no token", () => {

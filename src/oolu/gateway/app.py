@@ -27,6 +27,7 @@ from ..billing import (
     PayoutStatus,
     PayoutStore,
 )
+from ..chat import ChatAssistant
 from ..durable.idempotency import IdempotencyLedger
 from ..durable.service import DurableWorkflowService
 from ..identity.errors import AuthenticationError, AuthorizationError
@@ -185,6 +186,8 @@ class GatewayApp:
         disputes: DisputeService | None = None,
         webhook_verifier: WebhookVerifier | None = None,
         accounts=None,  # identity.LocalAccountService: local multi-user login
+        chat: ChatAssistant | None = None,  # the /v1/chat assistant; a
+        # model-less default keeps the conversational surface working
         value_patcher=None,  # orchestrator.ValuePatcher: fills creative inputs
         isolation=None,  # worker.IsolationPolicy: powers /v1/worker-health
         docker_available: bool = True,
@@ -235,6 +238,10 @@ class GatewayApp:
         # answer only when this is configured — installs fronted by a real
         # IdP keep a 404 there and lose nothing.
         self._accounts = accounts
+        # The chat surface is the product face; it must work on every
+        # install, so a missing assistant degrades to the model-less
+        # default (rules + message-as-intent), never to a 404.
+        self._chat = chat or ChatAssistant()
         # What may run where, per trust level — rendered by the shell's
         # health screen from the policy that is actually enforced.
         from ..worker.policy import IsolationPolicy
@@ -372,6 +379,7 @@ class GatewayApp:
         r = self._router
         r.add("GET", "/v1/openapi.json", self._openapi, public=True)
         r.add("GET", "/v1/health", self._health, public=True)
+        r.add("POST", "/v1/chat", self._chat_turn)
         r.add("POST", "/v1/runs", self._submit_run)
         r.add("GET", "/v1/runs", self._list_runs)
         r.add("GET", "/v1/runs/{run_id}", self._get_run)
@@ -451,6 +459,60 @@ class GatewayApp:
 
     def _health(self, request, session, params) -> Response:
         return json_response(200, {"status": "ok"})
+
+    def _chat_turn(self, request, session, params) -> Response:
+        """One conversational turn with the OoLu assistant.
+
+        The user-facing surface: the assistant answers, and when the turn
+        is work it starts a plain (non-marketplace) run whose progress the
+        client folds back into the conversation. The conversation itself is
+        client-held — the request carries the recent history — so this
+        route stays stateless over the same durable run store as /v1/runs.
+        """
+        body = request.body or {}
+        message = body.get("message")
+        if not message or not isinstance(message, str):
+            raise GatewayError(400, "invalid_request", "message is required")
+        history = body.get("history") or []
+        if not isinstance(history, list):
+            raise GatewayError(400, "invalid_request", "history must be a list")
+        turn = self._chat.respond(
+            message,
+            history=[h for h in history if isinstance(h, dict)][-20:],
+            sender=session.principal_id,
+        )
+        run = None
+        if turn.task:
+            run = self._start_intent_run(session, turn.task)
+            self._metrics["chat_runs"] += 1
+        return json_response(
+            200,
+            {
+                "reply": turn.say,
+                "source": turn.source,
+                "run_id": run["run_id"] if run else None,
+                "run": run,
+            },
+        )
+
+    def _start_intent_run(self, session, intent: str, *, max_recovery: int = 1) -> dict:
+        """Submit a plain intent as a run: the non-marketplace core of
+        ``_submit_run``, shared with the chat surface."""
+        tenant_runs = sum(
+            1
+            for s in self._durable.runs.list()
+            if s.contract.metadata.get("tenant_id") == session.tenant_id
+        )
+        if tenant_runs >= self._config.max_runs_per_tenant:
+            raise GatewayError(429, "quota_exceeded", "tenant run quota exceeded")
+        contract = TaskContract(
+            intent=intent,
+            submitted_by=session.principal_id,
+            metadata={"tenant_id": session.tenant_id},
+        )
+        state = self._durable.submit(contract, max_recovery_attempts=max_recovery)
+        self._metrics["runs_submitted"] += 1
+        return self._run_dict(state)
 
     def _submit_run(self, request, session, params) -> Response:
         body = request.body or {}

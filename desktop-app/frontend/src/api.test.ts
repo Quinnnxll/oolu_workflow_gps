@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api, login, register, requiresLogin, session, signOut } from "./api";
+import {
+  api,
+  captureEngineToken,
+  login,
+  register,
+  requiresLogin,
+  session,
+  signOut,
+} from "./api";
 
 // A recorded fetch call, so tests can assert the exact route + payload the
 // adapter sent to the gateway.
@@ -55,6 +63,7 @@ beforeEach(() => {
   calls = [];
   routes = {};
   localStorage.clear();
+  sessionStorage.clear();
   vi.stubGlobal("fetch", fetchMock);
   // Remote mode is the interesting case for auth; individual tests opt out.
   window.__OOLU_API__ = "https://host.example";
@@ -311,6 +320,26 @@ describe("auth", () => {
     expect(requiresLogin()).toBe(false);
   });
 
+  it("chat posts the message with history and returns the turn", async () => {
+    routes["POST /v1/chat"] = {
+      status: 200,
+      body: { reply: "On it.", source: "intent", run_id: "r9" },
+    };
+    const turn = await api.chat("email bob", [
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "Hi!" },
+    ]);
+    expect(lastCall().path).toBe("https://host.example/v1/chat");
+    expect(lastCall().body).toEqual({
+      message: "email bob",
+      history: [
+        { role: "user", content: "hi" },
+        { role: "assistant", content: "Hi!" },
+      ],
+    });
+    expect(turn.run_id).toBe("r9");
+  });
+
   it("register posts to the online server and stores the session", async () => {
     routes["POST /v1/auth/register"] = {
       status: 200,
@@ -351,6 +380,42 @@ describe("auth", () => {
     window.__OOLU_REMOTE__ = false;
     await expect(login("alice", "pw")).rejects.toThrow("enter the server");
     expect(calls.length).toBe(0);
+  });
+
+  it("captures the engine token from the URL hash and strips it", () => {
+    window.__OOLU_REMOTE__ = false;
+    window.location.hash = "#auth=eng123";
+    captureEngineToken();
+    expect(sessionStorage.getItem("oolu_engine_token")).toBe("eng123");
+    expect(window.location.hash).toBe("");
+  });
+
+  it("local mode authenticates with the engine token, not the online session", async () => {
+    window.__OOLU_REMOTE__ = false;
+    window.__OOLU_API__ = "http://127.0.0.1:8765";
+    sessionStorage.setItem("oolu_engine_token", "eng123");
+    session.set("online-tok", "alice", "acme");
+    routes["GET /v1/runs"] = { status: 200, body: { items: [] } };
+
+    await api.inbox();
+
+    expect(lastCall().headers["Authorization"]).toBe("Bearer eng123");
+  });
+
+  it("a local 401 drops the engine token but keeps the online account", async () => {
+    window.__OOLU_REMOTE__ = false;
+    window.__OOLU_API__ = "http://127.0.0.1:8765";
+    sessionStorage.setItem("oolu_engine_token", "stale");
+    session.set("online-tok", "alice", "acme");
+    const reload = vi.fn();
+    vi.stubGlobal("location", { ...window.location, reload });
+    routes["GET /v1/runs"] = { status: 401, body: {} };
+
+    await expect(api.inbox()).rejects.toThrow("signed out");
+
+    expect(sessionStorage.getItem("oolu_engine_token")).toBeNull();
+    expect(session.token).toBe("online-tok");
+    expect(reload).toHaveBeenCalled();
   });
 
   it("signOut keeps the remembered server for the next sign-in", () => {

@@ -15,10 +15,34 @@ declare global {
   interface Window {
     __OOLU_API__?: string;
     __OOLU_REMOTE__?: boolean;
+    __OOLU_ENGINE_TOKEN__?: string;
   }
 }
 
 const BASE = (): string => window.__OOLU_API__ ?? "";
+
+// ---- the loopback engine's ephemeral token --------------------------------
+// `oolu desktop` mints a fresh signing secret and local-user token on every
+// launch and hands it over out-of-band: the URL hash (#auth=<token>, the
+// same bootstrap the gateway's own frontend uses) or an injected global.
+// It authenticates THIS app to THIS machine's engine — it is not an online
+// account, so it lives in sessionStorage under its own key and never makes
+// the header claim the user is signed in.
+const ENGINE_TOKEN_KEY = "oolu_engine_token";
+
+export function captureEngineToken(): void {
+  const match = /[#&]auth=([^&]+)/.exec(location.hash ?? "");
+  if (match) {
+    sessionStorage.setItem(ENGINE_TOKEN_KEY, match[1]);
+    // The token must not linger in the URL (history, screenshots).
+    history.replaceState(null, "", location.pathname + location.search);
+  } else if (window.__OOLU_ENGINE_TOKEN__) {
+    sessionStorage.setItem(ENGINE_TOKEN_KEY, window.__OOLU_ENGINE_TOKEN__);
+  }
+}
+
+export const engineToken = (): string | null =>
+  sessionStorage.getItem(ENGINE_TOKEN_KEY);
 
 // Remote (online) hosts require a real sign-in; the local loopback engine
 // authorizes by OS ownership of the port, so it never shows a login screen.
@@ -144,10 +168,17 @@ export function signOut(): void {
   location.reload();
 }
 
+// Which credential authenticates API calls: the loopback engine's own
+// ephemeral token in local mode, the online session everywhere else.
+function apiToken(): string | null {
+  if (!isRemote()) return engineToken();
+  return session.token;
+}
+
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = {};
   if (body !== undefined) headers["Content-Type"] = "application/json";
-  const token = session.token;
+  const token = apiToken();
   if (token) headers["Authorization"] = "Bearer " + token;
 
   const res = await fetch(BASE() + path, {
@@ -156,8 +187,15 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (res.status === 401 && token) {
-    // The token expired or was revoked: drop it and return to sign-in.
-    signOut();
+    if (!isRemote()) {
+      // A stale engine token (the sidecar restarted): drop it and reload
+      // so the shell re-bootstraps. The online account is not at fault.
+      sessionStorage.removeItem(ENGINE_TOKEN_KEY);
+      location.reload();
+    } else {
+      // The token expired or was revoked: drop it and return to sign-in.
+      signOut();
+    }
     throw new Error("signed out");
   }
   const text = await res.text();
@@ -181,7 +219,7 @@ interface RunDict {
   result: Record<string, unknown> | null;
 }
 
-const TERMINAL_PHASES = ["completed", "failed", "cancelled"];
+export const TERMINAL_PHASES = ["completed", "failed", "cancelled"];
 
 async function composeTask(run: RunDict): Promise<TaskView> {
   let questions: QuestionView[] = [];
@@ -233,7 +271,20 @@ async function mutateRun(
   return composeTask(await req<RunDict>(method, path, body));
 }
 
+export interface ChatTurnReply {
+  reply: string;
+  source: string;
+  run_id: string | null;
+}
+
 export const api = {
+  // One turn with the assistant. The conversation is client-held, so the
+  // recent history rides along; a work turn comes back with the run id the
+  // chat folds into the thread.
+  chat: (
+    message: string,
+    history: { role: "user" | "assistant"; content: string }[],
+  ) => req<ChatTurnReply>("POST", "/v1/chat", { message, history }),
   submitTask: (intent: string) => mutateRun("POST", "/v1/runs", { intent }),
   task: async (id: string) =>
     composeTask(await req<RunDict>("GET", `/v1/runs/${id}`)),
@@ -294,7 +345,7 @@ export function timelineSocket(
   const url = `${origin}/v1/runs/${runId}/events`;
   // The gateway accepts a bearer token over WS via the ["bearer", <token>]
   // subprotocol (browsers cannot set Authorization on a WebSocket handshake).
-  const token = session.token;
+  const token = apiToken();
   const ws = token ? new WebSocket(url, ["bearer", token]) : new WebSocket(url);
   ws.onmessage = (m) => {
     try {
