@@ -536,6 +536,59 @@ main.chat-main {
   font-size: 12px;
 }
 
+/* ---- quick starts + voice ---- */
+.quickstarts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-self: flex-start;
+  max-width: 78%;
+}
+
+.quickstart {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--fg);
+  border-radius: 14px;
+  padding: 7px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.quickstart:hover {
+  border-color: var(--accent);
+}
+
+.mic {
+  align-self: center;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--fg);
+  border-radius: 50%;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  font-size: 16px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.mic.listening {
+  border-color: var(--accent);
+  color: var(--accent);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(88, 133, 255, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 7px rgba(88, 133, 255, 0);
+  }
+}
+
 /* ---- tool chips: what the assistant touched this turn ---- */
 .tool-chips {
   display: flex;

@@ -55,6 +55,98 @@ describe("Chat", () => {
     expect(screen.getByText(/I'm OoLu/)).toBeTruthy();
   });
 
+  it("quick starts send real commands with one tap", async () => {
+    routes["POST /v1/chat"] = {
+      status: 200,
+      body: { reply: "Your tasks:\n(none)", source: "tool", run_id: null },
+    };
+    render(<Chat />);
+
+    fireEvent.click(screen.getByRole("button", { name: "My tasks" }));
+
+    await screen.findByText(/Your tasks/);
+    const chat = calls.find((c) => c.path === "/v1/chat");
+    expect((chat?.body as { message: string }).message).toBe("my tasks");
+    // The thread has begun: the quick starts step aside.
+    expect(screen.queryByRole("button", { name: "My tasks" })).toBeNull();
+  });
+
+  it("dictation sends the final transcript; no mic without an engine", async () => {
+    // jsdom default: no engine, no button.
+    const { unmount } = render(<Chat />);
+    expect(screen.queryByLabelText("Speak to OoLu")).toBeNull();
+    unmount();
+
+    class FakeRecognition {
+      static last: FakeRecognition | null = null;
+      lang = "";
+      interimResults = false;
+      continuous = false;
+      onresult: ((e: unknown) => void) | null = null;
+      onend: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      start = vi.fn();
+      stop = vi.fn();
+      constructor() {
+        FakeRecognition.last = this;
+      }
+    }
+    (window as unknown as Record<string, unknown>).webkitSpeechRecognition = FakeRecognition;
+    routes["POST /v1/chat"] = {
+      status: 200,
+      body: { reply: "On it.", source: "intent", run_id: null },
+    };
+    routes["GET /v1/runs/r1"] = { status: 200, body: baseRun() };
+    try {
+      render(<Chat />);
+      fireEvent.click(screen.getByLabelText("Speak to OoLu"));
+      const rec = FakeRecognition.last!;
+      expect(rec.start).toHaveBeenCalled();
+
+      rec.onresult!({
+        resultIndex: 0,
+        results: [{ isFinal: true, 0: { transcript: "email bob the numbers" } }],
+      });
+
+      expect(await screen.findByText("On it.")).toBeTruthy();
+      const chat = calls.find((c) => c.path === "/v1/chat");
+      expect((chat?.body as { message: string }).message).toBe(
+        "email bob the numbers",
+      );
+    } finally {
+      delete (window as unknown as Record<string, unknown>).webkitSpeechRecognition;
+    }
+  });
+
+  it("speaks replies aloud when the voice toggle is on", async () => {
+    const speakSpy = vi.fn();
+    vi.stubGlobal("speechSynthesis", { cancel: vi.fn(), speak: speakSpy });
+    vi.stubGlobal(
+      "SpeechSynthesisUtterance",
+      class {
+        rate = 1;
+        constructor(public text: string) {}
+      },
+    );
+    routes["POST /v1/chat"] = {
+      status: 200,
+      body: { reply: "Anytime.", source: "rule", run_id: null },
+    };
+    render(<Chat />);
+
+    fireEvent.click(screen.getByLabelText("Speak replies aloud"));
+    fireEvent.change(screen.getByPlaceholderText("Message OoLu…"), {
+      target: { value: "thanks" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await screen.findByText("Anytime.");
+    expect(
+      (speakSpy.mock.calls[0][0] as { text: string }).text,
+    ).toBe("Anytime.");
+    expect(localStorage.getItem("oolu_voice_out")).toBe("on");
+  });
+
   it("sends a message with history and renders both sides", async () => {
     routes["POST /v1/chat"] = {
       status: 200,

@@ -3,6 +3,13 @@ import { api, TERMINAL_PHASES } from "../api";
 import type { ChatAction } from "../api";
 import { humanizeEvent, statusSentence } from "../humanize";
 import type { TaskView, TimelineEvent } from "../types";
+import {
+  createRecognizer,
+  speak,
+  speechInputSupported,
+  speechOutputSupported,
+} from "../voice";
+import type { Recognizer } from "../voice";
 import { Clarification } from "./Clarification";
 
 // The whole product face: one conversation with OoLu. Work the assistant
@@ -15,7 +22,18 @@ type Msg =
   | { kind: "run"; runId: string };
 
 const CHAT_KEY = "oolu_chat";
+const SPEAK_KEY = "oolu_voice_out";
 const WELCOME = "Hi! I'm OoLu. Tell me what you need done.";
+
+// Quick starts: one tap into the real command surface — each maps to a
+// deterministic command or a rule the assistant already answers.
+const QUICK_STARTS: { label: string; message: string }[] = [
+  { label: "What can you do?", message: "what can you do" },
+  { label: "My tasks", message: "my tasks" },
+  { label: "My files", message: "list files" },
+  { label: "My nodes", message: "my nodes" },
+  { label: "My settings", message: "settings" },
+];
 
 function loadThread(): Msg[] {
   try {
@@ -31,15 +49,22 @@ export function Chat() {
   const [thread, setThread] = useState<Msg[]>(loadThread);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [speakReplies, setSpeakReplies] = useState(
+    localStorage.getItem(SPEAK_KEY) === "on",
+  );
   const endRef = useRef<HTMLDivElement>(null);
+  const recognizerRef = useRef<Recognizer | null>(null);
+  const speakRef = useRef(speakReplies);
+  speakRef.current = speakReplies;
 
   useEffect(() => {
     localStorage.setItem(CHAT_KEY, JSON.stringify(thread));
     endRef.current?.scrollIntoView?.({ block: "end" });
   }, [thread]);
 
-  async function send() {
-    const text = draft.trim();
+  async function send(message?: string) {
+    const text = (message ?? draft).trim();
     if (!text || busy) return;
     setDraft("");
     setBusy(true);
@@ -53,6 +78,7 @@ export function Chat() {
           content: m.text,
         }));
       const turn = await api.chat(text, history);
+      if (speakRef.current) speak(turn.reply);
       setThread((t) => {
         const next: Msg[] = [
           ...t,
@@ -74,10 +100,46 @@ export function Chat() {
     }
   }
 
+  function toggleListening() {
+    if (listening) {
+      recognizerRef.current?.stop();
+      setListening(false);
+      return;
+    }
+    // A fresh recognizer per press: dictation ends on the final result.
+    recognizerRef.current = createRecognizer({
+      onFinal: (text) => {
+        setListening(false);
+        void send(text);
+      },
+      onInterim: (text) => setDraft(text),
+      onEnd: () => setListening(false),
+    });
+    if (recognizerRef.current) {
+      setListening(true);
+      recognizerRef.current.start();
+    }
+  }
+
   return (
     <div className="chat">
       <div className="chat-thread">
-        {thread.length === 0 && <div className="bubble assistant">{WELCOME}</div>}
+        {thread.length === 0 && (
+          <>
+            <div className="bubble assistant">{WELCOME}</div>
+            <div className="quickstarts">
+              {QUICK_STARTS.map((q) => (
+                <button
+                  key={q.label}
+                  className="quickstart"
+                  onClick={() => void send(q.message)}
+                >
+                  {q.label}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
         {thread.map((m, i) =>
           m.kind === "run" ? (
             <RunCard key={m.runId} runId={m.runId} />
@@ -99,8 +161,18 @@ export function Chat() {
         <div ref={endRef} />
       </div>
       <div className="chat-composer">
+        {speechInputSupported() && (
+          <button
+            className={`mic ${listening ? "listening" : ""}`}
+            title={listening ? "Stop listening" : "Speak to OoLu"}
+            aria-label={listening ? "Stop listening" : "Speak to OoLu"}
+            onClick={toggleListening}
+          >
+            {listening ? "◉" : "🎤"}
+          </button>
+        )}
         <textarea
-          placeholder="Message OoLu…"
+          placeholder={listening ? "Listening…" : "Message OoLu…"}
           value={draft}
           rows={2}
           onChange={(e) => setDraft(e.target.value)}
@@ -111,6 +183,22 @@ export function Chat() {
             }
           }}
         />
+        {speechOutputSupported() && (
+          <button
+            className="mic"
+            title={speakReplies ? "Stop speaking replies" : "Speak replies aloud"}
+            aria-label={
+              speakReplies ? "Stop speaking replies" : "Speak replies aloud"
+            }
+            onClick={() => {
+              const next = !speakReplies;
+              setSpeakReplies(next);
+              localStorage.setItem(SPEAK_KEY, next ? "on" : "off");
+            }}
+          >
+            {speakReplies ? "🔊" : "🔇"}
+          </button>
+        )}
         <button disabled={busy || !draft.trim()} onClick={() => void send()}>
           {busy ? "…" : "Send"}
         </button>
