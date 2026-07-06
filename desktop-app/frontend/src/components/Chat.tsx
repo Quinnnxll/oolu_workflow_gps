@@ -3,7 +3,16 @@ import { api, TERMINAL_PHASES } from "../api";
 import type { ChatAction } from "../api";
 import { humanizeEvent, statusSentence } from "../humanize";
 import type { TaskView, TimelineEvent } from "../types";
-import { deriveTone, deriveUserMood, updateAvatarSignals } from "../avatar";
+import {
+  currentAvatarSignals,
+  deriveTone,
+  deriveUserMood,
+  moodOf,
+  onAvatarSignals,
+  updateAvatarSignals,
+} from "../avatar";
+import type { Mood } from "../avatar";
+import { OoLuAvatar } from "./OoLuAvatar";
 import {
   createRecognizer,
   speak,
@@ -25,6 +34,16 @@ type Msg =
 const CHAT_KEY = "oolu_chat";
 const SPEAK_KEY = "oolu_voice_out";
 const WELCOME = "Hi! I'm OoLu. Tell me what you need done.";
+
+// The presence line under the name — what the companion is up to,
+// phrased like a friend's status, not a system state.
+const MOOD_LINE: Record<Mood, string> = {
+  calm: "with you",
+  happy: "pleased with how that went",
+  thinking: "busy with your tasks",
+  worried: "sorting out a problem",
+  excited: "all ears",
+};
 
 // Quick starts: one tap into the real command surface — each maps to a
 // deterministic command or a rule the assistant already answers.
@@ -58,6 +77,11 @@ export function Chat() {
   const recognizerRef = useRef<Recognizer | null>(null);
   const speakRef = useRef(speakReplies);
   speakRef.current = speakReplies;
+  // The companion lives here, at the head of the conversation.
+  const [mood, setMood] = useState<Mood>(
+    () => moodOf(currentAvatarSignals()).mood,
+  );
+  useEffect(() => onAvatarSignals((s) => setMood(moodOf(s).mood)), []);
 
   useEffect(() => {
     localStorage.setItem(CHAT_KEY, JSON.stringify(thread));
@@ -137,6 +161,13 @@ export function Chat() {
 
   return (
     <div className="chat">
+      <div className="chat-head">
+        <OoLuAvatar size={64} />
+        <div className="chat-head-body">
+          <div className="chat-head-name">OoLu</div>
+          <div className="chat-head-sub">{MOOD_LINE[mood]}</div>
+        </div>
+      </div>
       <div className="chat-thread">
         {thread.length === 0 && (
           <>

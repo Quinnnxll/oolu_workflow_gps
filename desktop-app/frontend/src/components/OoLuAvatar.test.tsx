@@ -38,7 +38,8 @@ describe("OoLuAvatar", () => {
 
   it("takes more room than an ordinary account picture by default", () => {
     const { container } = render(<OoLuAvatar />);
-    // Ordinary sidebar avatars are 34px; the companion gets 56.
+    // Ordinary account avatars are 34px; the companion defaults to 56
+    // (the chat head, where it lives, asks for 64).
     expect(container.querySelector("svg")!.getAttribute("width")).toBe("56");
   });
 });

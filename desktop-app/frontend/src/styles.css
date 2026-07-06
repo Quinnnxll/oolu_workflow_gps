@@ -536,14 +536,24 @@ main.chat-main {
   font-size: 12px;
 }
 
-/* ---- the living OoLu avatar ---- */
-.convo-avatar-live {
-  width: 56px;
-  height: 56px;
-  flex-shrink: 0;
+/* ---- the living OoLu avatar, at the head of the conversation ---- */
+.chat-head {
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+
+.chat-head-name {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.chat-head-sub {
+  color: var(--muted);
+  font-size: 12.5px;
 }
 
 .oolu-avatar {

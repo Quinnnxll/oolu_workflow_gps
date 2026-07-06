@@ -4,7 +4,6 @@ import { identityHue, updateAvatarSignals } from "../avatar";
 import type { RunSummary, TimelineEvent } from "../types";
 import { Chat } from "./Chat";
 import { FilesPane } from "./FilesPane";
-import { OoLuAvatar } from "./OoLuAvatar";
 import { SettingsPane } from "./SettingsPane";
 import { Work } from "./Work";
 
@@ -61,9 +60,7 @@ export function Life() {
           className={`convo ${selected.kind === "oolu" ? "on" : ""}`}
           onClick={() => setSelected({ kind: "oolu" })}
         >
-          <span className="convo-avatar-live">
-            <OoLuAvatar size={56} />
-          </span>
+          <span className="convo-avatar oolu">O</span>
           <span className="convo-body">
             <span className="convo-name">OoLu</span>
             <span className="convo-sub">your assistant</span>

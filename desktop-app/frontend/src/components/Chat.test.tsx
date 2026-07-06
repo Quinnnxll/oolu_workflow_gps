@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { resetAvatarSignals } from "../avatar";
 import { Chat, RunCard } from "./Chat";
 
 // Route table keyed by "METHOD /path"; the chat talks to the same gateway
@@ -34,6 +35,7 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   delete window.__OOLU_API__;
+  resetAvatarSignals();
 });
 
 function baseRun(overrides: Record<string, unknown> = {}) {
@@ -53,6 +55,30 @@ describe("Chat", () => {
   it("shows a welcome bubble on an empty thread", () => {
     render(<Chat />);
     expect(screen.getByText(/I'm OoLu/)).toBeTruthy();
+  });
+
+  it("hosts the living avatar at the head of the conversation", async () => {
+    routes["POST /v1/chat"] = {
+      status: 200,
+      body: { reply: "It didn't work.", source: "intent", run_id: null },
+    };
+    const { container } = render(<Chat />);
+
+    // The companion and its presence line live in the chat window.
+    const head = container.querySelector(".chat-head")!;
+    expect(head.querySelector("svg.oolu-avatar")).toBeTruthy();
+    expect(screen.getByText("with you")).toBeTruthy();
+
+    // A bad turn shows on its face — and in the presence line.
+    fireEvent.change(screen.getByPlaceholderText("Message OoLu…"), {
+      target: { value: "convert the report" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText("sorting out a problem")).toBeTruthy();
+    expect(
+      head.querySelector("svg.oolu-avatar")!.getAttribute("data-mood"),
+    ).toBe("worried");
   });
 
   it("quick starts send real commands with one tap", async () => {
