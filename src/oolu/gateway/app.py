@@ -29,7 +29,7 @@ from ..billing import (
     PayoutStatus,
     PayoutStore,
 )
-from ..chat import ChatAssistant
+from ..chat import ChatAssistant, FileChatTools
 from ..durable.files import FileTooLargeError, UserFile, UserFileStore
 from ..durable.idempotency import IdempotencyLedger
 from ..durable.service import DurableWorkflowService
@@ -503,10 +503,17 @@ class GatewayApp:
         history = body.get("history") or []
         if not isinstance(history, list):
             raise GatewayError(400, "invalid_request", "history must be a list")
+        # The assistant's hands: the caller's own files, tenant-bound.
+        tools = (
+            FileChatTools(self._files, tenant=session.tenant_id)
+            if self._files is not None
+            else None
+        )
         turn = self._chat.respond(
             message,
             history=[h for h in history if isinstance(h, dict)][-20:],
             sender=session.principal_id,
+            tools=tools,
         )
         run = None
         if turn.task:
@@ -517,6 +524,7 @@ class GatewayApp:
             {
                 "reply": turn.say,
                 "source": turn.source,
+                "actions": turn.actions,
                 "run_id": run["run_id"] if run else None,
                 "run": run,
             },

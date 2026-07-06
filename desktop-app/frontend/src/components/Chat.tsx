@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, TERMINAL_PHASES } from "../api";
+import type { ChatAction } from "../api";
 import { humanizeEvent, statusSentence } from "../humanize";
 import type { TaskView, TimelineEvent } from "../types";
 import { Clarification } from "./Clarification";
@@ -10,7 +11,7 @@ import { Clarification } from "./Clarification";
 
 type Msg =
   | { kind: "user"; text: string }
-  | { kind: "assistant"; text: string }
+  | { kind: "assistant"; text: string; actions?: ChatAction[] }
   | { kind: "run"; runId: string };
 
 const CHAT_KEY = "oolu_chat";
@@ -53,7 +54,10 @@ export function Chat() {
         }));
       const turn = await api.chat(text, history);
       setThread((t) => {
-        const next: Msg[] = [...t, { kind: "assistant", text: turn.reply }];
+        const next: Msg[] = [
+          ...t,
+          { kind: "assistant", text: turn.reply, actions: turn.actions },
+        ];
         if (turn.run_id) next.push({ kind: "run", runId: turn.run_id });
         return next;
       });
@@ -80,6 +84,15 @@ export function Chat() {
           ) : (
             <div key={i} className={`bubble ${m.kind}`}>
               {m.text}
+              {m.kind === "assistant" && m.actions && m.actions.length > 0 && (
+                <div className="tool-chips">
+                  {m.actions.map((a, j) => (
+                    <span key={j} className="tool-chip">
+                      {actionLabel(a)}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           ),
         )}
@@ -252,6 +265,14 @@ export function RunCard({ runId }: { runId: string }) {
       )}
     </div>
   );
+}
+
+// The chip's verb: what the assistant actually touched this turn.
+function actionLabel(action: ChatAction): string {
+  if (action.tool === "list_files") return "listed your files";
+  if (action.tool === "read_file") return `read ${action.name ?? "a file"}`;
+  if (action.tool === "write_file") return `updated ${action.name ?? "a file"}`;
+  return action.tool;
 }
 
 function statusLabel(task: TaskView): string {

@@ -271,9 +271,17 @@ async function mutateRun(
   return composeTask(await req<RunDict>(method, path, body));
 }
 
+// A tool the assistant used during the turn — shown as a chip so the user
+// can verify what was touched.
+export interface ChatAction {
+  tool: string;
+  name?: string;
+}
+
 export interface ChatTurnReply {
   reply: string;
   source: string;
+  actions?: ChatAction[];
   run_id: string | null;
 }
 

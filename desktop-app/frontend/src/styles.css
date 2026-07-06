@@ -536,6 +536,22 @@ main.chat-main {
   font-size: 12px;
 }
 
+/* ---- tool chips: what the assistant touched this turn ---- */
+.tool-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.tool-chip {
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 1px 8px;
+}
+
 /* ---- run cards: the assistant's voice + the verifiable record ---- */
 .run-voice {
   font-size: 13px;

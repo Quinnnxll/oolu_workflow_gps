@@ -73,6 +73,27 @@ describe("Chat", () => {
     expect(chat?.body).toEqual({ message: "thanks", history: [] });
   });
 
+  it("shows what the assistant touched as tool chips", async () => {
+    routes["POST /v1/chat"] = {
+      status: 200,
+      body: {
+        reply: "notes.md:\nship on friday",
+        source: "tool",
+        actions: [{ tool: "read_file", name: "notes.md" }],
+        run_id: null,
+      },
+    };
+    render(<Chat />);
+
+    fireEvent.change(screen.getByPlaceholderText("Message OoLu…"), {
+      target: { value: "read notes.md" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText("read notes.md", { selector: ".tool-chip" })).toBeTruthy();
+    expect(screen.getByText(/ship on friday/)).toBeTruthy();
+  });
+
   it("folds a work turn into the thread as a live run card", async () => {
     routes["POST /v1/chat"] = {
       status: 200,
