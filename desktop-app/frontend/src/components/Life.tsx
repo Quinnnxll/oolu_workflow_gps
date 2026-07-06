@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
+import type { FileMeta } from "../api";
 import type { RunSummary, TimelineEvent } from "../types";
 import { Chat } from "./Chat";
+import { FileView } from "./FileView";
 import { Work } from "./Work";
 
 // The Life environment: a messenger. The left pane lists who you can talk
@@ -13,12 +15,14 @@ import { Work } from "./Work";
 type Selection =
   | { kind: "oolu" }
   | { kind: "friends" }
-  | { kind: "noder"; run: RunSummary };
+  | { kind: "noder"; run: RunSummary }
+  | { kind: "file"; id: string };
 
 export function Life() {
   const [mode, setMode] = useState<"life" | "work">("life");
   const [selected, setSelected] = useState<Selection>({ kind: "oolu" });
   const [runs, setRuns] = useState<RunSummary[]>([]);
+  const [files, setFiles] = useState<FileMeta[]>([]);
 
   const refreshRuns = useCallback(async () => {
     try {
@@ -28,11 +32,23 @@ export function Life() {
     }
   }, []);
 
+  const refreshFiles = useCallback(async () => {
+    try {
+      setFiles((await api.files()).items ?? []);
+    } catch {
+      setFiles([]);
+    }
+  }, []);
+
   useEffect(() => {
     void refreshRuns();
-    const t = setInterval(refreshRuns, 5000);
+    void refreshFiles();
+    const t = setInterval(() => {
+      void refreshRuns();
+      void refreshFiles();
+    }, 5000);
     return () => clearInterval(t);
-  }, [refreshRuns]);
+  }, [refreshRuns, refreshFiles]);
 
   if (mode === "work") {
     return <Work onLife={() => setMode("life")} />;
@@ -56,6 +72,44 @@ export function Life() {
             <span className="convo-sub">your assistant</span>
           </span>
         </button>
+
+        <div className="work-head">
+          <span className="convo-group">Files</span>
+          <button
+            className="add-node"
+            title="New document"
+            onClick={async () => {
+              const doc = await api.createFile("untitled.md");
+              await refreshFiles();
+              setSelected({ kind: "file", id: doc.file_id });
+            }}
+          >
+            +
+          </button>
+        </div>
+        {files.length === 0 && (
+          <div className="convo-empty">Documents and sheets appear here.</div>
+        )}
+        {files.map((f) => (
+          <button
+            key={f.file_id}
+            className={`convo ${
+              selected.kind === "file" && selected.id === f.file_id ? "on" : ""
+            }`}
+            onClick={() => setSelected({ kind: "file", id: f.file_id })}
+          >
+            <span className="convo-avatar file">
+              {/\.(csv|tsv)$/i.test(f.name) ? "▤" : "≡"}
+            </span>
+            <span className="convo-body">
+              <span className="convo-name">{f.name}</span>
+              <span className="convo-sub">
+                {/\.(csv|tsv)$/i.test(f.name) ? "sheet" : "document"} ·{" "}
+                {(f.size / 1024).toFixed(1)} kB
+              </span>
+            </span>
+          </button>
+        ))}
 
         <div className="convo-group">Friends</div>
         <button
@@ -104,6 +158,17 @@ export function Life() {
             key={selected.run.run_id}
             run={selected.run}
             onRunAgain={refreshRuns}
+          />
+        )}
+        {selected.kind === "file" && (
+          <FileView
+            key={selected.id}
+            fileId={selected.id}
+            onChanged={refreshFiles}
+            onDeleted={() => {
+              void refreshFiles();
+              setSelected({ kind: "oolu" });
+            }}
           />
         )}
       </section>

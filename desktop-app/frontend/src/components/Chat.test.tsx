@@ -159,6 +159,30 @@ describe("RunCard", () => {
     expect(screen.getByText(/"sent": true/)).toBeTruthy();
   });
 
+  it("reveals the humanized record behind 'what I did'", async () => {
+    routes["GET /v1/runs/r1"] = {
+      status: 200,
+      body: baseRun({ phase: "completed" }),
+    };
+    routes["GET /v1/runs/r1/audit"] = {
+      status: 200,
+      body: {
+        entries: [
+          { at: "2026-07-06T10:00:00Z", event_type: "workflow.started", seq: 1 },
+          { at: "2026-07-06T10:00:05Z", event_type: "workflow.completed", seq: 2 },
+        ],
+      },
+    };
+    render(<RunCard runId="r1" />);
+    await screen.findByText("done");
+    expect(screen.getByText(/verified result/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "what I did" }));
+
+    expect(await screen.findByText("Started working")).toBeTruthy();
+    expect(screen.getByText("Finished the job")).toBeTruthy();
+  });
+
   it("surfaces a failure honestly", async () => {
     routes["GET /v1/runs/r1"] = {
       status: 200,

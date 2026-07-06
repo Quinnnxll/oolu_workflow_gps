@@ -87,6 +87,15 @@ def build_openapi() -> dict:
             "post": op("Connect a provider (requires providers:manage)"),
         },
         "/v1/metrics": {"get": op("Operational metrics")},
+        "/v1/files": {
+            "get": op("List the caller's files (documents and sheets)"),
+            "post": op("Create a file in the durable database"),
+        },
+        "/v1/files/{file_id}": {
+            "get": op("Read a file, content included"),
+            "put": op("Edit a file's name and/or content"),
+            "delete": op("Delete a file"),
+        },
         "/v1/work/nodes": {
             "get": op(
                 "The Work environment's node account list: every node the "

@@ -30,6 +30,7 @@ from ..billing import (
     PayoutStore,
 )
 from ..chat import ChatAssistant
+from ..durable.files import FileTooLargeError, UserFile, UserFileStore
 from ..durable.idempotency import IdempotencyLedger
 from ..durable.service import DurableWorkflowService
 from ..identity.errors import AuthenticationError, AuthorizationError
@@ -161,6 +162,17 @@ class _TokenBucket:
         return True
 
 
+def _media_type_for(name: str) -> str:
+    lowered = name.lower()
+    if lowered.endswith((".csv", ".tsv")):
+        return "text/csv"
+    if lowered.endswith(".json"):
+        return "application/json"
+    if lowered.endswith(".txt"):
+        return "text/plain"
+    return "text/markdown"
+
+
 class GatewayApp:
     def __init__(
         self,
@@ -190,6 +202,7 @@ class GatewayApp:
         webhook_verifier: WebhookVerifier | None = None,
         accounts=None,  # identity.LocalAccountService: local multi-user login
         desk: WorkDesk | None = None,  # the Work environment's node desk
+        files: UserFileStore | None = None,  # user documents/sheets
         chat: ChatAssistant | None = None,  # the /v1/chat assistant; a
         # model-less default keeps the conversational surface working
         value_patcher=None,  # orchestrator.ValuePatcher: fills creative inputs
@@ -243,6 +256,7 @@ class GatewayApp:
         # IdP keep a 404 there and lose nothing.
         self._accounts = accounts
         self._desk = desk
+        self._files = files
         # The chat surface is the product face; it must work on every
         # install, so a missing assistant degrades to the model-less
         # default (rules + message-as-intent), never to a 404.
@@ -410,6 +424,11 @@ class GatewayApp:
         r.add("GET", "/v1/metrics", self._metrics_endpoint)
         r.add("GET", "/v1/worker-health", self._worker_health)
         r.add("GET", "/v1/nodeplace", self._list_own_nodes)
+        r.add("GET", "/v1/files", self._files_list)
+        r.add("POST", "/v1/files", self._files_create)
+        r.add("GET", "/v1/files/{file_id}", self._files_get)
+        r.add("PUT", "/v1/files/{file_id}", self._files_update)
+        r.add("DELETE", "/v1/files/{file_id}", self._files_delete)
         r.add("GET", "/v1/work/nodes", self._work_nodes)
         r.add("POST", "/v1/work/nodes/{node_id}/account", self._work_account)
         r.add("GET", "/v1/work/nodes/{node_id}/activity", self._work_activity)
@@ -922,6 +941,94 @@ class GatewayApp:
                 "visibility": result.node.visibility.value,
             },
         )
+
+    # ------------------------------------------------------------------ #
+    # User files: documents and sheets in the durable database.           #
+    # ------------------------------------------------------------------ #
+    def _require_files(self) -> UserFileStore:
+        if self._files is None:
+            raise GatewayError(404, "not_found", "user files are not enabled")
+        return self._files
+
+    @staticmethod
+    def _file_meta(file: UserFile) -> dict:
+        return {
+            "file_id": file.file_id,
+            "name": file.name,
+            "media_type": file.media_type,
+            "size": file.size,
+            "created_at": file.created_at.isoformat(),
+            "updated_at": file.updated_at.isoformat(),
+        }
+
+    def _files_list(self, request, session, params) -> Response:
+        store = self._require_files()
+        return json_response(
+            200,
+            {"items": [self._file_meta(f) for f in store.list(tenant=session.tenant_id)]},
+        )
+
+    def _files_create(self, request, session, params) -> Response:
+        store = self._require_files()
+        body = request.body or {}
+        name = body.get("name")
+        if not name or not isinstance(name, str):
+            raise GatewayError(400, "invalid_request", "name is required")
+        file = UserFile(
+            tenant_id=session.tenant_id,
+            name=name.strip(),
+            media_type=str(body.get("media_type") or _media_type_for(name)),
+            content=str(body.get("content") or ""),
+        )
+        try:
+            store.save(file)
+        except FileTooLargeError as exc:
+            raise GatewayError(413, "too_large", str(exc)) from exc
+        return json_response(
+            201, {**self._file_meta(file), "content": file.content}
+        )
+
+    def _load_file(self, params, session) -> UserFile:
+        store = self._require_files()
+        file = store.get(params["file_id"], tenant=session.tenant_id)
+        if file is None:
+            raise GatewayError(404, "not_found", "no such file")
+        return file
+
+    def _files_get(self, request, session, params) -> Response:
+        file = self._load_file(params, session)
+        return json_response(200, {**self._file_meta(file), "content": file.content})
+
+    def _files_update(self, request, session, params) -> Response:
+        store = self._require_files()
+        file = self._load_file(params, session)
+        body = request.body or {}
+        updated = file.model_copy(
+            update={
+                "name": (
+                    str(body["name"]).strip() if body.get("name") else file.name
+                ),
+                "content": (
+                    str(body["content"])
+                    if "content" in body and body["content"] is not None
+                    else file.content
+                ),
+                "updated_at": request.now or self._clock(),
+            }
+        )
+        try:
+            store.save(updated)
+        except FileTooLargeError as exc:
+            raise GatewayError(413, "too_large", str(exc)) from exc
+        return json_response(
+            200, {**self._file_meta(updated), "content": updated.content}
+        )
+
+    def _files_delete(self, request, session, params) -> Response:
+        store = self._require_files()
+        self._load_file(params, session)
+        store.delete(params["file_id"], tenant=session.tenant_id)
+        return json_response(200, {"deleted": True})
 
     def _require_desk(self) -> WorkDesk:
         if self._desk is None:

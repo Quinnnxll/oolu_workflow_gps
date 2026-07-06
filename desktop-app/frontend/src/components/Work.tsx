@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api } from "../api";
 import type { HoldItem, NodeRunSteps, WorkNode } from "../api";
+import { humanizeEvent } from "../humanize";
 
 // The Work environment: where a noder manages and observes their nodes.
 // Same messenger architecture as Life — the list is node accounts (name,
@@ -369,9 +370,9 @@ export function NodeThread({
               <span className="muted">{money(Math.round(run.gross * 1e6))}</span>
             </div>
             {run.steps.map((s) => (
-              <div key={s.seq} className="log-line">
+              <div key={s.seq} className="log-line" title={s.event_type}>
                 <span className="log-at">{s.at}</span>
-                <span className="log-label">{s.event_type}</span>
+                <span className="log-label">{humanizeEvent(s.event_type)}</span>
               </div>
             ))}
           </div>

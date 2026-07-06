@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, TERMINAL_PHASES } from "../api";
-import type { TaskView } from "../types";
+import { humanizeEvent, statusSentence } from "../humanize";
+import type { TaskView, TimelineEvent } from "../types";
 import { Clarification } from "./Clarification";
 
 // The whole product face: one conversation with OoLu. Work the assistant
@@ -110,6 +111,8 @@ export function Chat() {
 export function RunCard({ runId }: { runId: string }) {
   const [task, setTask] = useState<TaskView | null>(null);
   const [gone, setGone] = useState(false);
+  const [steps, setSteps] = useState<TimelineEvent[] | null>(null);
+  const [showSteps, setShowSteps] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -117,6 +120,14 @@ export function RunCard({ runId }: { runId: string }) {
     } catch {
       // A vanished run (host wiped, other device) shouldn't wedge the chat.
       setGone(true);
+    }
+  }, [runId]);
+
+  const refreshSteps = useCallback(async () => {
+    try {
+      setSteps((await api.timeline(runId)).items);
+    } catch {
+      setSteps([]);
     }
   }, [runId]);
 
@@ -128,9 +139,12 @@ export function RunCard({ runId }: { runId: string }) {
 
   useEffect(() => {
     if (terminal || gone) return;
-    const t = setInterval(() => void refresh(), 2500);
+    const t = setInterval(() => {
+      void refresh();
+      if (showSteps) void refreshSteps();
+    }, 2500);
     return () => clearInterval(t);
-  }, [terminal, gone, refresh]);
+  }, [terminal, gone, refresh, refreshSteps, showSteps]);
 
   if (gone) {
     return <div className="run-card muted">This task is no longer available.</div>;
@@ -147,6 +161,7 @@ export function RunCard({ runId }: { runId: string }) {
           {statusLabel(task)}
         </span>
       </div>
+      <div className="run-voice">{statusSentence(task)}</div>
 
       {task.awaiting === "clarification" && (
         <Clarification task={task} onResolved={setTask} />
@@ -197,13 +212,43 @@ export function RunCard({ runId }: { runId: string }) {
         <pre className="result">{JSON.stringify(task.result, null, 2)}</pre>
       )}
 
-      {task.can_cancel && !terminal && (
+      <div className="run-card-foot">
         <button
           className="linklike"
-          onClick={async () => setTask(await api.cancel(task.run_id))}
+          onClick={() => {
+            const next = !showSteps;
+            setShowSteps(next);
+            if (next && steps === null) void refreshSteps();
+          }}
         >
-          cancel
+          {showSteps ? "hide what I did" : "what I did"}
         </button>
+        {task.can_cancel && !terminal && (
+          <button
+            className="linklike"
+            onClick={async () => setTask(await api.cancel(task.run_id))}
+          >
+            cancel
+          </button>
+        )}
+      </div>
+
+      {showSteps && (
+        <div className="run-steps">
+          {steps === null && <div className="muted">Fetching the record…</div>}
+          {steps !== null && steps.length === 0 && (
+            <div className="muted">Nothing recorded yet.</div>
+          )}
+          {steps?.map((s, i) => (
+            <div key={i} className="run-step" title={s.label}>
+              <span className="run-step-dot">•</span>
+              <span>{humanizeEvent(s.label)}</span>
+              <span className="run-step-at">
+                {new Date(s.at).toLocaleTimeString()}
+              </span>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );

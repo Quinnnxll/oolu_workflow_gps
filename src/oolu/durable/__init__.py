@@ -14,6 +14,7 @@ from .connection import (
     DURABLE_SCHEMA_VERSION,
     DurableConnection,
 )
+from .files import FileTooLargeError, UserFile, UserFileStore
 from .idempotency import IdempotencyLedger
 from .maintenance import backup, delete_workflow, prune_retention, restore
 from .outbox import OutboxMessage, OutboxStatus, TransactionalOutbox
@@ -28,6 +29,9 @@ __all__ = [
     "DurableAuditLog",
     "DurableConnection",
     "DurableRecordStore",
+    "FileTooLargeError",
+    "UserFile",
+    "UserFileStore",
     "DurableRunStateStore",
     "DurableTaskQueue",
     "DurableWorkflowService",

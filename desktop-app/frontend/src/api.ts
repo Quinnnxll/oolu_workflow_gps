@@ -277,6 +277,20 @@ export interface ChatTurnReply {
   run_id: string | null;
 }
 
+// ---- user file wire shapes (GET /v1/files et al.) -------------------------
+export interface FileMeta {
+  file_id: string;
+  name: string;
+  media_type: string;
+  size: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FileDoc extends FileMeta {
+  content: string;
+}
+
 // ---- Work environment wire shapes (GET /v1/work/nodes et al.) ------------
 export interface NodeAccountView {
   node_id: string;
@@ -383,6 +397,15 @@ export const api = {
     }));
     return { items: items.reverse() };
   },
+  // ---- user files: documents and sheets in the durable database --------
+  files: () => req<{ items: FileMeta[] }>("GET", "/v1/files"),
+  file: (id: string) => req<FileDoc>("GET", `/v1/files/${id}`),
+  createFile: (name: string, content = "") =>
+    req<FileDoc>("POST", "/v1/files", { name, content }),
+  saveFile: (id: string, patch: { name?: string; content?: string }) =>
+    req<FileDoc>("PUT", `/v1/files/${id}`, patch),
+  deleteFile: (id: string) =>
+    req<{ deleted: boolean }>("DELETE", `/v1/files/${id}`),
   // ---- the Work environment: node accounts and stewardship -------------
   workNodes: () => req<{ items: WorkNode[] }>("GET", "/v1/work/nodes"),
   workAccount: (nodeId: string, patch: Partial<NodeAccountPatch>) =>

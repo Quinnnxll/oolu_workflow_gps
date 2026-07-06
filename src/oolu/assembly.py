@@ -355,6 +355,7 @@ def build_host_runtime(
     data.mkdir(parents=True, exist_ok=True)
 
     # Imported lazily so shells without the gateway never pay for it.
+    from .durable.files import UserFileStore
     from .gateway import GatewayApp
     from .gateway.asgi import GatewayASGI
     from .identity import (
@@ -450,6 +451,7 @@ def build_host_runtime(
         contract_executors=executors,
         accounts=accounts,
         desk=desk,
+        files=UserFileStore(conn),
     )
     return HostRuntime(
         gateway=gateway,

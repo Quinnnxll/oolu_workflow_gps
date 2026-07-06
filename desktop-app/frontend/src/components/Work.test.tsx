@@ -154,8 +154,10 @@ describe("NodeThread", () => {
     };
     render(<NodeThread node={workNode()} onChanged={vi.fn()} />);
 
-    expect(await screen.findByText("workflow.started")).toBeTruthy();
-    expect(screen.getByText("workflow.executed")).toBeTruthy();
+    // Function words, not event codes — the raw type stays in the tooltip.
+    expect(await screen.findByText("Started working")).toBeTruthy();
+    expect(screen.getByText("Carried out the actions")).toBeTruthy();
+    expect(screen.getByTitle("workflow.executed")).toBeTruthy();
     expect(screen.getByText("run run12345")).toBeTruthy();
   });
 
