@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api } from "../api";
 import type { HoldItem, NodeRunSteps, WorkNode } from "../api";
+import { identityHue } from "../avatar";
 import { humanizeEvent } from "../humanize";
 import { FilesPane } from "./FilesPane";
 
@@ -65,7 +66,14 @@ export function Work({ onLife }: { onLife: () => void }) {
             className={`convo ${selected === n.node_id ? "on" : ""}`}
             onClick={() => setSelected(n.node_id)}
           >
-            <span className="convo-avatar node">
+            <span
+              className="convo-avatar node"
+              style={{
+                background: `hsl(${identityHue(n.title)} 45% 34%)`,
+                color: "#fff",
+                borderColor: "transparent",
+              }}
+            >
               {n.title.slice(0, 1).toUpperCase()}
             </span>
             <span className="convo-body">

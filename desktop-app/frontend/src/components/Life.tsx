@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import { api } from "../api";
+import { api, TERMINAL_PHASES } from "../api";
+import { identityHue, updateAvatarSignals } from "../avatar";
 import type { RunSummary, TimelineEvent } from "../types";
 import { Chat } from "./Chat";
 import { FilesPane } from "./FilesPane";
+import { OoLuAvatar } from "./OoLuAvatar";
 import { SettingsPane } from "./SettingsPane";
 import { Work } from "./Work";
 
@@ -26,7 +28,12 @@ export function Life() {
 
   const refreshRuns = useCallback(async () => {
     try {
-      setRuns((await api.runs()).items);
+      const items = (await api.runs()).items;
+      setRuns(items);
+      // The avatar carries the workload on its face.
+      updateAvatarSignals({
+        workload: items.filter((r) => !TERMINAL_PHASES.includes(r.phase)).length,
+      });
     } catch {
       setRuns([]);
     }
@@ -54,7 +61,9 @@ export function Life() {
           className={`convo ${selected.kind === "oolu" ? "on" : ""}`}
           onClick={() => setSelected({ kind: "oolu" })}
         >
-          <span className="convo-avatar oolu">O</span>
+          <span className="convo-avatar-live">
+            <OoLuAvatar size={56} />
+          </span>
           <span className="convo-body">
             <span className="convo-name">OoLu</span>
             <span className="convo-sub">your assistant</span>
@@ -108,7 +117,16 @@ export function Life() {
             }`}
             onClick={() => setSelected({ kind: "noder", run: r })}
           >
-            <span className="convo-avatar node">N</span>
+            <span
+              className="convo-avatar node"
+              style={{
+                background: `hsl(${identityHue(r.intent)} 45% 34%)`,
+                color: "#fff",
+                borderColor: "transparent",
+              }}
+            >
+              {r.intent.slice(0, 1).toUpperCase()}
+            </span>
             <span className="convo-body">
               <span className="convo-name">{r.intent}</span>
               <span className="convo-sub">{r.awaiting ?? r.phase}</span>

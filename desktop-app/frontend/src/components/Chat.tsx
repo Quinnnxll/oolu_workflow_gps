@@ -3,6 +3,7 @@ import { api, TERMINAL_PHASES } from "../api";
 import type { ChatAction } from "../api";
 import { humanizeEvent, statusSentence } from "../humanize";
 import type { TaskView, TimelineEvent } from "../types";
+import { deriveTone, deriveUserMood, updateAvatarSignals } from "../avatar";
 import {
   createRecognizer,
   speak,
@@ -68,6 +69,7 @@ export function Chat() {
     if (!text || busy) return;
     setDraft("");
     setBusy(true);
+    updateAvatarSignals({ userMood: deriveUserMood(text) });
     setThread((t) => [...t, { kind: "user", text }]);
     try {
       const history = thread
@@ -78,7 +80,14 @@ export function Chat() {
           content: m.text,
         }));
       const turn = await api.chat(text, history);
-      if (speakRef.current) speak(turn.reply);
+      updateAvatarSignals({ tone: deriveTone(turn.reply) });
+      if (speakRef.current) {
+        speak(turn.reply);
+        // The face mouths along for roughly as long as the reply lasts.
+        updateAvatarSignals({ speaking: true });
+        const ms = Math.min(8000, Math.max(1200, turn.reply.length * 55));
+        setTimeout(() => updateAvatarSignals({ speaking: false }), ms);
+      }
       setThread((t) => {
         const next: Msg[] = [
           ...t,
@@ -100,23 +109,28 @@ export function Chat() {
     }
   }
 
+  function setEars(open: boolean) {
+    setListening(open);
+    updateAvatarSignals({ listening: open });
+  }
+
   function toggleListening() {
     if (listening) {
       recognizerRef.current?.stop();
-      setListening(false);
+      setEars(false);
       return;
     }
     // A fresh recognizer per press: dictation ends on the final result.
     recognizerRef.current = createRecognizer({
       onFinal: (text) => {
-        setListening(false);
+        setEars(false);
         void send(text);
       },
       onInterim: (text) => setDraft(text),
-      onEnd: () => setListening(false),
+      onEnd: () => setEars(false),
     });
     if (recognizerRef.current) {
-      setListening(true);
+      setEars(true);
       recognizerRef.current.start();
     }
   }
