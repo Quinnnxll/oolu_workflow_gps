@@ -243,6 +243,16 @@ do not match. The local CLI adapter uses `shell=False`, but it is not an OS sand
 allow-listed commands must still be trusted. Untrusted execution belongs in the Docker or
 future restricted-worker composition.
 
+## Nodes vs. skills — and generating nodes
+
+A **skill** is an implementation (recorded actions, a synthesized script, a
+tool invocation); a **node** is the accountable citizen that wraps exactly
+one of them behind a typed contract, versions, an account, and economics.
+[docs/node-generation.md](docs/node-generation.md) is the canonical guide —
+written to be handed to the LLM that auto-builds missing nodes — covering
+the slot vocabulary that makes route finding work, the listing conventions
+search reads, body choice, lineage, and the safety/consent gates.
+
 ## Unified orchestrator
 
 `oolu.orchestrator` connects the vertical slices into one resumable
