@@ -376,8 +376,9 @@ def test_gateway_applies_configured_cors_origins(tmp_path):
 
 def test_oolu_host_passes_database_url_and_cors_to_runtime(monkeypatch, tmp_path):
     """`oolu host` forwards --database-url / --allow-origin to the runtime."""
-    import oolu.assembly as assembly
     import uvicorn
+
+    import oolu.assembly as assembly
 
     captured: dict = {}
 

@@ -17,10 +17,13 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from browser_harness import _AsgiHttpServer, _launch
-from playwright.sync_api import expect, sync_playwright
 
-from oolu.assembly import build_host_runtime
+pytest.importorskip("playwright.sync_api", reason="playwright not installed")
+
+from browser_harness import _AsgiHttpServer, _launch  # noqa: E402
+from playwright.sync_api import expect, sync_playwright  # noqa: E402
+
+from oolu.assembly import build_host_runtime  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 INDEX = ROOT / "src" / "oolu" / "gateway" / "frontend" / "index.html"

@@ -43,7 +43,9 @@ def test_alias_fallback():
     catalog = (ToolSpec("primary-missing-xyz", "x", ("x",), aliases=(real,)),)
     (tool,) = discover_tools(catalog)
     assert tool.name == "primary-missing-xyz"
-    assert Path(tool.path).stem.casefold() == real.casefold()
+    # Discovery canonicalizes (e.g. /bin/sh -> dash on Debian), so compare
+    # against the alias's own resolved path rather than its basename.
+    assert Path(tool.path) == Path(shutil.which(real)).resolve()
 
 
 def test_resolve_file_direct_and_nested(tmp_path):
