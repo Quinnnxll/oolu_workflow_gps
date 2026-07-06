@@ -87,6 +87,16 @@ def build_openapi() -> dict:
             "post": op("Connect a provider (requires providers:manage)"),
         },
         "/v1/metrics": {"get": op("Operational metrics")},
+        "/v1/settings": {
+            "get": op(
+                "The settings node: every declared setting with its bounds "
+                "and current value"
+            ),
+            "put": op(
+                "Apply setting changes through the declared catalog only "
+                "(unknown key or out-of-bounds value → 400)"
+            ),
+        },
         "/v1/files": {
             "get": op("List the caller's files (documents and sheets)"),
             "post": op("Create a file in the durable database"),

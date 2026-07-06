@@ -706,6 +706,76 @@ main.chat-main {
   font-size: 15px;
 }
 
+/* ---- the Settings node, rendered from its catalog ---- */
+.settings-pane {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  max-width: 640px;
+  width: 100%;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-group {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  margin-top: 6px;
+}
+
+.settings-group h3 {
+  margin: 0 0 4px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+}
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.setting-row:last-child {
+  border-bottom: 0;
+}
+
+.setting-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.setting-label > span:first-child {
+  font-size: 14px;
+}
+
+.setting-desc {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.setting-control select,
+.setting-control input[type="number"],
+.setting-control input[type="text"] {
+  width: 160px;
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+.setting-control input[type="checkbox"] {
+  width: auto;
+}
+
 /* ---- the Files account: a drawer of tiles ---- */
 .files-pane {
   display: flex;

@@ -27,6 +27,7 @@ from typing import Protocol, runtime_checkable
 
 from .durable.files import FileTooLargeError, UserFile, UserFileStore
 from .replies import DeterministicReplyEngine, MessageEnvelope, ReplyRule
+from .settings_node import SettingError
 
 # The model speaks JSON so "talk" and "work" stay machine-separable. `say`
 # is shown to the user; a non-null `task` is submitted to the engine as a
@@ -55,6 +56,8 @@ one, answer with EXACTLY one JSON object of the shape:
   {"tool": "list_runs", "args": {}}
   {"tool": "run_log", "args": {"run_id": "<a run id, or a phrase from its intent>"}}
   {"tool": "list_nodes", "args": {}}
+  {"tool": "get_settings", "args": {}}
+  {"tool": "set_setting", "args": {"key": "<a settings key>", "value": <the new value>}}
 The tool's result arrives as the next message; then answer the user with the
 {"say", "task"} shape. write_file replaces the whole file — read it first
 when editing. Touch only files the user asked about. To redo past work, set
@@ -221,6 +224,8 @@ class EngineTools(Protocol):
     def list_runs(self) -> list[dict]: ...
     def run_log(self, run_id: str) -> list[dict]: ...
     def list_nodes(self) -> list[dict]: ...
+    def get_settings(self) -> list[dict]: ...
+    def set_setting(self, key: str, value: object) -> str: ...
 
 
 class GatewayChatTools(FileChatTools):
@@ -239,12 +244,14 @@ class GatewayChatTools(FileChatTools):
         principal: str = "",
         durable=None,  # durable.DurableWorkflowService
         desk=None,  # nodeplace.WorkDesk
+        settings=None,  # settings_node.SettingsNode
     ):
         super().__init__(store, tenant=tenant)
         self._chat_tenant = tenant
         self._principal = principal
         self._durable = durable
         self._desk = desk
+        self._settings = settings
 
     def list_runs(self) -> list[dict]:
         if self._durable is None:
@@ -295,6 +302,22 @@ class GatewayChatTools(FileChatTools):
                 principal=self._principal, tenant=self._chat_tenant
             )
         ]
+
+    def get_settings(self) -> list[dict]:
+        if self._settings is None:
+            return []
+        return self._settings.describe(self._chat_tenant)
+
+    def set_setting(self, key: str, value: object) -> str:
+        """Apply one setting through the node's bounded door, or report why
+        it was refused — the assistant never gets a code path around it."""
+        if self._settings is None:
+            return "error: settings are not enabled"
+        try:
+            applied = self._settings.set(self._chat_tenant, key, value)
+        except SettingError as exc:
+            return f"error: {exc}"
+        return f"set {key} to {applied}"
 
 
 # The engine's events in the assistant's voice (compact, chat-sized; the
@@ -518,6 +541,10 @@ def _engine_command(text: str, tools: EngineTools) -> ChatTurn | None:
             source="tool",
         )
 
+    settings = _settings_command(text, tools)
+    if settings is not None:
+        return settings
+
     review = _REVIEW_RE.match(text)
     if review:
         matches = _resolve_run(tools.list_runs(), review.group(1))
@@ -534,6 +561,70 @@ def _engine_command(text: str, tools: EngineTools) -> ChatTurn | None:
             )
             return ChatTurn(say=f"Which one do you mean: {names}?", source="tool")
         # No matching run: the message is probably new work — fall through.
+    return None
+
+
+_SETTINGS_LIST_PHRASES = frozenset(
+    {"settings", "my settings", "show settings", "show my settings", "app settings"}
+)
+# "set <key> to <value>" / "set my <label> to <value>".
+_SET_RE = re.compile(r"^set\s+(?:my\s+)?(.+?)\s+to\s+(.+?)\s*$", re.I)
+
+
+def _match_setting(described: list[dict], phrase: str) -> list[dict]:
+    """A setting by key, or by a label/key substring — never a guess."""
+    wanted = phrase.strip().casefold()
+    exact = [s for s in described if s["key"].casefold() == wanted]
+    if exact:
+        return exact
+    return [
+        s
+        for s in described
+        if wanted in s["key"].casefold() or wanted in s["label"].casefold()
+    ]
+
+
+def _settings_command(text: str, tools: EngineTools) -> ChatTurn | None:
+    if not hasattr(tools, "get_settings"):
+        return None
+    lowered = text.casefold().rstrip(".!?")
+
+    if lowered in _SETTINGS_LIST_PHRASES:
+        described = tools.get_settings()
+        if not described:
+            return ChatTurn(say="Settings aren't available here.", source="tool")
+        lines = "\n".join(f"• {s['label']}: {s['value']}" for s in described)
+        return ChatTurn(
+            say=f"Your settings:\n{lines}",
+            source="tool",
+            actions=[{"tool": "get_settings"}],
+        )
+
+    setter = _SET_RE.match(text)
+    if setter:
+        described = tools.get_settings()
+        if not described:
+            return None
+        matches = _match_setting(described, setter.group(1))
+        if len(matches) == 1:
+            key = matches[0]["key"]
+            result = tools.set_setting(key, setter.group(2).strip())
+            if result.startswith("error:"):
+                return ChatTurn(
+                    say=f"I couldn't: {result[7:].strip()}", source="tool"
+                )
+            return ChatTurn(
+                say=f"Done — {matches[0]['label']} is now"
+                f" {result.split(' to ', 1)[-1]}.",
+                source="tool",
+                actions=[{"tool": "set_setting", "name": key}],
+            )
+        if len(matches) > 1:
+            names = ", ".join(m["label"] for m in matches[:6])
+            return ChatTurn(
+                say=f"Which setting do you mean: {names}?", source="tool"
+            )
+        # No setting by that name: probably not a settings command.
     return None
 
 
@@ -586,6 +677,27 @@ def _run_tool(tools: ChatTools, call: _ToolCall) -> tuple[str, dict | None]:
             "tool": "run_log",
             "name": run["run_id"][:8],
         }
+    if call.name == "get_settings" and isinstance(tools, EngineTools):
+        described = tools.get_settings()
+        listing = "\n".join(
+            f"{s['key']} = {s['value']}"
+            + (f" (one of: {', '.join(s['choices'])})" if s.get("choices") else "")
+            + (
+                f" (range {s.get('minimum')}..{s.get('maximum')})"
+                if s.get("kind") == "number"
+                else ""
+            )
+            for s in described
+        ) or "(none)"
+        return listing, {"tool": "get_settings"}
+    if call.name == "set_setting" and isinstance(tools, EngineTools):
+        key = str(call.args.get("key", ""))
+        result = tools.set_setting(key, call.args.get("value"))
+        action = None if result.startswith("error:") else {
+            "tool": "set_setting",
+            "name": key,
+        }
+        return result, action
     if call.name == "list_nodes" and isinstance(tools, EngineTools):
         nodes = tools.list_nodes()
         listing = (

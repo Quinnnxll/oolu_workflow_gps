@@ -3,6 +3,7 @@ import { api } from "../api";
 import type { RunSummary, TimelineEvent } from "../types";
 import { Chat } from "./Chat";
 import { FilesPane } from "./FilesPane";
+import { SettingsPane } from "./SettingsPane";
 import { Work } from "./Work";
 
 // The Life environment: a messenger. The left pane lists who you can talk
@@ -14,6 +15,7 @@ import { Work } from "./Work";
 type Selection =
   | { kind: "oolu" }
   | { kind: "files" }
+  | { kind: "settings" }
   | { kind: "friends" }
   | { kind: "noder"; run: RunSummary };
 
@@ -70,6 +72,17 @@ export function Life() {
           </span>
         </button>
 
+        <button
+          className={`convo ${selected.kind === "settings" ? "on" : ""}`}
+          onClick={() => setSelected({ kind: "settings" })}
+        >
+          <span className="convo-avatar file">⚙</span>
+          <span className="convo-body">
+            <span className="convo-name">Settings</span>
+            <span className="convo-sub">app, account, budget</span>
+          </span>
+        </button>
+
         <div className="convo-group">Friends</div>
         <button
           className={`convo ${selected.kind === "friends" ? "on" : ""}`}
@@ -120,6 +133,7 @@ export function Life() {
           />
         )}
         {selected.kind === "files" && <FilesPane />}
+        {selected.kind === "settings" && <SettingsPane />}
       </section>
     </div>
   );

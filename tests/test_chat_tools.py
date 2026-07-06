@@ -190,6 +190,12 @@ class _FakeEngineTools(FileChatTools):
     def list_nodes(self):
         return list(self._nodes)
 
+    def get_settings(self):
+        return []  # no settings surface in these run/node tests
+
+    def set_setting(self, key, value):
+        return "error: settings are not enabled"
+
 
 _RUNS = [
     {"run_id": "aaa111", "intent": "email bob the numbers", "phase": "completed", "awaiting": None},

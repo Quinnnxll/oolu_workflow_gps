@@ -285,6 +285,20 @@ export interface ChatTurnReply {
   run_id: string | null;
 }
 
+// ---- settings node wire shape (GET /v1/settings) --------------------------
+export interface SettingItem {
+  key: string;
+  group: string;
+  label: string;
+  kind: "bool" | "number" | "choice" | "text";
+  description: string;
+  value: unknown;
+  minimum?: number | null;
+  maximum?: number | null;
+  choices?: string[] | null;
+  max_length?: number | null;
+}
+
 // ---- user file wire shapes (GET /v1/files et al.) -------------------------
 export interface FileMeta {
   file_id: string;
@@ -406,6 +420,10 @@ export const api = {
     }));
     return { items: items.reverse() };
   },
+  // ---- the settings node: bounded, declared configuration -------------
+  settings: () => req<{ items: SettingItem[] }>("GET", "/v1/settings"),
+  setSettings: (changes: Record<string, unknown>) =>
+    req<{ items: SettingItem[] }>("PUT", "/v1/settings", { changes }),
   // ---- user files: documents and sheets in the durable database --------
   // No nodeId = the Life drawer; a nodeId = that node's own files in Work.
   files: (nodeId?: string) =>

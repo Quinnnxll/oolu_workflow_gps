@@ -381,6 +381,7 @@ def build_host_runtime(
         RegistryStore,
         WorkDesk,
     )
+    from .settings_node import SettingsNode, SettingsStore
 
     if database_url:
         from .durable.postgres import PostgresDurableConnection
@@ -452,6 +453,7 @@ def build_host_runtime(
         accounts=accounts,
         desk=desk,
         files=UserFileStore(conn),
+        settings_node=SettingsNode(SettingsStore(conn)),
     )
     return HostRuntime(
         gateway=gateway,

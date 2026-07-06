@@ -88,6 +88,7 @@ from ..orchestrator.state import (
     TaskContract,
 )
 from ..providers.vault import SecretVault
+from ..settings_node import SettingError, SettingsNode
 from ..skills.contract import NodeContract, Slot, SubgraphBody
 from ..skills.inputs import bind_inputs, inputs_manifest
 from ..skills.models import ReusableSkill
@@ -203,6 +204,7 @@ class GatewayApp:
         accounts=None,  # identity.LocalAccountService: local multi-user login
         desk: WorkDesk | None = None,  # the Work environment's node desk
         files: UserFileStore | None = None,  # user documents/sheets
+        settings_node: SettingsNode | None = None,  # the settings node
         chat: ChatAssistant | None = None,  # the /v1/chat assistant; a
         # model-less default keeps the conversational surface working
         value_patcher=None,  # orchestrator.ValuePatcher: fills creative inputs
@@ -257,6 +259,7 @@ class GatewayApp:
         self._accounts = accounts
         self._desk = desk
         self._files = files
+        self._settings = settings_node
         # The chat surface is the product face; it must work on every
         # install, so a missing assistant degrades to the model-less
         # default (rules + message-as-intent), never to a 404.
@@ -424,6 +427,8 @@ class GatewayApp:
         r.add("GET", "/v1/metrics", self._metrics_endpoint)
         r.add("GET", "/v1/worker-health", self._worker_health)
         r.add("GET", "/v1/nodeplace", self._list_own_nodes)
+        r.add("GET", "/v1/settings", self._settings_list)
+        r.add("PUT", "/v1/settings", self._settings_update)
         r.add("GET", "/v1/files", self._files_list)
         r.add("POST", "/v1/files", self._files_create)
         r.add("GET", "/v1/files/{file_id}", self._files_get)
@@ -511,6 +516,7 @@ class GatewayApp:
                 principal=session.principal_id,
                 durable=self._durable,
                 desk=self._desk,
+                settings=self._settings,
             )
             if self._files is not None
             else None
@@ -959,6 +965,39 @@ class GatewayApp:
     # ------------------------------------------------------------------ #
     # User files: documents and sheets in the durable database.           #
     # ------------------------------------------------------------------ #
+    # ------------------------------------------------------------------ #
+    # The settings node: bounded configuration, no code path.             #
+    # ------------------------------------------------------------------ #
+    def _require_settings(self) -> SettingsNode:
+        if self._settings is None:
+            raise GatewayError(404, "not_found", "settings are not enabled")
+        return self._settings
+
+    def _settings_list(self, request, session, params) -> Response:
+        node = self._require_settings()
+        return json_response(
+            200, {"items": node.describe(session.tenant_id)}
+        )
+
+    def _settings_update(self, request, session, params) -> Response:
+        """Apply setting changes through the node's declared catalog only.
+
+        The body is ``{"changes": {key: value}}``; every key must be a
+        catalogued setting and every value within its bounds, or the whole
+        batch is refused (400). There is no route that writes an arbitrary
+        key — configuration cannot escape the schema.
+        """
+        node = self._require_settings()
+        body = request.body or {}
+        changes = body.get("changes")
+        if not isinstance(changes, dict) or not changes:
+            raise GatewayError(400, "invalid_request", "changes object is required")
+        try:
+            node.set_many(session.tenant_id, changes)
+        except SettingError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(200, {"items": node.describe(session.tenant_id)})
+
     def _require_files(self) -> UserFileStore:
         if self._files is None:
             raise GatewayError(404, "not_found", "user files are not enabled")
