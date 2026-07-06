@@ -26,6 +26,7 @@ class ChargingService:
         providers: Iterable[ProviderConfig],
         idempotency: IdempotencyLedger,
         fraud: FraudSignals | None = None,
+        launch_guard=None,  # billing.launch.LaunchGuard: pre-launch gate
         rho: float = DEFAULT_RHO,
         holdback_days: int = DEFAULT_HOLDBACK_DAYS,
         currency: str = "usd",
@@ -36,6 +37,7 @@ class ChargingService:
         self._providers = list(providers)
         self._idem = idempotency
         self._fraud = fraud
+        self._launch = launch_guard
         self._engine = PricingEngine(rho=rho)
         self._holdback = timedelta(days=holdback_days)
         self._currency = currency
@@ -46,10 +48,19 @@ class ChargingService:
         attributions: list[AttributionRecord],
         *,
         consumer_ref: str,
+        class_key: str = "",
+        verified_successes: int = 0,
     ) -> dict:
         if event.gross is None:
             return {"charged": False, "reason": "no billable gross on event"}
         require_production_money(self._durable, self._providers)
+        if self._launch is not None:
+            # Pre-launch and unsettled prices refuse HERE, at the one place
+            # a real card would be charged — execution and bookkeeping are
+            # untouched upstream.
+            self._launch.assert_chargeable(
+                class_key, verified_successes=verified_successes
+            )
 
         def run() -> dict:
             shares = [

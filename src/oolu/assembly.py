@@ -355,6 +355,12 @@ def build_host_runtime(
     data.mkdir(parents=True, exist_ok=True)
 
     # Imported lazily so shells without the gateway never pay for it.
+    from .billing import (
+        FakeCardVault,
+        LaunchGuard,
+        PaymentMethodsService,
+        PaymentProfileStore,
+    )
     from .durable.files import UserFileStore
     from .gateway import GatewayApp
     from .gateway.asgi import GatewayASGI
@@ -454,6 +460,10 @@ def build_host_runtime(
         desk=desk,
         files=UserFileStore(conn),
         settings_node=SettingsNode(SettingsStore(conn)),
+        # Pre-launch: the test card vault and a closed launch guard — the
+        # real transaction port stays shut until an operator opens it.
+        payments=PaymentMethodsService(PaymentProfileStore(conn), FakeCardVault()),
+        launch_guard=LaunchGuard(transactions_enabled=False),
     )
     return HostRuntime(
         gateway=gateway,

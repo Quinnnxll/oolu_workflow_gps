@@ -776,6 +776,22 @@ main.chat-main {
   width: auto;
 }
 
+.setting-control.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.test-banner {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 /* ---- the Files account: a drawer of tiles ---- */
 .files-pane {
   display: flex;

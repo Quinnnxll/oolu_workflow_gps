@@ -25,10 +25,13 @@ from pydantic import ValidationError
 from ..billing import (
     BillingService,
     DisputeService,
+    PaymentError,
+    PaymentMethodsService,
     PayoutAdapter,
     PayoutStatus,
     PayoutStore,
 )
+from ..billing.launch import LaunchGuard
 from ..chat import ChatAssistant, GatewayChatTools
 from ..durable.files import FileTooLargeError, UserFile, UserFileStore
 from ..durable.idempotency import IdempotencyLedger
@@ -205,6 +208,8 @@ class GatewayApp:
         desk: WorkDesk | None = None,  # the Work environment's node desk
         files: UserFileStore | None = None,  # user documents/sheets
         settings_node: SettingsNode | None = None,  # the settings node
+        payments: PaymentMethodsService | None = None,  # card on file
+        launch_guard: LaunchGuard | None = None,  # pre-launch charge gate
         chat: ChatAssistant | None = None,  # the /v1/chat assistant; a
         # model-less default keeps the conversational surface working
         value_patcher=None,  # orchestrator.ValuePatcher: fills creative inputs
@@ -260,6 +265,8 @@ class GatewayApp:
         self._desk = desk
         self._files = files
         self._settings = settings_node
+        self._payments = payments
+        self._launch_guard = launch_guard
         # The chat surface is the product face; it must work on every
         # install, so a missing assistant degrades to the model-less
         # default (rules + message-as-intent), never to a 404.
@@ -427,6 +434,17 @@ class GatewayApp:
         r.add("GET", "/v1/metrics", self._metrics_endpoint)
         r.add("GET", "/v1/worker-health", self._worker_health)
         r.add("GET", "/v1/nodeplace", self._list_own_nodes)
+        r.add("GET", "/v1/payment-methods", self._payment_methods_list)
+        r.add("POST", "/v1/payment-methods", self._payment_methods_add)
+        r.add(
+            "DELETE", "/v1/payment-methods/{pm_ref}", self._payment_methods_remove
+        )
+        r.add(
+            "POST",
+            "/v1/payment-methods/{pm_ref}/default",
+            self._payment_methods_default,
+        )
+        r.add("GET", "/v1/payments/status", self._payments_status)
         r.add("GET", "/v1/settings", self._settings_list)
         r.add("PUT", "/v1/settings", self._settings_update)
         r.add("GET", "/v1/files", self._files_list)
@@ -965,6 +983,87 @@ class GatewayApp:
     # ------------------------------------------------------------------ #
     # User files: documents and sheets in the durable database.           #
     # ------------------------------------------------------------------ #
+    # ------------------------------------------------------------------ #
+    # Payment methods: card on file (pre-launch: test vault only).        #
+    # ------------------------------------------------------------------ #
+    def _require_payments(self) -> PaymentMethodsService:
+        if self._payments is None:
+            raise GatewayError(404, "not_found", "payments are not enabled")
+        return self._payments
+
+    def _payment_profile_dict(self, profile) -> dict:
+        return {
+            "mode": self._payments.mode,
+            "default_pm": profile.default_pm,
+            "cards": [
+                {
+                    "pm_ref": c.pm_ref,
+                    "brand": c.brand,
+                    "last4": c.last4,
+                    "exp_month": c.exp_month,
+                    "exp_year": c.exp_year,
+                }
+                for c in profile.cards
+            ],
+        }
+
+    def _payment_methods_list(self, request, session, params) -> Response:
+        payments = self._require_payments()
+        return json_response(
+            200, self._payment_profile_dict(payments.profile(session.principal_id))
+        )
+
+    def _payment_methods_add(self, request, session, params) -> Response:
+        """Save a card. Pre-launch: a named TEST card only — the route has
+        no field that could carry a real number. Live (later): the body
+        would carry a client-confirmed SetupIntent's payment method."""
+        payments = self._require_payments()
+        body = request.body or {}
+        brand = body.get("brand")
+        if not brand or not isinstance(brand, str):
+            raise GatewayError(400, "invalid_request", "brand is required")
+        try:
+            card = payments.add_test_card(session.principal_id, brand)
+        except PaymentError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(
+            201,
+            {
+                "pm_ref": card.pm_ref,
+                "brand": card.brand,
+                "last4": card.last4,
+                "mode": payments.mode,
+            },
+        )
+
+    def _payment_methods_remove(self, request, session, params) -> Response:
+        payments = self._require_payments()
+        removed = payments.remove_card(session.principal_id, params["pm_ref"])
+        if not removed:
+            raise GatewayError(404, "not_found", "no such payment method")
+        return json_response(200, {"removed": True})
+
+    def _payment_methods_default(self, request, session, params) -> Response:
+        payments = self._require_payments()
+        if not payments.set_default(session.principal_id, params["pm_ref"]):
+            raise GatewayError(404, "not_found", "no such payment method")
+        return json_response(200, {"default_pm": params["pm_ref"]})
+
+    def _payments_status(self, request, session, params) -> Response:
+        """Whether real charging is open, and why not: the pre-launch
+        switch, price settlement, and verification — spelled out."""
+        payments = self._require_payments()
+        guard = self._launch_guard
+        class_key = request.query.get("class_key", "")
+        if guard is None:
+            state = {"open": False, "mode": payments.mode, "reasons": [
+                "no launch guard configured"
+            ]}
+        else:
+            state = guard.status(class_key).model_dump(mode="json")
+        state["vault_mode"] = payments.mode
+        return json_response(200, state)
+
     # ------------------------------------------------------------------ #
     # The settings node: bounded configuration, no code path.             #
     # ------------------------------------------------------------------ #

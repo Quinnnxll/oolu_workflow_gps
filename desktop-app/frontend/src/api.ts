@@ -285,6 +285,28 @@ export interface ChatTurnReply {
   run_id: string | null;
 }
 
+// ---- payments wire shapes --------------------------------------------------
+export interface SavedCard {
+  pm_ref: string;
+  brand: string;
+  last4: string;
+  exp_month: number;
+  exp_year: number;
+}
+
+export interface PaymentProfileView {
+  mode: string; // "test" pre-launch, "live" later
+  default_pm: string | null;
+  cards: SavedCard[];
+}
+
+export interface PaymentsStatus {
+  open: boolean;
+  mode: string;
+  vault_mode: string;
+  reasons: string[];
+}
+
 // ---- settings node wire shape (GET /v1/settings) --------------------------
 export interface SettingItem {
   key: string;
@@ -420,6 +442,16 @@ export const api = {
     }));
     return { items: items.reverse() };
   },
+  // ---- payments: card on file (pre-launch: test vault, port closed) ----
+  paymentMethods: () => req<PaymentProfileView>("GET", "/v1/payment-methods"),
+  addTestCard: (brand: string) =>
+    req<{ pm_ref: string }>("POST", "/v1/payment-methods", { brand }),
+  removeCard: (pmRef: string) =>
+    req<{ removed: boolean }>("DELETE", `/v1/payment-methods/${pmRef}`),
+  setDefaultCard: (pmRef: string) =>
+    req<{ default_pm: string }>("POST", `/v1/payment-methods/${pmRef}/default`),
+  paymentsStatus: () =>
+    req<PaymentsStatus>("GET", "/v1/payments/status"),
   // ---- the settings node: bounded, declared configuration -------------
   settings: () => req<{ items: SettingItem[] }>("GET", "/v1/settings"),
   setSettings: (changes: Record<string, unknown>) =>

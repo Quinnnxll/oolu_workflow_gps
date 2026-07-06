@@ -73,6 +73,63 @@ const CATALOG = {
   ],
 };
 
+const WALLET = {
+  mode: "test",
+  default_pm: "pm_1",
+  cards: [
+    { pm_ref: "pm_1", brand: "visa", last4: "4242", exp_month: 7, exp_year: 2029 },
+  ],
+};
+
+const STATUS = {
+  open: false,
+  mode: "pre_launch",
+  vault_mode: "test",
+  reasons: ["pre-launch: the real transaction port is not opened"],
+};
+
+describe("PaymentSection", () => {
+  it("shows saved test cards with the pre-launch banner and reasons", async () => {
+    routes["GET /v1/settings"] = { status: 200, body: CATALOG };
+    routes["GET /v1/payment-methods"] = { status: 200, body: WALLET };
+    routes["GET /v1/payments/status"] = { status: 200, body: STATUS };
+    render(<SettingsPane />);
+
+    expect(await screen.findByText(/visa •••• 4242/)).toBeTruthy();
+    expect(screen.getByText(/real transaction port is closed/)).toBeTruthy();
+    expect(screen.getByText(/Charging opens when/)).toBeTruthy();
+  });
+
+  it("adds a named test card — no field carries a number", async () => {
+    routes["GET /v1/settings"] = { status: 200, body: CATALOG };
+    routes["GET /v1/payment-methods"] = {
+      status: 200,
+      body: { ...WALLET, cards: [], default_pm: null },
+    };
+    routes["GET /v1/payments/status"] = { status: 200, body: STATUS };
+    routes["POST /v1/payment-methods"] = {
+      status: 201,
+      body: { pm_ref: "pm_9", brand: "mastercard", last4: "4444", mode: "test" },
+    };
+    render(<SettingsPane />);
+
+    const brand = (await screen.findByLabelText(
+      "Test card brand",
+    )) as HTMLSelectElement;
+    fireEvent.change(brand, { target: { value: "mastercard" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    await waitFor(() => {
+      const post = calls.find(
+        (c) => c.method === "POST" && c.path === "/v1/payment-methods",
+      );
+      expect(post?.body).toEqual({ brand: "mastercard" });
+    });
+    // There is no card-number input anywhere in the pane.
+    expect(document.querySelector('input[autocomplete="cc-number"]')).toBeNull();
+  });
+});
+
 describe("SettingsPane", () => {
   it("renders controls generated from the catalog, grouped", async () => {
     routes["GET /v1/settings"] = { status: 200, body: CATALOG };

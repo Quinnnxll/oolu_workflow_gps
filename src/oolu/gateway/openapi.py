@@ -87,6 +87,26 @@ def build_openapi() -> dict:
             "post": op("Connect a provider (requires providers:manage)"),
         },
         "/v1/metrics": {"get": op("Operational metrics")},
+        "/v1/payment-methods": {
+            "get": op("The caller's saved cards (metadata only) and default"),
+            "post": op(
+                "Save a card. Pre-launch: named TEST cards only — no field "
+                "carries a real number; live mode will use client-confirmed "
+                "SetupIntents"
+            ),
+        },
+        "/v1/payment-methods/{pm_ref}": {
+            "delete": op("Remove a saved card"),
+        },
+        "/v1/payment-methods/{pm_ref}/default": {
+            "post": op("Make a saved card the default"),
+        },
+        "/v1/payments/status": {
+            "get": op(
+                "Is real charging open? The launch guard's doors spelled "
+                "out: transaction port, price settlement, verification"
+            ),
+        },
         "/v1/settings": {
             "get": op(
                 "The settings node: every declared setting with its bounds "
