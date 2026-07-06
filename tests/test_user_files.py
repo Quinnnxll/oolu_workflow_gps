@@ -37,6 +37,24 @@ def test_store_roundtrip_and_tenant_scoping(tmp_path):
         conn.close()
 
 
+def test_node_files_live_in_their_own_drawer(tmp_path):
+    conn = DurableConnection(tmp_path / "d.db")
+    try:
+        store = UserFileStore(conn)
+        store.save(UserFile(tenant_id="t1", name="life.md"))
+        store.save(UserFile(tenant_id="t1", node_id="n1", name="node-log.csv"))
+        store.save(UserFile(tenant_id="t1", node_id="n2", name="other.md"))
+
+        # One drawer at a time — never a mixed listing.
+        assert [f.name for f in store.list(tenant="t1")] == ["life.md"]
+        assert [f.name for f in store.list(tenant="t1", node_id="n1")] == [
+            "node-log.csv"
+        ]
+        assert [f.name for f in store.list(tenant="t1", node_id="n2")] == ["other.md"]
+    finally:
+        conn.close()
+
+
 def test_store_refuses_oversized_files(tmp_path):
     conn = DurableConnection(tmp_path / "d.db")
     try:
@@ -104,6 +122,23 @@ def test_files_crud_end_to_end(tmp_path):
             _req("GET", f"/v1/files/{file_id}", token=ident.token("user-2", "t2"))
         )
         assert other.status == 404
+
+        # A node's files ride the node_id query, separate from the Life drawer.
+        node_file = app.handle(
+            _req(
+                "POST",
+                "/v1/files",
+                token=token,
+                body={"name": "n1-report.md", "node_id": "n1", "content": "x"},
+            )
+        )
+        assert node_file.status == 201
+        life_only = app.handle(_req("GET", "/v1/files", token=token))
+        assert [f["name"] for f in life_only.body["items"]] == ["budget-q3.csv"]
+        node_only = app.handle(
+            _req("GET", "/v1/files", token=token, query={"node_id": "n1"})
+        )
+        assert [f["name"] for f in node_only.body["items"]] == ["n1-report.md"]
 
         gone = app.handle(_req("DELETE", f"/v1/files/{file_id}", token=token))
         assert gone.status == 200

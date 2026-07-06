@@ -706,6 +706,66 @@ main.chat-main {
   font-size: 15px;
 }
 
+/* ---- the Files account: a drawer of tiles ---- */
+.files-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding: 16px;
+  gap: 12px;
+  max-width: 820px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.files-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.files-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 10px;
+  overflow-y: auto;
+}
+
+.file-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+  cursor: pointer;
+  color: var(--fg);
+  text-align: left;
+}
+
+.file-tile:hover {
+  border-color: var(--accent);
+}
+
+.file-tile-icon {
+  font-size: 18px;
+  color: var(--muted);
+}
+
+.file-tile-name {
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.file-tile-sub {
+  font-size: 11px;
+  color: var(--muted);
+}
+
 textarea,
 input {
   width: 100%;

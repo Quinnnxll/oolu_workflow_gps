@@ -272,6 +272,10 @@ function actionLabel(action: ChatAction): string {
   if (action.tool === "list_files") return "listed your files";
   if (action.tool === "read_file") return `read ${action.name ?? "a file"}`;
   if (action.tool === "write_file") return `updated ${action.name ?? "a file"}`;
+  if (action.tool === "list_runs") return "checked your tasks";
+  if (action.tool === "list_nodes") return "checked your nodes";
+  if (action.tool === "run_log") return `reviewed run ${action.name ?? ""}`.trim();
+  if (action.tool === "run_again") return `re-ran ${action.name ?? "a task"}`;
   return action.tool;
 }
 

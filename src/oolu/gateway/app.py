@@ -29,7 +29,7 @@ from ..billing import (
     PayoutStatus,
     PayoutStore,
 )
-from ..chat import ChatAssistant, FileChatTools
+from ..chat import ChatAssistant, GatewayChatTools
 from ..durable.files import FileTooLargeError, UserFile, UserFileStore
 from ..durable.idempotency import IdempotencyLedger
 from ..durable.service import DurableWorkflowService
@@ -505,7 +505,13 @@ class GatewayApp:
             raise GatewayError(400, "invalid_request", "history must be a list")
         # The assistant's hands: the caller's own files, tenant-bound.
         tools = (
-            FileChatTools(self._files, tenant=session.tenant_id)
+            GatewayChatTools(
+                self._files,
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+                durable=self._durable,
+                desk=self._desk,
+            )
             if self._files is not None
             else None
         )
@@ -962,6 +968,7 @@ class GatewayApp:
     def _file_meta(file: UserFile) -> dict:
         return {
             "file_id": file.file_id,
+            "node_id": file.node_id,
             "name": file.name,
             "media_type": file.media_type,
             "size": file.size,
@@ -971,9 +978,15 @@ class GatewayApp:
 
     def _files_list(self, request, session, params) -> Response:
         store = self._require_files()
+        node_id = request.query.get("node_id") or None
         return json_response(
             200,
-            {"items": [self._file_meta(f) for f in store.list(tenant=session.tenant_id)]},
+            {
+                "items": [
+                    self._file_meta(f)
+                    for f in store.list(tenant=session.tenant_id, node_id=node_id)
+                ]
+            },
         )
 
     def _files_create(self, request, session, params) -> Response:
@@ -984,6 +997,7 @@ class GatewayApp:
             raise GatewayError(400, "invalid_request", "name is required")
         file = UserFile(
             tenant_id=session.tenant_id,
+            node_id=(str(body["node_id"]) if body.get("node_id") else None),
             name=name.strip(),
             media_type=str(body.get("media_type") or _media_type_for(name)),
             content=str(body.get("content") or ""),

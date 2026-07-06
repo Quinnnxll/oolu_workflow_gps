@@ -52,9 +52,13 @@ one, answer with EXACTLY one JSON object of the shape:
   {"tool": "list_files", "args": {}}
   {"tool": "read_file", "args": {"name": "<file name>"}}
   {"tool": "write_file", "args": {"name": "<file name>", "content": "<the full new content>"}}
+  {"tool": "list_runs", "args": {}}
+  {"tool": "run_log", "args": {"run_id": "<a run id, or a phrase from its intent>"}}
+  {"tool": "list_nodes", "args": {}}
 The tool's result arrives as the next message; then answer the user with the
 {"say", "task"} shape. write_file replaces the whole file — read it first
-when editing. Touch only files the user asked about."""
+when editing. Touch only files the user asked about. To redo past work, set
+"task" to that run's intent — there is no tool for starting work."""
 
 _HELP = (
     "I'm OoLu — tell me what you need done and I'll take care of it. "
@@ -188,7 +192,8 @@ class FileChatTools:
         self._tenant = tenant
 
     def list_files(self) -> list[UserFile]:
-        return self._store.list(tenant=self._tenant)
+        # The assistant's hands reach the Life drawer, not node files.
+        return self._store.list(tenant=self._tenant, node_id=None)
 
     def resolve(self, name: str) -> list[UserFile]:
         """Exact name first; else case-insensitive substring matches."""
@@ -207,6 +212,156 @@ class FileChatTools:
         return self._store.save(
             UserFile(tenant_id=self._tenant, name=name.strip(), content=content)
         )
+
+
+@runtime_checkable
+class EngineTools(Protocol):
+    """The engine's read surface: what a chat turn may inspect."""
+
+    def list_runs(self) -> list[dict]: ...
+    def run_log(self, run_id: str) -> list[dict]: ...
+    def list_nodes(self) -> list[dict]: ...
+
+
+class GatewayChatTools(FileChatTools):
+    """File tools plus the engine's read surface, tenant-bound.
+
+    Everything here is read-only over stores the gateway already scopes:
+    the caller's runs, their audit steps, and the caller's node desk. New
+    work still flows only through the run pipeline (``ChatTurn.task``).
+    """
+
+    def __init__(
+        self,
+        store: UserFileStore,
+        *,
+        tenant: str,
+        principal: str = "",
+        durable=None,  # durable.DurableWorkflowService
+        desk=None,  # nodeplace.WorkDesk
+    ):
+        super().__init__(store, tenant=tenant)
+        self._chat_tenant = tenant
+        self._principal = principal
+        self._durable = durable
+        self._desk = desk
+
+    def list_runs(self) -> list[dict]:
+        if self._durable is None:
+            return []
+        runs = [
+            state
+            for state in self._durable.runs.list(limit=10_000)
+            if state.contract.metadata.get("tenant_id") == self._chat_tenant
+        ]
+        summaries = []
+        for state in runs:
+            awaiting = None
+            pause = getattr(state, "pause", None)
+            if pause is not None:
+                kind = pause.kind
+                awaiting = kind.value if hasattr(kind, "value") else str(kind)
+            summaries.append(
+                {
+                    "run_id": state.run_id,
+                    "intent": state.intent,
+                    "phase": state.phase.value
+                    if hasattr(state.phase, "value")
+                    else str(state.phase),
+                    "awaiting": awaiting,
+                }
+            )
+        return summaries
+
+    def run_log(self, run_id: str) -> list[dict]:
+        if self._durable is None:
+            return []
+        return [
+            {"seq": r.seq, "event_type": r.event_type, "at": r.at.isoformat()}
+            for r in self._durable.audit.records(run_id=run_id)
+        ]
+
+    def list_nodes(self) -> list[dict]:
+        if self._desk is None:
+            return []
+        return [
+            {
+                "title": entry.title,
+                "status": entry.status,
+                "earnings_micros": entry.earnings_micros,
+                "health": entry.health.score,
+            }
+            for entry in self._desk.overview(
+                principal=self._principal, tenant=self._chat_tenant
+            )
+        ]
+
+
+# The engine's events in the assistant's voice (compact, chat-sized; the
+# frontend keeps its own richer map for run cards).
+_EVENT_WORDS = {
+    "workflow.submitted": "accepted the job",
+    "workflow.started": "started working",
+    "workflow.advance": "moved to the next step",
+    "workflow.advanced": "moved to the next step",
+    "workflow.executed": "carried out the actions",
+    "workflow.paused": "paused for input",
+    "workflow.resumed": "picked it back up",
+    "workflow.completed": "finished the job",
+    "workflow.failed": "failed",
+    "workflow.incident": "hit a problem",
+    "workflow.cancelled": "stopped on request",
+    "workflow.preflight_failed": "stopped before running",
+    "skill.blocked": "blocked an unsafe action",
+}
+
+
+def _speak_event(event_type: str) -> str:
+    return _EVENT_WORDS.get(event_type, event_type.replace(".", " ").replace("_", " "))
+
+
+def _speak_status(run: dict) -> str:
+    if run.get("awaiting"):
+        return f"waiting on you ({run['awaiting']})"
+    return str(run.get("phase", "working"))
+
+
+def _resolve_run(runs: list[dict], ref: str) -> list[dict]:
+    """A run by id, id prefix, or intent substring — never a guess."""
+    wanted = ref.strip().casefold()
+    if not wanted:
+        return []
+    exact = [r for r in runs if r["run_id"].casefold() == wanted]
+    if exact:
+        return exact
+    prefix = [r for r in runs if r["run_id"].casefold().startswith(wanted)]
+    if len(prefix) == 1:
+        return prefix
+    by_intent = [r for r in runs if wanted in r["intent"].casefold()]
+    if by_intent:
+        return by_intent
+    # Word-wise: every non-filler word must appear in the intent.
+    tokens = [t for t in wanted.split() if t not in {"the", "a", "an", "my", "that"}]
+    if tokens:
+        by_words = [
+            r for r in runs if all(t in r["intent"].casefold() for t in tokens)
+        ]
+        if by_words:
+            return by_words
+    return prefix
+
+
+def _run_log_say(run: dict, steps: list[dict]) -> str:
+    lines = []
+    for step in steps[:20]:
+        at = step.get("at", "")
+        clock = at.split("T")[1][:8] if "T" in at else at
+        lines.append(f"• {clock} — {_speak_event(step.get('event_type', ''))}")
+    body = "\n".join(lines) if lines else "(no steps recorded)"
+    return (
+        f"Here's what happened with \"{run['intent']}\""
+        f" (run {run['run_id'][:8]}):\n{body}"
+    )
 
 
 # What a file's content preview in chat is capped at.
@@ -261,6 +416,11 @@ def _file_command(message: str, tools: ChatTools) -> ChatTurn | None:
             actions=[{"tool": "write_file", "name": saved.name}],
         )
 
+    if isinstance(tools, EngineTools):
+        engine = _engine_command(text, tools)
+        if engine is not None:
+            return engine
+
     read = _READ_RE.match(text)
     if read:
         matches = tools.resolve(read.group(1))
@@ -278,6 +438,102 @@ def _file_command(message: str, tools: ChatTools) -> ChatTurn | None:
             names = ", ".join(f.name for f in matches)
             return ChatTurn(say=f"Which one do you mean: {names}?", source="tool")
         # No such file: not a file command after all.
+    return None
+
+
+_RUN_LIST_PHRASES = frozenset(
+    {
+        "list runs",
+        "my runs",
+        "show runs",
+        "show my runs",
+        "my tasks",
+        "list tasks",
+        "show my tasks",
+        "what is running",
+        "what's running",
+    }
+)
+_NODE_LIST_PHRASES = frozenset(
+    {"my nodes", "list nodes", "show my nodes", "node status", "how are my nodes"}
+)
+_RERUN_RE = re.compile(r"^(?:run again|rerun|re-run|retry)\s+(.+?)\s*$", re.I)
+_REVIEW_RE = re.compile(
+    r"^(?:review|audit|what happened (?:with|to))\s+(.+?)\s*$", re.I
+)
+
+
+def _engine_command(text: str, tools: EngineTools) -> ChatTurn | None:
+    """Deterministic engine commands: inspect runs and nodes, redo work."""
+    lowered = text.casefold().rstrip(".!?")
+
+    if lowered in _RUN_LIST_PHRASES:
+        runs = tools.list_runs()
+        if not runs:
+            say = "Nothing has run yet — just tell me what you need done."
+        else:
+            lines = "\n".join(
+                f"• {r['intent']} — {_speak_status(r)} ({r['run_id'][:8]})"
+                for r in runs[-15:]
+            )
+            say = f"Your tasks:\n{lines}"
+        return ChatTurn(say=say, source="tool", actions=[{"tool": "list_runs"}])
+
+    if lowered in _NODE_LIST_PHRASES:
+        nodes = tools.list_nodes()
+        if not nodes:
+            say = "You have no nodes yet — switch to Work and press + to start one."
+        else:
+            lines = "\n".join(
+                f"• {n['title']} — {n['status'].replace('_', ' ')},"
+                f" ${n['earnings_micros'] / 1_000_000:.2f} earned,"
+                + (
+                    f" {round(n['health'] * 100)}% healthy"
+                    if n["health"] is not None
+                    else " no verified runs yet"
+                )
+                for n in nodes
+            )
+            say = f"Your nodes:\n{lines}"
+        return ChatTurn(say=say, source="tool", actions=[{"tool": "list_nodes"}])
+
+    rerun = _RERUN_RE.match(text)
+    if rerun:
+        matches = _resolve_run(tools.list_runs(), rerun.group(1))
+        if len(matches) == 1:
+            run = matches[0]
+            return ChatTurn(
+                say=f"Running \"{run['intent']}\" again.",
+                task=run["intent"],
+                source="tool",
+                actions=[{"tool": "run_again", "name": run["run_id"][:8]}],
+            )
+        if len(matches) > 1:
+            names = "; ".join(
+                f"{r['intent']} ({r['run_id'][:8]})" for r in matches[:6]
+            )
+            return ChatTurn(say=f"Which one do you mean: {names}?", source="tool")
+        return ChatTurn(
+            say=f"I couldn't find a past task matching \"{rerun.group(1)}\".",
+            source="tool",
+        )
+
+    review = _REVIEW_RE.match(text)
+    if review:
+        matches = _resolve_run(tools.list_runs(), review.group(1))
+        if len(matches) == 1:
+            run = matches[0]
+            return ChatTurn(
+                say=_run_log_say(run, tools.run_log(run["run_id"])),
+                source="tool",
+                actions=[{"tool": "run_log", "name": run["run_id"][:8]}],
+            )
+        if len(matches) > 1:
+            names = "; ".join(
+                f"{r['intent']} ({r['run_id'][:8]})" for r in matches[:6]
+            )
+            return ChatTurn(say=f"Which one do you mean: {names}?", source="tool")
+        # No matching run: the message is probably new work — fall through.
     return None
 
 
@@ -304,6 +560,43 @@ def _run_tool(tools: ChatTools, call: _ToolCall) -> tuple[str, dict | None]:
         except FileTooLargeError as exc:
             return f"error: {exc}", None
         return f"saved {saved.name}", {"tool": "write_file", "name": saved.name}
+    if call.name == "list_runs" and isinstance(tools, EngineTools):
+        runs = tools.list_runs()
+        listing = (
+            "\n".join(
+                f"{r['run_id'][:8]} {r['intent']} — {_speak_status(r)}"
+                for r in runs[-20:]
+            )
+            or "(none)"
+        )
+        return listing, {"tool": "list_runs"}
+    if call.name == "run_log" and isinstance(tools, EngineTools):
+        matches = _resolve_run(tools.list_runs(), str(call.args.get("run_id", "")))
+        if len(matches) != 1:
+            return (
+                "error: no such run" if not matches else "error: ambiguous reference",
+                None,
+            )
+        run = matches[0]
+        steps = tools.run_log(run["run_id"])
+        listing = "\n".join(
+            f"{s['at']} {s['event_type']}" for s in steps[:40]
+        ) or "(no steps recorded)"
+        return f"run {run['run_id']} \"{run['intent']}\":\n{listing}", {
+            "tool": "run_log",
+            "name": run["run_id"][:8],
+        }
+    if call.name == "list_nodes" and isinstance(tools, EngineTools):
+        nodes = tools.list_nodes()
+        listing = (
+            "\n".join(
+                f"{n['title']} — {n['status']},"
+                f" earnings {n['earnings_micros']} micros, health {n['health']}"
+                for n in nodes
+            )
+            or "(none)"
+        )
+        return listing, {"tool": "list_nodes"}
     return f"error: unknown tool '{call.name}'", None
 
 

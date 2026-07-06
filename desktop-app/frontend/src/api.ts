@@ -288,6 +288,7 @@ export interface ChatTurnReply {
 // ---- user file wire shapes (GET /v1/files et al.) -------------------------
 export interface FileMeta {
   file_id: string;
+  node_id?: string | null;
   name: string;
   media_type: string;
   size: number;
@@ -406,10 +407,19 @@ export const api = {
     return { items: items.reverse() };
   },
   // ---- user files: documents and sheets in the durable database --------
-  files: () => req<{ items: FileMeta[] }>("GET", "/v1/files"),
+  // No nodeId = the Life drawer; a nodeId = that node's own files in Work.
+  files: (nodeId?: string) =>
+    req<{ items: FileMeta[] }>(
+      "GET",
+      nodeId ? `/v1/files?node_id=${encodeURIComponent(nodeId)}` : "/v1/files",
+    ),
   file: (id: string) => req<FileDoc>("GET", `/v1/files/${id}`),
-  createFile: (name: string, content = "") =>
-    req<FileDoc>("POST", "/v1/files", { name, content }),
+  createFile: (name: string, content = "", nodeId?: string) =>
+    req<FileDoc>("POST", "/v1/files", {
+      name,
+      content,
+      ...(nodeId ? { node_id: nodeId } : {}),
+    }),
   saveFile: (id: string, patch: { name?: string; content?: string }) =>
     req<FileDoc>("PUT", `/v1/files/${id}`, patch),
   deleteFile: (id: string) =>

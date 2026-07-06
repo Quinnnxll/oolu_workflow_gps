@@ -17,10 +17,12 @@ export function FileView({
   fileId,
   onChanged,
   onDeleted,
+  onBack,
 }: {
   fileId: string;
   onChanged: () => void;
   onDeleted: () => void;
+  onBack?: () => void;
 }) {
   const [file, setFile] = useState<FileDoc | null>(null);
   const [name, setName] = useState("");
@@ -64,6 +66,11 @@ export function FileView({
   return (
     <div className="file-view">
       <div className="file-head">
+        {onBack && (
+          <button className="linklike" onClick={onBack}>
+            ← files
+          </button>
+        )}
         <input
           className="file-name"
           aria-label="File name"

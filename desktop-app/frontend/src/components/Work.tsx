@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api } from "../api";
 import type { HoldItem, NodeRunSteps, WorkNode } from "../api";
 import { humanizeEvent } from "../humanize";
+import { FilesPane } from "./FilesPane";
 
 // The Work environment: where a noder manages and observes their nodes.
 // Same messenger architecture as Life — the list is node accounts (name,
@@ -243,6 +244,7 @@ export function NodeThread({
 }) {
   const [activity, setActivity] = useState<NodeRunSteps[] | null>(null);
   const [holds, setHolds] = useState<HoldItem[]>([]);
+  const [tab, setTab] = useState<"activity" | "files">("activity");
   const account = node.account;
 
   const refresh = useCallback(async () => {
@@ -355,6 +357,24 @@ export function NodeThread({
         </div>
       )}
 
+      <div className="dev-nav">
+        <button
+          className={tab === "activity" ? "on" : ""}
+          onClick={() => setTab("activity")}
+        >
+          Activity
+        </button>
+        <button
+          className={tab === "files" ? "on" : ""}
+          onClick={() => setTab("files")}
+        >
+          Files
+        </button>
+      </div>
+
+      {tab === "files" && <FilesPane nodeId={node.node_id} />}
+
+      {tab === "activity" && (
       <div className="noder-log">
         {activity === null && <div className="muted">Loading activity…</div>}
         {activity !== null && activity.length === 0 && (
@@ -378,6 +398,7 @@ export function NodeThread({
           </div>
         ))}
       </div>
+      )}
 
       <p className="muted noder-hint">
         You are responsible for this node — every step above is yours to

@@ -166,6 +166,127 @@ def test_model_tool_call_without_tools_degrades_honestly(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# Engine tools: inspect runs and nodes, redo work — deterministically.         #
+# --------------------------------------------------------------------------- #
+class _FakeEngineTools(FileChatTools):
+    """A toolkit with a scripted engine surface (files inherited)."""
+
+    def __init__(self, store, runs=None, nodes=None):
+        super().__init__(store, tenant="t1")
+        self._runs = runs or []
+        self._nodes = nodes or []
+        self.log_calls: list[str] = []
+
+    def list_runs(self):
+        return list(self._runs)
+
+    def run_log(self, run_id):
+        self.log_calls.append(run_id)
+        return [
+            {"seq": 1, "event_type": "workflow.started", "at": "2026-07-06T10:00:00+00:00"},
+            {"seq": 2, "event_type": "workflow.failed", "at": "2026-07-06T10:00:05+00:00"},
+        ]
+
+    def list_nodes(self):
+        return list(self._nodes)
+
+
+_RUNS = [
+    {"run_id": "aaa111", "intent": "email bob the numbers", "phase": "completed", "awaiting": None},
+    {"run_id": "bbb222", "intent": "convert report to pdf", "phase": "failed", "awaiting": None},
+]
+
+
+def _engine(tmp_path, **kwargs):
+    conn = DurableConnection(tmp_path / "d.db")
+    return _FakeEngineTools(UserFileStore(conn), **kwargs), conn
+
+
+def test_list_runs_command_speaks_the_task_list(tmp_path):
+    tools, conn = _engine(tmp_path, runs=_RUNS)
+    try:
+        turn = ChatAssistant().respond("my tasks", tools=tools)
+        assert "email bob the numbers" in turn.say
+        assert "failed" in turn.say
+        assert turn.actions == [{"tool": "list_runs"}]
+        assert turn.task is None
+    finally:
+        conn.close()
+
+
+def test_review_speaks_the_run_log_in_function_words(tmp_path):
+    tools, conn = _engine(tmp_path, runs=_RUNS)
+    try:
+        turn = ChatAssistant().respond("what happened with the report", tools=tools)
+        assert "started working" in turn.say
+        assert "failed" in turn.say
+        assert turn.actions == [{"tool": "run_log", "name": "bbb222"}]
+        assert tools.log_calls == ["bbb222"]
+    finally:
+        conn.close()
+
+
+def test_rerun_resolves_and_resubmits_the_original_intent(tmp_path):
+    tools, conn = _engine(tmp_path, runs=_RUNS)
+    try:
+        turn = ChatAssistant().respond("run again email bob", tools=tools)
+        assert turn.task == "email bob the numbers"
+        assert turn.actions == [{"tool": "run_again", "name": "aaa111"}]
+
+        missing = ChatAssistant().respond("rerun the tax filing", tools=tools)
+        assert missing.task is None
+        assert "couldn't find" in missing.say
+    finally:
+        conn.close()
+
+
+def test_node_status_command_speaks_the_desk(tmp_path):
+    tools, conn = _engine(
+        tmp_path,
+        nodes=[
+            {"title": "Invoice Cleaner", "status": "live", "earnings_micros": 12_340_000, "health": 0.9},
+            {"title": "Tax Filer", "status": "needs_verification", "earnings_micros": 0, "health": None},
+        ],
+    )
+    try:
+        turn = ChatAssistant().respond("my nodes", tools=tools)
+        assert "Invoice Cleaner" in turn.say and "$12.34" in turn.say
+        assert "90% healthy" in turn.say
+        assert "no verified runs yet" in turn.say
+        assert turn.actions == [{"tool": "list_nodes"}]
+    finally:
+        conn.close()
+
+
+def test_model_reviews_a_run_via_the_tool(tmp_path):
+    tools, conn = _engine(tmp_path, runs=_RUNS)
+    try:
+        model = _FakeModel(
+            [
+                '{"tool": "run_log", "args": {"run_id": "report"}}',
+                '{"say": "It failed right after starting.", "task": null}',
+            ]
+        )
+        turn = ChatAssistant(model=model).respond(
+            "why did my report conversion fail?", tools=tools
+        )
+        assert turn.say == "It failed right after starting."
+        assert turn.actions == [{"tool": "run_log", "name": "bbb222"}]
+        assert "workflow.failed" in model.calls[1][-1]["content"]
+    finally:
+        conn.close()
+
+
+def test_plain_file_tools_skip_engine_commands(tmp_path):
+    tools, _, conn = _tools(tmp_path)
+    try:
+        turn = ChatAssistant().respond("my tasks", tools=tools)
+        assert turn.source == "intent"  # no engine surface: it's just work
+    finally:
+        conn.close()
+
+
+# --------------------------------------------------------------------------- #
 # The route: tools bound to the caller's tenant, actions in the reply.         #
 # --------------------------------------------------------------------------- #
 def _token(subject="user-1", tenant="t1"):
@@ -200,6 +321,32 @@ def test_chat_route_reads_and_writes_tenant_files(tmp_path):
             _req("POST", "/v1/chat", token=_token(), body={"message": "read secret.md"})
         )
         assert blind.body["run_id"] is not None
+
+        # The engine surface answers through the same route.
+        submitted = app.handle(
+            _req(
+                "POST",
+                "/v1/chat",
+                token=_token(),
+                body={"message": "email bob the numbers"},
+            )
+        )
+        assert submitted.body["run_id"] is not None
+        tasks = app.handle(
+            _req("POST", "/v1/chat", token=_token(), body={"message": "my tasks"})
+        )
+        assert "email bob the numbers" in tasks.body["reply"]
+        assert tasks.body["actions"] == [{"tool": "list_runs"}]
+        review = app.handle(
+            _req(
+                "POST",
+                "/v1/chat",
+                token=_token(),
+                body={"message": "review email bob"},
+            )
+        )
+        assert "run" in review.body["reply"]
+        assert review.body["actions"][0]["tool"] == "run_log"
 
         write = app.handle(
             _req(

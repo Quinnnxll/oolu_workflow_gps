@@ -34,6 +34,9 @@ class UserFile(BaseModel):
 
     file_id: str = Field(default_factory=lambda: uuid4().hex)
     tenant_id: str
+    # A file lives with its owner: None = the Life environment's shared
+    # drawer; a node id = that node's own independent files in Work.
+    node_id: str | None = None
     name: str
     media_type: str = "text/markdown"
     content: str = ""
@@ -85,14 +88,17 @@ class UserFileStore:
             ).fetchone()
         return UserFile.model_validate_json(row["payload_json"]) if row else None
 
-    def list(self, *, tenant: str) -> list[UserFile]:
+    def list(self, *, tenant: str, node_id: str | None = None) -> list[UserFile]:
+        """One drawer at a time: the Life files (node_id None) or one
+        node's own files — never a mixed listing."""
         with self._conn.lock:
             rows = self._conn.db.execute(
                 "SELECT payload_json FROM user_files WHERE tenant_id = ?"
                 " ORDER BY rowid ASC",
                 (tenant,),
             ).fetchall()
-        return [UserFile.model_validate_json(r["payload_json"]) for r in rows]
+        files = [UserFile.model_validate_json(r["payload_json"]) for r in rows]
+        return [f for f in files if f.node_id == node_id]
 
     def delete(self, file_id: str, *, tenant: str) -> bool:
         with self._conn.transaction() as db:
