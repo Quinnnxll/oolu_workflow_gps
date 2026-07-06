@@ -1,3 +1,8 @@
+// The wake word is "OoLu" — just the name, no "hey". The webview layer
+// here is press-to-talk only; the native shell's wake-word engine (a
+// later Tauri plugin) must listen for exactly this phrase.
+export const WAKE_WORD = "OoLu";
+
 // Voice in and out over the Web Speech API, degrading gracefully: where
 // the platform has no engine, the UI simply never grows the buttons —
 // no dead microphones, no silent failures.

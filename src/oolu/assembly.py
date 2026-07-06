@@ -364,6 +364,7 @@ def build_host_runtime(
     from .durable.files import UserFileStore
     from .gateway import GatewayApp
     from .gateway.asgi import GatewayASGI
+    from .gateway.notify import RunEventNotifier, WebhookEndpointStore
     from .identity import (
         AuthorityResolver,
         Hs256Signer,
@@ -374,6 +375,7 @@ def build_host_runtime(
         OidcValidator,
         ProviderConfig,
     )
+    from .identity.apikeys import ApiKeyService
     from .knowledge import TraceStore
     from .metering import AttributionStore, MeteringLedger
     from .nodeplace import (
@@ -464,6 +466,12 @@ def build_host_runtime(
         # real transaction port stays shut until an operator opens it.
         payments=PaymentMethodsService(PaymentProfileStore(conn), FakeCardVault()),
         launch_guard=LaunchGuard(transactions_enabled=False),
+        # The public execution API: machine keys + signed run webhooks.
+        api_keys=ApiKeyService(conn),
+        webhook_endpoints=(endpoints := WebhookEndpointStore(conn)),
+        notifier=RunEventNotifier(
+            audit=durable.audit, durable=durable, endpoints=endpoints, conn=conn
+        ),
     )
     return HostRuntime(
         gateway=gateway,

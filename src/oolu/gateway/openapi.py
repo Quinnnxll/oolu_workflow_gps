@@ -87,6 +87,25 @@ def build_openapi() -> dict:
             "post": op("Connect a provider (requires providers:manage)"),
         },
         "/v1/metrics": {"get": op("Operational metrics")},
+        "/v1/api-keys": {
+            "get": op("List the caller tenant's API keys (never secrets)"),
+            "post": op(
+                "Issue a machine key for the public execution API; the "
+                "secret appears only in this response. Scopes: runs:submit, "
+                "runs:read, market:read"
+            ),
+        },
+        "/v1/api-keys/{key_id}": {"delete": op("Revoke an API key")},
+        "/v1/webhook-endpoints": {
+            "get": op("List the tenant's run-event webhook endpoints"),
+            "post": op(
+                "Register a webhook URL for terminal run events; the "
+                "signing secret appears only in this response"
+            ),
+        },
+        "/v1/webhook-endpoints/{endpoint_id}": {
+            "delete": op("Remove a webhook endpoint"),
+        },
         "/v1/payment-methods": {
             "get": op("The caller's saved cards (metadata only) and default"),
             "post": op(

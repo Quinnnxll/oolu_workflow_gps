@@ -36,8 +36,9 @@ from ..chat import ChatAssistant, GatewayChatTools
 from ..durable.files import FileTooLargeError, UserFile, UserFileStore
 from ..durable.idempotency import IdempotencyLedger
 from ..durable.service import DurableWorkflowService
+from ..identity.apikeys import KEY_PREFIX, ApiKeyError, ApiKeyService, scope_allows
 from ..identity.errors import AuthenticationError, AuthorizationError
-from ..identity.models import Session
+from ..identity.models import PrincipalKind, Session
 from ..identity.policy import AuthorityResolver
 from ..identity.service import IdentityApprovalAuthority
 from ..identity.sessions import default_assurance
@@ -105,6 +106,7 @@ from .http import (
     json_response,
     with_security_headers,
 )
+from .notify import RunEventNotifier, WebhookEndpoint, WebhookEndpointStore
 from .openapi import build_openapi
 from .webhooks import WebhookVerifier
 
@@ -210,6 +212,9 @@ class GatewayApp:
         settings_node: SettingsNode | None = None,  # the settings node
         payments: PaymentMethodsService | None = None,  # card on file
         launch_guard: LaunchGuard | None = None,  # pre-launch charge gate
+        api_keys: ApiKeyService | None = None,  # machine credentials
+        webhook_endpoints: WebhookEndpointStore | None = None,
+        notifier: RunEventNotifier | None = None,  # run-event webhooks
         chat: ChatAssistant | None = None,  # the /v1/chat assistant; a
         # model-less default keeps the conversational surface working
         value_patcher=None,  # orchestrator.ValuePatcher: fills creative inputs
@@ -267,6 +272,9 @@ class GatewayApp:
         self._settings = settings_node
         self._payments = payments
         self._launch_guard = launch_guard
+        self._api_keys = api_keys
+        self._webhook_endpoints = webhook_endpoints
+        self._notifier = notifier
         # The chat surface is the product face; it must work on every
         # install, so a missing assistant degrades to the model-less
         # default (rules + message-as-intent), never to a 404.
@@ -315,7 +323,17 @@ class GatewayApp:
         route, params = match
         session: Session | None = None
         if not route.public:
-            session = self._authenticate(request)
+            session, scopes = self._session_and_scopes(
+                request.bearer_token(), request.now or self._clock()
+            )
+            if scopes is not None and not scope_allows(
+                scopes, request.method, request.path
+            ):
+                # API keys reach the machine surface only — everything
+                # else is absent by construction, whatever the key holds.
+                raise GatewayError(
+                    403, "forbidden", "outside this API key's scopes"
+                )
             self._enforce_rate_limit(session, request)
             if route.requires_permission and not self._resolver.has_permission(
                 session, route.requires_permission
@@ -329,9 +347,37 @@ class GatewayApp:
     def _authenticate(self, request: Request) -> Session:
         return self._session_for(request.bearer_token(), request.now or self._clock())
 
+    def _session_and_scopes(
+        self, token: str | None, now: datetime
+    ) -> tuple[Session, frozenset[str] | None]:
+        """One auth door, two credential kinds: an API key yields a
+        service session plus its scope set; an identity token yields a
+        user session and None (no scope ceiling)."""
+        if token and token.startswith(KEY_PREFIX):
+            if self._api_keys is None:
+                raise GatewayError(401, "unauthorized", "API keys are not enabled")
+            record = self._api_keys.authenticate(token)
+            if record is None:
+                raise GatewayError(401, "unauthorized", "unknown or revoked API key")
+            session = Session(
+                principal_id=record.principal_id,
+                principal_kind=PrincipalKind.SERVICE,
+                tenant_id=record.tenant_id,
+                issued_at=now,
+                expires_at=now + timedelta(minutes=15),
+                amr=["api_key"],
+                source_issuer="oolu/api-keys",
+            )
+            return session, frozenset(record.scopes)
+        return self._session_for(token, now), None
+
     def _session_for(self, token: str | None, now: datetime) -> Session:
         if not token:
             raise GatewayError(401, "unauthorized", "missing bearer token")
+        if token.startswith(KEY_PREFIX):
+            # Streams and other direct callers accept keys through the
+            # same door as HTTP routes.
+            return self._session_and_scopes(token, now)[0]
         try:
             claims = self._validator.validate(token, now=now)
         except AuthenticationError as exc:
@@ -434,6 +480,16 @@ class GatewayApp:
         r.add("GET", "/v1/metrics", self._metrics_endpoint)
         r.add("GET", "/v1/worker-health", self._worker_health)
         r.add("GET", "/v1/nodeplace", self._list_own_nodes)
+        r.add("GET", "/v1/api-keys", self._api_keys_list)
+        r.add("POST", "/v1/api-keys", self._api_keys_create)
+        r.add("DELETE", "/v1/api-keys/{key_id}", self._api_keys_revoke)
+        r.add("GET", "/v1/webhook-endpoints", self._webhooks_list)
+        r.add("POST", "/v1/webhook-endpoints", self._webhooks_add)
+        r.add(
+            "DELETE",
+            "/v1/webhook-endpoints/{endpoint_id}",
+            self._webhooks_remove,
+        )
         r.add("GET", "/v1/payment-methods", self._payment_methods_list)
         r.add("POST", "/v1/payment-methods", self._payment_methods_add)
         r.add(
@@ -983,6 +1039,127 @@ class GatewayApp:
     # ------------------------------------------------------------------ #
     # User files: documents and sheets in the durable database.           #
     # ------------------------------------------------------------------ #
+    # ------------------------------------------------------------------ #
+    # API keys + webhook endpoints: the public execution API's controls.  #
+    # ------------------------------------------------------------------ #
+    def _require_api_keys(self, session) -> ApiKeyService:
+        if self._api_keys is None:
+            raise GatewayError(404, "not_found", "API keys are not enabled")
+        if "api_key" in session.amr:
+            # A key cannot mint, list, or revoke keys — management belongs
+            # to interactive identities only.
+            raise GatewayError(403, "forbidden", "keys cannot manage keys")
+        return self._api_keys
+
+    @staticmethod
+    def _api_key_dict(record) -> dict:
+        return {
+            "key_id": record.key_id,
+            "name": record.name,
+            "scopes": list(record.scopes),
+            "created_at": record.created_at.isoformat(),
+            "revoked_at": (
+                record.revoked_at.isoformat() if record.revoked_at else None
+            ),
+            "last_used_at": (
+                record.last_used_at.isoformat() if record.last_used_at else None
+            ),
+        }
+
+    def _api_keys_list(self, request, session, params) -> Response:
+        service = self._require_api_keys(session)
+        return json_response(
+            200,
+            {
+                "items": [
+                    self._api_key_dict(r)
+                    for r in service.list(tenant=session.tenant_id)
+                ]
+            },
+        )
+
+    def _api_keys_create(self, request, session, params) -> Response:
+        service = self._require_api_keys(session)
+        body = request.body or {}
+        name = body.get("name")
+        if not name or not isinstance(name, str):
+            raise GatewayError(400, "invalid_request", "name is required")
+        scopes = body.get("scopes")
+        if scopes is not None and not isinstance(scopes, list):
+            raise GatewayError(400, "invalid_request", "scopes must be a list")
+        try:
+            record, secret = service.issue(
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+                name=name,
+                scopes=scopes,
+            )
+        except ApiKeyError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        # The secret appears in THIS response and nowhere else, ever.
+        return json_response(201, {**self._api_key_dict(record), "secret": secret})
+
+    def _api_keys_revoke(self, request, session, params) -> Response:
+        service = self._require_api_keys(session)
+        if not service.revoke(params["key_id"], tenant=session.tenant_id):
+            raise GatewayError(404, "not_found", "no such active key")
+        return json_response(200, {"revoked": True})
+
+    def _require_webhooks(self, session) -> WebhookEndpointStore:
+        if self._webhook_endpoints is None:
+            raise GatewayError(404, "not_found", "webhooks are not enabled")
+        if "api_key" in session.amr:
+            raise GatewayError(403, "forbidden", "keys cannot manage webhooks")
+        return self._webhook_endpoints
+
+    def _webhooks_list(self, request, session, params) -> Response:
+        store = self._require_webhooks(session)
+        return json_response(
+            200,
+            {
+                "items": [
+                    {
+                        "endpoint_id": e.endpoint_id,
+                        "url": e.url,
+                        "created_at": e.created_at.isoformat(),
+                    }
+                    for e in store.list(tenant=session.tenant_id)
+                ]
+            },
+        )
+
+    def _webhooks_add(self, request, session, params) -> Response:
+        store = self._require_webhooks(session)
+        body = request.body or {}
+        url = body.get("url")
+        if (
+            not url
+            or not isinstance(url, str)
+            or not url.startswith(("https://", "http://"))
+        ):
+            raise GatewayError(400, "invalid_request", "a valid url is required")
+        endpoint = WebhookEndpoint(
+            tenant_id=session.tenant_id,
+            url=url.strip(),
+            secret="whsec_" + uuid4().hex,
+        )
+        store.add(endpoint)
+        # The signing secret appears in THIS response and nowhere else.
+        return json_response(
+            201,
+            {
+                "endpoint_id": endpoint.endpoint_id,
+                "url": endpoint.url,
+                "secret": endpoint.secret,
+            },
+        )
+
+    def _webhooks_remove(self, request, session, params) -> Response:
+        store = self._require_webhooks(session)
+        if not store.remove(params["endpoint_id"], tenant=session.tenant_id):
+            raise GatewayError(404, "not_found", "no such endpoint")
+        return json_response(200, {"removed": True})
+
     # ------------------------------------------------------------------ #
     # Payment methods: card on file (pre-launch: test vault only).        #
     # ------------------------------------------------------------------ #
