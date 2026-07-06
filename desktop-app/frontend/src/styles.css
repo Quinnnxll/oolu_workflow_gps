@@ -80,6 +80,17 @@ header nav button.on {
   font-size: 12px;
 }
 
+/* Header pill saying the app is not signed in to an online server. */
+.chip {
+  display: inline-block;
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: default;
+}
+
 main {
   padding: 16px;
   flex: 1;
@@ -441,6 +452,34 @@ button.ghost {
   color: var(--danger);
   font-size: 13px;
   margin-top: 8px;
+}
+
+/* Third-party sign-up options (not yet wired to a provider). */
+.alt-auth {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.alt-auth button {
+  background: var(--bg);
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.alt-auth button:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.login-switch,
+.stay-local {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .linklike {

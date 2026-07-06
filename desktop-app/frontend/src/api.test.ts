@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api, login, requiresLogin, session, signOut } from "./api";
+import { api, login, register, requiresLogin, session, signOut } from "./api";
 
 // A recorded fetch call, so tests can assert the exact route + payload the
 // adapter sent to the gateway.
@@ -309,6 +309,58 @@ describe("auth", () => {
   it("requiresLogin is false in local (non-remote) mode", () => {
     window.__OOLU_REMOTE__ = false;
     expect(requiresLogin()).toBe(false);
+  });
+
+  it("register posts to the online server and stores the session", async () => {
+    routes["POST /v1/auth/register"] = {
+      status: 200,
+      body: { token: "t2", principal: "bob@example.com", tenant: "acme" },
+    };
+
+    await register("bob@example.com", "pw");
+
+    expect(lastCall().path).toBe("https://host.example/v1/auth/register");
+    expect(lastCall().body).toEqual({ email: "bob@example.com", password: "pw" });
+    expect(session.token).toBe("t2");
+    expect(session.principal).toBe("bob@example.com");
+  });
+
+  it("register maps a 404 to a friendly 'not offered' message", async () => {
+    routes["POST /v1/auth/register"] = { status: 404, body: {} };
+    await expect(register("bob@example.com", "pw")).rejects.toThrow(
+      "does not offer registration",
+    );
+    expect(session.signedIn()).toBe(false);
+  });
+
+  it("local mode signs into the server the user names and remembers it", async () => {
+    window.__OOLU_REMOTE__ = false;
+    routes["POST /v1/auth/login"] = {
+      status: 200,
+      body: { token: "t3", principal: "alice" },
+    };
+
+    await login("alice", "pw", "https://online.oolu.example/");
+
+    expect(lastCall().path).toBe("https://online.oolu.example/v1/auth/login");
+    expect(session.server).toBe("https://online.oolu.example");
+    expect(session.token).toBe("t3");
+  });
+
+  it("local mode refuses auth calls without a server", async () => {
+    window.__OOLU_REMOTE__ = false;
+    await expect(login("alice", "pw")).rejects.toThrow("enter the server");
+    expect(calls.length).toBe(0);
+  });
+
+  it("signOut keeps the remembered server for the next sign-in", () => {
+    session.setServer("https://online.oolu.example");
+    session.set("t", "alice", "acme");
+    const reload = vi.fn();
+    vi.stubGlobal("location", { ...window.location, reload });
+    signOut();
+    expect(session.signedIn()).toBe(false);
+    expect(session.server).toBe("https://online.oolu.example");
   });
 
   it("signOut clears the stored session", () => {

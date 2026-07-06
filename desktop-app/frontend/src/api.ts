@@ -27,6 +27,7 @@ export const isRemote = (): boolean => window.__OOLU_REMOTE__ === true;
 const TOKEN_KEY = "oolu_token";
 const PRINCIPAL_KEY = "oolu_principal";
 const TENANT_KEY = "oolu_tenant";
+const SERVER_KEY = "oolu_server";
 
 // localStorage (not sessionStorage) so a signed-in host survives app restarts.
 export const session = {
@@ -36,6 +37,12 @@ export const session = {
   get principal(): string | null {
     return localStorage.getItem(PRINCIPAL_KEY);
   },
+  // The online server a *local* build is signed into (a remote build's server
+  // is baked in as __OOLU_API__). Remembered across sign-outs so the field
+  // comes prefilled next time.
+  get server(): string | null {
+    return localStorage.getItem(SERVER_KEY);
+  },
   signedIn(): boolean {
     return localStorage.getItem(TOKEN_KEY) !== null;
   },
@@ -43,6 +50,9 @@ export const session = {
     localStorage.setItem(TOKEN_KEY, token);
     localStorage.setItem(PRINCIPAL_KEY, principal);
     localStorage.setItem(TENANT_KEY, tenant);
+  },
+  setServer(url: string): void {
+    localStorage.setItem(SERVER_KEY, url);
   },
   clear(): void {
     localStorage.removeItem(TOKEN_KEY);
@@ -59,8 +69,43 @@ interface LoginResponse {
   tenant?: string;
 }
 
-export async function login(username: string, password: string): Promise<void> {
-  const res = await fetch(BASE() + "/v1/auth/login", {
+// Where auth calls go: a remote build talks to its baked-in host; a local
+// build signs into whichever online server the user entered (the engine and
+// all its data stay on the loopback either way).
+function authBase(server?: string): string {
+  if (isRemote()) return BASE();
+  const url = (server ?? session.server ?? "").trim().replace(/\/+$/, "");
+  if (!url) throw new Error("enter the server to sign in to");
+  session.setServer(url);
+  return url;
+}
+
+async function authPost(path: string, body: unknown, fallback: string): Promise<LoginResponse> {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (res.status === 404 || res.status === 405) {
+    throw new Error("this server does not offer registration yet");
+  }
+  const data = (await res.json().catch(() => ({}))) as
+    | LoginResponse
+    | { error?: { message?: string } };
+  if (!res.ok) {
+    const message =
+      (data as { error?: { message?: string } })?.error?.message ?? fallback;
+    throw new Error(message);
+  }
+  return data as LoginResponse;
+}
+
+export async function login(
+  username: string,
+  password: string,
+  server?: string,
+): Promise<void> {
+  const res = await fetch(authBase(server) + "/v1/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username, password }),
@@ -75,6 +120,22 @@ export async function login(username: string, password: string): Promise<void> {
     throw new Error(message);
   }
   const ok = data as LoginResponse;
+  session.set(ok.token, ok.principal, ok.tenant ?? "");
+}
+
+// Self-serve e-mail registration on the online server. The endpoint is the
+// online host's to enable; hosts without it answer 404, surfaced as a plain
+// "not offered" message rather than a raw status code.
+export async function register(
+  email: string,
+  password: string,
+  server?: string,
+): Promise<void> {
+  const ok = await authPost(
+    authBase(server) + "/v1/auth/register",
+    { email, password },
+    "registration failed",
+  );
   session.set(ok.token, ok.principal, ok.tenant ?? "");
 }
 

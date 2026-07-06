@@ -62,4 +62,84 @@ describe("Login", () => {
     expect(onSignedIn).not.toHaveBeenCalled();
     expect(session.signedIn()).toBe(false);
   });
+
+  it("registers with e-mail from the create-account view", async () => {
+    fetchMock.mockResolvedValue(
+      reply(200, { token: "t", principal: "bob@example.com" }),
+    );
+    const onSignedIn = vi.fn();
+    render(<Login onSignedIn={onSignedIn} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Create one" }));
+    fireEvent.change(screen.getByLabelText("E-mail"), {
+      target: { value: "bob@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "pw" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create account" }));
+
+    await waitFor(() => expect(onSignedIn).toHaveBeenCalled());
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://host.example/v1/auth/register");
+    expect(JSON.parse(String(init.body))).toEqual({
+      email: "bob@example.com",
+      password: "pw",
+    });
+    expect(session.token).toBe("t");
+  });
+
+  it("offers Google and phone sign-up, disabled until a provider exists", () => {
+    render(<Login onSignedIn={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Create one" }));
+
+    const google = screen.getByRole("button", {
+      name: "Continue with Google",
+    }) as HTMLButtonElement;
+    const phone = screen.getByRole("button", {
+      name: "Continue with phone",
+    }) as HTMLButtonElement;
+    expect(google.disabled).toBe(true);
+    expect(phone.disabled).toBe(true);
+  });
+
+  describe("local build (no baked-in server)", () => {
+    beforeEach(() => {
+      window.__OOLU_REMOTE__ = false;
+    });
+
+    it("asks which server to sign in to and remembers it", async () => {
+      fetchMock.mockResolvedValue(
+        reply(200, { token: "t", principal: "alice" }),
+      );
+      const onSignedIn = vi.fn();
+      render(<Login onSignedIn={onSignedIn} />);
+
+      fireEvent.change(screen.getByLabelText("Server"), {
+        target: { value: "https://online.oolu.example" },
+      });
+      fireEvent.change(screen.getByLabelText("Username"), {
+        target: { value: "alice" },
+      });
+      fireEvent.change(screen.getByLabelText("Password"), {
+        target: { value: "pw" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+      await waitFor(() => expect(onSignedIn).toHaveBeenCalled());
+      const [url] = fetchMock.mock.calls[0] as [string];
+      expect(url).toBe("https://online.oolu.example/v1/auth/login");
+      expect(session.server).toBe("https://online.oolu.example");
+    });
+
+    it("lets the user stay local instead of signing in", () => {
+      const onStayLocal = vi.fn();
+      render(<Login onSignedIn={vi.fn()} onStayLocal={onStayLocal} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Stay local" }));
+
+      expect(onStayLocal).toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
 });

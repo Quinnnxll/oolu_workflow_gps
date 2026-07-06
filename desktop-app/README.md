@@ -80,6 +80,15 @@ The shell has two modes, chosen at **build time** — never by the end user:
 
 - **Local (default):** `OOLU_SERVER_URL` unset. The Rust core spawns the `oolu`
   loopback sidecar and injects its origin — the offline/solo experience above.
+  The header shows a **Local** chip (meaning: not signed in to an online
+  server) with a **sign in** link beside it. Signing in is optional and
+  auth-only — the user names the online server, or creates an account there
+  (e-mail via `POST /v1/auth/register`; Google/phone are shown but disabled
+  until a provider exists). The engine keeps running on the loopback either
+  way: learned paths and generated skills stay in the local database.
+  Caveat for packaged builds: the webview CSP `connect-src` is loopback-only
+  today, so reaching an online server from a packaged local build also needs
+  the CSP additions described under "Later setup".
 - **Remote:** compile with `OOLU_SERVER_URL=https://<your-host>`. No sidecar is
   spawned; the window injects that URL as `window.__OOLU_API__` and sets
   `window.__OOLU_REMOTE__ = true`, so the frontend shows a sign-in screen,

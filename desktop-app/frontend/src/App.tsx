@@ -11,6 +11,9 @@ type Tab = "task" | "inbox" | "skills";
 export function App() {
   // Local loopback needs no sign-in; a remote host does until we hold a token.
   const [authed, setAuthed] = useState(!requiresLogin());
+  // Local mode can *optionally* sign into the online server; this shows the
+  // sign-in screen over the running local app when the user asks for it.
+  const [showAuth, setShowAuth] = useState(false);
   const [tab, setTab] = useState<Tab>("task");
   const [task, setTask] = useState<TaskView | null>(null);
   const [inbox, setInbox] = useState<InboxItem[]>([]);
@@ -40,6 +43,15 @@ export function App() {
     return <Login onSignedIn={() => setAuthed(true)} />;
   }
 
+  if (showAuth) {
+    return (
+      <Login
+        onSignedIn={() => setShowAuth(false)}
+        onStayLocal={() => setShowAuth(false)}
+      />
+    );
+  }
+
   return (
     <div className="app">
       <header>
@@ -56,7 +68,7 @@ export function App() {
           </button>
         </nav>
         <div className="loopback">
-          {isRemote() ? (
+          {isRemote() || session.signedIn() ? (
             <>
               {session.principal ?? "signed in"} ·{" "}
               <button className="linklike" onClick={signOut}>
@@ -64,7 +76,17 @@ export function App() {
               </button>
             </>
           ) : (
-            "127.0.0.1 · local"
+            <>
+              <span
+                className="chip"
+                title="Not signed in to an online server — learned paths and generated skills stay in your local database"
+              >
+                Local
+              </span>{" "}
+              <button className="linklike" onClick={() => setShowAuth(true)}>
+                sign in
+              </button>
+            </>
           )}
         </div>
       </header>
