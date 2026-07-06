@@ -42,12 +42,17 @@ const RUN = {
 };
 
 describe("Life", () => {
-  it("opens on the OoLu conversation with the mode tabs", () => {
+  it("opens on the OoLu conversation and can switch into Work", async () => {
+    routes["GET /v1/work/nodes"] = { status: 200, body: { items: [] } };
     render(<Life />);
     expect(screen.getByRole("button", { name: "Life" })).toBeTruthy();
-    const work = screen.getByRole("button", { name: "Work" }) as HTMLButtonElement;
-    expect(work.disabled).toBe(true);
     // The OoLu chat is the open pane.
+    expect(screen.getByPlaceholderText("Message OoLu…")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Work" }));
+    expect(await screen.findByText("My nodes")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Life" }));
     expect(screen.getByPlaceholderText("Message OoLu…")).toBeTruthy();
   });
 

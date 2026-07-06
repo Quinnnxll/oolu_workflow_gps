@@ -15,6 +15,13 @@ _SCHEMA = (
         payload_json TEXT NOT NULL,
         PRIMARY KEY (event_id, noder_principal)
     )""",
+    # A contract run binds several versions at once; the aggregate binding
+    # row keys on its representative, so participation is indexed here.
+    """CREATE TABLE IF NOT EXISTS binding_versions (
+        run_id TEXT NOT NULL,
+        version_id TEXT NOT NULL,
+        PRIMARY KEY (run_id, version_id)
+    )""",
 )
 
 
@@ -38,6 +45,12 @@ class AttributionStore:
                     binding.model_dump_json(),
                 ),
             )
+            for version_id in binding.version_ids or [binding.version_id]:
+                db.execute(
+                    "INSERT OR IGNORE INTO binding_versions (run_id, version_id)"
+                    " VALUES (?, ?)",
+                    (binding.run_id, version_id),
+                )
             return cursor.rowcount > 0
 
     def get_binding(self, run_id: str) -> RunBinding | None:
@@ -46,6 +59,27 @@ class AttributionStore:
                 "SELECT payload_json FROM run_bindings WHERE run_id = ?", (run_id,)
             ).fetchone()
         return RunBinding.model_validate_json(row["payload_json"]) if row else None
+
+    def bindings_for_versions(self, version_ids: list[str]) -> list[RunBinding]:
+        """Every run bound to any of these versions — a node's execution
+        history, read through its versions (oldest binding first). The
+        participation index covers all of a contract run's nodes, not just
+        the aggregate binding's representative."""
+        if not version_ids:
+            return []
+        marks = ",".join("?" for _ in version_ids)
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                f"""SELECT b.payload_json FROM run_bindings b
+                    WHERE b.version_id IN ({marks})
+                       OR b.run_id IN (
+                            SELECT run_id FROM binding_versions
+                            WHERE version_id IN ({marks})
+                       )
+                    ORDER BY b.rowid ASC""",
+                tuple(version_ids) * 2,
+            ).fetchall()
+        return [RunBinding.model_validate_json(row["payload_json"]) for row in rows]
 
     def consumer_spend(
         self,

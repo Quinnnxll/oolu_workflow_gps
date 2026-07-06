@@ -230,6 +230,7 @@ def build_run_binding(
     return RunBinding(
         run_id=run_id,
         version_id=candidate.version_id,
+        version_ids=[candidate.version_id],
         consumer_tenant=consumer_tenant,
         consumer_principal=consumer_principal,
         gross=candidate.cleared_price,

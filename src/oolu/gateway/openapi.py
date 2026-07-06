@@ -87,6 +87,26 @@ def build_openapi() -> dict:
             "post": op("Connect a provider (requires providers:manage)"),
         },
         "/v1/metrics": {"get": op("Operational metrics")},
+        "/v1/work/nodes": {
+            "get": op(
+                "The Work environment's node account list: every node the "
+                "caller answers for, with account (responsible, admin, "
+                "authority level, status, audit mode), cumulative earnings, "
+                "and platform-verified health"
+            ),
+        },
+        "/v1/work/nodes/{node_id}/account": {
+            "post": op(
+                "Create or update a node's account; a node with no account "
+                "yet is onboarded — the caller becomes its responsible"
+            ),
+        },
+        "/v1/work/nodes/{node_id}/activity": {
+            "get": op(
+                "The node's execution feed: runs bound to its versions, "
+                "expanded into audit steps"
+            ),
+        },
         "/v1/nodeplace": {
             "get": op("List the caller's own contributed nodes"),
             "post": op(

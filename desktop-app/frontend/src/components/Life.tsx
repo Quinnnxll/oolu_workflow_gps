@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import type { RunSummary, TimelineEvent } from "../types";
 import { Chat } from "./Chat";
+import { Work } from "./Work";
 
 // The Life environment: a messenger. The left pane lists who you can talk
 // to — OoLu (the assistant, full function access), Friends (people and
@@ -15,6 +16,7 @@ type Selection =
   | { kind: "noder"; run: RunSummary };
 
 export function Life() {
+  const [mode, setMode] = useState<"life" | "work">("life");
   const [selected, setSelected] = useState<Selection>({ kind: "oolu" });
   const [runs, setRuns] = useState<RunSummary[]>([]);
 
@@ -32,14 +34,16 @@ export function Life() {
     return () => clearInterval(t);
   }, [refreshRuns]);
 
+  if (mode === "work") {
+    return <Work onLife={() => setMode("life")} />;
+  }
+
   return (
     <div className="life">
       <aside className="convo-list">
         <div className="mode-tabs">
           <button className="on">Life</button>
-          <button disabled title="Work arrives in the next build">
-            Work
-          </button>
+          <button onClick={() => setMode("work")}>Work</button>
         </div>
 
         <button

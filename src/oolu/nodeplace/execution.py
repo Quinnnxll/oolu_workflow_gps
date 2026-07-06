@@ -175,6 +175,7 @@ def execute_contract(
     run_id: str | None = None,
     trace_store: TraceStore | None = None,
     trace_context: str = "",
+    trace_exclude: frozenset[str] = frozenset(),
 ) -> ContractRunResult:
     """Run an assembled contract with multi-node marketplace binding.
 
@@ -241,6 +242,7 @@ def execute_contract(
             RunBinding(
                 run_id=run_id,
                 version_id=representative,
+                version_ids=[n.version_id for n in market_nodes],
                 consumer_tenant=consumer_tenant,
                 consumer_principal=consumer_principal,
                 gross=gross_total,
@@ -280,6 +282,7 @@ def execute_contract(
             record,
             cleared_by_name,
             context=trace_context,
+            exclude=trace_exclude,
         )
     return ContractRunResult(
         run_id=run_id,
@@ -309,6 +312,7 @@ def _record_contract_trace(
     cleared_by_name: dict[str, float],
     *,
     context: str,
+    exclude: frozenset[str] = frozenset(),
 ) -> None:
     """Fold one contract run into the trace statistics, node-granularly.
 
@@ -329,6 +333,11 @@ def _record_contract_trace(
         owner = compiled.owners.get(action_id or "")
         if owner is None or owner == contract.name:
             continue  # unattributable, or the contract's own glue actions
+        if owner in exclude:
+            # The node forbids using its throughput for auto-development:
+            # the run executes and settles normally, but this child leaves
+            # no observation behind for the growth loop.
+            continue
         ok = outcome.status is ExecutionStatus.SUCCEEDED
         child_ok[owner] = child_ok.get(owner, True) and ok
         last_done[owner] = index

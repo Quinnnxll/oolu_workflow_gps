@@ -1,0 +1,88 @@
+"""Node accounts: the operator-facing identity a node carries in Work.
+
+The registry knows what a node IS (skill, versions, listings); the account
+says who ANSWERS for it and under what regime — the responsible noder, an
+optional admin group (organizations and governments manage fleets), an
+authority level (1-5), a lifecycle status, and whether it is an audit node
+(every request must be committed manually before it runs).
+
+Accounts are deliberately separate from the frozen registry records: they
+change operationally (verification, incidents, stewardship handoffs)
+without minting node versions.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from enum import Enum
+
+from pydantic import BaseModel, ConfigDict, Field
+
+AUTHORITY_MIN = 1
+AUTHORITY_MAX = 5
+
+
+class NodeStatus(str, Enum):
+    LIVE = "live"
+    NEEDS_VERIFICATION = "needs_verification"
+    ERROR = "error"
+
+
+class NodeAccount(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    node_id: str
+    # The principal answering for this node's behavior.
+    responsible: str
+    # Optional management group above the responsible — organizations and
+    # government deployments; personal nodes leave it unset.
+    admin: str | None = None
+    authority_level: int = Field(
+        default=AUTHORITY_MIN, ge=AUTHORITY_MIN, le=AUTHORITY_MAX
+    )
+    # New nodes are not live until verified; errors demote explicitly.
+    status: NodeStatus = NodeStatus.NEEDS_VERIFICATION
+    # An audit node never runs unattended: every request is held until a
+    # human commits it.
+    audit_mode: bool = False
+    # May data passing through this node feed auto-development (trace
+    # learning, node synthesis)? Enterprise and government nodes that carry
+    # customer or citizen data turn this OFF: their runs execute normally
+    # but leave nothing behind for the growth loop to learn from.
+    allow_autodev_data: bool = True
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+_SCHEMA = """CREATE TABLE IF NOT EXISTS node_accounts (
+    node_id TEXT PRIMARY KEY,
+    payload_json TEXT NOT NULL
+)"""
+
+
+class NodeAccountStore:
+    """SQLite-backed accounts over the shell's own durable connection."""
+
+    def __init__(self, conn) -> None:
+        self._conn = conn
+        with self._conn.transaction() as db:
+            db.execute(_SCHEMA)
+
+    def upsert(self, account: NodeAccount) -> None:
+        with self._conn.transaction() as db:
+            db.execute(
+                """INSERT INTO node_accounts (node_id, payload_json)
+                   VALUES (?, ?)
+                   ON CONFLICT(node_id) DO UPDATE SET
+                     payload_json = excluded.payload_json""",
+                (account.node_id, account.model_dump_json()),
+            )
+
+    def get(self, node_id: str) -> NodeAccount | None:
+        with self._conn.lock:
+            row = self._conn.db.execute(
+                "SELECT payload_json FROM node_accounts WHERE node_id = ?",
+                (node_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return NodeAccount.model_validate_json(row["payload_json"])

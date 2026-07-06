@@ -48,6 +48,10 @@ class RunBinding(BaseModel):
     schema_version: int = METERING_SCHEMA_VERSION
     run_id: str
     version_id: str
+    # Every marketplace version that participated (a contract run binds
+    # several nodes at once); empty means just `version_id` — the
+    # single-node runs written before this field existed.
+    version_ids: list[str] = Field(default_factory=list)
     consumer_tenant: str
     consumer_principal: str | None = None
     gross: float = 0.0

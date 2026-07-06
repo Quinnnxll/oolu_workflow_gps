@@ -372,11 +372,13 @@ def build_host_runtime(
     from .nodeplace import (
         CandidateAssembler,
         LiveVersionStats,
+        NodeAccountStore,
         NodeplaceService,
         PriceBook,
         RatingService,
         RatingStore,
         RegistryStore,
+        WorkDesk,
     )
 
     if database_url:
@@ -416,12 +418,19 @@ def build_host_runtime(
     metering = MeteringLedger(conn)
     attribution = AttributionStore(conn)
     ratings = RatingService(RatingStore(conn), verified_run=metering.verified_run)
-    market = CandidateAssembler(
+    stats = LiveVersionStats(
+        metering=metering, audit=durable.audit, attribution=attribution
+    )
+    market = CandidateAssembler(registry=registry, stats=stats, ratings=ratings)
+    # The Work environment's operator view: node accounts + earnings +
+    # verified health + per-node execution feeds, over the same stores.
+    desk = WorkDesk(
         registry=registry,
-        stats=LiveVersionStats(
-            metering=metering, audit=durable.audit, attribution=attribution
-        ),
-        ratings=ratings,
+        accounts=NodeAccountStore(conn),
+        metering=metering,
+        stats=stats,
+        attribution=attribution,
+        audit=durable.audit,
     )
     price_book = PriceBook(data / "prices.db")
     traces = TraceStore(data / "traces.db")
@@ -440,6 +449,7 @@ def build_host_runtime(
         trace_store=traces,
         contract_executors=executors,
         accounts=accounts,
+        desk=desk,
     )
     return HostRuntime(
         gateway=gateway,

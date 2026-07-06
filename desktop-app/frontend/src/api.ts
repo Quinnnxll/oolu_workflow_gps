@@ -277,6 +277,53 @@ export interface ChatTurnReply {
   run_id: string | null;
 }
 
+// ---- Work environment wire shapes (GET /v1/work/nodes et al.) ------------
+export interface NodeAccountView {
+  node_id: string;
+  responsible: string;
+  admin: string | null;
+  authority_level: number;
+  status: string;
+  audit_mode: boolean;
+  allow_autodev_data: boolean;
+}
+
+export interface NodeAccountPatch {
+  admin: string;
+  authority_level: number;
+  status: string;
+  audit_mode: boolean;
+  allow_autodev_data: boolean;
+}
+
+export interface WorkNode {
+  node_id: string;
+  title: string;
+  status: string;
+  account: NodeAccountView;
+  earnings_micros: number;
+  health: {
+    verified_successes: number;
+    verified_failures: number;
+    score: number | null;
+  };
+}
+
+export interface NodeRunSteps {
+  run_id: string;
+  gross: number;
+  steps: { seq: number; event_type: string; at: string }[];
+}
+
+export interface HoldItem {
+  pending_id: string;
+  name: string;
+  reserved: string[];
+  submitted_by: string | null;
+  created_at: string;
+  expires_at: string | null;
+}
+
 export const api = {
   // One turn with the assistant. The conversation is client-held, so the
   // recent history rides along; a work turn comes back with the run id the
@@ -336,6 +383,30 @@ export const api = {
     }));
     return { items: items.reverse() };
   },
+  // ---- the Work environment: node accounts and stewardship -------------
+  workNodes: () => req<{ items: WorkNode[] }>("GET", "/v1/work/nodes"),
+  workAccount: (nodeId: string, patch: Partial<NodeAccountPatch>) =>
+    req<NodeAccountView>("POST", `/v1/work/nodes/${nodeId}/account`, patch),
+  workActivity: (nodeId: string) =>
+    req<{ items: NodeRunSteps[] }>("GET", `/v1/work/nodes/${nodeId}/activity`),
+  // Manual-commit queue: held contract runs (audit nodes land here).
+  holds: () => req<{ items: HoldItem[] }>("GET", "/v1/runs/contract/holds"),
+  decideHold: (pendingId: string, approved: boolean) =>
+    req<unknown>("POST", `/v1/runs/contract/holds/${pendingId}`, { approved }),
+  // Create a node as admin: contribute a draft (its first real version
+  // arrives from work or a manual publish), then shape its account.
+  createNode: (title: string, summary: string) =>
+    req<{ node_id: string }>("POST", "/v1/nodeplace", {
+      skill: {
+        name: title,
+        description: summary || title,
+        signature: { application: "cli", adapter: "cli" },
+        actions: [{ correlation_id: "draft", adapter: "cli", operation: "run" }],
+      },
+      title,
+      summary: summary || title,
+      visibility: "public",
+    }),
   // The desktop "Skills" tab browses the marketplace's published listings —
   // the gateway's discovery surface.
   skills: (q?: string) =>

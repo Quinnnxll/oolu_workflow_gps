@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+from pydantic import ValidationError
+
 from ..billing import (
     BillingService,
     DisputeService,
@@ -59,6 +61,7 @@ from ..nodeplace import (
     SubscriptionPlan,
     UnverifiedRunError,
     Visibility,
+    WorkDesk,
     assess_budget,
     build_run_binding,
     compile_contract,
@@ -84,7 +87,7 @@ from ..orchestrator.state import (
     TaskContract,
 )
 from ..providers.vault import SecretVault
-from ..skills.contract import NodeContract, Slot
+from ..skills.contract import NodeContract, Slot, SubgraphBody
 from ..skills.inputs import bind_inputs, inputs_manifest
 from ..skills.models import ReusableSkill
 from ..skills.ports import ActionExecutor
@@ -186,6 +189,7 @@ class GatewayApp:
         disputes: DisputeService | None = None,
         webhook_verifier: WebhookVerifier | None = None,
         accounts=None,  # identity.LocalAccountService: local multi-user login
+        desk: WorkDesk | None = None,  # the Work environment's node desk
         chat: ChatAssistant | None = None,  # the /v1/chat assistant; a
         # model-less default keeps the conversational surface working
         value_patcher=None,  # orchestrator.ValuePatcher: fills creative inputs
@@ -238,6 +242,7 @@ class GatewayApp:
         # answer only when this is configured — installs fronted by a real
         # IdP keep a 404 there and lose nothing.
         self._accounts = accounts
+        self._desk = desk
         # The chat surface is the product face; it must work on every
         # install, so a missing assistant degrades to the model-less
         # default (rules + message-as-intent), never to a 404.
@@ -405,6 +410,9 @@ class GatewayApp:
         r.add("GET", "/v1/metrics", self._metrics_endpoint)
         r.add("GET", "/v1/worker-health", self._worker_health)
         r.add("GET", "/v1/nodeplace", self._list_own_nodes)
+        r.add("GET", "/v1/work/nodes", self._work_nodes)
+        r.add("POST", "/v1/work/nodes/{node_id}/account", self._work_account)
+        r.add("GET", "/v1/work/nodes/{node_id}/activity", self._work_activity)
         r.add("POST", "/v1/nodeplace", self._contribute)
         r.add("POST", "/v1/nodeplace/{node_id}/revoke", self._revoke_node)
         r.add("GET", "/v1/listings", self._discover_listings)
@@ -915,6 +923,64 @@ class GatewayApp:
             },
         )
 
+    def _require_desk(self) -> WorkDesk:
+        if self._desk is None:
+            raise GatewayError(404, "not_found", "the work desk is not enabled")
+        return self._desk
+
+    def _work_nodes(self, request, session, params) -> Response:
+        """The Work environment's node account list: every node the caller
+        answers for, with account, cumulative earnings, and health."""
+        desk = self._require_desk()
+        entries = desk.overview(
+            principal=session.principal_id, tenant=session.tenant_id
+        )
+        return json_response(
+            200, {"items": [e.model_dump(mode="json") for e in entries]}
+        )
+
+    def _work_account(self, request, session, params) -> Response:
+        """Create/update a node account — or onboard: a node with no account
+        yet gets the caller as its responsible."""
+        desk = self._require_desk()
+        body = request.body or {}
+        level = body.get("authority_level")
+        try:
+            account = desk.save_account(
+                params["node_id"],
+                principal=session.principal_id,
+                tenant=session.tenant_id,
+                admin=body.get("admin"),
+                authority_level=int(level) if level is not None else None,
+                status=body.get("status"),
+                audit_mode=(
+                    bool(body["audit_mode"]) if "audit_mode" in body else None
+                ),
+                allow_autodev_data=(
+                    bool(body["allow_autodev_data"])
+                    if "allow_autodev_data" in body
+                    else None
+                ),
+            )
+        except OwnershipError as exc:
+            raise GatewayError(403, "forbidden", str(exc)) from exc
+        except ContributionError as exc:
+            raise GatewayError(404, "not_found", str(exc)) from exc
+        except (ValueError, ValidationError) as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(200, account.model_dump(mode="json"))
+
+    def _work_activity(self, request, session, params) -> Response:
+        """The node's execution feed: bound runs expanded into audit steps."""
+        desk = self._require_desk()
+        try:
+            feed = desk.activity(params["node_id"], tenant=session.tenant_id)
+        except ContributionError as exc:
+            raise GatewayError(404, "not_found", str(exc)) from exc
+        return json_response(
+            200, {"items": [r.model_dump(mode="json") for r in feed]}
+        )
+
     def _list_own_nodes(self, request, session, params) -> Response:
         nodeplace = self._require_nodeplace()
         nodes = nodeplace.list_own_nodes(
@@ -1227,6 +1293,17 @@ class GatewayApp:
         except ValueError as exc:
             raise GatewayError(400, "invalid_request", str(exc)) from exc
         reserved = reserved_operations(compiled)
+        if self._desk is not None:
+            # An audit node never runs unattended: its presence holds the
+            # contract for a manual commit exactly like a reserved action.
+            children = (
+                contract.body.nodes
+                if isinstance(contract.body, SubgraphBody)
+                else [contract]
+            )
+            reserved = sorted(
+                {*reserved, *self._desk.audit_holds_for([c.id for c in children])}
+            )
         if reserved:
             # Not a dead end: hold it durably, tenant-scoped, for an
             # authorized approver (POST /v1/runs/contract/holds/{id}).
@@ -1322,6 +1399,20 @@ class GatewayApp:
         except ReviewRequiredError as exc:
             raise GatewayError(409, "review_required", str(exc)) from exc
 
+        # Children of nodes that forbid data reuse are excluded from trace
+        # learning BEFORE anything runs.
+        trace_exclude: frozenset[str] = frozenset()
+        if self._desk is not None:
+            children = (
+                contract.body.nodes
+                if isinstance(contract.body, SubgraphBody)
+                else [contract]
+            )
+            blocked = self._desk.autodev_blocked([c.id for c in children])
+            trace_exclude = frozenset(
+                c.name for c in children if c.id in blocked
+            )
+
         def submit() -> dict:
             result = execute_contract(
                 contract,
@@ -1335,6 +1426,7 @@ class GatewayApp:
                 consumer_principal=session.principal_id,
                 trace_store=self._trace_store,
                 trace_context=session.tenant_id,
+                trace_exclude=trace_exclude,
             )
             self._metrics["contract_runs"] += 1
             payload = result.model_dump(mode="json")

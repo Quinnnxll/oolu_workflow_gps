@@ -87,7 +87,7 @@ class LiveVersionStats:
         successes = 0
         costs: list[float] = []
         for event in self._metering.events():
-            if event.version_id != version_id:
+            if not self._touches(event.run_id, event.version_id, version_id):
                 continue
             successes += 1
             if event.provider_cost is not None:
@@ -101,8 +101,7 @@ class LiveVersionStats:
                 if record.payload.get("status") == ExecutionStatus.SUCCEEDED.value:
                     continue
                 run_id = record.payload.get("run_id", "")
-                binding = self._attribution.get_binding(run_id)
-                if binding is not None and binding.version_id == version_id:
+                if self._touches(run_id, None, version_id):
                     failures += 1
 
         return VersionStats(
@@ -110,6 +109,21 @@ class LiveVersionStats:
             failures=failures,
             provider_cost_mean=(sum(costs) / len(costs)) if costs else None,
         )
+
+    def _touches(
+        self, run_id: str, event_version: str | None, version_id: str
+    ) -> bool:
+        """Did this run involve the version? A contract run binds several
+        nodes at once, so the aggregate binding's participation list counts
+        as much as the representative recorded on the event itself."""
+        if event_version == version_id:
+            return True
+        if self._attribution is None:
+            return False
+        binding = self._attribution.get_binding(run_id)
+        if binding is None:
+            return False
+        return version_id in (binding.version_ids or [binding.version_id])
 
 
 class AssembledCandidate(BaseModel):

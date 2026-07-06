@@ -1,3 +1,4 @@
+from .accounts import NodeAccount, NodeAccountStore, NodeStatus
 from .assembly import (
     AssemblyNodePreview,
     AssemblyPreview,
@@ -13,6 +14,7 @@ from .budget import (
     assess_budget,
     enforce_budget,
 )
+from .desk import DeskEntry, NodeHealth, RunSteps, WorkDesk
 from .economics import (
     AssembledCandidate,
     CandidateAssembler,
@@ -148,6 +150,13 @@ __all__ = [
     "NodeplaceService",
     "OwnershipError",
     "PayoutPreview",
+    "NodeAccount",
+    "NodeAccountStore",
+    "NodeHealth",
+    "NodeStatus",
+    "DeskEntry",
+    "RunSteps",
+    "WorkDesk",
     "PendingContractRecord",
     "PendingContractStore",
     "PriceBook",
