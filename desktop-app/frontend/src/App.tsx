@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, isRemote, requiresLogin, session, signOut } from "./api";
 import type { InboxItem, TaskView } from "./types";
-import { Chat } from "./components/Chat";
+import { Life } from "./components/Life";
 import { TaskPane } from "./components/TaskPane";
 import { Inbox } from "./components/Inbox";
 import { Skills } from "./components/Skills";
@@ -66,7 +66,7 @@ export function App() {
       </header>
 
       <main className={dev ? "" : "chat-main"}>
-        {dev ? <DevScreens /> : <Chat />}
+        {dev ? <DevScreens /> : <Life />}
       </main>
     </div>
   );

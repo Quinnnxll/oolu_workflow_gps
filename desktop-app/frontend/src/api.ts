@@ -324,6 +324,18 @@ export const api = {
       }));
     return { items };
   },
+  // The Noder conversation list: every node interaction (run), newest
+  // first, regardless of whether it needs a human right now.
+  runs: async () => {
+    const data = await req<{ items: RunDict[] }>("GET", "/v1/runs");
+    const items = (data.items ?? []).map((r) => ({
+      run_id: r.run_id,
+      intent: r.intent,
+      phase: r.phase,
+      awaiting: r.awaiting,
+    }));
+    return { items: items.reverse() };
+  },
   // The desktop "Skills" tab browses the marketplace's published listings —
   // the gateway's discovery surface.
   skills: (q?: string) =>

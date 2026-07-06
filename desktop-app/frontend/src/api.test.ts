@@ -320,6 +320,26 @@ describe("auth", () => {
     expect(requiresLogin()).toBe(false);
   });
 
+  it("runs lists node interactions newest first", async () => {
+    routes["GET /v1/runs"] = {
+      status: 200,
+      body: {
+        items: [
+          { run_id: "r1", intent: "older", phase: "completed", awaiting: null },
+          { run_id: "r2", intent: "newer", phase: "executing", awaiting: null },
+        ],
+      },
+    };
+    const { items } = await api.runs();
+    expect(items.map((r) => r.run_id)).toEqual(["r2", "r1"]);
+    expect(items[0]).toEqual({
+      run_id: "r2",
+      intent: "newer",
+      phase: "executing",
+      awaiting: null,
+    });
+  });
+
   it("chat posts the message with history and returns the turn", async () => {
     routes["POST /v1/chat"] = {
       status: 200,

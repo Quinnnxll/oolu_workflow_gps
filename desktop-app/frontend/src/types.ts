@@ -44,6 +44,15 @@ export interface TimelineEvent {
   detail: string;
 }
 
+// One row in the Noder conversation list: a node interaction (a run) whose
+// audit log is that thread's message history.
+export interface RunSummary {
+  run_id: string;
+  intent: string;
+  phase: string;
+  awaiting: string | null;
+}
+
 // A marketplace listing (`GET /v1/listings`). The desktop "Skills" tab browses
 // published nodes, which is the only discovery surface the gateway exposes.
 export interface Listing {
