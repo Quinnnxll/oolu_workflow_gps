@@ -5,10 +5,10 @@ import json
 
 import pytest
 
-from workflow_gps.cli import _cmd_record, build_parser
-from workflow_gps.skills.models import ActionEvent, Demonstration, ExecutionStatus
-from workflow_gps.skills.recorder import Recording, RecordingMetrics
-from workflow_gps.skills.registry import SkillRegistry
+from oolu.cli import _cmd_record, build_parser
+from oolu.skills.models import ActionEvent, Demonstration, ExecutionStatus
+from oolu.skills.recorder import Recording, RecordingMetrics
+from oolu.skills.registry import SkillRegistry
 
 
 def _parse(argv):

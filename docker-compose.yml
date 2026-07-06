@@ -1,0 +1,23 @@
+# Self-hosting OoLu for online web users (multi-user accounts):
+#
+#   OOLU_HOST_SECRET=$(openssl rand -base64 32) \
+#   OOLU_ADMIN_PASSWORD=change-me-soon docker compose up -d
+#   docker compose logs oolu   # shows the admin sign-in details
+#
+# Terminate TLS in front of this (Caddy, nginx, Traefik, a cloud load
+# balancer): passwords and bearer tokens must not travel over plain HTTP
+# outside your machine.
+services:
+  oolu:
+    build: .
+    ports:
+      - "8765:8765"
+    environment:
+      OOLU_HOST_SECRET: ${OOLU_HOST_SECRET:?set OOLU_HOST_SECRET to a long random secret}
+      OOLU_ADMIN_PASSWORD: ${OOLU_ADMIN_PASSWORD:-}
+    volumes:
+      - oolu-data:/data
+    restart: unless-stopped
+
+volumes:
+  oolu-data:

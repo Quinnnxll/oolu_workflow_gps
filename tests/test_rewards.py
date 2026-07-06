@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from workflow_gps.billing.pricing import PricingEngine
-from workflow_gps.nodeplace import (
+from oolu.billing.pricing import PricingEngine
+from oolu.nodeplace import (
     CandidateEconomics,
     CostVector,
     LineageLink,

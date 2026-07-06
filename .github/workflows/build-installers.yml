@@ -1,0 +1,62 @@
+# Builds the single-file OoLu shell app for every desktop platform.
+# PyInstaller cannot cross-compile, so each OS builds its own binary; the
+# artifacts are what a release attaches as downloadable "installers".
+name: build-installers
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Build the shell app
+        run: python packaging/build_installer.py
+      - name: Smoke-check the binary exists
+        shell: bash
+        run: ls dist/OoLu-Shell*
+      - name: Smoke-test the binary actually boots
+        # The build only proves PyInstaller froze *something*; this proves the
+        # frozen app starts and serves. A "double-click and go" app that exits
+        # after a second (a missing hidden import, an unbundled data file, a
+        # startup exception) must fail the build here, not on a user's machine.
+        shell: bash
+        env:
+          OOLU_SHELL_OPEN_BROWSER: "0"
+          OOLU_SHELL_PORT: "8765"
+          OOLU_SHELL_NO_HOLD: "1"
+          OOLU_SHELL_DATA_DIR: ${{ runner.temp }}/oolu-smoke
+        run: |
+          set -uo pipefail
+          bin=$(ls dist/OoLu-Shell* | head -n1)
+          echo "launching $bin"
+          "./$bin" > shell-smoke.log 2>&1 &
+          pid=$!
+          ok=""
+          for i in $(seq 1 30); do
+            if ! kill -0 "$pid" 2>/dev/null; then
+              echo "the shell process exited before becoming healthy"; break
+            fi
+            if curl -fsS "http://127.0.0.1:8765/v1/health" >/dev/null 2>&1; then
+              ok=1; echo "shell answered /v1/health after ${i}s"; break
+            fi
+            sleep 1
+          done
+          kill "$pid" 2>/dev/null || true
+          echo "----- shell output -----"; cat shell-smoke.log || true
+          crash="$OOLU_SHELL_DATA_DIR/shell-crash.log"
+          if [ -f "$crash" ]; then echo "----- crash log -----"; cat "$crash"; fi
+          if [ -z "$ok" ]; then echo "SMOKE TEST FAILED: the shell never served /v1/health"; exit 1; fi
+      - uses: actions/upload-artifact@v5
+        with:
+          name: OoLu-Shell-${{ runner.os }}
+          path: dist/OoLu-Shell*

@@ -9,13 +9,13 @@ compiler then consumes the brief exactly as it would a hand-built one.
 
 from __future__ import annotations
 
-from workflow_gps.orchestrator import (
+from oolu.orchestrator import (
     HeuristicIntaker,
     ModelBackedIntaker,
     StaticIntaker,
 )
-from workflow_gps.orchestrator.state import TaskContract
-from workflow_gps.skills.requirements import (
+from oolu.orchestrator.state import TaskContract
+from oolu.skills.requirements import (
     AuthorizationMode,
     ParameterSource,
     RequirementConstraintCompiler,
@@ -121,7 +121,7 @@ def test_no_model_uses_deterministic_fallback():
 
 def test_intaker_satisfies_the_orchestrator_port():
     # Both the new adapter and the legacy static one honor the same Intaker port.
-    from workflow_gps.orchestrator import Intaker
+    from oolu.orchestrator import Intaker
 
     assert isinstance(ModelBackedIntaker(), Intaker)
     assert isinstance(HeuristicIntaker(), Intaker)

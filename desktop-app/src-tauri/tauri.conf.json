@@ -33,7 +33,7 @@
       "icons/128x128@2x.png",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/wfgps"],
+    "externalBin": ["binaries/oolu"],
     "windows": {
       "nsis": {
         "installMode": "currentUser"
@@ -43,7 +43,7 @@
   "plugins": {
     "shell": {
       "sidecar": true,
-      "scope": [{ "name": "binaries/wfgps", "sidecar": true, "args": true }]
+      "scope": [{ "name": "binaries/oolu", "sidecar": true, "args": true }]
     }
   }
 }

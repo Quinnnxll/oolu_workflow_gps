@@ -4,6 +4,380 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Value patching — the mechanical-design scenario: deterministic
+scaffolding (open the app, open the file, select the tool) chains by
+slots, and at the creative step the run pulls the node's declared input
+list and lets a smart plugin fill the values:
+
+- **`ValueInput` on `NodeContract.inputs`**: a node declares its creative
+  values — name, description, type (`number` / `string` / `choice`), an
+  honest default, hard `minimum`/`maximum` bounds or a closed choice set —
+  instead of hardcoding them. Actions reference them with two placeholder
+  forms inside parameters: `{"$input": name}` (whole-value) and
+  `{"$template": "...{hole}..."}` (named holes in source text; **numbers
+  and choices only** — free strings in templates are refused at bind time
+  as an injection vector).
+- **`skills/inputs.py`**: `inputs_manifest` (qualified `"<node>.<name>"`
+  names across a subgraph; duplicate child names refused), `validate_value`
+  (numbers clamp into bounds, hallucinated choices revert to the default),
+  `resolve_values` (precedence **user > patcher > default**, strict
+  unknown-key refusal, garbage degrades to the default), and `bind_inputs`
+  (substitutes resolved values into every placeholder; identity when there
+  are none).
+- **`orchestrator/patchers.py`** — the smart plugin seam: `ValuePatcher`
+  protocol, `DefaultValuePatcher` (defaults, free), and
+  `GatewayValuePatcher`, which fills the WHOLE manifest with **one batched
+  model call** (the node adapts the model via its declared descriptions,
+  defaults, and bounds), meters it under `values.patch`, and boxes every
+  returned value through `validate_value` — unknown names drop, unusable
+  output means defaults. `patch_or_defaults` guards the run path: no
+  patcher, a raising patcher, or a dead endpoint all mean the declared
+  defaults run; a creative model can improve a run, never block one.
+- **Gateway wiring**: listings carry `inputs` (`POST /v1/nodeplace`
+  passthrough to the marketplace `NodeContract`), `/v1/market/assemble`
+  previews now list the assembled plan's needed inputs with defaults and
+  bounds, and `POST /v1/runs/contract` accepts `{"inputs": {...}}`,
+  patches + binds **before** compilation (held reserved contracts store
+  the concrete values an approver will actually judge), adds the metered
+  `patch_cost` to the budget-gated estimate, and surfaces it on the run
+  response. Contract-run `outcomes` now include each action's `evidence`,
+  so callers see what verification measured.
+- **CAD**: `parametric_plate_pack()` — a plate whose width, depth,
+  thickness, and hole radius are declared bounded inputs feeding a
+  `$template` OpenSCAD source, with a verification spec derived from the
+  bounds so EVERY admissible fill verifies (volume brackets computed from
+  `t·(w·d − A₆₄(r))`, genus 1 provable for the whole box); and
+  `rect_plate_with_hole` — an exact watertight genus-1 reference solid
+  matching the closed form to 1e-9, used as the test instrument.
+- Tests: `tests/test_value_patching.py` proves the scenario end to end
+  through the public gateway — five marketplace nodes assembled by slots
+  alone, scaffolding executed in order before the creative step, an LLM
+  patch (one metered call) clamped into bounds with invented parameters
+  dropped, user values outranking the model, defaults outlasting a dead
+  one, and the rendered geometry verified against the analytic spec.
+
+## v0.7.0 — 2026-07-05
+
+Release notes: `docs/releases/v0.7.0.md`.
+
+Unified-surface migration, final step — the loopback surface is gone:
+
+- **Removed** the `workflow_gps.desktop` package (`DesktopService`, the
+  loopback app, its view-models and inline UI), `build_desktop_runtime`,
+  the `--legacy-loopback` / `--unified` flags, and **`wfgps web`** (the
+  shared-token mode built on the loopback shell — superseded by
+  `wfgps host`, which is multi-user with real accounts). One surface
+  remains: the multi-tenant gateway, with `wfgps desktop` (loopback,
+  auto signed in) and `wfgps host` (network, accounts) as its two
+  bindings. `wfgps desktop` keeps its flags, port, and data layout — the
+  setup scripts and the packaged app work unchanged.
+- The `Dockerfile` / `docker-compose.yml` now run `wfgps host`
+  (`WFGPS_HOST_SECRET` + `WFGPS_ADMIN_PASSWORD` instead of
+  `WFGPS_WEB_TOKEN`); the README's self-hosting section is rewritten
+  around accounts.
+- Tests moved with the code they prove: the desktop-runtime lifecycle
+  tests (planning-only failure, model-driven clarification, injected
+  planner end-to-end, CLI-executor confirmation, reopen persistence) are
+  ported to the host runtime through real gateway routes; the
+  planning-cost/expected-success/cost-weight/default-advising surface
+  tests are ported to `/v1/market/assemble`; the loopback-only suites
+  (~57 tests whose behaviors have gateway twins) are deleted; the shared
+  browser harness moved to `tests/browser_harness.py`.
+
+Unified-surface migration, step 3 — the flip:
+
+- **`wfgps desktop` now serves the unified gateway surface by default**:
+  same routes and front-end as `wfgps host`, loopback-only, auto signed
+  in, with `--registry` / `--seed-starter` keeping their meaning (the
+  starter pack seeds the registry and its skills plan `POST /v1/runs`
+  intents) — the setup scripts and the packaged app work unchanged. The
+  pre-migration surface stays available behind **`--legacy-loopback`**
+  for the transition window; `--unified` remains as a no-op flag.
+- Parity screens: the Earnings screen gained the **payout-account card**
+  (KYC status when onboarded; a country/currency onboarding form when
+  not — a host without a payout adapter answers with the same honest
+  404), and Health gained **execution isolation** (a new gateway
+  `GET /v1/worker-health` route rendering the enforced
+  `IsolationPolicy` via a helper both shells now share — the labels are
+  computed from the policy, never restated by hand).
+- **First-run crash fixed** (the packaged app's field failure,
+  reproduced by the new seeding test): `SkillRegistry`, `TraceStore`,
+  `PriceBook`, and `LocalKnowledgeClient` did not create their parent
+  directories, so a fresh machine died with sqlite's "unable to open
+  database file" before any table logic ran. All path-owning stores now
+  create their directories at construction, pinned by a test that
+  builds each one under a deliberately nonexistent path.
+
+Unified-surface migration, step 2 — task-flow parity:
+
+- The unified front-end's run detail now makes **every pause kind
+  actionable**: clarification questions render as a form (suggested
+  values as placeholders) posting `/answers`; route confirmation shows
+  the chosen blueprint, estimated cost, and reserved actions with
+  Confirm/Decline posting `/confirmation`; approval shows
+  granted-of-required with an Approve button (self-approval refusals
+  surface as the server's own error); incidents list with Retry/Abort
+  posting `/incidents`; and any non-terminal run has a Cancel button.
+- Added the **Skills screen** (`/v1/listings?q=` search over published
+  marketplace nodes — title, summary, status, tags), degrading honestly
+  where nodeplace is not wired.
+- A real-Chromium test drives a run that pauses twice — clarification,
+  then route confirmation — to completion entirely from the browser,
+  via the paste-a-token sign-in path an IdP-fronted host would use.
+  Route pins cover every new fragment the page calls.
+  With this, the unified surface covers the loopback shell's task flow;
+  what remains before flipping the default is the payout-onboarding
+  screen and worker health (the Health screen shows gateway metrics).
+
+Unified-surface migration, step 1 — plus field fixes:
+
+- Added **`wfgps desktop --unified`** (opt-in preview): the desktop shell
+  served over the SAME multi-tenant gateway `wfgps host` uses — same
+  routes, same front-end, same identity semantics — bound to loopback
+  with a `local` user auto-provisioned and signed in. The browser opens
+  straight into the shell via a `#auth=<token>` bootstrap (the token
+  moves into sessionStorage and out of the URL immediately): zero
+  ceremony locally, because the loopback bind — not a password — is the
+  trust boundary on the user's own machine. Credentials are ephemeral
+  per launch by design (fresh secret, rotated password); the data
+  directory persists like any host. The default `wfgps desktop` is
+  unchanged; the loopback surface remains until the remaining screens
+  are ported (step 2).
+- **GitHub Actions**: bumped `checkout` v4→v5, `setup-python` v5→v6,
+  `upload-artifact` v4→v5, `setup-node` v4→v5 across all workflows
+  (the Node 20 runtime deprecation), and the Tauri frontend toolchain
+  Node 20→22 (Node 20 is end-of-life). Pinned by a test so a stale
+  major cannot creep back.
+- **Startup schema guarantee, pinned**: new tests prove a fresh data
+  directory answers every read surface before any write (the packaged
+  app's exact startup path), restarts reopen and migrate cleanly (the
+  admin created before a host restart still signs in after), and every
+  SQLite store creates its schema at CONSTRUCTION time — "no such
+  table" is structurally impossible on a fresh install.
+
+The multi-user gateway grows a face:
+
+- Replaced the gateway front-end (served by `GatewayASGI` at `GET /`)
+  with a **sign-in page + shell**: username/password → `POST
+  /v1/auth/login`, the bearer token lives in `sessionStorage` for that
+  tab (a 401 signs the tab out; sign-out drops it), and every fetch
+  carries `Authorization: Bearer`. IdP-fronted hosts (no local accounts)
+  get a paste-a-token fallback on the same page.
+- Screens over the authenticated surface: **Runs** (start an intent,
+  list, detail with audit timeline + live WebSocket frames via the
+  bearer subprotocol), **Assemble** (goal → priced preview with
+  planning cost, expected success, and budget verdicts → run the
+  contract; a 202 hold links to the inbox), **Inbox** (approve/decline
+  held reserved contracts), **Earnings**, **Users** (admin-only:
+  create, disable/enable), **Health**. Screens degrade honestly: 404 →
+  "not enabled on this host", 403 → "no authority for this screen".
+  XSS-safe by construction (DOM building, no HTML templates, no
+  `innerHTML`), pinned by tests along with every route the page calls.
+- Real-Chromium end-to-end tours against a real host runtime: sign-in
+  (wrong password says only "invalid credentials"), admin provisions
+  and disables a user from the browser and the disabled account is
+  locked out, and a member sees the Users screen refuse and the
+  unwired Earnings screen say so — instead of breaking.
+
+Multi-user web hosting — accounts, not a shared token:
+
+- Added `identity.accounts`: **local user accounts** as the identity
+  provider a self-hoster lacks. Passwords are scrypt-hashed (stdlib;
+  per-user salt, cost parameters recorded next to the hash), login mints
+  a short-lived HS256 token through the SAME `OidcValidator` path an
+  external IdP would use, and **roles become stored grants** — a forged
+  token claim still buys nothing. Login failures are uniform ("invalid
+  credentials" for unknown / wrong-password / disabled alike — no account
+  enumeration), unknown users cost the same scrypt work as wrong
+  passwords (decoy verification), and repeated failures lock the username
+  briefly.
+- New gateway routes (answering only when accounts are configured —
+  IdP-fronted installs keep their 404): public `POST /v1/auth/login`;
+  `GET/POST /v1/auth/users` and `POST /v1/auth/users/{name}/disabled`
+  behind stored `users:manage` authority, tenant-scoped (admins provision
+  their own tenant; the tenant comes from the session, never the body).
+- Added `build_host_runtime(data_dir=, secret=)`: the full multi-tenant
+  gateway (runs, marketplace, ratings, pricing, traces, approvals) over
+  one backupable data directory, wired with local accounts. Refuses
+  secrets under 32 characters.
+- Added **`wfgps host`**: serves it, bootstraps the first admin
+  (idempotently — never resets an existing password) from
+  `WFGPS_ADMIN_PASSWORD` or a generated password shown once, warns when
+  the signing secret is ephemeral, and says loudly to put HTTPS in front.
+
+The self-host runner for online web users:
+
+- Added **`wfgps web`**: the desktop shell served over the network,
+  wrapped in `desktop.web.TokenGuardedApp` — the one property that makes
+  a non-loopback bind defensible: nobody without the access token gets
+  anything. Browsers sign in once at `/login?token=…` (HttpOnly /
+  SameSite=Lax session cookie; sessions are in-memory, so a restart signs
+  everyone out), API clients send `Authorization: Bearer <token>`, and
+  WebSocket upgrades ride the cookie (4401 without). Token comparison is
+  constant-time; the 401 page is deliberately information-free. The token
+  comes from `WFGPS_WEB_TOKEN` (or is generated and printed once), must be
+  ≥16 characters, and the startup banner says loudly to put HTTPS in
+  front. `wfgps desktop` stays loopback-only, unchanged.
+- Added a **`Dockerfile` + `docker-compose.yml`**: the shell behind the
+  token on one backupable `/data` volume; compose refuses to start
+  without `WFGPS_WEB_TOKEN`. Both pinned by tests, documented in the
+  README's "Self-hosting for online web users".
+
+Onboarding hardening (from a field DX audit) — every install trap grows
+directions:
+
+- Added **`wfgps doctor`**: checks Python version, data-dir writability,
+  each optional stack (with the exact `pip install "workflow-gps[…]"` to
+  run), the configured model endpoints (a probe that treats any HTTP
+  answer as alive — 401 is not "down"), and the API-key requirement.
+  Missing *optional* stacks are guidance, not failure: a desktop-only
+  machine reports healthy. Exit 1 only on real problems, each with its
+  one-line fix.
+- **`wfgps run` preflights** the three classic fresh-install traps before
+  any engine machinery can produce a misleading traceback: missing
+  `[engine]` extras, no model server answering at the configured
+  `api_base` (the silent `localhost:8000` trap — the error now names
+  vLLM/Ollama/LM Studio and `--config models.yaml`), and an unset
+  `OPENAI_API_KEY` (any value works for vLLM). `--no-preflight` bypasses;
+  injected builders (tests, embedders) are never preflighted.
+- **Dead ends answer with directions**: running
+  `python src/workflow_gps/cli.py` as a bare file now prints how to run
+  it properly (setup scripts / `wfgps` / `python -m`) instead of a
+  relative-import traceback, and `uvicorn workflow_gps.gateway.asgi:app`
+  serves a 503 signpost explaining that `GatewayASGI` is a class needing
+  a wired `GatewayApp` — with the real local commands — instead of
+  uvicorn's "Attribute 'app' not found".
+- **Setup scripts bootstrap pip**: a `.venv` created by a stripped-down
+  Python (no pip) is repaired via `ensurepip` instead of failing later
+  with "No module named pip".
+- Added the **`ci` GitHub Actions workflow** (lint + full test suite on
+  every push/PR and on demand via `workflow_dispatch`); all three
+  workflows are hand-dispatchable, pinned by a test.
+- Moved model-call pricing from `metering.model_calls` to
+  **`billing.model_calls`** — the metering package's own tested invariant
+  is that it exposes no money symbols (metering counts usage; billing
+  prices it), and the meter violated the layering. Import paths change;
+  behavior does not.
+
+- The learned planner is now **wired in by default**: when a surface has
+  a `trace_store` and no explicit `proposal_model`, producer picks are
+  advised by `TraceProposalModel` over the caller's own recorded runs —
+  free, evidence-only, and tenant-scoped (the gateway constructs the
+  model per request with the calling tenant's context, so one tenant's
+  history never enters another's evidence pool; the desktop uses its
+  single-user bucket). An explicitly passed `proposal_model` always
+  wins. Pinned in tests with run-level evidence per-node personalization
+  cannot see: steps that succeeded inside runs that failed as wholes.
+
+The first domain pack — CAD, with verification grounded in mathematics:
+
+- Added `domains.cad.geometry`: exact mesh mathematics with stated
+  hypotheses. Volume by the divergence theorem (Σ v0·(v1×v2)/6 — exact
+  on closed, consistently oriented meshes; translation invariance and
+  orientation antisymmetry are *asserted in tests*, not assumed),
+  surface area, extents, and a combinatorial `ManifoldReport`
+  (boundary / non-manifold / misoriented edges, degenerate triangles,
+  connected components, Euler characteristic, and genus via χ = 2c − 2g).
+  STL both directions, with binary detection by the exact length
+  equation — never the header, which real files lie about.
+- Added `domains.cad.verify`: `GeometrySpec` (watertightness, volume and
+  area intervals, extent box-fit, exact genus) → `GeometryReport` with
+  measured numbers behind every failure. Volume is *withheld* on open
+  meshes — the formula's hypothesis failed, so no number beats a wrong
+  number.
+- Added `domains.cad.OpenSCADExecutor` (adapter `cad`): deterministic
+  `render_stl` through the OpenSCAD CLI (binary configurable as an argv
+  prefix — tests drive the real subprocess path via a stub renderer;
+  a `skipif` test runs the true binary when installed) and pure-Python
+  `verify_geometry`. A failed predicate fails the action → the run → the
+  earnings, and the trace posterior records the failure honestly: the
+  platform's money-on-verified-success promise, enforced by geometry.
+- Added `domains.cad.cad_starter_pack()`: a parametric mounting plate and
+  its verification node, slot-chained. The spec's bounds bracket
+  closed-form values (inscribed-polygon hole area (n/2)r²sin(2π/n),
+  perimeter 2nr·sin(π/n); volume ≈ 3087.08 mm³, area ≈ 2098.9 mm²,
+  genus exactly 1) — tight enough to refute a hole-less or double-holed
+  part outright, recomputed from the formulas in the tests. A gateway
+  test contributes both nodes and goal-assembles them: CAD nodes are
+  ordinary marketplace citizens.
+
+The trace corpus and the first learned planner:
+
+- `TraceStore` now logs every recorded run **verbatim** (`trace_runs`, a
+  new migration existing databases adopt cleanly): the aggregates grade
+  nodes; the log answers "what did whole successful plans look like".
+  Read it with `runs(context=, goal=, limit=)` — newest first, `None`
+  filters mean all, the empty string stays a real bucket.
+- Added `knowledge.corpus`: `build_examples` turns runs into
+  (goal, plan-prefix → next node) training examples — the shape a
+  forward-generating sequence model trains on — and `export_jsonl`
+  writes them oldest-first as a portable file for offline model
+  training. Failed runs export flagged (`run_success: false`), never
+  silently dropped.
+- Added `orchestrator.TraceProposalModel`: the baseline learned planner
+  behind the same `ProposalModel` seam a Mamba/SSM checkpoint later
+  implements. It proposes live from the caller's own run log, judged
+  against the most specific evidence pool available (runs of this goal →
+  runs sharing an already-selected node → all runs; the budget layer's
+  class-first shape), weights candidates by the Beta mean of the runs
+  they appeared in, has no opinion where it has no evidence, and costs
+  nothing. A future sequence checkpoint must beat it in the replay
+  harness to earn its inference cost.
+
+Thompson v2 — the learning loop gets honest about time, money, and proof:
+
+- `TraceStore` gained `recency_decay` (default 1.0 = today's exact
+  counting): every fresh observation of a node first discounts its
+  existing counts, so the posterior tracks what the node has done
+  *lately* — a node that regressed last month stops looking as good as
+  ever, old glory fades into honest uncertainty, and Thompson sampling
+  re-explores it. Posterior (and `NodeStats`) counts are floats now.
+- `ContractAssembler` (and previews on both surfaces, via `cost_weight`
+  in the request body) can rank picks by expected **utility** — quality
+  minus weighted personal cost — instead of quality alone, so a
+  slightly-less-proven cheap node can honestly beat a proven expensive
+  one, by exactly the trade the caller declared. Default 0 keeps cost a
+  tie-break, unchanged.
+- Previews now report `expected_success`: the plan's chance of verified
+  success in the caller's own hands (product of picked nodes' posterior
+  means over the personalized library; gap nodes count at their uniform
+  prior 0.5). Shown on the desktop assemble screen.
+- Added `knowledge.replay`: an offline harness where planner strategies
+  audition before they ship. `ReplayWorld`s (fittable from recorded
+  history via `from_trace_store`) run in drift-modeling phases,
+  `PosteriorStrategy` replays the assembler's exact pick math with its
+  own private trace store, and every strategy sees the same seeded
+  outcome stream — reports compare decisions, not luck. Pinned in tests:
+  decay adapts to drift faster, cost-awareness buys success cheaper.
+
+- Added the `ProposalModel` seam to `ContractAssembler`: a model may weigh
+  in on contested producer picks, but only as a **prior** — its `[0, 1]`
+  weights enter the same Beta posterior verified history feeds, as
+  pseudo-observations (`proposal_strength`, default 3) that decide
+  thin-history ties and wash out as real evidence accumulates. Advisory by
+  construction: unknown ids are dropped, wild weights clamp, exceptions
+  (including a dead model endpoint) downgrade to verified-history-only
+  assembly, and a single-candidate pick never spends a model call.
+- Added `billing.model_calls`: `ModelCallMeter` records every completion's
+  token telemetry under a purpose tag and a `ModelPriceTable` (per-tier
+  cost per million tokens; unknown tiers priced conservatively) turns it
+  into money — model calls are never free.
+- Added `orchestrator.proposals.GatewayProposalModel`: the seam implemented
+  over the same routing `Gateway` the synthesis engine uses (frozen
+  cache-safe system prompt, fast tier, small completion budget, strongest
+  candidates shortlisted), with defensive weight parsing — unreadable
+  advice is no advice — and every call metered.
+- Assembly previews now surface `planning_cost` (what the advice cost,
+  distinct from market gross since no noder earns it) on both surfaces,
+  and the budget verdict judges **gross + planning cost**: a plan that
+  needed advice is honestly dearer. New ctor knob `proposal_model` on
+  `GatewayApp`, `DesktopService`, and `build_desktop_runtime`; the desktop
+  assemble screen shows the planning line when it is nonzero.
+
+## v0.6.0 — 2026-07-05
+
+Release notes: `docs/releases/v0.6.0.md`.
+
 Reward & pricing system (`claude/oolu-workflow-planning-review`) — the
 economic layer for Noders and route planning; design in
 `docs/REWARD_PRICING_DESIGN.md`.
@@ -57,6 +431,353 @@ Adaptive planning (`claude/oolu-workflow-planning-review`) — implements the
 typed-capability-graph proposal in `docs/WORKFLOW_PLANNING_REVIEW.md`; the
 planner now grows automatically with the user's executions and learned skills.
 
+- Native installer packaging (`packaging/`): `python packaging/build_installer.py`
+  produces a single self-contained executable (`dist/WorkflowGPS-Shell`,
+  `.exe` on Windows) via PyInstaller — copy it anywhere, double-click,
+  the shell starts, the browser opens, data lives in `~/.workflow-gps`.
+  The frozen launcher (`shell_launcher.py`) is a thin wrapper over the
+  same `wfgps desktop` invocation the setup scripts use (one launch path
+  to keep honest), with a free-port fallback so a busy 8765 never turns
+  into an error dialog. The spec bundles the starter-pack data
+  (importlib.resources inside the frozen app) and uvicorn's dynamic
+  imports statically, and excludes every heavy optional stack.
+  PyInstaller cannot cross-compile, so `.github/workflows/
+  build-installers.yml` builds Windows/macOS/Linux binaries on every
+  version tag. Validated live: the Linux binary built here serves the
+  UI, seeded skills, and earnings standalone. `tests/test_packaging.py`
+  pins the launcher argv against the real CLI, the port fallback, the
+  spec's bundling, and the CI wiring.
+- One-step setup for non-developers: download the repo ZIP, unzip, and
+  run `setup.bat` (Windows, double-clickable) or `./setup.sh`
+  (macOS/Linux). The scripts find Python 3.11+ (with a friendly pointer
+  when it's missing), create a private `.venv` inside the folder,
+  install only the `serve` extra (the shell never needs the heavy
+  `engine`), and launch `wfgps desktop --seed-starter --open` — which
+  now auto-opens the browser (new `--open` flag) and prints a
+  human-readable startup message. Idempotent: re-running reuses the
+  environment and just starts the shell; nothing lands outside the
+  folder. The README opens with a "Quickstart — download → run" section,
+  and `tests/test_setup_scripts.py` pins every link of the story (the
+  scripts' install command and launch flags against the CLI parser, the
+  README pointers) so the setup path can never silently rot.
+- Browser-level end-to-end tests (`tests/test_browser_e2e.py`): a real
+  Chromium drives the real front-end over a minimal in-test ASGI HTTP
+  server (no external server dependency). The tour: assemble the seeded
+  marketplace chain, watch the budget verdict, confirm the run through
+  the shared money path, onboard a payout account (KYC pending blocks
+  payouts), and render health; a second test proves the task screen
+  degrades gracefully where the transport has no websockets. Skips
+  cleanly wherever the `browser` extra (playwright) or a Chromium
+  executable is unavailable; falls back to the host-installed
+  `/opt/pw-browsers/chromium` when playwright's own download is absent.
+- Payout-account onboarding in the shell: `DesktopService.payout_account`
+  / `onboard_payout_account` (new `payout_adapter` ctor hook, also a
+  `build_desktop_runtime` passthrough) over `GET`/`POST
+  /v1/payout-account`. Not-onboarded is a rendered state (200), never an
+  error; onboarding is idempotent (an account is an external resource,
+  returned rather than minted twice) and audited (`payout.onboarded`);
+  the KYC status is refreshed from the processor on every read and the
+  refresh persisted — verification happens on THEIR side, the shell only
+  mirrors it, and `payouts_enabled` flips only on `verified`. The
+  Earnings screen gains a payout-account card: onboarding form when
+  absent, status badges ("payouts blocked until KYC verifies") after.
+- Earnings wired into `build_desktop_runtime`: shells get the earnings
+  screen out of the box — the runtime creates an `EarningsLedger` and
+  `PayoutStore` over its own durable connection (honest zeros until the
+  user's contributions earn), passes them to the shell under the new
+  `noder_principal` parameter (default `"local-noder"`; `None`
+  disables), and exposes them on `DesktopRuntime.earnings` /
+  `.payouts` — hand THOSE to a settlement job so the screen and the
+  money pipeline share one truth.
+- Desktop earnings screen: `DesktopService.earnings()` (new
+  `earnings_ledger` / `payout_store` / `noder_principal` ctor wiring)
+  projects the local noder's ledger into a secret-free `EarningsView` —
+  available/pending/reserved/lifetime-paid balance tiles, the ledger
+  lines (kind, amount, event, availability; most recent first), and
+  payout batch history — served at `GET /v1/earnings` (404 when the
+  shell has no earnings wiring). Amounts cross the loopback in currency
+  units; the ledger keeps its integer micros, and the shell can show
+  the money but never move it. The front-end gains an Earnings screen
+  with color-coded entry kinds and an explicit negative-balance
+  explainer (a clawback exceeded the reserve; new earnings repay first).
+- Desktop front-end (replacing the scaffold screen by screen, still one
+  self-contained page with no build step): a DOM-builder kernel (`h()`)
+  replaces innerHTML templates — every dynamic value is a text node, so
+  the page is XSS-safe by construction; a hash router gives each screen
+  and each task a deep-linkable address (`#/task/{run_id}`). The screens
+  now drive the WHOLE loopback surface: the new task-detail screen
+  answers clarification questions, previews and approves/declines
+  routes, resolves incidents (retry/abort), cancels, and streams the
+  live timeline over the websocket; Assemble renders per-step clearing
+  forces and keeps its form across navigation; Inbox links run pauses to
+  their task screens; a new Skills screen searches the library. The
+  wiring test now pins all of it.
+- Desktop UI scaffolding (`desktop/ui.py`, served by the loopback at
+  `GET /`): one self-contained page — plain HTML + vanilla JS, no build
+  step — over the same loopback endpoints the tests drive, so the page
+  can never do anything the API cannot. Four screens: **Assemble** (goal
+  + slots + budget knobs + explore/fill-gaps, preview with per-step
+  prices/payouts, learned orderings, and the budget verdict; confirm
+  with review acknowledgement, rendering held-for-approval outcomes),
+  **Tasks** (submit + session task table), **Inbox** (all pause kinds;
+  contract-approval items get approve/decline buttons using a bearer
+  token held in page memory only — every decision is verified
+  server-side), and **Health**. Light/dark aware, XSS-escaped rendering.
+  Tests pin the page's wiring to the real routes and syntax-check the
+  inline script with node (skipped where node is absent).
+- Hardening passes: property-style fuzzing of the money invariants and
+  concurrency stress on the shared stores (no new dependencies — seeded
+  `random`, explicit seeds, failures replay exactly). The money machine
+  (12 seeds x 50 random ops: accruals, clock advances, settlement cycles
+  with a flaky processor, upheld/rejected disputes) checks after every
+  step that the reserve is never negative, lifetime payouts never exceed
+  gross accruals (money is never minted), only upheld clawbacks can
+  drive a balance negative, and the ledger's PAYOUT outflow equals what
+  the processor actually paid — then jumps past the risk window for the
+  eventually-100% endgame (gross == paid + available + reserved, residue
+  below threshold). The concurrency suite races 16 barrier-synchronized
+  threads at the primitives: idempotent `run` executes exactly once (and
+  exactly once again after `release`), ledger dedup admits one row per
+  unique key with no lost distinct writes, a hold is decided by exactly
+  one contender (with sweeps racing adds), and trace statistics lose
+  nothing across threads.
+- Reserve release — the holdback is a loan, not a fee: the settlement
+  reserve target is now scoped to the chargeback **risk window**
+  (`risk_window_days`, default `DEFAULT_RISK_WINDOW_DAYS = 90`; `None`
+  restores accumulate-forever). The true-up is symmetric: fresh earnings
+  top the reserve up, and accruals that age out of the window release
+  their share back to the noder as one more RESERVE entry — paid out on
+  the next settlement, so the noder eventually receives 100% of
+  undisputed earnings. Aged-out accruals demand no reserve at all
+  (only at-risk earnings are held against).
+- Dispute deepening — reserve-funded clawbacks, final decisions:
+  upholding a dispute still reverses every accrual the event minted
+  (CLAWBACK entries, per noder), but a shortfall from already-paid
+  earnings is now funded from the noder's RESERVE first — the settlement
+  holdback finally doing the job it exists for — via a negative RESERVE
+  release entry, so the balance projection stays one formula. Only what
+  the reserve cannot cover remains as honest negative balance (debt)
+  that future accruals repay before anything pays out again. The
+  settlement reserve target now nets clawbacks (reversed earnings no
+  longer demand reserve, so a clawback isn't re-collected as a fresh
+  top-up). Decisions are final: uphold-after-reject and
+  reject-after-uphold raise, the same decision twice is a no-op/replay,
+  and both resolutions are audited (`dispute.upheld` with clawed/drawn/
+  debt micros, `dispute.rejected`). Uphold reports a per-noder breakdown.
+- Settlement cycles + payment-failure containment:
+  `SettlementService.settle_all(period_key=...)` settles every noder on
+  the ledger (`EarningsLedger.principals()`) for one period — outcomes
+  are per-noder and independent, so one processor failure never blocks
+  anyone else's payout; the cycle summary (paid/failed/skipped counts
+  and paid micros) is appended to the durable audit as
+  `settlement.cycle`. A `PaymentError` inside `settle` is now a
+  first-class outcome instead of a crash: the batch is marked FAILED for
+  the record, the ledger is never debited, and the period's idempotency
+  claim is released via the new `IdempotencyLedger.release(key)` — fixing
+  a real poisoning bug where a raised `fn` left a claim that replayed
+  `None` forever. Re-running the same period IS the retry mechanism:
+  paid noders replay their cached receipts (the processor is never
+  called twice), failed ones get a fresh attempt with a fresh batch.
+- Approver notification — the holds SSE feed:
+  `GET /v1/runs/contract/holds/events` streams the tenant's hold
+  lifecycle so approvers subscribe instead of polling the listing. Same
+  snapshot semantics as the per-run event stream: frames are derived
+  from the audit log (`contract.held` is now audited at hold time on
+  both surfaces, and held/approved/declined/expired payloads carry the
+  tenant), so nothing is invented for the transport and the feed is
+  strictly tenant-scoped. Each frame carries `id: <seq>`; `?after=<seq>`
+  resumes past frames already seen (SSE Last-Event-ID semantics). The
+  request itself sweeps, so an expiry becomes an event, never silence.
+- Hold expiry: a held reserved contract carries an `expires_at` stamped
+  at submission (the promise made then — TTL changes never retroactively
+  extend old holds). Gateway: `GatewayConfig.contract_hold_ttl_seconds`
+  (default 7 days; `None` = never), `expires_at` on the 202 response and
+  hold listings, and a late decision returns 410 `expired`. Desktop:
+  `hold_ttl_seconds` (+ injectable `clock`) ctor knobs, default never.
+  Expiry is lazy — `PendingContractStore.sweep_expired` runs on every
+  list/inbox and decision, so a stale hold can never rot in the queue or
+  be released long after the submitter's intent went cold; each sweep is
+  audited per hold as `contract.expired`.
+- Gateway hold-for-approval for reserved contracts: `POST
+  /v1/runs/contract` no longer 403s a contract with reserved actions —
+  it HOLDS it (202 `awaiting_approval` with a `pending_id`, idempotent
+  under the Idempotency-Key, budget knobs captured at submission).
+  `GET /v1/runs/contract/holds` lists the caller tenant's holds;
+  `POST /v1/runs/contract/holds/{pending_id}` decides one. Decisions are
+  tenant-scoped (another tenant's hold is a 404 — existence never
+  leaks), require approve authority in the hold's own tenant (the
+  submitter's own token gets 403 and the hold survives), re-run the
+  budget gate on the SUBMITTER's terms and histories (402/409 leave the
+  hold intact), and execute with the run bound to the ORIGINAL
+  submitter — the approver authorizes, never takes the consumer seat.
+  Declining removes the hold; both outcomes are audited with the
+  decider's principal. The shared `PendingContractStore` moved to
+  `nodeplace.holds` (table `pending_contracts`, records now carry the
+  submitting tenant/principal, `list(tenant=...)` filters) and backs
+  both surfaces, so gateway holds also survive restarts and every
+  process over one database sees one consistent set.
+- Held approvals survive restarts: pending reserved contracts moved from
+  process memory into the shell's own durable database
+  (`desktop.pending.PendingContractStore`, table
+  `desktop_pending_contracts`) — a hold is a commitment the user made,
+  so it lives with the runs. The record stores the contract as posted
+  plus the budget knobs captured at confirm time; the compiled blueprint
+  is deliberately NOT persisted (script bodies mint fresh action ids per
+  compile) — whichever process decides the hold recompiles once and
+  executes exactly what it inspected. A fresh `DesktopService` over the
+  same durable connection lists and decides holds made before a restart,
+  and every service over that store sees decisions immediately.
+- Loopback route for the approval decision:
+  `POST /v1/assembly/approvals/{pending_id}` with `{"approved": bool}`
+  decides a held reserved contract from the desktop UI. The loopback
+  stays a no-auth boundary with one deliberate exception: this route
+  REQUIRES an `Authorization: Bearer` token, which
+  `DesktopService.decide_assembly` turns into a verified identity
+  session (`SessionManager.login`) before handing off to
+  `approve_assembly` — caller text never becomes authority. Missing/bad
+  token -> 401, valid-but-unauthorized principal -> 403 (the hold
+  survives every failed attempt), missing `approved` field -> 400,
+  unknown or already-decided hold -> 404, no session manager wired ->
+  404. New `session_manager` ctor hook on the shell.
+- Desktop reserved contracts become approvable inbox tasks: confirming a
+  contract with reserved (irreversible) actions no longer 403s — it is
+  HELD (`awaiting_approval`) and appears in the inbox as kind
+  `contract-approval`, naming the reserved operations.
+  `DesktopService.approve_assembly(pending_id, session=...)` decides it:
+  approval mints from a verified identity session (same
+  `IdentityApprovalAuthority` gate as run approvals — an unauthorized
+  session raises and the hold survives), re-runs the budget gate (prices
+  may have moved while held; approval grants the reserved actions, not
+  the money), then executes through the shared money path; declining
+  removes it. Both outcomes are audited with the decider's principal.
+  `nodeplace.execution` splits `compile_contract` (no reserved gate, for
+  approval flows) + `reserved_operations` out of `compile_runnable`
+  (which still refuses — the gateway's unattended path is unchanged).
+- Recency decay on spending profiles: history weighs `recency_decay`
+  (default 0.9) less per run back, so comfort tracks where spending is
+  *trending*. `SpendingProfile.typical` is now a recency-weighted median,
+  and the ceiling is driven by `recent_peak` — a decaying maximum — so
+  one lavish run long ago stops waving outliers through as it ages, and
+  a user who has tightened gets a ceiling that followed them down; `peak`
+  stays the raw historical maximum for honest display. Applies to global
+  and class profiles alike (histories are most-recent-first, as
+  `consumer_spend` returns them); `recency_decay: 1.0` in the budget
+  policy restores flat history exactly.
+- Per-goal-class spending profiles: behavioral budgets are judged within
+  the plan's own class of goal — spending lucratively on gifts while
+  keeping everyday automation tight is two different spenders, and
+  neither habit loosens (or flags) the other. `RunBinding` gains a
+  `goal_class` (the class key of the run's costliest child, stamped by
+  `execute_contract` and `build_run_binding`), `consumer_spend` filters
+  by it, and `estimate_contract_gross` returns a `ContractEstimate`
+  (gross + dominant class). `assess_budget` is class-first: a class with
+  enough history REPLACES the global profile for the behavioral check
+  (reasons name the class); a class with thin history falls back to the
+  global profile — so a first lavish run in a new class gets exactly one
+  review, then the class speaks for itself. Verdicts carry `goal_class`
+  and `class_profile`; `preview_assembly` takes a `spend_lookup`
+  (class -> history) since the plan's class is only known after assembly.
+- Cost-aware assembly budgets (`nodeplace.budget`): three signals with
+  three authorities judge an assembled plan's estimated cost. A
+  caller-set `hard_cap` refuses outright (`BudgetExceededError` -> 402
+  `budget_exceeded`; no acknowledgement overrides it); a user-set
+  `review_threshold` holds the run (`ReviewRequiredError` -> 409
+  `review_required`) until `review_acknowledged: true`; and a
+  **behavioral comfort ceiling** learned from the user's own committed
+  run grosses (`AttributionStore.consumer_spend`; review above BOTH
+  median x multiplier AND their demonstrated peak, never judged on
+  fewer than 3 runs) flags outliers even with no declared budget.
+  The linked wallet is deliberately the weakest signal — its balance may
+  be a slice of the user's true assets, so it NEVER caps or scales the
+  budget: an estimate above the remaining balance only adds a review
+  reason, and a large balance grants nothing. Estimation
+  (`estimate_contract_gross`) clears in preview mode, so the gate runs
+  BEFORE any price commits or binding writes. Reasons accumulate across
+  all signals like quote warnings. Wired everywhere: verdicts ride
+  `/v1/market/assemble` and the desktop preview (`budget` field, from a
+  `budget` request object / `budget_cap` + `review_threshold` params);
+  enforcement guards `POST /v1/runs/contract` and the desktop confirm
+  (403 at the loopback); `wallet_lookup` ctor hooks on both surfaces.
+- Trace-derived learned orderings in assembled subgraphs: when the
+  caller's own runs consistently completed one child before another
+  (`TraceStore.derive_edges`: enough observations, one direction nearly
+  always, transitively reduced), `preview_assembly` stamps that order
+  onto the assembled contract as `provenance="learned"` `ContractEdge`s —
+  which the compiler already turns into real dependencies, so the
+  scheduler stops racing steps the user's history says are ordered. Slot
+  flow outranks statistics: learned edges that data-flow or explicit
+  edges already imply or contradict are dropped (a contradiction stays
+  parallelism, never a learned cycle), and ambiguous child names are left
+  out. Surfaced as `learned_order` (`[{"first", "then"}, ...]`) on the
+  assemble response and the desktop `AssemblyPreviewView`.
+- Thompson-sampled assembly (`explore: true`): `preview_assembly` accepts
+  an `rng` and passes it to `ContractAssembler`, so producer picks are
+  sampled from the same personalized Beta posteriors instead of taken
+  greedily — unproven alternatives get chances proportional to their
+  remaining uncertainty, and exploration collapses onto the winner as
+  confirmed runs accumulate. Opt-in per request: `explore: true` on
+  `POST /v1/market/assemble` and on the desktop's
+  `POST /v1/assembly/preview` (`DesktopService.assembly_preview(...,
+  explore=True)`); the default stays deterministic (best posterior mean,
+  stable tie-breaks) — the right mode for a preview the user is about to
+  pay for. The gateway and shell hold a seedable `rng` (ctor param).
+- Confirmed runs feed the TraceStore: `execute_contract` accepts a
+  `trace_store` (+ `trace_context`) and records one node-granular trace
+  per run — each top-level child's verdict (a child succeeds only if
+  every action it contributed did), the price it actually cleared at as
+  its cost EWMA, and completion order into the precedence matrix — under
+  the same `route:{name}` keys the assembler scores by.
+  `compile_with_owners` (orchestrator) returns the blueprint plus an
+  action-to-child attribution map from ONE compile pass (script bodies
+  mint fresh action ids per compile, so a second pass would not match);
+  `compile_runnable` now returns a `CompiledContract` carrying both.
+  On the pick side, `preview_assembly` folds the caller's own history
+  into each contract's `NodeStats` (evidence adds; the personally paid
+  cost supersedes the listed one). Gateway: new `trace_store` ctor param,
+  bucketed per tenant (`trace_context=tenant_id`) so one tenant's
+  failures personalize only their own picks; desktop: `trace_store` ctor
+  param on the shell (single user: the global bucket). Every confirmed
+  run sharpens the next assembly — no separate training step.
+- Desktop confirm button: `DesktopService.confirm_assembly` runs the
+  contract the preview returned — through the shared
+  `nodeplace.execution.execute_contract`, the exact code path behind the
+  gateway's `POST /v1/runs/contract` (extracted in this change), so there
+  is one place where contract runs turn into money: committed per-node
+  clearing, one aggregate lineage-weighted `RunBinding`, and the
+  deriver-payable `workflow.executed` audit event. Served over the
+  loopback at `POST /v1/assembly/confirm`; reserved actions are refused
+  with 403 (`ReservedActionsError`, a `PermissionError`), executors are
+  backend-configured (never UI-supplied), and a client `confirm_id` makes
+  the click idempotent — double-clicks replay the first result without
+  re-executing.
+- Direct contract execution + desktop assembly preview: `POST
+  /v1/runs/contract` takes the contract `/v1/market/assemble` returned,
+  compiles it to a DAG blueprint (`contract_to_blueprint`), and executes it
+  on the gateway's configured `contract_executors` (`DagRouteRunner`) —
+  every marketplace node in the subgraph clears at a *committed* price and
+  the run gets one aggregate `RunBinding` whose shares merge each node's
+  lineage split weighted by its cleared price, so the metering deriver pays
+  every noder in the chain from the same platform-verified audit event.
+  Reserved (irreversible) actions are refused with 403 — those still
+  require the orchestrator's approval flow. The shared preview computation
+  moved to `nodeplace.assembly.preview_assembly`, and the desktop shell
+  surfaces it: `DesktopService.assembly_preview` (optional
+  `market`/`price_book` wiring) maps it into the secret-free
+  `AssemblyPreviewView`, served over the loopback at
+  `POST /v1/assembly/preview` — read-only, prices never commit.
+- Slot vocabularies on listings + goal-based assembly over the marketplace:
+  `Listing` gains typed `consumes`/`produces` slots — declared at
+  contribution (service + gateway body fields) or derived from the skill
+  itself (induced parameters -> consumes, artifact validators ->
+  produces). `CandidateAssembler.contracts(query)` turns every active
+  public listing into an assembler-ready `NodeContract` (listing slots as
+  typed I/O, the sanitized skill's actions as the executable body,
+  verified history as stats). `POST /v1/market/assemble` backward-chains
+  a goal's wanted slots through those vocabularies and returns the
+  assembled subgraph contract with per-node cleared-price previews and
+  lineage-aware payout previews — read-only: the price book never moves,
+  and no money does either. Missing slots report honestly, or
+  (`fill_gaps: true`) become synthesized script gap nodes.
 - Goal-directed assembly: `orchestrator/assembler.py` adds
   `ContractAssembler` — give it a `GoalSpec` (wanted slots + slots on hand)
   and a contract library (a list, or a callable over a live registry via

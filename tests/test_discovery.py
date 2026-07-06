@@ -1,38 +1,49 @@
 from __future__ import annotations
 
+import os
 import shutil
+from pathlib import Path
 
 import pytest
 
-from workflow_gps.assembly import build_discovered_cli_executor
-from workflow_gps.skills.discovery import (
+from oolu.assembly import build_discovered_cli_executor
+from oolu.skills.discovery import (
     DiscoveredTool,
     ToolSpec,
     discover_tools,
     resolve_file,
 )
-from workflow_gps.skills.models import ActionEvent, ExecutionStatus
+from oolu.skills.models import ActionEvent, ExecutionStatus
+
+
+def _present_tool() -> str:
+    """Name of a real executable guaranteed to be on PATH for the host OS."""
+    for candidate in (("cmd",) if os.name == "nt" else ("sh", "bash", "env")):
+        if shutil.which(candidate):
+            return candidate
+    pytest.skip("no known always-present tool on PATH")
 
 
 def test_discovers_present_tools_with_absolute_paths():
+    present = _present_tool()
     catalog = (
-        ToolSpec("sh", "shell", ("shell",)),
+        ToolSpec(present, "shell", ("shell",)),
         ToolSpec("definitely-not-a-real-tool-xyz", "none", ("none",)),
     )
     tools = discover_tools(catalog)
     names = {t.name for t in tools}
-    assert "sh" in names
+    assert present in names
     assert "definitely-not-a-real-tool-xyz" not in names
-    sh = next(t for t in tools if t.name == "sh")
-    assert sh.path.startswith("/") and sh.category == "shell"
+    found = next(t for t in tools if t.name == present)
+    assert os.path.isabs(found.path) and found.category == "shell"
 
 
 def test_alias_fallback():
-    real = "sh" if shutil.which("sh") else "env"
+    real = _present_tool()
     catalog = (ToolSpec("primary-missing-xyz", "x", ("x",), aliases=(real,)),)
     (tool,) = discover_tools(catalog)
     assert tool.name == "primary-missing-xyz"
-    assert tool.path.endswith(real)
+    assert Path(tool.path).stem.casefold() == real.casefold()
 
 
 def test_resolve_file_direct_and_nested(tmp_path):
@@ -70,8 +81,8 @@ def test_tools_endpoint_lists_discovered(tmp_path):
     import asyncio
     import json
 
-    from workflow_gps.skills.registry import SkillRegistry
-    from workflow_gps.skills.server import SkillsServer
+    from oolu.skills.registry import SkillRegistry
+    from oolu.skills.server import SkillsServer
 
     reg = SkillRegistry(tmp_path / "r.db")
     tools = [

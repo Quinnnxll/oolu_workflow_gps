@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from workflow_gps.nodeplace import (
+from oolu.nodeplace import (
     CandidateEconomics,
     ConsumerAccount,
     CostVector,

@@ -24,7 +24,9 @@ export function Inbox({ items, onOpen, onRefresh }: Props) {
               <div className="intent">{it.intent}</div>
               <div className="prompt">{it.prompt}</div>
             </div>
-            <time>{new Date(it.created_at).toLocaleString()}</time>
+            {it.created_at && (
+              <time>{new Date(it.created_at).toLocaleString()}</time>
+            )}
           </li>
         ))}
       </ul>

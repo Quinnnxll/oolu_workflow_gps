@@ -10,6 +10,12 @@ use tauri_plugin_shell::ShellExt;
 
 struct Sidecar(Mutex<Option<CommandChild>>);
 
+// The online host is baked in at build (setup) time, never edited by the user:
+// compile with OOLU_SERVER_URL=https://your-host to ship a client that signs
+// into that host. Left unset (the default today, while the domain is pending)
+// the app runs the local loopback engine as a sidecar — the offline/solo mode.
+const SERVER_URL: Option<&str> = option_env!("OOLU_SERVER_URL");
+
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
         .expect("bind loopback")
@@ -34,18 +40,32 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .manage(Sidecar(Mutex::new(None)))
         .setup(|app| {
-            let port = free_port();
+            // A non-empty build-time server URL selects remote mode.
+            let remote = SERVER_URL.filter(|url| !url.is_empty());
+            let api_base = match remote {
+                Some(url) => {
+                    // Remote: talk to the online host directly — no sidecar,
+                    // the front-end shows a sign-in screen (see api.ts).
+                    url.to_string()
+                }
+                None => {
+                    // Local: spawn the loopback engine and point the app at it.
+                    let port = free_port();
+                    let (_rx, child) = app
+                        .shell()
+                        .sidecar("oolu")?
+                        .args(["desktop", "--host", "127.0.0.1", "--port", &port.to_string()])
+                        .spawn()?;
+                    app.state::<Sidecar>().0.lock().unwrap().replace(child);
+                    wait_ready(port, Duration::from_secs(20));
+                    format!("http://127.0.0.1:{port}")
+                }
+            };
 
-            let (_rx, child) = app
-                .shell()
-                .sidecar("wfgps")?
-                .args(["desktop", "--host", "127.0.0.1", "--port", &port.to_string()])
-                .spawn()?;
-            app.state::<Sidecar>().0.lock().unwrap().replace(child);
-
-            wait_ready(port, Duration::from_secs(20));
-
-            let inject = format!("window.__OOLU_API__ = 'http://127.0.0.1:{port}';");
+            let is_remote = remote.is_some();
+            let inject = format!(
+                "window.__OOLU_API__ = '{api_base}'; window.__OOLU_REMOTE__ = {is_remote};"
+            );
             WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
                 .title("OoLu")
                 .inner_size(900.0, 720.0)
@@ -59,6 +79,7 @@ fn main() {
         .expect("run OoLu")
         .run(|app, event| {
             if let tauri::RunEvent::ExitRequested { .. } = event {
+                // Only populated in local mode; a no-op remote-side.
                 if let Some(child) = app.state::<Sidecar>().0.lock().unwrap().take() {
                     let _ = child.kill();
                 }

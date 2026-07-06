@@ -14,10 +14,10 @@ import json
 import re
 from pathlib import Path
 
-from workflow_gps.knowledge import LocalKnowledgeClient
-from workflow_gps.knowledge.scrubbing import is_safe_to_store, scrub
-from workflow_gps.models import ErrorClass, RecalcStrategy
-from workflow_gps.replies.offsets import FileOffsetStore
+from oolu.knowledge import LocalKnowledgeClient
+from oolu.knowledge.scrubbing import is_safe_to_store, scrub
+from oolu.models import ErrorClass, RecalcStrategy
+from oolu.replies.offsets import FileOffsetStore
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 

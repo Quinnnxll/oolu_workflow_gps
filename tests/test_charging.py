@@ -5,20 +5,20 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from workflow_gps.billing import (
+from oolu.billing import (
     BalanceProjection,
     ChargingService,
     EarningsLedger,
     FakePayoutAdapter,
     MoneyModeError,
 )
-from workflow_gps.durable import DurableConnection
-from workflow_gps.durable.idempotency import IdempotencyLedger
-from workflow_gps.durable.postgres import PostgresDurableConnection
-from workflow_gps.identity import ProviderConfig
-from workflow_gps.metering import AttributionRecord, MeteringEvent
+from oolu.durable import DurableConnection
+from oolu.durable.idempotency import IdempotencyLedger
+from oolu.durable.postgres import PostgresDurableConnection
+from oolu.identity import ProviderConfig
+from oolu.metering import AttributionRecord, MeteringEvent
 
-PG_DSN = os.environ.get("WFGPS_TEST_PG_DSN") or os.environ.get("DATABASE_URL")
+PG_DSN = os.environ.get("OOLU_TEST_PG_DSN") or os.environ.get("DATABASE_URL")
 
 EVENT_TIME = datetime(2030, 1, 1, tzinfo=UTC)
 
@@ -32,7 +32,9 @@ class _AsymmetricVerifier:
 
 _ASYMMETRIC = [
     ProviderConfig(
-        issuer="https://idp", audiences=frozenset({"wfgps"}), verifier=_AsymmetricVerifier()
+        issuer="https://idp",
+        audiences=frozenset({"oolu"}),
+        verifier=_AsymmetricVerifier(),
     )
 ]
 
@@ -53,7 +55,11 @@ def _event():
 
 
 def _attrs(event):
-    return [AttributionRecord(event_id=event.event_id, noder_principal="noder-B", weight=1.0)]
+    return [
+        AttributionRecord(
+            event_id=event.event_id, noder_principal="noder-B", weight=1.0
+        )
+    ]
 
 
 def test_charging_is_refused_on_local_infra():
@@ -112,7 +118,9 @@ def test_charge_accrues_with_holdback_on_production():
         assert before.available_micros == 0
         assert before.pending_micros == 294000
 
-        after = projection.balance("noder-B", now=EVENT_TIME + timedelta(days=14, seconds=1))
+        after = projection.balance(
+            "noder-B", now=EVENT_TIME + timedelta(days=14, seconds=1)
+        )
         assert after.available_micros == 294000
         assert after.pending_micros == 0
     finally:

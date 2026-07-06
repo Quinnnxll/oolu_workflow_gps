@@ -6,15 +6,15 @@ import threading
 import time
 from datetime import UTC, datetime
 
-from workflow_gps.knowledge import TraceStore, route_node_key
-from workflow_gps.orchestrator import (
+from oolu.knowledge import TraceStore, route_node_key
+from oolu.orchestrator import (
     Blueprint,
     BlueprintEdge,
     DagRouteRunner,
     ReservedAction,
     RoutePlan,
 )
-from workflow_gps.skills.models import ActionEvent, ExecutionOutcome, ExecutionStatus
+from oolu.skills.models import ActionEvent, ExecutionOutcome, ExecutionStatus
 
 
 class StubExecutor:

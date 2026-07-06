@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>OoLu</title>
+<style>
+  :root { color-scheme: light dark;
+    --line: #8884; --muted: #888; --ok: #2a7; --bad: #d44; --accent: #46f; }
+  body { font-family: system-ui, sans-serif; max-width: 860px;
+    margin: 1.5rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.2rem; margin: 0; }
+  h2 { font-size: 1rem; margin: 1.2rem 0 0.6rem; }
+  header { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap;
+    border-bottom: 1px solid var(--line); padding-bottom: 0.7rem; }
+  nav { display: flex; gap: 0.8rem; flex-wrap: wrap; }
+  nav a { text-decoration: none; color: inherit; opacity: 0.75; }
+  nav a.active { opacity: 1; font-weight: 600;
+    border-bottom: 2px solid var(--accent); }
+  header .who { margin-left: auto; font-size: 0.85rem; color: var(--muted); }
+  main { margin-top: 1rem; }
+  label { display: block; font-size: 0.85rem; margin: 0.7rem 0 0.25rem; }
+  input, select, button { font: inherit; padding: 0.45rem; }
+  input { width: 100%; box-sizing: border-box; }
+  button { cursor: pointer; margin-top: 0.7rem; }
+  button.small { margin: 0; padding: 0.2rem 0.5rem; font-size: 0.85rem; }
+  table { border-collapse: collapse; width: 100%; margin-top: 0.6rem; }
+  th, td { text-align: left; padding: 0.35rem 0.5rem;
+    border-bottom: 1px solid var(--line); font-size: 0.9rem;
+    vertical-align: top; }
+  .card { border: 1px solid var(--line); border-radius: 8px;
+    padding: 0.9rem; margin-top: 0.8rem; }
+  .muted { color: var(--muted); font-size: 0.85rem; }
+  .error { color: var(--bad); margin-top: 0.6rem; }
+  .badge { display: inline-block; border: 1px solid var(--line);
+    border-radius: 999px; padding: 0.05rem 0.55rem; font-size: 0.8rem;
+    margin: 0 0.25rem 0.25rem 0; }
+  .badge.ok { border-color: var(--ok); color: var(--ok); }
+  .badge.bad { border-color: var(--bad); color: var(--bad); }
+  ul.plain { list-style: none; padding-left: 0; margin: 0.4rem 0; }
+  .signin { max-width: 26rem; margin: 3rem auto; }
+  details { margin-top: 1rem; }
+  a { color: inherit; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+"use strict";
+
+/* ---- tiny DOM kernel: XSS-safe by construction (no HTML templates) ---- */
+function h(tag, attrs, ...children) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v);
+  }
+  const append = (child) => {
+    if (child == null || child === false) return;
+    if (Array.isArray(child)) { child.forEach(append); return; }
+    el.append(child.nodeType ? child : document.createTextNode(String(child)));
+  };
+  children.forEach(append);
+  return el;
+}
+const badge = (text, cls) =>
+  h("span", { class: "badge" + (cls ? " " + cls : "") }, text);
+const money = (v) => (v == null ? "—" : "$" + Number(v).toFixed(4));
+const percent = (v) => (v == null ? "—" : Math.round(v * 100) + "%");
+
+/* ---- session: the bearer token lives for this browser tab only ---- */
+const session = {
+  get token() { return sessionStorage.getItem("oolu_token"); },
+  get principal() { return sessionStorage.getItem("oolu_principal"); },
+  signIn(token, principal, tenant) {
+    sessionStorage.setItem("oolu_token", token);
+    sessionStorage.setItem("oolu_principal", principal);
+    sessionStorage.setItem("oolu_tenant", tenant || "");
+  },
+  signOut() { sessionStorage.clear(); render(); },
+};
+
+async function api(method, path, body) {
+  const headers = { Authorization: "Bearer " + session.token };
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  const res = await fetch(path, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (res.status === 401 && session.token) {
+    session.signOut();
+    throw new Error("signed out");
+  }
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = null; }
+  if (!res.ok) {
+    const message = data && data.error
+      ? data.error.message : res.status + " " + res.statusText;
+    const failure = new Error(message);
+    failure.status = res.status;
+    throw failure;
+  }
+  return data;
+}
+
+/* ---- sign-in ---- */
+function signInScreen() {
+  const err = h("div", { class: "error" });
+  const user = h("input", { autocomplete: "username", id: "username" });
+  const pass = h("input", {
+    type: "password", autocomplete: "current-password", id: "password",
+  });
+  const pasted = h("input", { placeholder: "paste a bearer token", id: "token" });
+
+  async function submit(event) {
+    event.preventDefault();
+    err.textContent = "";
+    try {
+      const res = await fetch("/v1/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: user.value, password: pass.value }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        err.textContent = res.status === 404
+          ? "This host has no local accounts — paste a bearer token below."
+          : (data && data.error ? data.error.message : "sign-in failed");
+        return;
+      }
+      session.signIn(data.token, data.principal, data.tenant);
+      location.hash = "#/runs";
+      render();
+    } catch (e) { err.textContent = e.message; }
+  }
+
+  function useToken() {
+    if (!pasted.value.trim()) return;
+    session.signIn(pasted.value.trim(), "token-user", "");
+    location.hash = "#/runs";
+    render();
+  }
+
+  return h("div", { class: "signin card" },
+    h("h1", {}, "OoLu"),
+    h("p", { class: "muted" }, "Sign in to this host."),
+    h("form", { onsubmit: submit },
+      h("label", { for: "username" }, "Username"), user,
+      h("label", { for: "password" }, "Password"), pass,
+      h("button", { type: "submit" }, "Sign in")),
+    err,
+    h("details", {},
+      h("summary", { class: "muted" },
+        "or use a bearer token (IdP-fronted hosts)"),
+      h("label", { for: "token" }, "Access token"), pasted,
+      h("button", { onclick: useToken }, "Use token")));
+}
+
+/* ---- shared helpers ---- */
+function notEnabled() {
+  return h("p", { class: "muted" }, "This feature is not enabled on this host.");
+}
+async function guard(mount, loader) {
+  try { mount.append(await loader()); }
+  catch (e) {
+    if (e.status === 404) mount.append(notEnabled());
+    else if (e.status === 403) mount.append(h("p", { class: "muted" },
+      "Your account does not have authority for this screen."));
+    else mount.append(h("div", { class: "error" }, e.message));
+  }
+}
+
+/* ---- runs ---- */
+async function runsScreen() {
+  const intent = h("input", { id: "intent", placeholder: "describe the task" });
+  const submitOut = h("div", {});
+  async function start(event) {
+    event.preventDefault();
+    submitOut.replaceChildren();
+    try {
+      const run = await api("POST", "/v1/runs", { intent: intent.value });
+      location.hash = "#/run/" + run.run_id;
+      render();
+    } catch (e) { submitOut.append(h("div", { class: "error" }, e.message)); }
+  }
+  const form = h("form", { onsubmit: start, class: "card" },
+    h("label", { for: "intent" }, "Start a workflow"), intent,
+    h("button", { type: "submit" }, "Start"), submitOut);
+
+  const data = await api("GET", "/v1/runs");
+  const listing = data.items.length
+    ? h("table", {},
+        h("tr", {}, h("th", {}, "run"), h("th", {}, "phase"),
+          h("th", {}, "intent"), h("th", {}, "waiting on")),
+        data.items.map((r) => h("tr", {},
+          h("td", {}, h("a", { href: "#/run/" + r.run_id }, r.run_id.slice(0, 12))),
+          h("td", {}, badge(r.phase, r.phase === "failed" ? "bad" : undefined)),
+          h("td", {}, r.intent),
+          h("td", {}, r.awaiting || "—"))))
+    : h("p", { class: "muted" }, "No runs yet — start one above, or try Assemble.");
+  return h("div", {}, form, listing);
+}
+
+/* Pause panels: whatever the run is waiting on becomes an actionable card. */
+async function pausePanel(run) {
+  const base = "/v1/runs/" + run.run_id;
+  const err = h("div", { class: "error" });
+  const act = async (method, path, body) => {
+    err.textContent = "";
+    try { await api(method, path, body); render(); }
+    catch (e) { err.textContent = e.message; }
+  };
+
+  if (run.awaiting === "clarification") {
+    const data = await api("GET", base + "/questions");
+    const fields = data.questions.map((q) => ({
+      parameter: q.parameter,
+      input: h("input", {
+        id: "q-" + q.parameter,
+        placeholder: q.suggested_values.join(" / ") || q.question,
+      }),
+      question: q.question,
+    }));
+    return h("form", { class: "card", onsubmit: (e) => {
+      e.preventDefault();
+      const answers = {};
+      for (const f of fields) answers[f.parameter] = f.input.value;
+      act("POST", base + "/answers", { answers });
+    } },
+      h("h2", {}, "needs clarification"),
+      fields.map((f) => [h("label", { for: "q-" + f.parameter }, f.question), f.input]),
+      h("button", { type: "submit" }, "Answer"), err);
+  }
+
+  if (run.awaiting === "confirmation") {
+    const route = await api("GET", base + "/route");
+    return h("div", { class: "card" },
+      h("h2", {}, "confirm the route"),
+      route.route === null ? h("p", { class: "muted" }, "no route preview") : h("div", {},
+        h("div", {}, badge(route.chosen), h("span", { class: "muted" },
+          " estimated cost " + money(route.total_cost))),
+        route.reserved_actions.length
+          ? h("div", {}, route.reserved_actions.map((a) => badge(a, "bad")))
+          : null),
+      h("button", { class: "small", onclick: () =>
+        act("POST", base + "/confirmation", { approved: true }) }, "Confirm"),
+      " ",
+      h("button", { class: "small", onclick: () =>
+        act("POST", base + "/confirmation", { approved: false }) }, "Decline"),
+      err);
+  }
+
+  if (run.awaiting === "approval") {
+    const approvals = await api("GET", base + "/approvals");
+    return h("div", { class: "card" },
+      h("h2", {}, "needs approval"),
+      h("p", { class: "muted" },
+        approvals.granted + " of " + approvals.required + " approvals granted"
+        + " — an authorized approver (not the submitter) must decide"),
+      h("button", { class: "small", onclick: () =>
+        act("POST", base + "/approvals", {}) }, "Approve"),
+      err);
+  }
+
+  if (run.awaiting === "incident") {
+    const data = await api("GET", base + "/incidents");
+    return h("div", { class: "card" },
+      h("h2", {}, "incident"),
+      h("ul", { class: "plain" }, data.incidents.map((i) =>
+        h("li", { class: "muted" }, i.reason + (i.resolution ? " — " + i.resolution : "")))),
+      h("button", { class: "small", onclick: () =>
+        act("POST", base + "/incidents", { decision: "retry" }) }, "Retry"),
+      " ",
+      h("button", { class: "small", onclick: () =>
+        act("POST", base + "/incidents", { decision: "abort" }) }, "Abort"),
+      err);
+  }
+  return null;
+}
+
+async function runDetail(runId) {
+  const run = await api("GET", "/v1/runs/" + runId);
+  const audit = await api("GET", "/v1/runs/" + runId + "/audit");
+  const timeline = h("ul", { class: "plain" },
+    (audit.entries || []).map((entry) =>
+      h("li", { class: "muted" }, entry.at + "  " + entry.event_type)));
+  const live = h("div", {});
+  try {
+    const scheme = location.protocol === "https:" ? "wss://" : "ws://";
+    const socket = new WebSocket(
+      scheme + location.host + "/v1/runs/" + runId + "/events",
+      ["bearer", session.token]);
+    socket.onmessage = (msg) => {
+      const frame = JSON.parse(msg.data);
+      live.prepend(h("div", { class: "muted" },
+        "live: " + frame.event_type + " (" + frame.phase + ")"));
+    };
+  } catch { /* the live stream is a bonus, never a requirement */ }
+  const terminal = ["completed", "failed", "cancelled"].includes(run.phase);
+  const cancelErr = h("div", { class: "error" });
+  return h("div", {},
+    h("div", { class: "card" },
+      badge(run.phase, run.phase === "failed" ? "bad" : "ok"),
+      run.awaiting ? badge("awaiting " + run.awaiting) : null,
+      h("p", {}, run.intent),
+      run.failure_reason ? h("div", { class: "error" }, run.failure_reason) : null,
+      run.result ? h("p", { class: "muted" }, JSON.stringify(run.result)) : null,
+      terminal ? null : h("button", { class: "small", onclick: async () => {
+        try { await api("POST", "/v1/runs/" + runId + "/cancel", {}); render(); }
+        catch (e) { cancelErr.textContent = e.message; }
+      } }, "Cancel run"),
+      cancelErr),
+    await pausePanel(run),
+    h("h2", {}, "timeline"), live, timeline);
+}
+
+/* ---- skills: the marketplace's published listings ---- */
+function skillsScreen() {
+  const query = h("input", { id: "q", placeholder: "search published nodes" });
+  const out = h("div", {});
+  async function search(event) {
+    if (event) event.preventDefault();
+    out.replaceChildren();
+    try {
+      const data = await api(
+        "GET", "/v1/listings?q=" + encodeURIComponent(query.value || ""));
+      out.append(data.items.length
+        ? h("table", {},
+            h("tr", {}, h("th", {}, "listing"), h("th", {}, "summary"),
+              h("th", {}, "status"), h("th", {}, "tags")),
+            data.items.map((item) => h("tr", {},
+              h("td", {}, item.title),
+              h("td", { class: "muted" }, item.summary),
+              h("td", {}, badge(item.status)),
+              h("td", {}, (item.tags || []).map((t) => badge(t))))))
+        : h("p", { class: "muted" }, "No published nodes match."));
+    } catch (e) {
+      out.append(e.status === 404
+        ? notEnabled()
+        : h("div", { class: "error" }, e.message));
+    }
+  }
+  search();
+  return h("div", {},
+    h("form", { onsubmit: search }, h("label", { for: "q" }, "Search"), query,
+      h("button", { type: "submit" }, "Search")),
+    out);
+}
+
+/* ---- assemble ---- */
+function assembleScreen() {
+  const goal = h("input", { id: "goal", placeholder: "e.g. clean-the-books" });
+  const want = h("input", { id: "want", placeholder: "slot name, e.g. tidy" });
+  const wantType = h("input", { id: "want-type", value: "path" });
+  const explore = h("input", { type: "checkbox", id: "explore", style: "width:auto" });
+  const costWeight = h("input", { id: "cost-weight", value: "0" });
+  const out = h("div", {});
+
+  async function preview(event) {
+    event.preventDefault();
+    out.replaceChildren();
+    try {
+      const body = {
+        goal: {
+          name: goal.value,
+          want: [{ name: want.value, value_type: wantType.value }],
+        },
+        explore: explore.checked,
+        cost_weight: Number(costWeight.value || 0),
+      };
+      const p = await api("POST", "/v1/market/assemble", body);
+      out.append(previewCard(p));
+    } catch (e) { out.append(h("div", { class: "error" }, e.message)); }
+  }
+
+  function previewCard(p) {
+    const confirmOut = h("div", {});
+    async function run() {
+      confirmOut.replaceChildren(h("p", { class: "muted" }, "running…"));
+      try {
+        const result = await api("POST", "/v1/runs/contract", { contract: p.contract });
+        confirmOut.replaceChildren(
+          result.status === "awaiting_approval"
+            ? h("div", {}, badge("held for approval"),
+                h("a", { href: "#/inbox" }, "open the inbox"))
+            : h("div", {},
+                badge(result.status, result.status === "succeeded" ? "ok" : "bad"),
+                h("span", { class: "muted" },
+                  " gross " + money(result.market && result.market.gross))));
+      } catch (e) {
+        confirmOut.replaceChildren(h("div", { class: "error" }, e.message));
+      }
+    }
+    return h("div", { class: "card" },
+      badge(p.complete ? "complete" : "incomplete", p.complete ? "ok" : "bad"),
+      p.selected.map((name) => badge(name)),
+      p.missing.length
+        ? h("div", { class: "muted" },
+            "missing: " + p.missing.map((s) => s.name).join(", "))
+        : null,
+      h("div", { class: "muted" },
+        "estimated total: " + money(p.estimated_gross_total)
+        + " · planning: " + money(p.planning_cost)
+        + " · expected success: " + percent(p.expected_success)),
+      p.budget && p.budget.reasons.length
+        ? h("div", { class: "error" }, p.budget.reasons.join("; "))
+        : null,
+      h("table", {},
+        h("tr", {}, h("th", {}, "step"), h("th", {}, "kind"),
+          h("th", {}, "price"), h("th", {}, "payouts")),
+        p.nodes.map((node) => h("tr", {},
+          h("td", {}, node.name + (node.gap ? " (gap)" : "")),
+          h("td", {}, node.kind),
+          h("td", {}, money(node.cleared && node.cleared.cleared)),
+          h("td", {}, node.payout_previews
+            .map((x) => x.noder_principal + " " + money(x.amount))
+            .join(", "))))),
+      p.complete && p.contract ? h("button", { onclick: run }, "Run this plan") : null,
+      confirmOut);
+  }
+
+  return h("div", {},
+    h("form", { onsubmit: preview, class: "card" },
+      h("label", { for: "goal" }, "Goal"), goal,
+      h("label", { for: "want" }, "Wanted slot"), want,
+      h("label", { for: "want-type" }, "Slot type"), wantType,
+      h("label", { for: "cost-weight" }, "Cost weight (0 = quality first)"), costWeight,
+      h("label", {}, explore, " explore (Thompson-sample the picks)"),
+      h("button", { type: "submit" }, "Preview")),
+    out);
+}
+
+/* ---- inbox (held reserved contracts) ---- */
+async function inboxScreen() {
+  const data = await api("GET", "/v1/runs/contract/holds");
+  if (!data.items.length) {
+    return h("p", { class: "muted" }, "Nothing is waiting for approval.");
+  }
+  return h("div", {}, data.items.map((hold) => {
+    const out = h("div", {});
+    async function decide(approved) {
+      try {
+        const result = await api(
+          "POST", "/v1/runs/contract/holds/" + hold.pending_id, { approved });
+        out.replaceChildren(badge(
+          approved ? (result.status || "approved") : "declined",
+          approved ? "ok" : "bad"));
+      } catch (e) { out.replaceChildren(h("div", { class: "error" }, e.message)); }
+    }
+    return h("div", { class: "card" },
+      h("strong", {}, hold.name),
+      h("div", { class: "muted" }, "submitted by " + hold.submitted_by
+        + (hold.expires_at ? " · expires " + hold.expires_at : "")),
+      h("div", {}, hold.reserved.map((op) => badge(op, "bad"))),
+      h("button", { class: "small", onclick: () => decide(true) }, "Approve"),
+      " ",
+      h("button", { class: "small", onclick: () => decide(false) }, "Decline"),
+      out);
+  }));
+}
+
+/* ---- earnings ---- */
+async function payoutCard() {
+  const err = h("div", { class: "error" });
+  async function onboard(event) {
+    event.preventDefault();
+    err.textContent = "";
+    try {
+      await api("POST", "/v1/payout-accounts", {
+        country: document.getElementById("payout-country").value || "US",
+        currency: document.getElementById("payout-currency").value || "usd",
+      });
+      render();
+    } catch (e) { err.textContent = e.message; }
+  }
+  try {
+    const account = await api("GET", "/v1/payout-accounts");
+    return h("div", { class: "card" },
+      h("h2", {}, "payout account"),
+      badge("KYC " + account.kyc_status,
+        account.kyc_status === "verified" ? "ok" : undefined),
+      h("span", { class: "muted" },
+        " " + account.provider_account_id
+        + " · " + account.country + "/" + account.currency));
+  } catch (e) {
+    if (e.status !== 404) return h("div", { class: "error" }, e.message);
+    // No account yet (or payouts unwired): offer onboarding; a host
+    // without a payout adapter answers that POST with the same honest 404.
+    return h("form", { class: "card", onsubmit: onboard },
+      h("h2", {}, "set up payouts"),
+      h("p", { class: "muted" },
+        "Earnings accrue either way; an account is needed to pay them out."),
+      h("label", { for: "payout-country" }, "Country"),
+      h("input", { id: "payout-country", value: "US" }),
+      h("label", { for: "payout-currency" }, "Currency"),
+      h("input", { id: "payout-currency", value: "usd" }),
+      h("button", { type: "submit" }, "Set up payouts"), err);
+  }
+}
+
+async function earningsScreen() {
+  const balance = await api("GET", "/v1/earnings");
+  const entries = await api("GET", "/v1/earnings/entries");
+  return h("div", {},
+    await payoutCard(),
+    h("div", { class: "card" },
+      h("div", {}, "available: " + money(balance.available),
+        " · pending: " + money(balance.pending)),
+      h("div", { class: "muted" }, "reserve: " + money(balance.reserve))),
+    h("h2", {}, "ledger"),
+    entries.items.length
+      ? h("table", {},
+          h("tr", {}, h("th", {}, "at"), h("th", {}, "kind"), h("th", {}, "amount")),
+          entries.items.map((e) => h("tr", {},
+            h("td", {}, e.at || e.created_at || ""),
+            h("td", {}, e.kind),
+            h("td", {}, money(e.amount != null
+              ? e.amount : e.amount_micros / 1000000)))))
+      : h("p", { class: "muted" }, "No earnings yet."));
+}
+
+/* ---- users (needs stored users:manage authority) ---- */
+async function usersScreen() {
+  const data = await api("GET", "/v1/auth/users");
+  const err = h("div", { class: "error" });
+
+  function row(user) {
+    const toggle = h("button", { class: "small", onclick: async () => {
+      try {
+        await api("POST", "/v1/auth/users/" + user.username + "/disabled",
+          { disabled: !user.disabled });
+        render();
+      } catch (e) { err.textContent = e.message; }
+    } }, user.disabled ? "Enable" : "Disable");
+    return h("tr", {},
+      h("td", {}, user.username),
+      h("td", {}, user.roles.join(", ") || "—"),
+      h("td", {}, user.disabled ? badge("disabled", "bad") : badge("active", "ok")),
+      h("td", {}, toggle));
+  }
+
+  const username = h("input", { id: "new-username" });
+  const password = h("input", { id: "new-password", type: "password" });
+  const admin = h("input", { type: "checkbox", id: "new-admin", style: "width:auto" });
+  async function create(event) {
+    event.preventDefault();
+    err.textContent = "";
+    try {
+      await api("POST", "/v1/auth/users", {
+        username: username.value,
+        password: password.value,
+        roles: admin.checked ? ["admin"] : [],
+      });
+      render();
+    } catch (e) { err.textContent = e.message; }
+  }
+
+  return h("div", {},
+    h("table", {},
+      h("tr", {}, h("th", {}, "username"), h("th", {}, "roles"),
+        h("th", {}, "status"), h("th", {})),
+      data.items.map(row)),
+    err,
+    h("form", { onsubmit: create, class: "card" },
+      h("h2", {}, "add a user"),
+      h("label", { for: "new-username" }, "Username"), username,
+      h("label", { for: "new-password" }, "Password"), password,
+      h("label", {}, admin, " administrator (manages users)"),
+      h("button", { type: "submit" }, "Create user")));
+}
+
+/* ---- health ---- */
+async function healthScreen() {
+  const metrics = await api("GET", "/v1/metrics");
+  let worker = null;
+  try { worker = await api("GET", "/v1/worker-health"); } catch { /* older host */ }
+  return h("div", {},
+    worker === null ? null : h("div", { class: "card" },
+      h("h2", {}, "execution isolation"),
+      badge(worker.docker_available ? "docker available" : "docker unavailable",
+        worker.docker_available ? "ok" : "bad"),
+      h("ul", { class: "plain" }, worker.labels.map((l) =>
+        h("li", {}, badge(l.isolated ? "isolated" : "host", l.isolated ? "ok" : undefined),
+          " ", l.label,
+          h("span", { class: "muted" }, "  (" + l.allowed_backends.join(", ") + ")"))))),
+    h("table", {},
+      h("tr", {}, h("th", {}, "metric"), h("th", {}, "value")),
+      Object.entries(metrics).map(([k, v]) =>
+        h("tr", {}, h("td", {}, k), h("td", {}, String(v))))));
+}
+
+/* ---- router ---- */
+const ROUTES = [
+  ["#/runs", "Runs", runsScreen],
+  ["#/assemble", "Assemble", assembleScreen],
+  ["#/inbox", "Inbox", inboxScreen],
+  ["#/skills", "Skills", skillsScreen],
+  ["#/earnings", "Earnings", earningsScreen],
+  ["#/users", "Users", usersScreen],
+  ["#/health", "Health", healthScreen],
+];
+
+function render() {
+  const app = document.getElementById("app");
+  app.replaceChildren();
+  if (!session.token) { app.append(signInScreen()); return; }
+
+  const hash = location.hash || "#/runs";
+  const nav = h("nav", {}, ROUTES.map(([href, label]) =>
+    h("a", { href, class: hash.startsWith(href) ? "active" : "" }, label)));
+  app.append(h("header", {},
+    h("h1", {}, "OoLu"), nav,
+    h("span", { class: "who" }, session.principal + " · ",
+      h("a", { href: "#", onclick: (e) => {
+        e.preventDefault(); session.signOut();
+      } }, "sign out"))));
+
+  const mount = h("main", {});
+  app.append(mount);
+
+  const detail = hash.match(/^#\/run\/(.+)$/);
+  if (detail) { guard(mount, () => runDetail(detail[1])); return; }
+  const route = ROUTES.find(([href]) => hash.startsWith(href)) || ROUTES[0];
+  guard(mount, () => Promise.resolve(route[2]()));
+}
+
+/* Local auto-auth: `oolu desktop --unified` opens the shell with
+   #auth=<token>. The token moves into sessionStorage and leaves the URL
+   immediately, so the local user never sees a sign-in screen — the
+   loopback bind, not a password, is the trust boundary on their own
+   machine. */
+(function bootstrapLocalAuth() {
+  const match = location.hash.match(/^#auth=(.+)$/);
+  if (!match) return;
+  session.signIn(decodeURIComponent(match[1]), "local", "local");
+  history.replaceState(null, "", location.pathname + "#/runs");
+})();
+
+window.addEventListener("hashchange", render);
+render();
+</script>
+</body>
+</html>

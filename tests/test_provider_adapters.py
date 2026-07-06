@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from workflow_gps.providers import (
+from oolu.providers import (
     AnthropicAdapter,
     BudgetExceeded,
     GoogleOAuthAdapter,
@@ -32,7 +32,7 @@ from workflow_gps.providers import (
     SecretVault,
     classify_status,
 )
-from workflow_gps.providers.base import Budget
+from oolu.providers.base import Budget
 
 
 # --------------------------------------------------------------------------- #

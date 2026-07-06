@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from workflow_gps.durable import (
+from oolu.durable import (
     DurableAuditLog,
     DurableConnection,
     DurableRecordStore,
@@ -13,11 +13,11 @@ from workflow_gps.durable import (
     IdempotencyLedger,
     TaskStatus,
 )
-from workflow_gps.durable.postgres import PostgresDurableConnection, _translate
+from oolu.durable.postgres import PostgresDurableConnection, _translate
 
 T0 = datetime(2099, 1, 1, tzinfo=UTC)
 
-PG_DSN = os.environ.get("WFGPS_TEST_PG_DSN") or os.environ.get("DATABASE_URL")
+PG_DSN = os.environ.get("OOLU_TEST_PG_DSN") or os.environ.get("DATABASE_URL")
 
 _PG_TABLES = (
     "workflow_runs",
@@ -42,9 +42,7 @@ def _new_pg() -> PostgresDurableConnection:
     except Exception as exc:  # noqa: BLE001
         pytest.skip(f"PostgreSQL unavailable: {exc}")
     with conn.transaction() as db:
-        db.execute(
-            "TRUNCATE " + ", ".join(_PG_TABLES) + " RESTART IDENTITY"
-        )
+        db.execute("TRUNCATE " + ", ".join(_PG_TABLES) + " RESTART IDENTITY")
     return conn
 
 
@@ -69,7 +67,9 @@ def test_translate_insert_or_replace():
     out = _translate(
         "INSERT OR REPLACE INTO routes (route_id, run_id, payload_json) VALUES (?, ?, ?)"
     )
-    assert out.startswith("INSERT INTO routes (route_id, run_id, payload_json) VALUES (%s, %s, %s)")
+    assert out.startswith(
+        "INSERT INTO routes (route_id, run_id, payload_json) VALUES (%s, %s, %s)"
+    )
     assert "ON CONFLICT (route_id) DO UPDATE SET" in out
     assert "run_id = EXCLUDED.run_id" in out
     assert "payload_json = EXCLUDED.payload_json" in out
@@ -77,7 +77,9 @@ def test_translate_insert_or_replace():
 
 
 def test_translate_normalizes_on_conflict_spacing():
-    out = _translate("INSERT INTO t (a) VALUES (?) ON CONFLICT(a) DO UPDATE SET a = excluded.a")
+    out = _translate(
+        "INSERT INTO t (a) VALUES (?) ON CONFLICT(a) DO UPDATE SET a = excluded.a"
+    )
     assert "ON CONFLICT (a) DO UPDATE" in out
 
 
@@ -119,8 +121,12 @@ def test_queue_lease_complete_and_exhaust(conn):
 
 def test_queue_enqueue_is_idempotent(conn):
     queue = DurableTaskQueue(conn)
-    first = queue.enqueue("send", {"to": "x"}, idempotency_key="dedupe", available_at=T0)
-    second = queue.enqueue("send", {"to": "x"}, idempotency_key="dedupe", available_at=T0)
+    first = queue.enqueue(
+        "send", {"to": "x"}, idempotency_key="dedupe", available_at=T0
+    )
+    second = queue.enqueue(
+        "send", {"to": "x"}, idempotency_key="dedupe", available_at=T0
+    )
     assert first.task_id == second.task_id
 
 

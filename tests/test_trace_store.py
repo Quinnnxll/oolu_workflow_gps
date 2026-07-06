@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import random
 
-from workflow_gps.knowledge import NodeObservation, TraceStore, route_node_key
+from oolu.knowledge import NodeObservation, TraceStore, route_node_key
 
 
 def _run(store: TraceStore, goal: str, node_keys: list[str], *, ok: bool = True):

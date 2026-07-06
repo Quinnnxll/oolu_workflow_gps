@@ -5,11 +5,11 @@ from __future__ import annotations
 import pytest
 from test_dag_scheduler import StubExecutor
 
-from workflow_gps.cache import LocalScriptCache
-from workflow_gps.models import ExecutionResult, Phase
-from workflow_gps.orchestrator import DagRouteRunner, RoutePlan, contract_to_blueprint
-from workflow_gps.runtime import NodeScriptRunner, NodeSynthesis, StubBackend
-from workflow_gps.skills import (
+from oolu.cache import LocalScriptCache
+from oolu.models import ExecutionResult, Phase
+from oolu.orchestrator import DagRouteRunner, RoutePlan, contract_to_blueprint
+from oolu.runtime import NodeScriptRunner, NodeSynthesis, StubBackend
+from oolu.skills import (
     ActionsBody,
     ContractEdge,
     NodeContract,
@@ -19,7 +19,7 @@ from workflow_gps.skills import (
     SubgraphBody,
     derive_data_edges,
 )
-from workflow_gps.skills.models import (
+from oolu.skills.models import (
     ActionEvent,
     ConstraintSpec,
     ExecutionStatus,

@@ -381,3 +381,73 @@ button.ghost {
   border: 1px solid var(--line);
   color: var(--muted);
 }
+
+/* ---- sign-in (remote host mode) ---- */
+.login {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+}
+
+.login-card .brand {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.login-card label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 8px;
+}
+
+.login-card input {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.login-card button[type="submit"] {
+  margin-top: 16px;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+
+.login-card button[type="submit"]:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.login-card .error {
+  color: var(--danger);
+  font-size: 13px;
+  margin-top: 8px;
+}
+
+.linklike {
+  border: 0;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+  font: inherit;
+}

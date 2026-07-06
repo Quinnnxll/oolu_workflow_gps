@@ -5,15 +5,15 @@ import json
 
 import pytest
 
-from workflow_gps.assembly import build_remote_worker_executor
-from workflow_gps.providers.base import ProviderResponse
-from workflow_gps.skills.models import ActionEvent, ExecutionStatus
-from workflow_gps.worker.control_plane import ControlPlane, WorkerInfo
-from workflow_gps.worker.errors import WorkerError
-from workflow_gps.worker.http import HttpWorkerTransport, WorkerHttpApp
-from workflow_gps.worker.leases import LeaseSigner, LeaseVerifier
-from workflow_gps.worker.ledger import InMemoryLeaseLedger
-from workflow_gps.worker.worker import StubWorkerExecutor, Worker
+from oolu.assembly import build_remote_worker_executor
+from oolu.providers.base import ProviderResponse
+from oolu.skills.models import ActionEvent, ExecutionStatus
+from oolu.worker.control_plane import ControlPlane, WorkerInfo
+from oolu.worker.errors import WorkerError
+from oolu.worker.http import HttpWorkerTransport, WorkerHttpApp
+from oolu.worker.leases import LeaseSigner, LeaseVerifier
+from oolu.worker.ledger import InMemoryLeaseLedger
+from oolu.worker.worker import StubWorkerExecutor, Worker
 
 _SECRET = "shared-worker-secret"
 
@@ -113,8 +113,8 @@ def test_server_runs_a_leased_task():
     )
     http = _AsgiLoopbackHttp(app)
 
-    from workflow_gps.worker.control_plane import TaskRequest
-    from workflow_gps.worker.leases import TrustLevel
+    from oolu.worker.control_plane import TaskRequest
+    from oolu.worker.leases import TrustLevel
 
     task = TaskRequest(
         tenant_id="t",

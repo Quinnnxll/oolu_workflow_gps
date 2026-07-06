@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from workflow_gps.orchestrator import (
+from oolu.orchestrator import (
     ActionExecutorRouteRunner,
     Blueprint,
     BoundedRetryRecovery,
@@ -29,13 +29,13 @@ from workflow_gps.orchestrator import (
     TaskContract,
     WorkflowOrchestrator,
 )
-from workflow_gps.skills.models import (
+from oolu.skills.models import (
     ActionEvent,
     ApprovalRecord,
     ExecutionOutcome,
     ExecutionStatus,
 )
-from workflow_gps.skills.requirements import (
+from oolu.skills.requirements import (
     AuthorizationGrant,
     AuthorizationMode,
     ParameterDomain,
@@ -526,7 +526,7 @@ def test_preflight_guard_rejects_excluded_route_directly():
 # Durable run-state store: a paused run survives a close/reopen (a restart).   #
 # --------------------------------------------------------------------------- #
 def test_paused_run_survives_durable_store_reopen(tmp_path):
-    from workflow_gps.orchestrator import LocalRunStateStore
+    from oolu.orchestrator import LocalRunStateStore
 
     brief = RequirementBrief(
         intent="apply change",
@@ -563,8 +563,8 @@ def test_paused_run_survives_durable_store_reopen(tmp_path):
 def test_cli_workflow_status_reports_paused_run(tmp_path):
     import io
 
-    from workflow_gps.cli import main
-    from workflow_gps.orchestrator import LocalRunStateStore
+    from oolu.cli import main
+    from oolu.orchestrator import LocalRunStateStore
 
     brief = RequirementBrief(
         intent="apply change",

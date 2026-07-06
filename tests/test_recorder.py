@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from workflow_gps.skills.learner import SkillLearner
-from workflow_gps.skills.models import (
+from oolu.skills.learner import SkillLearner
+from oolu.skills.models import (
     ActionEvent,
     ExecutionOutcome,
     ExecutionStatus,
     StateSnapshot,
 )
-from workflow_gps.skills.recorder import (
+from oolu.skills.recorder import (
     DemonstrationRecorder,
     DurableAuditLogSource,
     InMemoryLogSource,
@@ -18,7 +18,7 @@ from workflow_gps.skills.recorder import (
     RecordingMetrics,
     select_best,
 )
-from workflow_gps.skills.registry import SkillRegistry
+from oolu.skills.registry import SkillRegistry
 
 _T0 = datetime(2026, 7, 3, 12, 0, tzinfo=UTC)
 
@@ -201,6 +201,6 @@ def test_recording_feeds_the_learner(tmp_path):
 
 
 def _min_demo():
-    from workflow_gps.skills.models import Demonstration
+    from oolu.skills.models import Demonstration
 
     return Demonstration(intent="x", actions=[], outcome=ExecutionStatus.SUCCEEDED)

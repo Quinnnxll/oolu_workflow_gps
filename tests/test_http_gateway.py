@@ -12,8 +12,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from workflow_gps.durable import DurableConnection, DurableWorkflowService
-from workflow_gps.gateway import (
+from oolu.durable import DurableConnection, DurableWorkflowService
+from oolu.gateway import (
     GatewayApp,
     GatewayConfig,
     Request,
@@ -21,7 +21,7 @@ from workflow_gps.gateway import (
     WebhookSigner,
     WebhookVerifier,
 )
-from workflow_gps.identity import (
+from oolu.identity import (
     AuthorityGrant,
     AuthorityResolver,
     Hs256Signer,
@@ -33,7 +33,7 @@ from workflow_gps.identity import (
     Role,
     Tenant,
 )
-from workflow_gps.orchestrator import (
+from oolu.orchestrator import (
     ActionExecutorRouteRunner,
     Blueprint,
     BoundedRetryRecovery,
@@ -46,8 +46,8 @@ from workflow_gps.orchestrator import (
     StatusOutcomeMonitor,
     WorkflowOrchestrator,
 )
-from workflow_gps.skills.models import ActionEvent, ExecutionOutcome, ExecutionStatus
-from workflow_gps.skills.requirements import (
+from oolu.skills.models import ActionEvent, ExecutionOutcome, ExecutionStatus
+from oolu.skills.requirements import (
     AuthorizationGrant,
     AuthorizationMode,
     ParameterDomain,
@@ -58,7 +58,7 @@ from workflow_gps.skills.requirements import (
 
 _IDP = "idp-secret"
 _ISSUER = "https://idp"
-_AUDIENCE = "wfgps"
+_AUDIENCE = "oolu"
 NOW = datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
 
 

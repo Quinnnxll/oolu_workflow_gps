@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from test_http_gateway import _app, _req
 
-from workflow_gps.gateway import GatewayApp
-from workflow_gps.metering.attribution import AttributionStore
-from workflow_gps.metering.deriver import MeteringDeriver
-from workflow_gps.metering.models import RunBinding
-from workflow_gps.metering.store import MeteringLedger
-from workflow_gps.nodeplace import (
+from oolu.gateway import GatewayApp
+from oolu.metering.attribution import AttributionStore
+from oolu.metering.deriver import MeteringDeriver
+from oolu.metering.models import RunBinding
+from oolu.metering.store import MeteringLedger
+from oolu.nodeplace import (
     CandidateAssembler,
     LiveVersionStats,
     NodeplaceService,
@@ -18,7 +18,7 @@ from workflow_gps.nodeplace import (
     RatingStore,
     RegistryStore,
 )
-from workflow_gps.skills.models import ActionEvent, ReusableSkill, SkillSignature
+from oolu.skills.models import ActionEvent, ReusableSkill, SkillSignature
 
 
 def _build(tmp_path):
@@ -48,13 +48,25 @@ def _build(tmp_path):
 
 
 def _contribute_and_publish(
-    app, ident, registry, *, name, noder, price, derived_from=None
+    app,
+    ident,
+    registry,
+    *,
+    name,
+    noder,
+    price,
+    derived_from=None,
+    consumes=None,
+    produces=None,
+    inputs=None,
+    actions=None,
 ):
     skill = ReusableSkill(
         name=name,
         description=f"{name} cleans invoices",
         signature=SkillSignature(application="cli", adapter="cli"),
-        actions=[ActionEvent(correlation_id="c", adapter="cli", operation="run")],
+        actions=actions
+        or [ActionEvent(correlation_id="c", adapter="cli", operation="run")],
     )
     body = {
         "skill": skill.model_dump(mode="json"),
@@ -67,6 +79,12 @@ def _contribute_and_publish(
     }
     if derived_from is not None:
         body["derived_from"] = derived_from
+    if consumes is not None:
+        body["consumes"] = consumes
+    if produces is not None:
+        body["produces"] = produces
+    if inputs is not None:
+        body["inputs"] = inputs
     created = app.handle(
         _req(
             "POST",
@@ -279,7 +297,7 @@ def test_submit_run_binds_marketplace_node_and_accrues_on_verified_success(
 ):
     """The full loop: submit -> priced binding -> verified execution ->
     metering -> billing accrual, with conservation intact."""
-    from workflow_gps.billing import BillingService, EarningsLedger
+    from oolu.billing import BillingService, EarningsLedger
 
     app, conn, ident, registry, metering, attribution, audit = _build(tmp_path)
     proven, _flaky = _seed(app, ident, registry, metering, attribution, audit)

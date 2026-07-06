@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import pytest
 
-from workflow_gps.assembly import build_worker_executor
-from workflow_gps.models import ExecutionResult, Phase
-from workflow_gps.runtime.backend import (
+from oolu.assembly import build_worker_executor
+from oolu.models import ExecutionResult, Phase
+from oolu.runtime.backend import (
     BackendUnavailable,
     ExecutionRequest,
     StubBackend,
     make_success,
 )
-from workflow_gps.skills.models import ActionEvent, ExecutionStatus
-from workflow_gps.worker.execution import BackendWorkerExecutor
+from oolu.skills.models import ActionEvent, ExecutionStatus
+from oolu.worker.execution import BackendWorkerExecutor
 
 
 def _payload(script="emit_result({'ok': 1})", **params):
@@ -51,7 +51,7 @@ def test_no_script_is_failed():
 
 
 def test_backend_error_surfaces_as_worker_error():
-    from workflow_gps.worker.errors import WorkerError
+    from oolu.worker.errors import WorkerError
 
     executor = BackendWorkerExecutor(StubBackend([], healthy=False))
     with pytest.raises(WorkerError, match="isolation backend failed"):
@@ -106,7 +106,7 @@ def test_backend_worker_runs_through_the_control_plane():
 
 
 def test_docker_builder_requires_docker():
-    from workflow_gps.assembly import build_docker_worker_executor
+    from oolu.assembly import build_docker_worker_executor
 
     # No docker SDK / daemon in this environment: the builder must fail loudly,
     # never silently fall back to an unsandboxed backend.

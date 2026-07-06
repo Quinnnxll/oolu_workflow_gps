@@ -2,22 +2,22 @@
 
 from __future__ import annotations
 
-from workflow_gps.cache import LocalScriptCache
-from workflow_gps.models import ExecutionResult, Phase
-from workflow_gps.orchestrator import (
+from oolu.cache import LocalScriptCache
+from oolu.models import ExecutionResult, Phase
+from oolu.orchestrator import (
     Blueprint,
     DagRouteRunner,
     ReservedAction,
     RoutePlan,
 )
-from workflow_gps.runtime import (
+from oolu.runtime import (
     GraphEngineSynthesizer,
     NodeScriptRunner,
     NodeSynthesis,
     StubBackend,
     render_node_goal,
 )
-from workflow_gps.skills.models import ActionEvent, ExecutionStatus
+from oolu.skills.models import ActionEvent, ExecutionStatus
 
 
 def _ok(payload=None):

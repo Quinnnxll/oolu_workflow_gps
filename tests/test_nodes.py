@@ -4,17 +4,17 @@ from __future__ import annotations
 
 from conftest import drive
 
-from workflow_gps.graph.edges import EdgeRouter
-from workflow_gps.graph.nodes import GraphNodes
-from workflow_gps.models import (
+from oolu.graph.edges import EdgeRouter
+from oolu.graph.nodes import GraphNodes
+from oolu.models import (
     ErrorClass,
     ErrorRecord,
     GraphState,
     GraphStatus,
     ModelTier,
 )
-from workflow_gps.routing.gateway import FakeGateway, GatewayError
-from workflow_gps.runtime.backend import (
+from oolu.routing.gateway import FakeGateway, GatewayError
+from oolu.runtime.backend import (
     StubBackend,
     make_failure,
 )

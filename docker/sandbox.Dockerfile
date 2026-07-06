@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1
 #
-# Workflow-GPS sandbox image — the hostile-execution base for LocalDockerBackend.
+# OoLu sandbox image — the hostile-execution base for LocalDockerBackend.
 #
 # Build from the REPO ROOT (the entrypoint COPY needs that context):
-#     docker build -f docker/sandbox.Dockerfile -t workflow-gps-sandbox:latest .
+#     docker build -f docker/sandbox.Dockerfile -t oolu-sandbox:latest .
 #
 # The image is intentionally minimal: Python + uv + a non-root user + the in-container
 # entrypoint. Everything else (dependencies, the result shim, the user script) is
@@ -19,11 +19,11 @@ COPY --from=ghcr.io/astral-sh/uv:0.5 /uv /usr/local/bin/uv
 
 # Non-root user. Hostile code must never run as root, even inside the container.
 RUN useradd --create-home --uid 10001 sandbox \
-    && mkdir -p /opt/wfgps
+    && mkdir -p /opt/oolu
 
 # Bake the in-container runner (structured exception reporting). Static, so it lives
 # in the image rather than being copied per-run.
-COPY docker/entrypoint.py /opt/wfgps/entrypoint.py
+COPY docker/entrypoint.py /opt/oolu/entrypoint.py
 
 # CRITICAL: at runtime the rootfs is mounted READ-ONLY and the only writable mount is
 # the /sandbox tmpfs. So every tool that needs to write — uv's cache, the temp dir,

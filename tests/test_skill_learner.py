@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from workflow_gps.skills.learner import SkillLearner, scrub_demonstration
-from workflow_gps.skills.models import (
+from oolu.skills.learner import SkillLearner, scrub_demonstration
+from oolu.skills.models import (
     ActionEvent,
     Demonstration,
     ExecutionOutcome,
     ExecutionStatus,
     StateSnapshot,
 )
-from workflow_gps.skills.registry import SkillRegistry
+from oolu.skills.registry import SkillRegistry
 
 
 class _CliExecutor:

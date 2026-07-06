@@ -13,8 +13,8 @@ import json
 import httpx
 import pytest
 
-from workflow_gps.providers.base import HttpTransport, ProviderResponse
-from workflow_gps.providers.transport import HttpxTransport
+from oolu.providers.base import HttpTransport, ProviderResponse
+from oolu.providers.transport import HttpxTransport
 
 
 def _transport(handler) -> HttpxTransport:
@@ -37,9 +37,7 @@ def test_json_body_is_the_default_encoding() -> None:
 
     resp = _transport(handler).request("POST", "https://api.test/x", body={"a": 1})
 
-    assert resp == ProviderResponse(
-        status=200, json={"ok": True}, headers=resp.headers
-    )
+    assert resp == ProviderResponse(status=200, json={"ok": True}, headers=resp.headers)
     assert "application/json" in captured["content_type"]
     assert json.loads(captured["body"]) == {"a": 1}
 
@@ -117,7 +115,7 @@ def test_transport_failure_becomes_retryable_503() -> None:
 
 def test_drives_a_provider_adapter_end_to_end() -> None:
     """Wire the transport through the real BaseProviderAdapter pipeline."""
-    from workflow_gps.providers import OpenAiAdapter, SecretVault
+    from oolu.providers import OpenAiAdapter, SecretVault
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers.get("authorization") == "Bearer sk-test"

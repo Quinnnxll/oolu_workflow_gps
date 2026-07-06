@@ -4,16 +4,16 @@ from __future__ import annotations
 
 from conftest import drive
 
-from workflow_gps.cache import (
+from oolu.cache import (
     LocalScriptCache,
     ScriptCacheSignature,
     make_script_cache_key,
 )
-from workflow_gps.graph.edges import EdgeRouter
-from workflow_gps.graph.nodes import GraphNodes
-from workflow_gps.models import ErrorClass, ErrorRecord, GraphState, GraphStatus
-from workflow_gps.routing.gateway import FakeGateway
-from workflow_gps.runtime.backend import StubBackend, make_failure, make_success
+from oolu.graph.edges import EdgeRouter
+from oolu.graph.nodes import GraphNodes
+from oolu.models import ErrorClass, ErrorRecord, GraphState, GraphStatus
+from oolu.routing.gateway import FakeGateway
+from oolu.runtime.backend import StubBackend, make_failure, make_success
 
 
 def _signature(**changes) -> ScriptCacheSignature:

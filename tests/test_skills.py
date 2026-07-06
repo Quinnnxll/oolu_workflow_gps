@@ -8,8 +8,8 @@ import sys
 
 import pytest
 
-from workflow_gps.cli import main
-from workflow_gps.skills import (
+from oolu.cli import main
+from oolu.skills import (
     ActionEvent,
     AuthorizationGrant,
     AuthorizationMode,

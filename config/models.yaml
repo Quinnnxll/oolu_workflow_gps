@@ -1,17 +1,17 @@
-# Workflow-GPS configuration.
+# OoLu configuration.
 #
-# This file deserializes directly into workflow_gps.config.Settings — the same
+# This file deserializes directly into oolu.config.Settings — the same
 # frozen Pydantic models the engine uses internally, so there is no second schema.
 # Load it with:  Settings.load("config/models.yaml")
 #
 # Deployment-time overrides (applied on top of this file) come from env vars:
-#   WFGPS_API_BASE          - override both tiers' endpoint
-#   WFGPS_FAST_MODEL        - override the fast-tier model string
-#   WFGPS_REASONING_MODEL   - override the reasoning-tier model string
-#   WFGPS_BACKEND           - 'subprocess' | 'docker'
-#   WFGPS_PINNED_INDEX_URL  - Phase-A package index
-#   WFGPS_UV_CACHE_DIR      - host uv cache mounted read-only into containers
-#   WFGPS_CONFIG            - path to this file
+#   OOLU_API_BASE          - override both tiers' endpoint
+#   OOLU_FAST_MODEL        - override the fast-tier model string
+#   OOLU_REASONING_MODEL   - override the reasoning-tier model string
+#   OOLU_BACKEND           - 'subprocess' | 'docker'
+#   OOLU_PINNED_INDEX_URL  - Phase-A package index
+#   OOLU_UV_CACHE_DIR      - host uv cache mounted read-only into containers
+#   OOLU_CONFIG            - path to this file
 
 # ---------------------------------------------------------------------------
 # Two-tier routing matrix.
@@ -80,9 +80,9 @@ edges:
 # ---------------------------------------------------------------------------
 backend:
   kind: subprocess
-  image: "workflow-gps-sandbox:latest"
+  image: "oolu-sandbox:latest"
   network_name: "bridge"
-  uv_cache_dir: null          # e.g. "/var/cache/wfgps-uv" — mounted read-only
+  uv_cache_dir: null          # e.g. "/var/cache/oolu-uv" — mounted read-only
   pinned_index_url: null      # e.g. "https://pypi.org/simple" or a local mirror
   run_as_user: null           # e.g. "sandbox" — non-root user inside the image
 
@@ -95,7 +95,7 @@ graph:
 # prompt, so context stays small and tool selection stays sub-second.
 # ---------------------------------------------------------------------------
 skills:
-  registry_path: "~/.workflow-gps/skills-registry.db"
+  registry_path: "~/.oolu/skills-registry.db"
   max_context_tools: 8
 
 request_timeout_s: 120.0      # gateway completion timeout

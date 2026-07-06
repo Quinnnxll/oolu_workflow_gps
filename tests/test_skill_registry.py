@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from workflow_gps.skills.models import ActionEvent, ReusableSkill, SkillSignature
-from workflow_gps.skills.registry import SkillRegistry
+from oolu.skills.models import ActionEvent, ReusableSkill, SkillSignature
+from oolu.skills.registry import SkillRegistry
 
 
 def _skill(name, description, *ops, params=()):
-    from workflow_gps.skills.models import SkillParameter
+    from oolu.skills.models import SkillParameter
 
     return ReusableSkill(
         name=name,

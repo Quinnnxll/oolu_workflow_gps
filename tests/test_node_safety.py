@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import pytest
 
-from workflow_gps.durable import DurableConnection
-from workflow_gps.nodeplace import (
+from oolu.durable import DurableConnection
+from oolu.nodeplace import (
     NodeplaceService,
     NodeSafetyGate,
     RegistryStore,
     SafetyViolation,
     Visibility,
 )
-from workflow_gps.skills.models import ActionEvent, ReusableSkill, SkillSignature
+from oolu.skills.models import ActionEvent, ReusableSkill, SkillSignature
 
 
 def _skill(*, operation="run"):
@@ -100,7 +100,9 @@ def test_contribute_rejects_mutating_node_without_approval():
 
 def test_read_only_node_may_skip_approval():
     service = _service()
-    result = _contribute(service, skill=_skill(operation="read"), requires_approval=False)
+    result = _contribute(
+        service, skill=_skill(operation="read"), requires_approval=False
+    )
     published = service.publish(
         result.listing.listing_id, noder_principal="noder-1", tenant_id="t1"
     )
@@ -112,7 +114,7 @@ def test_publish_re_gates_the_stored_version():
     result = _contribute(service)
     # A stricter gate (no backend is considered isolated) must refuse activation
     # even for an already-stored version.
-    from workflow_gps.worker.policy import IsolationPolicy
+    from oolu.worker.policy import IsolationPolicy
 
     strict = NodeplaceService(
         service._store,

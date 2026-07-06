@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from workflow_gps.skills.browser_observer import BrowserObserver
+from oolu.skills.browser_observer import BrowserObserver
 
 
 def test_on_record_builds_action_events():
@@ -33,7 +33,7 @@ def test_clear_resets_the_buffer():
 # Real-Chromium capture.                                                      #
 # --------------------------------------------------------------------------- #
 pytest.importorskip("playwright")
-from workflow_gps.skills.browser import discover_chromium  # noqa: E402
+from oolu.skills.browser import discover_chromium  # noqa: E402
 
 _browser = pytest.mark.skipif(
     discover_chromium() is None, reason="no provisioned chromium"
@@ -91,9 +91,9 @@ def test_captures_real_interactions(page):
 
 @_browser
 def test_recorded_browser_demo_feeds_the_learner(page, tmp_path):
-    from workflow_gps.skills.learner import SkillLearner, scrub_demonstration
-    from workflow_gps.skills.recorder import DemonstrationRecorder
-    from workflow_gps.skills.registry import SkillRegistry
+    from oolu.skills.learner import SkillLearner, scrub_demonstration
+    from oolu.skills.recorder import DemonstrationRecorder
+    from oolu.skills.registry import SkillRegistry
 
     obs = BrowserObserver()
     obs.attach(page)

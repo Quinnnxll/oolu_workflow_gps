@@ -6,8 +6,8 @@ cycles that differ only in volatile state.
 
 from __future__ import annotations
 
-from workflow_gps.models import ErrorClass, ErrorRecord, ExecutionPlan, GraphState
-from workflow_gps.routing.prompting import DEFAULT_SYSTEM_PROMPT, PromptAssembler
+from oolu.models import ErrorClass, ErrorRecord, ExecutionPlan, GraphState
+from oolu.routing.prompting import DEFAULT_SYSTEM_PROMPT, PromptAssembler
 
 INTENT = "convert sales.csv to a bar chart"
 

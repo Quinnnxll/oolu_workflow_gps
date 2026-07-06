@@ -5,11 +5,11 @@ from datetime import UTC, datetime
 
 import pytest
 
-from workflow_gps.billing import PricingEngine
-from workflow_gps.durable import DurableConnection
-from workflow_gps.durable.postgres import PostgresDurableConnection
-from workflow_gps.metering import MeteringEvent, MeteringLedger, NoderShare
-from workflow_gps.nodeplace import (
+from oolu.billing import PricingEngine
+from oolu.durable import DurableConnection
+from oolu.durable.postgres import PostgresDurableConnection
+from oolu.metering import MeteringEvent, MeteringLedger, NoderShare
+from oolu.nodeplace import (
     RatingError,
     RatingService,
     RatingStore,
@@ -17,7 +17,7 @@ from workflow_gps.nodeplace import (
     mu_from_ratings,
 )
 
-PG_DSN = os.environ.get("WFGPS_TEST_PG_DSN") or os.environ.get("DATABASE_URL")
+PG_DSN = os.environ.get("OOLU_TEST_PG_DSN") or os.environ.get("DATABASE_URL")
 
 
 def _new_pg() -> PostgresDurableConnection:
@@ -61,7 +61,9 @@ def _record_run(metering: MeteringLedger, *, version_id: str, principal: str) ->
 
 def _service(conn):
     metering = MeteringLedger(conn)
-    return RatingService(RatingStore(conn), verified_run=metering.verified_run), metering
+    return RatingService(
+        RatingStore(conn), verified_run=metering.verified_run
+    ), metering
 
 
 # --------------------------------------------------------------------------- #
@@ -76,7 +78,9 @@ def test_rating_requires_a_verified_run(conn):
 def test_verified_run_allows_rating(conn):
     service, metering = _service(conn)
     _record_run(metering, version_id="v1", principal="rater")
-    rating = service.rate(rater_principal="rater", version_id="v1", score=4, text="good")
+    rating = service.rate(
+        rater_principal="rater", version_id="v1", score=4, text="good"
+    )
     assert rating.verified_run is True
     assert rating.score == 4
     assert [r.rater_principal for r in service.ratings("v1")] == ["rater"]

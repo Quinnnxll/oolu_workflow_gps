@@ -1,4 +1,4 @@
-"""Shared pytest fixtures and helpers for the Workflow-GPS suite.
+"""Shared pytest fixtures and helpers for the OoLu suite.
 
 Centralizes the test doubles (StubBackend scenarios, FakeGateway scripts, in-memory
 knowledge) and the capability gates so individual test files stay focused on
@@ -11,9 +11,9 @@ import shutil
 
 import pytest
 
-from workflow_gps.models import ErrorClass, ErrorRecord, ExecutionResult
-from workflow_gps.routing.gateway import FakeGateway
-from workflow_gps.runtime.backend import (
+from oolu.models import ErrorClass, ErrorRecord, ExecutionResult
+from oolu.routing.gateway import FakeGateway
+from oolu.runtime.backend import (
     ExecutionRequest,
     StubBackend,
     make_failure,
@@ -118,7 +118,7 @@ def script_gateway():
 # --------------------------------------------------------------------------- #
 @pytest.fixture
 def mem_knowledge():
-    from workflow_gps.knowledge import LocalKnowledgeClient
+    from oolu.knowledge import LocalKnowledgeClient
 
     client = LocalKnowledgeClient(":memory:")
     yield client

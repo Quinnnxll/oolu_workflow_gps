@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from workflow_gps.skills import DemonstrationCompiler, bind_parameters
-from workflow_gps.skills.models import (
+from oolu.skills import DemonstrationCompiler, bind_parameters
+from oolu.skills.models import (
     ActionEvent,
     Demonstration,
     ExecutionStatus,
@@ -129,7 +129,7 @@ def test_bind_parameters_produces_concrete_actions():
 def test_learner_generalize_induces_path_slots_despite_pii_scrubbing(tmp_path):
     """The scrubber masks absolute paths; templating must run first so the
     varying path survives as {workspace}/... and still becomes a slot."""
-    from workflow_gps.skills import SkillLearner, SkillRegistry
+    from oolu.skills import SkillLearner, SkillRegistry
 
     registry = SkillRegistry(tmp_path / "registry.db")
     learner = SkillLearner(registry)  # scrub_pii=True is the default

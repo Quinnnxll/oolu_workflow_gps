@@ -15,7 +15,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from workflow_gps.worker import (
+from oolu.worker import (
     AudienceMismatch,
     ControlPlane,
     ExpiredLease,

@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from workflow_gps.skills.models import (
+from oolu.skills.models import (
     ActionEvent,
     ExecutionOutcome,
     ExecutionStatus,
@@ -13,8 +13,8 @@ from workflow_gps.skills.models import (
     SkillParameter,
     SkillSignature,
 )
-from workflow_gps.skills.registry import SkillRegistry
-from workflow_gps.skills.server import SkillsServer
+from oolu.skills.registry import SkillRegistry
+from oolu.skills.server import SkillsServer
 
 
 class _Executor:

@@ -6,18 +6,18 @@ import json
 
 import pytest
 
-from workflow_gps.providers.base import ProviderResponse
-from workflow_gps.worker.control_plane import ControlPlane, TaskRequest, WorkerInfo
-from workflow_gps.worker.errors import RevocationUnavailable, WorkerError
-from workflow_gps.worker.http import (
+from oolu.providers.base import ProviderResponse
+from oolu.worker.control_plane import ControlPlane, TaskRequest, WorkerInfo
+from oolu.worker.errors import RevocationUnavailable, WorkerError
+from oolu.worker.http import (
     HttpWorkerTransport,
     RemoteRevocationLedger,
     RevocationHttpApp,
     WorkerHttpApp,
 )
-from workflow_gps.worker.leases import LeaseSigner, LeaseVerifier, TrustLevel
-from workflow_gps.worker.ledger import InMemoryLeaseLedger
-from workflow_gps.worker.worker import StubWorkerExecutor, Worker
+from oolu.worker.leases import LeaseSigner, LeaseVerifier, TrustLevel
+from oolu.worker.ledger import InMemoryLeaseLedger
+from oolu.worker.worker import StubWorkerExecutor, Worker
 
 _SECRET = "shared-worker-secret"
 

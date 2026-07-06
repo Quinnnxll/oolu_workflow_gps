@@ -13,28 +13,28 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
-      - name: Build wfgps sidecar (PyInstaller)
+      - name: Build oolu sidecar (PyInstaller)
         run: |
           python -m pip install --upgrade pip
           pip install ".[serve]" pyinstaller
-          pyinstaller desktop-app/sidecar/wfgps.spec \
+          pyinstaller desktop-app/sidecar/oolu.spec \
             --distpath desktop-app/src-tauri/binaries \
             --workpath build/pyi --noconfirm
-          mv desktop-app/src-tauri/binaries/wfgps.exe \
-             desktop-app/src-tauri/binaries/wfgps-x86_64-pc-windows-msvc.exe
+          mv desktop-app/src-tauri/binaries/oolu.exe \
+             desktop-app/src-tauri/binaries/oolu-x86_64-pc-windows-msvc.exe
 
       - name: Smoke-test the sidecar
-        run: desktop-app/src-tauri/binaries/wfgps-x86_64-pc-windows-msvc.exe version
+        run: desktop-app/src-tauri/binaries/oolu-x86_64-pc-windows-msvc.exe version
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Install frontend deps
         working-directory: desktop-app/frontend
@@ -62,7 +62,7 @@ jobs:
           cp desktop-app/src-tauri/target/release/bundle/nsis/*-setup.exe \
              out/OoLu-Setup.exe
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: OoLu-Setup
           path: out/OoLu-Setup.exe

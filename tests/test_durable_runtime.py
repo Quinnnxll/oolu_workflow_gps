@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from workflow_gps.durable import (
+from oolu.durable import (
     DurableAuditLog,
     DurableConnection,
     DurableTaskQueue,
@@ -27,7 +27,7 @@ from workflow_gps.durable import (
     prune_retention,
     restore,
 )
-from workflow_gps.orchestrator import (
+from oolu.orchestrator import (
     ActionExecutorRouteRunner,
     Blueprint,
     BoundedRetryRecovery,
@@ -44,13 +44,13 @@ from workflow_gps.orchestrator import (
     TaskContract,
     WorkflowOrchestrator,
 )
-from workflow_gps.skills.models import (
+from oolu.skills.models import (
     ActionEvent,
     ApprovalRecord,
     ExecutionOutcome,
     ExecutionStatus,
 )
-from workflow_gps.skills.requirements import (
+from oolu.skills.requirements import (
     AuthorizationGrant,
     AuthorizationMode,
     ParameterDomain,

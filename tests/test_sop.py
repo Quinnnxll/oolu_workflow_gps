@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from workflow_gps.orchestrator import (
+from oolu.orchestrator import (
     Blueprint,
     ReservedAction,
     apply_sop_to_blueprint,
 )
-from workflow_gps.skills import apply_sop_to_skill, parse_sop
-from workflow_gps.skills.models import ActionEvent, ReusableSkill, SkillSignature
+from oolu.skills import apply_sop_to_skill, parse_sop
+from oolu.skills.models import ActionEvent, ReusableSkill, SkillSignature
 
 SOP_YAML = """
 sop: month-end-report

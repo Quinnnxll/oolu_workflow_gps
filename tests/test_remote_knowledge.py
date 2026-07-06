@@ -10,7 +10,7 @@ import hashlib
 
 import pytest
 
-from workflow_gps.knowledge import (
+from oolu.knowledge import (
     KnowledgeClient,
     OAuth2PKCETokenProvider,
     RemoteConfig,
@@ -19,7 +19,7 @@ from workflow_gps.knowledge import (
     TransportError,
     generate_pkce_pair,
 )
-from workflow_gps.models import KnowledgeSource
+from oolu.models import KnowledgeSource
 
 TOKEN = StaticTokenProvider("test-token")
 

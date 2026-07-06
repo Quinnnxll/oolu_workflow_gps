@@ -1,7 +1,7 @@
 [project]
-name = "workflow-gps"
-version = "0.5.0"
-description = "A real-time navigation engine for local LLM agentic workflows."
+name = "oolu"
+version = "0.7.0"
+description = "OoLu — a real-time navigation engine for local LLM agentic workflows."
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.6",
@@ -21,7 +21,7 @@ docker = ["docker>=7.0"]
 postgres = ["psycopg[binary]>=3.1"]   # PostgreSQL durable adapter (workstream A)
 oidc = ["cryptography>=41.0"]          # JWKS RS256/ES256 verifier (workstream B)
 http = ["httpx>=0.27"]                 # real HttpTransport for providers (workstream C)
-serve = ["uvicorn>=0.30"]              # ASGI server for `wfgps serve` (/v1/skills)
+serve = ["uvicorn>=0.30"]              # ASGI server for `oolu serve` (/v1/skills)
 browser = ["playwright>=1.40"]         # Playwright browser ActionExecutor (web skills)
 # P2 (v0.5.0) money movement: the Stripe Connect PayoutAdapter reuses the injected
 # HttpTransport (the `http` extra) instead of the Stripe SDK, so it is mockable in
@@ -29,15 +29,18 @@ browser = ["playwright>=1.40"]         # Playwright browser ActionExecutor (web 
 dev = ["pytest>=8.0", "mypy>=1.8", "ruff>=0.3"]
 
 [project.scripts]
-wfgps = "workflow_gps.cli:main"
+oolu = "oolu.cli:main"
+# `wfgps` stays as a backwards-compatible alias for the old command name so
+# existing scripts, docs, and muscle memory keep working after the rebrand.
+wfgps = "oolu.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/workflow_gps"]
-artifacts = ["src/workflow_gps/skills/packs/*.yaml"]
+packages = ["src/oolu"]
+artifacts = ["src/oolu/skills/packs/*.yaml"]
 
 [tool.ruff]
 line-length = 88

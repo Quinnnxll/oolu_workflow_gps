@@ -10,21 +10,21 @@ from __future__ import annotations
 
 import pytest
 
-from workflow_gps.config import Settings, build_workflow_gps
-from workflow_gps.routing.gateway import FakeGateway
-from workflow_gps.runtime.isolation import SubprocessBackend
+from oolu.config import Settings, build_oolu
+from oolu.routing.gateway import FakeGateway
+from oolu.runtime.isolation import SubprocessBackend
 
 pytestmark = [pytest.mark.slow, pytest.mark.needs_uv, pytest.mark.needs_langgraph]
 
 SCRIPT = """```python
 import slugify
-from _wfgps_runtime import emit_result
-emit_result({"slug": slugify.slugify("Hello, World!  Workflow-GPS rocks")})
+from _oolu_runtime import emit_result
+emit_result({"slug": slugify.slugify("Hello, World!  OoLu rocks")})
 ```"""
 
 
 def test_real_dependency_self_heal():
-    engine = build_workflow_gps(
+    engine = build_oolu(
         Settings(),
         gateway=FakeGateway(
             [SCRIPT]
@@ -36,5 +36,5 @@ def test_real_dependency_self_heal():
     result = engine.run("slugify a greeting")
 
     assert result.success, result.failure_reason
-    assert result.answer == {"slug": "hello-world-workflow-gps-rocks"}
+    assert result.answer == {"slug": "hello-world-oolu-rocks"}
     assert result.recalc_count == 1  # exactly one heal cycle

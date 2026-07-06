@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from workflow_gps.orchestrator import SkillRegistryPlanner, classify_risk
-from workflow_gps.skills.models import ActionEvent, ReusableSkill, SkillSignature
+from oolu.orchestrator import SkillRegistryPlanner, classify_risk
+from oolu.skills.models import ActionEvent, ReusableSkill, SkillSignature
 
 
 def _skill(name, *ops):

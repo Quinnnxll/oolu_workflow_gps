@@ -1,35 +1,44 @@
 import { useCallback, useEffect, useState } from "react";
-import { api } from "./api";
+import { api, isRemote, requiresLogin, session, signOut } from "./api";
 import type { InboxItem, TaskView } from "./types";
 import { TaskPane } from "./components/TaskPane";
 import { Inbox } from "./components/Inbox";
 import { Skills } from "./components/Skills";
+import { Login } from "./components/Login";
 
 type Tab = "task" | "inbox" | "skills";
 
 export function App() {
+  // Local loopback needs no sign-in; a remote host does until we hold a token.
+  const [authed, setAuthed] = useState(!requiresLogin());
   const [tab, setTab] = useState<Tab>("task");
   const [task, setTask] = useState<TaskView | null>(null);
   const [inbox, setInbox] = useState<InboxItem[]>([]);
 
   const refreshInbox = useCallback(async () => {
+    if (!authed) return;
     try {
       setInbox((await api.inbox()).items);
     } catch {
       setInbox([]);
     }
-  }, []);
+  }, [authed]);
 
   useEffect(() => {
+    if (!authed) return;
     void refreshInbox();
     const t = setInterval(refreshInbox, 4000);
     return () => clearInterval(t);
-  }, [refreshInbox]);
+  }, [authed, refreshInbox]);
 
   const openTask = useCallback(async (runId: string) => {
     setTask(await api.task(runId));
     setTab("task");
   }, []);
+
+  if (!authed) {
+    return <Login onSignedIn={() => setAuthed(true)} />;
+  }
 
   return (
     <div className="app">
@@ -46,7 +55,18 @@ export function App() {
             Skills
           </button>
         </nav>
-        <div className="loopback">127.0.0.1 · local</div>
+        <div className="loopback">
+          {isRemote() ? (
+            <>
+              {session.principal ?? "signed in"} ·{" "}
+              <button className="linklike" onClick={signOut}>
+                sign out
+              </button>
+            </>
+          ) : (
+            "127.0.0.1 · local"
+          )}
+        </div>
       </header>
 
       <main>

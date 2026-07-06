@@ -7,7 +7,7 @@ import urllib.error
 
 import pytest
 
-from workflow_gps.replies import (
+from oolu.replies import (
     DeterministicReplyEngine,
     FileOffsetStore,
     LocalLearnedReplyStore,
@@ -15,7 +15,7 @@ from workflow_gps.replies import (
     ReplyBot,
     ReplyRule,
 )
-from workflow_gps.replies.channels import (
+from oolu.replies.channels import (
     ChannelError,
     PollBatch,
     TelegramAdapter,
@@ -318,7 +318,7 @@ def test_telegram_http_error_keeps_description_but_not_token(monkeypatch):
 
 def test_telegram_rejects_command_text_as_token():
     with pytest.raises(ValueError, match="paste only"):
-        TelegramBotApiTransport("py -m workflow_gps.cli telegram")
+        TelegramBotApiTransport("py -m oolu.cli telegram")
 
 
 def test_explicit_teaching_works_for_plain_bot_scope():

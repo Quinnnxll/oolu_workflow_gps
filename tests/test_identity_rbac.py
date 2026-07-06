@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from workflow_gps.identity import (
+from oolu.identity import (
     AuthorityGrant,
     AuthorityResolver,
     CrossTenantError,
@@ -33,11 +33,11 @@ from workflow_gps.identity import (
     StepUpRequiredError,
     Tenant,
 )
-from workflow_gps.identity.errors import AuthenticationError, AuthorizationError
+from oolu.identity.errors import AuthenticationError, AuthorizationError
 
 _SECRET = "test-signing-secret"
 _ISSUER = "https://idp.example.com"
-_AUDIENCE = "workflow-gps"
+_AUDIENCE = "oolu"
 NOW = datetime(2026, 6, 29, tzinfo=UTC)
 
 
@@ -58,7 +58,7 @@ def _validator() -> OidcValidator:
 
 
 def _store(tmp_path):
-    from workflow_gps.identity import IdentityStore
+    from oolu.identity import IdentityStore
 
     return IdentityStore(tmp_path / "identity.db")
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from workflow_gps.nodeplace import (
+from oolu.nodeplace import (
     CandidateEconomics,
     CostVector,
     NodeClass,

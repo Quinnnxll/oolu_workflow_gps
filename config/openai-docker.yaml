@@ -1,13 +1,13 @@
-# Workflow-GPS configuration: hosted OpenAI models + the Docker sandbox backend.
+# OoLu configuration: hosted OpenAI models + the Docker sandbox backend.
 #
 # Same as config/openai.yaml, but runs synthesized code inside ephemeral, network-
-# severed Docker containers (the workflow-gps-sandbox:latest image) instead of a
+# severed Docker containers (the oolu-sandbox:latest image) instead of a
 # bare host subprocess. Requires Docker Desktop running and the image built:
 #
-#   docker build -f docker/sandbox.Dockerfile -t workflow-gps-sandbox:latest .
+#   docker build -f docker/sandbox.Dockerfile -t oolu-sandbox:latest .
 #
 # Provide your key in the environment, then:
-#   python -m workflow_gps.cli run "..." --config ../config/openai-docker.yaml --json
+#   python -m oolu.cli run "..." --config ../config/openai-docker.yaml --json
 
 routing:
   fast:
@@ -51,7 +51,7 @@ edges:
 
 backend:
   kind: docker
-  image: "workflow-gps-sandbox:latest"
+  image: "oolu-sandbox:latest"
   network_name: "bridge"
   uv_cache_dir: null
   pinned_index_url: null

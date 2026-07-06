@@ -11,22 +11,22 @@ import sqlite3
 
 import pytest
 
-from workflow_gps.cache.store import MIGRATIONS as CACHE_MIGRATIONS
-from workflow_gps.cache.store import LocalScriptCache
-from workflow_gps.durable.connection import DURABLE_MIGRATIONS
-from workflow_gps.identity.store import IDENTITY_MIGRATIONS
-from workflow_gps.knowledge.client import KNOWLEDGE_MIGRATIONS, LocalKnowledgeClient
-from workflow_gps.knowledge.remote import QUARANTINE_MIGRATIONS
-from workflow_gps.orchestrator.store import RUN_STATE_MIGRATIONS
-from workflow_gps.persistence import Migration, SchemaError, migrate, schema_version
-from workflow_gps.replies.learned import MIGRATIONS as REPLY_MIGRATIONS
-from workflow_gps.replies.learned import LocalLearnedReplyStore
-from workflow_gps.skills.store import (
+from oolu.cache.store import MIGRATIONS as CACHE_MIGRATIONS
+from oolu.cache.store import LocalScriptCache
+from oolu.durable.connection import DURABLE_MIGRATIONS
+from oolu.identity.store import IDENTITY_MIGRATIONS
+from oolu.knowledge.client import KNOWLEDGE_MIGRATIONS, LocalKnowledgeClient
+from oolu.knowledge.remote import QUARANTINE_MIGRATIONS
+from oolu.orchestrator.store import RUN_STATE_MIGRATIONS
+from oolu.persistence import Migration, SchemaError, migrate, schema_version
+from oolu.replies.learned import MIGRATIONS as REPLY_MIGRATIONS
+from oolu.replies.learned import LocalLearnedReplyStore
+from oolu.skills.store import (
     SKILL_MIGRATIONS,
     LocalExecutionStore,
     LocalSkillStore,
 )
-from workflow_gps.worker.ledger import WORKER_MIGRATIONS
+from oolu.worker.ledger import WORKER_MIGRATIONS
 
 # Every versioned schema in the project, paired with its migration history. New
 # stores added later must be registered here so the shared invariants below cover

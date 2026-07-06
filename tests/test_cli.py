@@ -8,8 +8,8 @@ from types import SimpleNamespace as NS
 
 import pytest
 
-from workflow_gps.cli import main
-from workflow_gps.knowledge import LocalKnowledgeClient
+from oolu.cli import main
+from oolu.knowledge import LocalKnowledgeClient
 
 OK = NS(
     success=True,
@@ -106,8 +106,8 @@ def test_local_script_cache_injected():
 
 
 def test_remote_without_env_is_config_error(monkeypatch):
-    monkeypatch.delenv("WFGPS_KNOWLEDGE_URL", raising=False)
-    monkeypatch.delenv("WFGPS_KNOWLEDGE_TOKEN", raising=False)
+    monkeypatch.delenv("OOLU_KNOWLEDGE_URL", raising=False)
+    monkeypatch.delenv("OOLU_KNOWLEDGE_TOKEN", raising=False)
     b, _ = _builder(OK)
     assert (
         main(["run", "x", "--knowledge", "remote"], builder=b, out=io.StringIO()) == 2
@@ -122,7 +122,7 @@ def test_show_config():
 
 def test_version():
     buf = io.StringIO()
-    assert main(["version"], out=buf) == 0 and "workflow-gps" in buf.getvalue()
+    assert main(["version"], out=buf) == 0 and "oolu" in buf.getvalue()
 
 
 def test_telegram_requires_token(monkeypatch, tmp_path):

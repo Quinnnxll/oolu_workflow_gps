@@ -4,9 +4,9 @@ import shutil
 
 import pytest
 
-from workflow_gps.assembly import build_cli_executor, build_desktop_runtime
-from workflow_gps.orchestrator.state import Blueprint, ReservedAction
-from workflow_gps.skills.models import (
+from oolu.assembly import build_cli_executor, build_host_runtime
+from oolu.orchestrator.state import Blueprint, ReservedAction
+from oolu.skills.models import (
     ActionEvent,
     ExecutionOutcome,
     ExecutionStatus,
@@ -47,9 +47,9 @@ def _echo_blueprint():
 
 
 def test_build_planning_context_wires_registry_and_tools(tmp_path):
-    from workflow_gps.assembly import build_planning_context
-    from workflow_gps.skills.discovery import DiscoveredTool
-    from workflow_gps.skills.registry import SkillRegistry
+    from oolu.assembly import build_planning_context
+    from oolu.skills.discovery import DiscoveredTool
+    from oolu.skills.registry import SkillRegistry
 
     assert build_planning_context() is None
 
@@ -79,11 +79,43 @@ def test_build_planning_context_wires_registry_and_tools(tmp_path):
         reg.close()
 
 
+def _host(tmp_path, **kwargs):
+    """The unified runtime, signed in — every port of the old desktop
+    runtime tests now drives the same gateway surface the shell uses."""
+    runtime = build_host_runtime(
+        data_dir=tmp_path / "host",
+        secret="a-thirty-two-character-plus-signing-secret",
+        **kwargs,
+    )
+    runtime.accounts.bootstrap(tenant="main", username="admin", password="first-pass")
+    token = runtime.accounts.login("admin", "first-pass").token
+    return runtime, token
+
+
+def _call(runtime, token, method, path, body=None):
+    from oolu.gateway.http import Request
+
+    headers = {"Authorization": f"Bearer {token}"}
+    return runtime.gateway.handle(
+        Request(method=method, path=path, headers=headers, query={}, body=body)
+    )
+
+
+def _submit(runtime, token, intent):
+    submitted = _call(runtime, token, "POST", "/v1/runs", {"intent": intent})
+    assert submitted.status in (200, 201, 202), submitted.body
+    run_id = submitted.body["run_id"]
+    return _call(runtime, token, "GET", f"/v1/runs/{run_id}").body
+
+
 def test_planning_only_runtime_fails_with_no_route(tmp_path):
-    with build_desktop_runtime(db_path=tmp_path / "d.db") as rt:
-        view = rt.desktop.submit_task("do something")
-        assert view.phase == "failed"
-        assert "no executable route" in (view.failure_reason or "")
+    runtime, token = _host(tmp_path)
+    try:
+        run = _submit(runtime, token, "do something")
+        assert run["phase"] == "failed"
+        assert "no executable route" in (run["failure_reason"] or "")
+    finally:
+        runtime.close()
 
 
 def test_model_intake_drives_clarification_through_the_runtime(tmp_path):
@@ -91,32 +123,43 @@ def test_model_intake_drives_clarification_through_the_runtime(tmp_path):
         '{"parameters": [{"name": "city", "value_type": "string", '
         '"required": true, "question": "Which city?"}]}'
     )
-    with build_desktop_runtime(
-        db_path=tmp_path / "d.db", intake_model=_Model(answer)
-    ) as rt:
-        view = rt.desktop.submit_task("book a flight")
-        assert view.awaiting == "clarification"
-        assert [q.parameter for q in view.questions] == ["city"]
+    runtime, token = _host(tmp_path, intake_model=_Model(answer))
+    try:
+        run = _submit(runtime, token, "book a flight")
+        assert run["awaiting"] == "clarification"
+        questions = _call(
+            runtime, token, "GET", f"/v1/runs/{run['run_id']}/questions"
+        ).body
+        assert [q["parameter"] for q in questions["questions"]] == ["city"]
 
-        resumed = rt.desktop.answer_questions(view.run_id, {"city": "Lisbon"})
-        assert resumed.phase == "failed"
-        assert "no executable route" in (resumed.failure_reason or "")
+        resumed = _call(
+            runtime,
+            token,
+            "POST",
+            f"/v1/runs/{run['run_id']}/answers",
+            {"answers": {"city": "Lisbon"}},
+        ).body
+        assert resumed["phase"] == "failed"
+        assert "no executable route" in (resumed["failure_reason"] or "")
+    finally:
+        runtime.close()
 
 
 def test_full_path_runs_end_to_end_with_injected_planner(tmp_path):
-    with build_desktop_runtime(
-        db_path=tmp_path / "d.db",
-        blueprints=[_echo_blueprint()],
-        executors={"local": _Executor()},
-    ) as rt:
-        view = rt.desktop.submit_task("echo please")
-        assert view.phase == "completed"
-        assert view.result == {
+    runtime, token = _host(
+        tmp_path, blueprints=[_echo_blueprint()], executors={"local": _Executor()}
+    )
+    try:
+        run = _submit(runtime, token, "echo please")
+        assert run["phase"] == "completed"
+        assert run["result"] == {
             "status": "succeeded",
             "attempts": 1,
             "route": "echo-route",
             "actions": 1,
         }
+    finally:
+        runtime.close()
 
 
 def _cli_run_skill(argv):
@@ -138,28 +181,42 @@ def _cli_run_skill(argv):
 def test_registry_and_cli_executor_run_a_real_command(tmp_path):
     if shutil.which("true") is None:
         pytest.skip("no `true` binary")
-    with build_desktop_runtime(
-        db_path=tmp_path / "d.db",
+    runtime, token = _host(
+        tmp_path,
         skills=[_cli_run_skill(["true"])],
         executors=build_cli_executor(workspace=tmp_path, allowed_executables=["true"]),
-    ) as rt:
-        view = rt.desktop.submit_task("run the thing")
-        assert view.awaiting == "confirmation"
-
-        done = rt.desktop.confirm(view.run_id, approved=True)
-        assert done.phase == "completed"
-        assert done.result["status"] == "succeeded"
-        assert done.result["route"] == "cli-task"
-
-
-def test_runs_survive_reopening_the_same_db(tmp_path):
-    db = tmp_path / "d.db"
-    rt = build_desktop_runtime(db_path=db)
-    run_id = rt.desktop.submit_task("persist me").run_id
-    rt.close()
-
-    reopened = build_desktop_runtime(db_path=db)
+    )
     try:
-        assert reopened.desktop.task(run_id).run_id == run_id
+        run = _submit(runtime, token, "run the thing")
+        assert run["awaiting"] == "confirmation"
+
+        done = _call(
+            runtime,
+            token,
+            "POST",
+            f"/v1/runs/{run['run_id']}/confirmation",
+            {"approved": True},
+        ).body
+        assert done["phase"] == "completed"
+        assert done["result"]["status"] == "succeeded"
+        assert done["result"]["route"] == "cli-task"
+    finally:
+        runtime.close()
+
+
+def test_runs_survive_reopening_the_same_data_directory(tmp_path):
+    runtime, token = _host(tmp_path)
+    run_id = _submit(runtime, token, "persist me")["run_id"]
+    runtime.close()
+
+    # Same directory, same secret: the run and the sign-in both survive.
+    reopened = build_host_runtime(
+        data_dir=tmp_path / "host",
+        secret="a-thirty-two-character-plus-signing-secret",
+    )
+    try:
+        token = reopened.accounts.login("admin", "first-pass").token
+        run = _call(reopened, token, "GET", f"/v1/runs/{run_id}").body
+        assert run["run_id"] == run_id
     finally:
         reopened.close()

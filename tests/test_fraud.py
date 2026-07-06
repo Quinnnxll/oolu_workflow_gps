@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from workflow_gps.billing import (
+from oolu.billing import (
     BalanceProjection,
     ChargingService,
     DefaultFraudSignals,
@@ -13,13 +13,13 @@ from workflow_gps.billing import (
     FakePayoutAdapter,
     FraudSignals,
 )
-from workflow_gps.durable.idempotency import IdempotencyLedger
-from workflow_gps.durable.postgres import PostgresDurableConnection
-from workflow_gps.identity import ProviderConfig
-from workflow_gps.metering import AttributionRecord, MeteringEvent, NoderShare
-from workflow_gps.nodeplace import is_duplicate_hash, is_plagiarism, similarity
+from oolu.durable.idempotency import IdempotencyLedger
+from oolu.durable.postgres import PostgresDurableConnection
+from oolu.identity import ProviderConfig
+from oolu.metering import AttributionRecord, MeteringEvent, NoderShare
+from oolu.nodeplace import is_duplicate_hash, is_plagiarism, similarity
 
-PG_DSN = os.environ.get("WFGPS_TEST_PG_DSN") or os.environ.get("DATABASE_URL")
+PG_DSN = os.environ.get("OOLU_TEST_PG_DSN") or os.environ.get("DATABASE_URL")
 
 
 class _AsymmetricVerifier:
@@ -31,7 +31,9 @@ class _AsymmetricVerifier:
 
 _ASYMMETRIC = [
     ProviderConfig(
-        issuer="https://idp", audiences=frozenset({"wfgps"}), verifier=_AsymmetricVerifier()
+        issuer="https://idp",
+        audiences=frozenset({"oolu"}),
+        verifier=_AsymmetricVerifier(),
     )
 ]
 
@@ -68,7 +70,9 @@ def test_replayed_success_is_rejected():
 
 def test_durable_seen_predicate_detects_replay():
     fraud = DefaultFraudSignals(seen=lambda key: key == "already-metered")
-    verdict = fraud.assess(idempotency_key="already-metered", consumer_principal="c", shares=[])
+    verdict = fraud.assess(
+        idempotency_key="already-metered", consumer_principal="c", shares=[]
+    )
     assert verdict.allowed is False
 
 
@@ -76,7 +80,8 @@ def test_velocity_throttle():
     fraud = DefaultFraudSignals(velocity_limit=2)
     keys = ["k1", "k2", "k3"]
     verdicts = [
-        fraud.assess(idempotency_key=k, consumer_principal="spammer", shares=[]) for k in keys
+        fraud.assess(idempotency_key=k, consumer_principal="spammer", shares=[])
+        for k in keys
     ]
     assert [v.allowed for v in verdicts] == [True, True, False]
     assert verdicts[2].reasons == ["velocity_exceeded"]
@@ -94,7 +99,9 @@ def test_similarity_and_plagiarism_threshold():
     assert similarity("deploy the app to prod", "deploy the app to prod") == 1.0
     assert similarity("deploy the app", "totally different words here") < 0.2
     corpus = {"v1": "deploy the app to production now"}
-    assert is_plagiarism("deploy the app to production now", corpus, threshold=0.9) == "v1"
+    assert (
+        is_plagiarism("deploy the app to production now", corpus, threshold=0.9) == "v1"
+    )
     assert is_plagiarism("a wholly unrelated workflow", corpus, threshold=0.9) is None
 
 
@@ -139,8 +146,12 @@ def test_self_dealer_earns_nothing_but_others_are_paid():
             occurred_at=datetime(2030, 1, 1, tzinfo=UTC),
         )
         attributions = [
-            AttributionRecord(event_id=event.event_id, noder_principal="alice", weight=1.0),
-            AttributionRecord(event_id=event.event_id, noder_principal="bob", weight=1.0),
+            AttributionRecord(
+                event_id=event.event_id, noder_principal="alice", weight=1.0
+            ),
+            AttributionRecord(
+                event_id=event.event_id, noder_principal="bob", weight=1.0
+            ),
         ]
         out = service.charge_and_accrue(event, attributions, consumer_ref="cus_alice")
         assert out["charged"] is True

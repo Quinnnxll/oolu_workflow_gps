@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from workflow_gps.assembly import build_worker_executor
-from workflow_gps.skills.models import ActionEvent, ExecutionStatus
-from workflow_gps.worker.worker import StubWorkerExecutor
+from oolu.assembly import build_worker_executor
+from oolu.skills.models import ActionEvent, ExecutionStatus
+from oolu.worker.worker import StubWorkerExecutor
 
 
 def _action(operation="run", adapter="worker"):

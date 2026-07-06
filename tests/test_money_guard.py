@@ -4,17 +4,17 @@ import os
 
 import pytest
 
-from workflow_gps.billing import (
+from oolu.billing import (
     MoneyModeError,
     is_production_money,
     require_production_money,
 )
-from workflow_gps.durable import DurableConnection
-from workflow_gps.durable.postgres import PostgresDurableConnection
-from workflow_gps.identity import ProviderConfig
-from workflow_gps.identity.tokens import Hs256Verifier
+from oolu.durable import DurableConnection
+from oolu.durable.postgres import PostgresDurableConnection
+from oolu.identity import ProviderConfig
+from oolu.identity.tokens import Hs256Verifier
 
-PG_DSN = os.environ.get("WFGPS_TEST_PG_DSN") or os.environ.get("DATABASE_URL")
+PG_DSN = os.environ.get("OOLU_TEST_PG_DSN") or os.environ.get("DATABASE_URL")
 
 
 class _AsymmetricVerifier:
@@ -30,7 +30,7 @@ class _ProductionDurable:
 
 def _provider(verifier):
     return ProviderConfig(
-        issuer="https://idp", audiences=frozenset({"wfgps"}), verifier=verifier
+        issuer="https://idp", audiences=frozenset({"oolu"}), verifier=verifier
     )
 
 

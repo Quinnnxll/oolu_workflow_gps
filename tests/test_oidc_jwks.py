@@ -10,19 +10,19 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 
-from workflow_gps.identity import (
+from oolu.identity import (
     IdentityConfigurationError,
     OidcValidator,
     ProviderConfig,
     assert_production_identity,
 )
-from workflow_gps.identity.errors import AuthenticationError
-from workflow_gps.identity.jwks import JwksVerifier
-from workflow_gps.identity.tokens import Hs256Verifier
-from workflow_gps.providers.transport import HttpxTransport
+from oolu.identity.errors import AuthenticationError
+from oolu.identity.jwks import JwksVerifier
+from oolu.identity.tokens import Hs256Verifier
+from oolu.providers.transport import HttpxTransport
 
 ISSUER = "https://idp.test"
-AUDIENCE = "workflow-gps"
+AUDIENCE = "oolu"
 
 
 def _b64url(data: bytes) -> str:
@@ -67,7 +67,9 @@ def _rsa_material(kid: str = "r1"):
     }
 
     def mint(payload: dict | None = None) -> str:
-        prefix, message = _signing_input({"alg": "RS256", "typ": "JWT", "kid": kid}, payload or _payload())
+        prefix, message = _signing_input(
+            {"alg": "RS256", "typ": "JWT", "kid": kid}, payload or _payload()
+        )
         signature = key.sign(message, padding.PKCS1v15(), hashes.SHA256())
         return f"{prefix}.{_b64url(signature)}"
 
@@ -86,7 +88,9 @@ def _ec_material(kid: str = "e1"):
     }
 
     def mint(payload: dict | None = None) -> str:
-        prefix, message = _signing_input({"alg": "ES256", "typ": "JWT", "kid": kid}, payload or _payload())
+        prefix, message = _signing_input(
+            {"alg": "ES256", "typ": "JWT", "kid": kid}, payload or _payload()
+        )
         der = key.sign(message, ec.ECDSA(hashes.SHA256()))
         r, s = decode_dss_signature(der)
         raw = r.to_bytes(32, "big") + s.to_bytes(32, "big")
@@ -97,7 +101,11 @@ def _ec_material(kid: str = "e1"):
 
 def _validator(verifier) -> OidcValidator:
     return OidcValidator(
-        [ProviderConfig(issuer=ISSUER, audiences=frozenset({AUDIENCE}), verifier=verifier)]
+        [
+            ProviderConfig(
+                issuer=ISSUER, audiences=frozenset({AUDIENCE}), verifier=verifier
+            )
+        ]
     )
 
 
@@ -144,7 +152,10 @@ def test_unknown_kid_triggers_rotation_refresh():
         return documents[index]
 
     verifier = JwksVerifier(
-        fetch=fetch, algorithm="RS256", min_refresh_interval=60.0, clock=lambda: clock["t"]
+        fetch=fetch,
+        algorithm="RS256",
+        min_refresh_interval=60.0,
+        clock=lambda: clock["t"],
     )
     clock["t"] = 1100.0
     claims = _validator(verifier).validate(mint())
@@ -165,7 +176,9 @@ def test_from_transport_fetches_jwks_over_http():
         assert request.url.path == "/.well-known/jwks.json"
         return httpx.Response(200, json={"keys": [jwk]})
 
-    transport = HttpxTransport(client=httpx.Client(transport=httpx.MockTransport(handler)))
+    transport = HttpxTransport(
+        client=httpx.Client(transport=httpx.MockTransport(handler))
+    )
     verifier = JwksVerifier.from_transport(
         transport, "https://idp.test/.well-known/jwks.json", algorithm="RS256"
     )

@@ -5,10 +5,10 @@ from __future__ import annotations
 import pytest
 from test_gateway_market import _build, _contribute_and_publish, _req, _seed
 
-from workflow_gps.billing import BillingService, EarningsLedger
-from workflow_gps.metering.deriver import MeteringDeriver
-from workflow_gps.nodeplace import ContributionError, NodeplaceService, RegistryStore
-from workflow_gps.skills.models import ActionEvent, ReusableSkill, SkillSignature
+from oolu.billing import BillingService, EarningsLedger
+from oolu.metering.deriver import MeteringDeriver
+from oolu.nodeplace import ContributionError, NodeplaceService, RegistryStore
+from oolu.skills.models import ActionEvent, ReusableSkill, SkillSignature
 
 
 def _skill(name: str, operation: str = "run") -> ReusableSkill:

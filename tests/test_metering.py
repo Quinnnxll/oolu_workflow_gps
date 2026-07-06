@@ -5,11 +5,11 @@ import os
 
 import pytest
 
-from workflow_gps.durable import DurableAuditLog, DurableConnection
-from workflow_gps.durable.postgres import PostgresDurableConnection
-from workflow_gps.metering import MeteringDeriver, MeteringEvent, MeteringLedger
+from oolu.durable import DurableAuditLog, DurableConnection
+from oolu.durable.postgres import PostgresDurableConnection
+from oolu.metering import MeteringDeriver, MeteringEvent, MeteringLedger
 
-PG_DSN = os.environ.get("WFGPS_TEST_PG_DSN") or os.environ.get("DATABASE_URL")
+PG_DSN = os.environ.get("OOLU_TEST_PG_DSN") or os.environ.get("DATABASE_URL")
 
 _PG_TABLES = ("audit_log", "metering_events")
 
@@ -134,12 +134,20 @@ def test_metering_event_has_no_earnings_fields():
 
 
 def test_no_real_payment_path_exists():
-    for module in ("workflow_gps.payout", "workflow_gps.settlement"):
+    for module in ("oolu.payout", "oolu.settlement"):
         with pytest.raises(ModuleNotFoundError):
             importlib.import_module(module)
 
 
 def test_metering_exposes_no_money_symbols():
-    surface = " ".join(dir(importlib.import_module("workflow_gps.metering"))).lower()
-    for token in ("price", "pricing", "charge", "payout", "billing", "earning", "commission"):
+    surface = " ".join(dir(importlib.import_module("oolu.metering"))).lower()
+    for token in (
+        "price",
+        "pricing",
+        "charge",
+        "payout",
+        "billing",
+        "earning",
+        "commission",
+    ):
         assert token not in surface

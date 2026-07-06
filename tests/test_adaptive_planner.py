@@ -5,8 +5,8 @@ from __future__ import annotations
 import random
 from datetime import UTC, datetime
 
-from workflow_gps.knowledge import NodeObservation, TraceStore, route_node_key
-from workflow_gps.orchestrator import (
+from oolu.knowledge import NodeObservation, TraceStore, route_node_key
+from oolu.orchestrator import (
     AdaptivePlanner,
     BoundedRetryRecovery,
     CapabilityGrounder,
@@ -20,16 +20,16 @@ from workflow_gps.orchestrator import (
     ThompsonRouteOptimizer,
     WorkflowOrchestrator,
 )
-from workflow_gps.orchestrator.state import SemanticGrounding
-from workflow_gps.skills import SkillRegistry, parse_sop
-from workflow_gps.skills.models import (
+from oolu.orchestrator.state import SemanticGrounding
+from oolu.skills import SkillRegistry, parse_sop
+from oolu.skills.models import (
     ActionEvent,
     ExecutionOutcome,
     ExecutionStatus,
     ReusableSkill,
     SkillSignature,
 )
-from workflow_gps.skills.requirements import (
+from oolu.skills.requirements import (
     AuthorizationGrant,
     AuthorizationMode,
     RequirementBrief,

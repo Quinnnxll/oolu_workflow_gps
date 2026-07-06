@@ -2,21 +2,21 @@ from __future__ import annotations
 
 import pytest
 
-from workflow_gps.skills.context import (
+from oolu.skills.context import (
     PlanningContextBuilder,
     SkillContextBuilder,
     render_tool_env,
     render_tool_manifest,
     select_tools,
 )
-from workflow_gps.skills.discovery import DiscoveredTool
-from workflow_gps.skills.models import (
+from oolu.skills.discovery import DiscoveredTool
+from oolu.skills.models import (
     ActionEvent,
     ReusableSkill,
     SkillParameter,
     SkillSignature,
 )
-from workflow_gps.skills.registry import SkillRegistry
+from oolu.skills.registry import SkillRegistry
 
 _TOOLS = [
     DiscoveredTool(

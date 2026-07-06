@@ -23,7 +23,12 @@ ENV/
 *.db
 *.sqlite
 *.sqlite3
+.oolu/
 .workflow-gps/
+
+# Node deps / Rust build output (also covered per-app under desktop-app/)
+node_modules/
+target/
 
 # Secrets / local env (never commit API keys)
 .env
@@ -40,3 +45,4 @@ Thumbs.db
 
 # Git bundles (transfer artifacts, never tracked)
 *.bundle
+.pyinstaller-work/

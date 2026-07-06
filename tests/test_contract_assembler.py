@@ -6,8 +6,8 @@ import random
 
 from test_dag_scheduler import StubExecutor
 
-from workflow_gps.knowledge import NodeObservation, TraceStore
-from workflow_gps.orchestrator import (
+from oolu.knowledge import NodeObservation, TraceStore
+from oolu.orchestrator import (
     AssemblyResult,
     ContractAssembler,
     DagRouteRunner,
@@ -16,7 +16,7 @@ from workflow_gps.orchestrator import (
     contract_from_registered,
     contract_to_blueprint,
 )
-from workflow_gps.skills import (
+from oolu.skills import (
     ActionsBody,
     NodeContract,
     NodeStats,
@@ -24,7 +24,7 @@ from workflow_gps.skills import (
     SkillRegistry,
     Slot,
 )
-from workflow_gps.skills.models import (
+from oolu.skills.models import (
     ActionEvent,
     ExecutionStatus,
     ReusableSkill,

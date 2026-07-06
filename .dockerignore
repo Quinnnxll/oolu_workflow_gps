@@ -1,0 +1,12 @@
+.git
+.venv
+.oolu
+.pytest_cache
+.pyinstaller-work
+dist
+build
+tests
+docs
+packaging
+**/__pycache__
+*.bundle

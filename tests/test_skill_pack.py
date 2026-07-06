@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from workflow_gps.skills.pack import (
+from oolu.skills.pack import (
     load_skill_pack,
     load_starter_pack,
     parse_skill_pack,
     starter_pack_text,
 )
-from workflow_gps.skills.registry import SkillRegistry
+from oolu.skills.registry import SkillRegistry
 
 _PACK = {
     "skills": [

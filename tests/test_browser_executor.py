@@ -4,14 +4,14 @@ import pytest
 
 pytest.importorskip("playwright")
 
-from workflow_gps.skills.browser import (  # noqa: E402
+from oolu.skills.browser import (  # noqa: E402
     BrowserActionExecutor,
     BrowserPolicy,
     _allowed_hosts_for,
     _host,
     discover_chromium,
 )
-from workflow_gps.skills.models import ActionEvent, ExecutionStatus  # noqa: E402
+from oolu.skills.models import ActionEvent, ExecutionStatus  # noqa: E402
 
 pytestmark = pytest.mark.skipif(
     discover_chromium() is None, reason="no provisioned chromium"
@@ -130,9 +130,9 @@ def test_idempotent_replay(executor, tmp_path):
 
 
 def test_server_execute_drives_the_browser(executor, tmp_path):
-    from workflow_gps.skills.pack import load_skill_pack
-    from workflow_gps.skills.registry import SkillRegistry
-    from workflow_gps.skills.server import SkillsServer
+    from oolu.skills.pack import load_skill_pack
+    from oolu.skills.registry import SkillRegistry
+    from oolu.skills.server import SkillsServer
 
     url = _page(tmp_path, "s.html", "<h1 id=h>served</h1>")
     registry = SkillRegistry(tmp_path / "reg.db")
