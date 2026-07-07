@@ -303,8 +303,15 @@ class WorkflowOrchestrator:
         assert state.route is not None
         attempt = state.recovery_attempts + 1
         key = f"{state.run_id}:exec:{attempt}"
+        # Resolved brief values (stated by the user, or answered in
+        # clarification) flow into the actions right before execution;
+        # the recorded route itself stays exactly as planned.
+        from .adapters import bind_brief_parameters
+
         state.execution = self._executor.execute(
-            state.route, idempotency_key=key, attempt=attempt
+            bind_brief_parameters(state.route, state.brief),
+            idempotency_key=key,
+            attempt=attempt,
         )
         self._emit(
             "workflow.executed",
@@ -369,6 +376,17 @@ class WorkflowOrchestrator:
             "route": state.route.chosen.name,
             "actions": len(state.route.chosen.actions),
         }
+        # What the hands actually brought back (executors keep evidence
+        # bounded) — the part of the run the user came for.
+        outputs = [
+            outcome.evidence
+            for outcome in (
+                state.execution.action_outcomes if state.execution else []
+            )
+            if outcome.evidence
+        ]
+        if outputs:
+            state.result["outputs"] = outputs
         self._emit("workflow.completed", {"run_id": state.run_id})
         return self._advance(state, Phase.COMPLETED, "finalized")
 

@@ -189,6 +189,57 @@ class RiskBasedHumanControl:
 # --------------------------------------------------------------------------- #
 # Execution.                                                                  #
 # --------------------------------------------------------------------------- #
+def _substitute(value, values: dict):
+    """Fill ``{{name}}`` references in strings, recursively through
+    containers — the same convention the browser executor's steps use."""
+    if isinstance(value, str):
+        for name, replacement in values.items():
+            value = value.replace("{{" + name + "}}", str(replacement))
+        return value
+    if isinstance(value, dict):
+        return {k: _substitute(v, values) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_substitute(v, values) for v in value]
+    return value
+
+
+def bind_brief_parameters(route: RoutePlan, brief) -> RoutePlan:
+    """The wrist between intake and the hands: resolved brief values flow
+    into each action's parameters before execution.
+
+    A value the user stated (or answered in clarification) fills a
+    parameter the action does not already fix, and ``{{name}}`` references
+    inside declared parameters are substituted. Actions keep their own
+    declared parameters — a skill's fixed values always win over intake.
+    """
+    values = {
+        p.name: p.value
+        for p in (brief.parameters if brief else [])
+        if p.value is not None
+    }
+    if not values:
+        return route
+    bound = []
+    for item in route.chosen.actions:
+        parameters = {
+            k: _substitute(v, values) for k, v in item.action.parameters.items()
+        }
+        for name, value in values.items():
+            parameters.setdefault(name, value)
+        bound.append(
+            item.model_copy(
+                update={
+                    "action": item.action.model_copy(
+                        update={"parameters": parameters}
+                    )
+                }
+            )
+        )
+    return route.model_copy(
+        update={"chosen": route.chosen.model_copy(update={"actions": bound})}
+    )
+
+
 class ActionExecutorRouteRunner:
     """Execute a route's actions through the existing ``ActionExecutor`` contract.
 

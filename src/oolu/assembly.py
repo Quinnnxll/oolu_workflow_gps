@@ -76,6 +76,32 @@ def build_cli_executor(
     return {executor.name: executor}
 
 
+def build_http_executor(
+    *,
+    allow_hosts: list[str] | tuple[str, ...] = (),
+    timeout_s: float = 20.0,
+    max_bytes: int = 1_000_000,
+    allow_private: bool = False,
+) -> dict[str, ActionExecutor]:
+    """The engine's first hands: GET-only HTTP behind the SSRF guard.
+
+    ``allow_hosts`` narrows to named hosts (and their subdomains);
+    ``allow_private`` disables the public-address guard for offline
+    tests/demos only — never ship it on.
+    """
+    from .skills.http_adapter import HttpActionExecutor, HttpExecutionPolicy
+
+    executor = HttpActionExecutor(
+        HttpExecutionPolicy(
+            allow_hosts=frozenset(h.strip().lower() for h in allow_hosts if h.strip()),
+            timeout_s=timeout_s,
+            max_bytes=max_bytes,
+            allow_private=allow_private,
+        )
+    )
+    return {executor.name: executor}
+
+
 def build_discovered_cli_executor(
     *,
     workspace: str | Path,

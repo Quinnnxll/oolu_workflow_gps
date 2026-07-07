@@ -41,10 +41,14 @@ from ..skills.requirements import (
     AuthorizationGrant,
     AuthorizationMode,
     ParameterDomain,
+    ParameterSource,
     RequirementBrief,
     RequirementParameter,
 )
 from .state import TaskContract
+
+# A URL the user literally typed into their request.
+_URL_RE = re.compile(r"https?://[^\s\"'<>]+")
 
 logger = logging.getLogger(__name__)
 
@@ -139,16 +143,30 @@ class LiteLLMIntakeModel:
 class HeuristicIntaker:
     """Deterministic, no-network intake.
 
-    It invents nothing: the brief carries the intent verbatim with no parameters
-    and ``GUIDED`` authorization. The run proceeds to grounding on the raw intent
-    rather than fabricating structure the user never stated. This is the honest
+    It invents nothing: the brief carries the intent verbatim and ``GUIDED``
+    authorization. The one extraction it performs is of things the user
+    *literally stated* — a URL typed into the intent becomes the ``url``
+    parameter (source USER), so "fetch http://api.example/x" can execute
+    without a model. Everything else stays unfabricated; this is the honest
     floor the system runs on when no model is available.
     """
 
     def intake(self, contract: TaskContract) -> RequirementBrief:
+        parameters = []
+        urls = _URL_RE.findall(contract.intent)
+        if urls:
+            parameters.append(
+                RequirementParameter(
+                    name="url",
+                    description="the address stated in the request",
+                    domain=ParameterDomain(value_type="string"),
+                    value=urls[0].rstrip(".,;)"),
+                    source=ParameterSource.USER,
+                )
+            )
         return RequirementBrief(
             intent=contract.intent,
-            parameters=[],
+            parameters=parameters,
             constraints=[],
             authorization=AuthorizationGrant(mode=AuthorizationMode.GUIDED),
         )
