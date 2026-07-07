@@ -1273,8 +1273,12 @@ def _cmd_desktop(args, out) -> int:
         # the multi-user admin page `oolu host` serves.
         frontend="shell",
         # The online server this app pairs with: the sign-in screen uses
-        # it instead of asking the user to type a server.
-        config=GatewayConfig(server_url=os.environ.get("OOLU_SERVER_URL")),
+        # it instead of asking the user to type a server. The desktop's
+        # home tenant is "local" — planning reads its key and settings.
+        config=GatewayConfig(
+            server_url=os.environ.get("OOLU_SERVER_URL"),
+            registration_tenant="local",
+        ),
         # "Continue with Google" turns on when the operator provides a
         # Google OAuth client (Desktop-app type; the id is not a secret).
         google_client_id=os.environ.get("OOLU_GOOGLE_CLIENT_ID"),

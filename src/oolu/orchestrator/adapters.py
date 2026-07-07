@@ -9,6 +9,7 @@ one of them without touching the run state or the phase machine (ADR-0002).
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 
 from ..skills.models import ExecutionOutcome, ExecutionStatus
@@ -131,6 +132,70 @@ class LeastCostRouteOptimizer:
         viable = [item for item in ranked if not item.excluded]
         chosen = viable[0] if viable else ranked[0]
         alternatives = [item for item in ranked if item.id != chosen.id]
+        return RoutePlan(
+            chosen=chosen,
+            alternatives=alternatives,
+            total_cost=chosen.estimated_cost,
+        )
+
+
+class ModelRouteOptimizer:
+    """Semantic route choice over a deterministic floor.
+
+    The fallback (least-cost) optimizer ranks and excludes as before; when a
+    model is available and more than one route is viable, the model is shown
+    the intent and the route names and picks one. Anything short of a clean,
+    viable pick — no model key, a dead provider, a reached spending cap, an
+    unparseable answer, a name that isn't on the menu — keeps the fallback's
+    choice. The model can only ever re-order viable routes, never resurrect
+    an excluded one.
+    """
+
+    def __init__(self, fallback: LeastCostRouteOptimizer, *, model=None):
+        self._fallback = fallback
+        self._model = model  # chat.ChatModel: reply(messages) -> str
+
+    def optimize(
+        self, brief: RequirementBrief, grounding: SemanticGrounding
+    ) -> RoutePlan:
+        plan = self._fallback.optimize(brief, grounding)
+        candidates = [plan.chosen, *plan.alternatives]
+        viable = [item for item in candidates if not item.excluded]
+        if self._model is None or len(viable) < 2:
+            return plan
+        try:
+            menu = "\n".join(
+                f"{index + 1}. {item.name}" for index, item in enumerate(viable)
+            )
+            raw = self._model.reply(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Pick the route that best fits the user's request. "
+                            "Reply with ONLY the number of your pick. If none "
+                            "fits, reply 0."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Request: {brief.intent}\n\nRoutes:\n{menu}",
+                    },
+                ]
+            )
+            match = re.search(r"\d+", raw)
+            if match is None:
+                return plan
+            index = int(match.group())
+            if not 1 <= index <= len(viable):
+                return plan
+            chosen = viable[index - 1]
+        except Exception:  # noqa: BLE001 - a failed consultation keeps the
+            # deterministic choice; route picking must never kill a run.
+            return plan
+        if chosen.id == plan.chosen.id:
+            return plan
+        alternatives = [item for item in candidates if item.id != chosen.id]
         return RoutePlan(
             chosen=chosen,
             alternatives=alternatives,

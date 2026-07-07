@@ -84,6 +84,7 @@ class ChatModelRouter:
         preference: Callable[[], str] | None = None,  # auto|anthropic|openai
         tier: Callable[[], str] | None = None,  # fast|reasoning
         max_tokens: int = 1024,
+        purpose: str = CHAT_PURPOSE,  # what the meter books this under
     ) -> None:
         self._keyring = keyring
         self._tenant = tenant
@@ -93,6 +94,7 @@ class ChatModelRouter:
         self._preference = preference or (lambda: "auto")
         self._tier = tier or (lambda: "fast")
         self._max_tokens = max_tokens
+        self._purpose = purpose
         self._adapters: dict[tuple[str, str], Any] = {}
 
     # ------------------------------------------------------------------ #
@@ -117,7 +119,10 @@ class ChatModelRouter:
         cap = float(self._budget() or 0.0)
         if cap <= 0 or self._meter is None:
             return
-        spent = self._meter.total_cost(CHAT_PURPOSE)
+        # The cap covers ALL model spend on this install — chat turns and
+        # planning consultations share one pool, so the number the user set
+        # is the number that holds.
+        spent = self._meter.total_cost()
         if spent >= cap:
             raise ModelBudgetExceeded(
                 f"I've reached the model spending cap you set "
@@ -191,7 +196,7 @@ class ChatModelRouter:
             completion_tokens = int(usage.get("completion_tokens", 0) or 0)
         if self._meter is not None:
             self._meter.record(
-                CHAT_PURPOSE,
+                self._purpose,
                 _Telemetry(
                     model=str(data.get("model") or model_id),
                     tier=tier,
@@ -203,3 +208,30 @@ class ChatModelRouter:
         if not text:
             raise ModelUnavailable(f"{provider} returned an empty reply")
         return text
+
+
+class RouterIntakeModel:
+    """The orchestrator's ``IntakeModel`` over the tenant's keyring router.
+
+    The bridge from Milestone A into planning: the same pasted key that
+    answers chat now structures briefs. Degradation is silence, not noise —
+    no key, a dead provider, or a reached cap returns ``""``, which the
+    intaker treats as "no proposal" and falls back to its heuristic floor.
+    """
+
+    def __init__(self, router: ChatModelRouter):
+        self._router = router
+
+    def propose(self, intent: str) -> str:
+        from ..chat import ModelBudgetExceeded, ModelUnavailable
+        from ..orchestrator.intake import INTAKE_SYSTEM_PROMPT
+
+        try:
+            return self._router.reply(
+                [
+                    {"role": "system", "content": INTAKE_SYSTEM_PROMPT},
+                    {"role": "user", "content": intent},
+                ]
+            )
+        except (ModelUnavailable, ModelBudgetExceeded):
+            return ""

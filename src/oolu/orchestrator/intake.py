@@ -204,7 +204,44 @@ class ModelBackedIntaker:
             )
             return self._fallback.intake(contract)
         brief = _parse_brief(contract.intent, text)
-        return brief if brief is not None else self._fallback.intake(contract)
+        if brief is None:
+            return self._fallback.intake(contract)
+        return _bind_stated_values(brief)
+
+
+def _bind_stated_values(brief: RequirementBrief) -> RequirementBrief:
+    """Bind exactly what the user already said, nothing more.
+
+    The intake contract forbids the model from selecting values — but a
+    suggested value that appears *verbatim* in the intent (a URL, a name,
+    a number the user typed) was stated by the user, not guessed by the
+    model. Binding those (source USER) spares a clarification round that
+    would only ask the user to repeat themselves. Everything else stays
+    unbound and keeps its question.
+    """
+    bound: list[RequirementParameter] = []
+    for param in brief.parameters:
+        value = None
+        if param.value is None:
+            for suggestion in param.suggested_values:
+                text = str(suggestion)
+                if len(text) >= 2 and text in brief.intent:
+                    value = suggestion
+                    break
+            # A URL is stated even when the model didn't suggest it back.
+            if value is None and param.name == "url":
+                urls = _URL_RE.findall(brief.intent)
+                if urls:
+                    value = urls[0].rstrip(".,;)")
+        if value is not None:
+            bound.append(
+                param.model_copy(
+                    update={"value": value, "source": ParameterSource.USER}
+                )
+            )
+        else:
+            bound.append(param)
+    return brief.model_copy(update={"parameters": bound})
 
 
 # --------------------------------------------------------------------------- #

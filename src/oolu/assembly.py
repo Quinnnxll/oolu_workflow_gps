@@ -289,14 +289,19 @@ def build_orchestrator_factory(
     blueprints: list[Blueprint] | None = None,
     grounding_map: dict[str, str] | None = None,
     executors: dict[str, ActionExecutor] | None = None,
+    route_model=None,  # chat.ChatModel: semantic route choice, optional
 ) -> OrchestratorFactory:
+    from .orchestrator.adapters import ModelRouteOptimizer
+
     intaker = ModelBackedIntaker(intake_model)
     executor = ActionExecutorRouteRunner(dict(executors or {}))
 
     if skills and not blueprints:
         planner = SkillRegistryPlanner(skills)
         grounder: object = RegistryGrounder(planner.capabilities())
-        optimizer: object = LeastCostRouteOptimizer(planner.blueprints())
+        optimizer: object = ModelRouteOptimizer(
+            LeastCostRouteOptimizer(planner.blueprints()), model=route_model
+        )
     elif blueprints:
         grounder = CapabilityGrounder(
             dict(grounding_map or {}), always_resolved=executor.capabilities()
@@ -429,6 +434,40 @@ def build_host_runtime(
         conn: Any = PostgresDurableConnection(database_url)
     else:
         conn = DurableConnection(data / "host.db")
+    # The model plumbing is shared: the keyring holds the pasted keys, the
+    # meter books every consultation, and the settings node carries the
+    # provider/tier choice and the one spending cap that covers everything.
+    model_keys = ModelKeyring(conn, key_path=data / "machine.key")
+    model_meter = ModelCallMeter()
+    settings_node = SettingsNode(SettingsStore(conn))
+    home_tenant = (
+        getattr(config, "registration_tenant", None) if config else None
+    ) or "main"
+
+    def _model_setting(key: str, fallback):
+        return settings_node.effective(home_tenant).get(key, fallback)
+
+    def _planning_router(purpose: str):
+        from .providers.chatmodel import ChatModelRouter
+
+        return ChatModelRouter(
+            model_keys,
+            home_tenant,
+            meter=model_meter,
+            budget=lambda: float(_model_setting("budget.model_cap", 0.0) or 0.0),
+            preference=lambda: str(_model_setting("model.provider", "auto")),
+            tier=lambda: str(_model_setting("model.tier", "fast")),
+            purpose=purpose,
+        )
+
+    # Milestone A's key, bridged into planning: intake structures briefs and
+    # route choice turns semantic. Both degrade to the deterministic floor
+    # (heuristic intake, least-cost routes) the moment no key answers.
+    if intake_model is None:
+        from .providers.chatmodel import RouterIntakeModel
+
+        intake_model = RouterIntakeModel(_planning_router("plan.intake"))
+
     factory = build_orchestrator_factory(
         settings,
         intake_model=intake_model,
@@ -436,6 +475,7 @@ def build_host_runtime(
         blueprints=blueprints,
         grounding_map=grounding_map,
         executors=executors,
+        route_model=_planning_router("plan.route"),
     )
     durable = DurableWorkflowService(conn, factory)
 
@@ -524,12 +564,12 @@ def build_host_runtime(
         accounts=accounts,
         desk=desk,
         files=UserFileStore(conn),
-        settings_node=SettingsNode(SettingsStore(conn)),
-        # The brain behind chat: pasted provider keys survive restarts
-        # encrypted (the machine key file is the local trust boundary),
-        # and every model consultation is metered spend.
-        model_keys=ModelKeyring(conn, key_path=data / "machine.key"),
-        model_meter=ModelCallMeter(),
+        settings_node=settings_node,
+        # The brain behind chat: the same keyring/meter planning uses —
+        # pasted keys survive restarts encrypted, every consultation is
+        # metered, and one spending cap covers chat AND planning.
+        model_keys=model_keys,
+        model_meter=model_meter,
         google_signin=google,
         identity_links=identity_links,
         # Pre-launch: the test card vault and a closed launch guard — the

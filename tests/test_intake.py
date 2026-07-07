@@ -58,25 +58,35 @@ def test_model_brief_produces_clarifying_questions():
 ```"""
     brief = ModelBackedIntaker(_FakeModel(answer)).intake(_contract())
     assert [p.name for p in brief.parameters] == ["destination", "cabin"]
+    # "Lisbon" is verbatim in the user's own words, so it binds (source
+    # USER) and the user is not asked to repeat themselves...
+    destination = brief.parameters[0]
+    assert destination.value == "Lisbon"
+    assert destination.source is ParameterSource.USER
     result = RequirementConstraintCompiler().compile(brief)
-    # Both params are required-and-unresolved, so the compiler asks, highest first.
+    # ...while the cabin — which the user never mentioned — is still asked.
     assert result.status.value == "clarifying"
-    assert [q.parameter for q in result.questions] == ["destination", "cabin"]
-    assert result.questions[0].suggested_values == ["Lisbon"]
+    assert [q.parameter for q in result.questions] == ["cabin"]
 
 
 def test_model_may_suggest_but_never_binds_a_value():
-    # The model tries to pin the value itself; intake must demote it to a
-    # suggestion so provenance is preserved and the human still chooses.
+    # The model tries to pin "Paris" itself; intake demotes it. What binds
+    # instead is "Lisbon" — because the USER typed it in the intent, and
+    # code (verbatim containment), not the model, verifies that. A
+    # suggestion absent from the user's words stays an open question.
     answer = (
         '{"parameters": [{"name": "destination", "value_type": "string", '
-        '"value": "Paris", "source": "user", "suggested_values": ["Lisbon"]}]}'
+        '"value": "Paris", "source": "user", "suggested_values": ["Lisbon"]}, '
+        '{"name": "hotel", "value_type": "string", '
+        '"suggested_values": ["Ritz"], "question": "Which hotel?"}]}'
     )
     brief = ModelBackedIntaker(_FakeModel(answer)).intake(_contract())
-    (param,) = brief.parameters
-    assert param.value is None
-    assert param.source is ParameterSource.UNRESOLVED
-    assert param.suggested_values == ["Lisbon"]
+    destination, hotel = brief.parameters
+    assert destination.value == "Lisbon"  # the user's word, never Paris
+    assert destination.source is ParameterSource.USER
+    assert destination.suggested_values == ["Lisbon"]
+    assert hotel.value is None  # the model's idea stays a question
+    assert hotel.source is ParameterSource.UNRESOLVED
 
 
 def test_model_cannot_self_authorize():
