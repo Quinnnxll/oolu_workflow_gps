@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api } from "../api";
+import { accountConsoleUrl, api } from "../api";
 import type {
   ModelKeyView,
   PaymentProfileView,
@@ -58,7 +58,9 @@ export function SettingsPane() {
           <h3>{GROUP_LABELS[group] ?? group}</h3>
           {group === "subscription" && (
             <p className="muted">
-              Billing isn't enabled yet — this records your intended plan.
+              Your plan is a commitment, not a preference — it's shown here
+              and managed in the account console (cancel the current plan
+              there to change terms).
             </p>
           )}
           {items
@@ -66,6 +68,23 @@ export function SettingsPane() {
             .map((item) => (
               <SettingRow key={item.key} item={item} onSave={save} />
             ))}
+          {group === "subscription" && (
+            <div className="setting-row">
+              <div className="setting-label">
+                <span>Manage plan</span>
+                <span className="setting-desc">
+                  Upgrade with deduction, cancel, or switch monthly/yearly.
+                </span>
+              </div>
+              <div className="setting-control">
+                <button
+                  onClick={() => window.open(accountConsoleUrl(), "_blank")}
+                >
+                  Open the account console
+                </button>
+              </div>
+            </div>
+          )}
           {group === "model" && <ModelKeysSection />}
         </section>
       ))}
@@ -329,6 +348,11 @@ function SettingControl({
   item: SettingItem;
   onSave: (key: string, value: unknown) => Promise<void>;
 }) {
+  if (item.managed) {
+    // Display-only: the value's owner is a dedicated flow, and the node
+    // itself refuses writes — this control never even offers one.
+    return <span className="managed-value">{String(item.value ?? "")}</span>;
+  }
   if (item.kind === "bool") {
     return (
       <input

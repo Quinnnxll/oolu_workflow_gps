@@ -396,6 +396,7 @@ def build_host_runtime(
         ModelCallMeter,
         PaymentMethodsService,
         PaymentProfileStore,
+        SubscriptionService,
     )
     from .durable.files import UserFileStore
     from .gateway import GatewayApp
@@ -576,6 +577,9 @@ def build_host_runtime(
         # real transaction port stays shut until an operator opens it.
         payments=PaymentMethodsService(PaymentProfileStore(conn), FakeCardVault()),
         launch_guard=LaunchGuard(transactions_enabled=False),
+        # The plan lifecycle behind the account console; it mirrors its
+        # state into the (managed, display-only) subscription settings.
+        subscriptions=SubscriptionService(conn, settings=settings_node),
         # The public execution API: machine keys + signed run webhooks.
         api_keys=ApiKeyService(conn),
         webhook_endpoints=(endpoints := WebhookEndpointStore(conn)),

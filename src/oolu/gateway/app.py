@@ -34,6 +34,7 @@ from ..billing import (
     PayoutStore,
 )
 from ..billing.launch import LaunchGuard
+from ..billing.subscription import SubscriptionError, SubscriptionService
 from ..chat import ChatAssistant, GatewayChatTools
 from ..durable.files import FileTooLargeError, UserFile, UserFileStore
 from ..durable.idempotency import IdempotencyLedger
@@ -234,6 +235,7 @@ class GatewayApp:
         settings_node: SettingsNode | None = None,  # the settings node
         payments: PaymentMethodsService | None = None,  # card on file
         launch_guard: LaunchGuard | None = None,  # pre-launch charge gate
+        subscriptions: SubscriptionService | None = None,  # plan lifecycle
         api_keys: ApiKeyService | None = None,  # machine credentials
         webhook_endpoints: WebhookEndpointStore | None = None,
         notifier: RunEventNotifier | None = None,  # run-event webhooks
@@ -299,6 +301,7 @@ class GatewayApp:
         self._settings = settings_node
         self._payments = payments
         self._launch_guard = launch_guard
+        self._subscriptions = subscriptions
         self._api_keys = api_keys
         self._webhook_endpoints = webhook_endpoints
         self._notifier = notifier
@@ -538,6 +541,12 @@ class GatewayApp:
         r.add("GET", "/v1/payments/status", self._payments_status)
         r.add("GET", "/v1/settings", self._settings_list)
         r.add("PUT", "/v1/settings", self._settings_update)
+        # The subscription lifecycle: a commitment, not a settings knob.
+        # Choose from free; changing terms means cancel first (the credit
+        # for unused time is the deduction the next choose applies).
+        r.add("GET", "/v1/subscription", self._subscription_view)
+        r.add("POST", "/v1/subscription/choose", self._subscription_choose)
+        r.add("POST", "/v1/subscription/cancel", self._subscription_cancel)
         # Model keys: the BYO-key door. Secrets go in; only fingerprints
         # ever come back out. Deliberately NOT a setting — the settings
         # catalog is visible data.
@@ -1426,6 +1435,41 @@ class GatewayApp:
             raise GatewayError(404, "not_found", f"no {provider} key is stored")
         self._model_routers.pop(session.tenant_id, None)
         return json_response(200, {"removed": provider})
+
+    # ------------------------------------------------------------------ #
+    # The subscription lifecycle (the account console's backend).         #
+    # ------------------------------------------------------------------ #
+    def _require_subscriptions(self) -> SubscriptionService:
+        if self._subscriptions is None:
+            raise GatewayError(404, "not_found", "subscriptions are not enabled")
+        return self._subscriptions
+
+    def _subscription_view(self, request, session, params) -> Response:
+        service = self._require_subscriptions()
+        return json_response(200, service.view(session.tenant_id))
+
+    def _subscription_choose(self, request, session, params) -> Response:
+        service = self._require_subscriptions()
+        body = request.body or {}
+        try:
+            result = service.choose(
+                session.tenant_id,
+                str(body.get("plan", "")),
+                str(body.get("cycle", "monthly")),
+            )
+        except SubscriptionError as exc:
+            raise GatewayError(409, "conflict", str(exc)) from exc
+        self._metrics["subscription_chosen"] += 1
+        return json_response(200, result)
+
+    def _subscription_cancel(self, request, session, params) -> Response:
+        service = self._require_subscriptions()
+        try:
+            result = service.cancel(session.tenant_id)
+        except SubscriptionError as exc:
+            raise GatewayError(409, "conflict", str(exc)) from exc
+        self._metrics["subscription_cancelled"] += 1
+        return json_response(200, result)
 
     def _require_files(self) -> UserFileStore:
         if self._files is None:

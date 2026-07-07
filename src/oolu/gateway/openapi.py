@@ -126,6 +126,23 @@ def build_openapi() -> dict:
                 "out: transaction port, price settlement, verification"
             ),
         },
+        "/v1/subscription": {
+            "get": op(
+                "The plan lifecycle: current plan, cycle, period, credit, "
+                "and the price table"
+            ),
+        },
+        "/v1/subscription/choose": {
+            "post": op(
+                "Start a plan (only from free — cancel first to change "
+                "terms); any credit is deducted from the price"
+            ),
+        },
+        "/v1/subscription/cancel": {
+            "post": op(
+                "End the current plan now; unused time becomes credit"
+            ),
+        },
         "/v1/settings": {
             "get": op(
                 "The settings node: every declared setting with its bounds "

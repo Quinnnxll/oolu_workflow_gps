@@ -241,6 +241,18 @@ export function signOut(): void {
   location.reload();
 }
 
+// The account console: commitments (the subscription) live on their own
+// page. Local mode opens this gateway's console with the engine token
+// handed over in the hash (same bootstrap the shell itself uses); a
+// signed-in remote session opens the server's console with its token.
+export function accountConsoleUrl(): string {
+  if (isRemote() || session.signedIn()) {
+    const base = isRemote() ? BASE() : (session.server ?? "");
+    return `${base}/account#auth=${session.token ?? ""}`;
+  }
+  return `${BASE()}/account#auth=${engineToken() ?? ""}`;
+}
+
 // Which credential authenticates API calls: the loopback engine's own
 // ephemeral token in local mode, the online session everywhere else.
 function apiToken(): string | null {
@@ -392,6 +404,8 @@ export interface SettingItem {
   maximum?: number | null;
   choices?: string[] | null;
   max_length?: number | null;
+  // Display-only here: owned by a dedicated flow (the account console).
+  managed?: boolean;
 }
 
 // ---- model key wire shape (GET /v1/keys/model) -----------------------------

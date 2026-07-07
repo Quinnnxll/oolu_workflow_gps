@@ -37,6 +37,11 @@ class SettingField(BaseModel):
     kind: SettingKind
     default: Any = None
     description: str = ""
+    # A managed field is DISPLAY-ONLY through the settings surface: its
+    # value is owned by a dedicated service (e.g. the subscription
+    # lifecycle) and set() refuses it for every caller — the UI, the
+    # API, and OoLu alike. Changing it takes the owning flow, not a knob.
+    managed: bool = False
     # NUMBER: inclusive bounds. CHOICE: the closed admissible set. TEXT:
     # a max length. All optional; absent means unconstrained within type.
     minimum: float | None = None
@@ -145,7 +150,9 @@ SETTINGS_CATALOG: tuple[SettingField, ...] = (
         default=True,
         description="Let OoLu build missing nodes and publish them under my account.",
     ),
-    # --- subscription (not sold yet; the knob exists so config is complete)
+    # --- subscription: DISPLAY-ONLY here. The plan is a commitment with
+    # money attached, not a preference — changing it takes the account
+    # console's cancel-first flow, never a settings knob.
     SettingField(
         key="subscription.plan",
         group="subscription",
@@ -153,8 +160,9 @@ SETTINGS_CATALOG: tuple[SettingField, ...] = (
         kind=SettingKind.CHOICE,
         default="free",
         choices=("free", "plus", "pro", "enterprise"),
-        description="Subscription tier. Billing is not enabled yet; this only "
-        "records the intended plan.",
+        managed=True,
+        description="Your current plan. Managed in the account console — "
+        "cancel the current plan there to change terms.",
     ),
     SettingField(
         key="subscription.billing_cycle",
@@ -163,7 +171,9 @@ SETTINGS_CATALOG: tuple[SettingField, ...] = (
         kind=SettingKind.CHOICE,
         default="monthly",
         choices=("monthly", "yearly"),
-        description="How the plan would be billed once billing is enabled.",
+        managed=True,
+        description="Monthly or yearly. Managed in the account console with "
+        "the plan.",
     ),
     # --- model (the brain behind chat; keys live in the keyring, NOT here —
     # this catalog is visible data, so a secret must never be a setting) ----
@@ -301,15 +311,15 @@ class SettingsNode:
         return out
 
     def set(self, tenant: str, key: str, value: Any) -> Any:
-        """Apply one setting. Unknown key or out-of-bounds value → refused.
+        """Apply one setting. Unknown key, out-of-bounds value, or a managed
+        field → refused.
 
         This method is the whole guarantee: it consults the catalog, coerces
         against the declared field, and stores the normalized value. There is
-        no branch that executes caller-supplied code or invents a key.
+        no branch that executes caller-supplied code or invents a key — and
+        no caller (UI, API, or the assistant) can write a managed field.
         """
-        field = field_for(key)
-        if field is None:
-            raise SettingError(f"no such setting '{key}'")
+        field = self._writable(key)
         coerced = field.coerce(value)
         self._store.set_raw(tenant, field.key, coerced)
         return coerced
@@ -319,10 +329,31 @@ class SettingsNode:
         catalog first, then commit — a bad key aborts the whole set."""
         validated = {}
         for key, value in changes.items():
-            field = field_for(key)
-            if field is None:
-                raise SettingError(f"no such setting '{key}'")
+            field = self._writable(key)
             validated[field.key] = field.coerce(value)
         for key, value in validated.items():
             self._store.set_raw(tenant, key, value)
         return validated
+
+    def reflect(self, tenant: str, key: str, value: Any) -> Any:
+        """The owning service's door for a MANAGED field: the subscription
+        lifecycle (and only such owners) mirrors its state here so the
+        settings surface displays truth. Still catalog-validated — an owner
+        cannot invent keys or out-of-bounds values either."""
+        field = field_for(key)
+        if field is None:
+            raise SettingError(f"no such setting '{key}'")
+        coerced = field.coerce(value)
+        self._store.set_raw(tenant, field.key, coerced)
+        return coerced
+
+    def _writable(self, key: str) -> SettingField:
+        field = field_for(key)
+        if field is None:
+            raise SettingError(f"no such setting '{key}'")
+        if field.managed:
+            raise SettingError(
+                f"{field.key} is managed in the account console — cancel the "
+                "current plan there to change terms"
+            )
+        return field

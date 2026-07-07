@@ -19,6 +19,9 @@ from .http import Request, Response
 _FRONTEND_ROOT = Path(__file__).parent / "frontend"
 _FRONTEND_INDEX = _FRONTEND_ROOT / "index.html"
 _SHELL_DIR = _FRONTEND_ROOT / "shell"
+# The account console: where commitments (the subscription) are managed —
+# deliberately its own page, served by every gateway alongside either face.
+_ACCOUNT_PAGE = _FRONTEND_ROOT / "account.html"
 
 _ASSET_TYPES = {
     ".js": "text/javascript; charset=utf-8",
@@ -134,6 +137,11 @@ class GatewayASGI:
         if self._serve_frontend and method == "GET":
             if path in ("/", "/index.html"):
                 await self._respond(send, 200, self._frontend_headers, self._index)
+                return
+            if path == "/account":
+                await self._respond(
+                    send, 200, self._frontend_headers, _ACCOUNT_PAGE.read_bytes()
+                )
                 return
             asset = self._shell_asset(path)
             if asset is not None:

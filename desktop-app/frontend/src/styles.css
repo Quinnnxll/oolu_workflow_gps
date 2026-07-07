@@ -839,6 +839,16 @@ main.chat-main {
   color: var(--muted);
 }
 
+.managed-value {
+  display: inline-block;
+  min-width: 160px;
+  padding: 6px 8px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  text-transform: capitalize;
+}
+
 .setting-control select,
 .setting-control input[type="number"],
 .setting-control input[type="text"] {

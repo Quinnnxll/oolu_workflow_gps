@@ -80,9 +80,13 @@ def test_choice_outside_the_closed_set_is_refused(tmp_path):
     node, conn = _node(tmp_path)
     try:
         with pytest.raises(SettingError, match="one of"):
-            node.set("t1", "subscription.plan", "diamond")  # not offered
+            node.set("t1", "model.provider", "skynet")  # not offered
         with pytest.raises(SettingError, match="one of"):
             node.set("t1", "app.theme", "neon")
+        # subscription.plan refuses even in-set values: it is managed —
+        # the account console's cancel-first flow owns it, not a knob.
+        with pytest.raises(SettingError, match="account console"):
+            node.set("t1", "subscription.plan", "pro")
     finally:
         conn.close()
 

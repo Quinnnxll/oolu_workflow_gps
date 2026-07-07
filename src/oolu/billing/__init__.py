@@ -56,6 +56,11 @@ from .policy import (
 from .pricing import PricingEngine, PricingResult
 from .service import BillingService
 from .settlement import SettlementService
+from .subscription import (
+    PLAN_PRICES_MICROS,
+    SubscriptionError,
+    SubscriptionService,
+)
 
 __all__ = [
     "TEST_CARDS",
@@ -64,6 +69,9 @@ __all__ = [
     "FakeCardVault",
     "LaunchClosedError",
     "LaunchGuard",
+    "PLAN_PRICES_MICROS",
+    "SubscriptionError",
+    "SubscriptionService",
     "LaunchStatus",
     "PaymentMethodsService",
     "PaymentProfile",

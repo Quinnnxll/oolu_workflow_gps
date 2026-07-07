@@ -57,8 +57,9 @@ const CATALOG = {
       label: "Plan",
       kind: "choice",
       description: "Tier.",
-      value: "free",
+      value: "plus",
       choices: ["free", "plus", "pro", "enterprise"],
+      managed: true,
     },
     {
       key: "budget.hard_cap",
@@ -232,16 +233,37 @@ describe("SettingsPane", () => {
     expect(await screen.findByText("Theme")).toBeTruthy();
     expect(screen.getByText("App")).toBeTruthy();
     expect(screen.getByText("Budget")).toBeTruthy();
-    // Subscription note is honest about billing not existing.
-    expect(screen.getByText(/Billing isn't enabled yet/)).toBeTruthy();
-    // The plan choices are exactly the declared closed set.
-    const plan = screen.getByLabelText("Plan") as HTMLSelectElement;
-    expect([...plan.options].map((o) => o.value)).toEqual([
-      "free",
-      "plus",
-      "pro",
-      "enterprise",
-    ]);
+    // The subscription is a commitment: display-only, console-managed.
+    expect(screen.getByText(/managed in the account console/)).toBeTruthy();
+  });
+
+  it("shows the plan without offering a knob, and opens the console", async () => {
+    routes["GET /v1/settings"] = { status: 200, body: CATALOG };
+    const opened = vi.fn();
+    vi.stubGlobal("open", opened);
+    sessionStorage.setItem("oolu_engine_token", "engine-tok");
+    try {
+      const { container } = render(<SettingsPane />);
+
+      // The managed plan renders as text — there is no control to change it.
+      const shown = await screen.findByText("plus", {
+        selector: ".managed-value",
+      });
+      expect(shown).toBeTruthy();
+      expect(screen.queryByLabelText("Plan")).toBeNull();
+      expect(container.querySelector("select[aria-label='Plan']")).toBeNull();
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Open the account console" }),
+      );
+      // Local mode: this gateway's console, engine token handed over in
+      // the hash (the console scrubs it on load).
+      expect(String(opened.mock.calls[0][0])).toBe(
+        "http://local.test/account#auth=engine-tok",
+      );
+    } finally {
+      sessionStorage.clear();
+    }
   });
 
   it("saves a change through the node", async () => {
