@@ -136,6 +136,19 @@ def build_openapi() -> dict:
                 "(unknown key or out-of-bounds value → 400)"
             ),
         },
+        "/v1/keys/model": {
+            "get": op(
+                "Configured model providers with key fingerprints — "
+                "never the keys"
+            ),
+            "post": op(
+                "Store a provider API key in the encrypted keyring; "
+                "answers with a fingerprint only"
+            ),
+        },
+        "/v1/keys/model/{provider}": {
+            "delete": op("Remove a stored model key"),
+        },
         "/v1/files": {
             "get": op("List the caller's files (documents and sheets)"),
             "post": op("Create a file in the durable database"),

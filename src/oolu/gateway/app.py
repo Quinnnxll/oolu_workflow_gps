@@ -91,6 +91,8 @@ from ..orchestrator.state import (
     RunState,
     TaskContract,
 )
+from ..providers.chatmodel import ChatModelRouter
+from ..providers.keyring import PROVIDERS, ModelKeyring
 from ..providers.vault import SecretVault
 from ..settings_node import SettingError, SettingsNode
 from ..skills.contract import NodeContract, Slot, SubgraphBody
@@ -217,6 +219,9 @@ class GatewayApp:
         notifier: RunEventNotifier | None = None,  # run-event webhooks
         chat: ChatAssistant | None = None,  # the /v1/chat assistant; a
         # model-less default keeps the conversational surface working
+        model_keys: ModelKeyring | None = None,  # tenant model API keys
+        model_meter=None,  # billing.ModelCallMeter: chat spend enters books
+        model_transport=None,  # providers.HttpTransport; None = real httpx
         value_patcher=None,  # orchestrator.ValuePatcher: fills creative inputs
         isolation=None,  # worker.IsolationPolicy: powers /v1/worker-health
         docker_available: bool = True,
@@ -279,6 +284,12 @@ class GatewayApp:
         # install, so a missing assistant degrades to the model-less
         # default (rules + message-as-intent), never to a 404.
         self._chat = chat or ChatAssistant()
+        # The brain behind chat: per-tenant routers over the keyring,
+        # rebuilt when keys change. No keyring → chat stays model-less.
+        self._model_keys = model_keys
+        self._model_meter = model_meter
+        self._model_transport = model_transport
+        self._model_routers: dict[str, ChatModelRouter] = {}
         # What may run where, per trust level — rendered by the shell's
         # health screen from the policy that is actually enforced.
         from ..worker.policy import IsolationPolicy
@@ -503,6 +514,12 @@ class GatewayApp:
         r.add("GET", "/v1/payments/status", self._payments_status)
         r.add("GET", "/v1/settings", self._settings_list)
         r.add("PUT", "/v1/settings", self._settings_update)
+        # Model keys: the BYO-key door. Secrets go in; only fingerprints
+        # ever come back out. Deliberately NOT a setting — the settings
+        # catalog is visible data.
+        r.add("GET", "/v1/keys/model", self._model_keys_list)
+        r.add("POST", "/v1/keys/model", self._model_keys_add)
+        r.add("DELETE", "/v1/keys/model/{provider}", self._model_keys_remove)
         r.add("GET", "/v1/files", self._files_list)
         r.add("POST", "/v1/files", self._files_create)
         r.add("GET", "/v1/files/{file_id}", self._files_get)
@@ -600,15 +617,24 @@ class GatewayApp:
             history=[h for h in history if isinstance(h, dict)][-20:],
             sender=session.principal_id,
             tools=tools,
+            model=self._tenant_model(session.tenant_id),
         )
         run = None
+        say = turn.say
         if turn.task:
-            run = self._start_intent_run(session, turn.task)
-            self._metrics["chat_runs"] += 1
+            try:
+                run = self._start_intent_run(session, turn.task)
+                self._metrics["chat_runs"] += 1
+            except GatewayError as exc:
+                if exc.code != "cannot_execute":
+                    raise
+                # The engine refused the plan: the assistant says so in the
+                # conversation instead of the client showing a raw error.
+                say = f"I can't run that on this machine yet — {exc.message}."
         return json_response(
             200,
             {
-                "reply": turn.say,
+                "reply": say,
                 "source": turn.source,
                 "actions": turn.actions,
                 "run_id": run["run_id"] if run else None,
@@ -631,7 +657,15 @@ class GatewayApp:
             submitted_by=session.principal_id,
             metadata={"tenant_id": session.tenant_id},
         )
-        state = self._durable.submit(contract, max_recovery_attempts=max_recovery)
+        try:
+            state = self._durable.submit(
+                contract, max_recovery_attempts=max_recovery
+            )
+        except OrchestratorError as exc:
+            # A refused plan (e.g. preflight: the planned route needs a
+            # capability no executor here provides) is an honest answer
+            # about this machine, not a server crash.
+            raise GatewayError(422, "cannot_execute", str(exc)) from exc
         self._metrics["runs_submitted"] += 1
         return self._run_dict(state)
 
@@ -677,7 +711,14 @@ class GatewayApp:
                 submitted_by=session.principal_id,
                 metadata={"tenant_id": session.tenant_id},
             )
-            state = self._durable.submit(contract, max_recovery_attempts=max_recovery)
+            try:
+                state = self._durable.submit(
+                    contract, max_recovery_attempts=max_recovery
+                )
+            except OrchestratorError as exc:
+                # Same honesty as the chat surface: a plan this machine
+                # cannot execute is a 422 with the reason, not a 500.
+                raise GatewayError(422, "cannot_execute", str(exc)) from exc
             self._metrics["runs_submitted"] += 1
             result = self._run_dict(state)
             if entry is not None:
@@ -1273,6 +1314,81 @@ class GatewayApp:
         except SettingError as exc:
             raise GatewayError(400, "invalid_request", str(exc)) from exc
         return json_response(200, {"items": node.describe(session.tenant_id)})
+
+    # ------------------------------------------------------------------ #
+    # Model keys: the BYO-key door and the per-tenant brain behind chat.  #
+    # ------------------------------------------------------------------ #
+    def _require_model_keys(self) -> ModelKeyring:
+        if self._model_keys is None:
+            raise GatewayError(404, "not_found", "model keys are not enabled")
+        return self._model_keys
+
+    def _tenant_model(self, tenant: str) -> ChatModelRouter | None:
+        """The tenant's chat brain, or None to stay model-less.
+
+        Routers are cached per tenant (adapters keep capability caches) and
+        dropped whenever the tenant's keys change. Settings are read through
+        closures at call time, so a settings change needs no invalidation.
+        """
+        if self._model_keys is None or not self._model_keys.providers(tenant):
+            return None
+        router = self._model_routers.get(tenant)
+        if router is None:
+            settings = self._settings
+
+            def _effective(key: str, fallback):
+                if settings is None:
+                    return fallback
+                return settings.effective(tenant).get(key, fallback)
+
+            router = ChatModelRouter(
+                self._model_keys,
+                tenant,
+                transport=self._model_transport,
+                meter=self._model_meter,
+                budget=lambda: float(_effective("budget.model_cap", 0.0) or 0.0),
+                preference=lambda: str(_effective("model.provider", "auto")),
+                tier=lambda: str(_effective("model.tier", "fast")),
+            )
+            self._model_routers[tenant] = router
+        return router
+
+    def _model_keys_list(self, request, session, params) -> Response:
+        keyring = self._require_model_keys()
+        return json_response(
+            200, {"items": keyring.providers(session.tenant_id)}
+        )
+
+    def _model_keys_add(self, request, session, params) -> Response:
+        """Take a pasted key into the encrypted keyring; answer with only a
+        fingerprint. The secret never appears in a response, a log line, a
+        setting, or an error — this route is the one door in."""
+        keyring = self._require_model_keys()
+        body = request.body or {}
+        provider = body.get("provider")
+        key = body.get("key")
+        if provider not in PROVIDERS:
+            allowed = ", ".join(PROVIDERS)
+            raise GatewayError(
+                400, "invalid_request", f"provider must be one of: {allowed}"
+            )
+        if not isinstance(key, str) or len(key.strip()) < 8:
+            raise GatewayError(
+                400, "invalid_request", "that doesn't look like an API key"
+            )
+        mark = keyring.store(session.tenant_id, provider, key)
+        # The next chat turn must see the new key, not a cached adapter.
+        self._model_routers.pop(session.tenant_id, None)
+        self._metrics["model_keys_added"] += 1
+        return json_response(201, {"provider": provider, "fingerprint": mark})
+
+    def _model_keys_remove(self, request, session, params) -> Response:
+        keyring = self._require_model_keys()
+        provider = params.get("provider", "")
+        if not keyring.remove(session.tenant_id, provider):
+            raise GatewayError(404, "not_found", f"no {provider} key is stored")
+        self._model_routers.pop(session.tenant_id, None)
+        return json_response(200, {"removed": provider})
 
     def _require_files(self) -> UserFileStore:
         if self._files is None:

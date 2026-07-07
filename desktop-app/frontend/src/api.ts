@@ -321,6 +321,14 @@ export interface SettingItem {
   max_length?: number | null;
 }
 
+// ---- model key wire shape (GET /v1/keys/model) -----------------------------
+// Fingerprints only — the key itself never comes back from the server.
+export interface ModelKeyView {
+  provider: string;
+  fingerprint: string;
+  added_at: string;
+}
+
 // ---- user file wire shapes (GET /v1/files et al.) -------------------------
 export interface FileMeta {
   file_id: string;
@@ -456,6 +464,16 @@ export const api = {
   settings: () => req<{ items: SettingItem[] }>("GET", "/v1/settings"),
   setSettings: (changes: Record<string, unknown>) =>
     req<{ items: SettingItem[] }>("PUT", "/v1/settings", { changes }),
+  // ---- model keys: the BYO-key door. A key goes in once; only its
+  // fingerprint ever comes back.
+  modelKeys: () => req<{ items: ModelKeyView[] }>("GET", "/v1/keys/model"),
+  addModelKey: (provider: string, key: string) =>
+    req<{ provider: string; fingerprint: string }>("POST", "/v1/keys/model", {
+      provider,
+      key,
+    }),
+  removeModelKey: (provider: string) =>
+    req<{ removed: string }>("DELETE", `/v1/keys/model/${provider}`),
   // ---- user files: documents and sheets in the durable database --------
   // No nodeId = the Life drawer; a nodeId = that node's own files in Work.
   files: (nodeId?: string) =>

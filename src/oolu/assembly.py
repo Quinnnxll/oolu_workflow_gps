@@ -359,6 +359,7 @@ def build_host_runtime(
     from .billing import (
         FakeCardVault,
         LaunchGuard,
+        ModelCallMeter,
         PaymentMethodsService,
         PaymentProfileStore,
     )
@@ -390,6 +391,7 @@ def build_host_runtime(
         RegistryStore,
         WorkDesk,
     )
+    from .providers.keyring import ModelKeyring
     from .settings_node import SettingsNode, SettingsStore
 
     if database_url:
@@ -463,6 +465,11 @@ def build_host_runtime(
         desk=desk,
         files=UserFileStore(conn),
         settings_node=SettingsNode(SettingsStore(conn)),
+        # The brain behind chat: pasted provider keys survive restarts
+        # encrypted (the machine key file is the local trust boundary),
+        # and every model consultation is metered spend.
+        model_keys=ModelKeyring(conn, key_path=data / "machine.key"),
+        model_meter=ModelCallMeter(),
         # Pre-launch: the test card vault and a closed launch guard — the
         # real transaction port stays shut until an operator opens it.
         payments=PaymentMethodsService(PaymentProfileStore(conn), FakeCardVault()),

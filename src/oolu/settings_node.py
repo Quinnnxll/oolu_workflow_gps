@@ -32,7 +32,7 @@ class SettingField(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     key: str
-    group: str  # app | account | subscription | budget
+    group: str  # app | account | subscription | model | budget
     label: str
     kind: SettingKind
     default: Any = None
@@ -164,6 +164,39 @@ SETTINGS_CATALOG: tuple[SettingField, ...] = (
         default="monthly",
         choices=("monthly", "yearly"),
         description="How the plan would be billed once billing is enabled.",
+    ),
+    # --- model (the brain behind chat; keys live in the keyring, NOT here —
+    # this catalog is visible data, so a secret must never be a setting) ----
+    SettingField(
+        key="model.provider",
+        group="model",
+        label="Model provider",
+        kind=SettingKind.CHOICE,
+        default="auto",
+        choices=("auto", "anthropic", "openai"),
+        description="Which provider answers chat. Auto tries Anthropic "
+        "first, then OpenAI — whichever has a key configured.",
+    ),
+    SettingField(
+        key="model.tier",
+        group="model",
+        label="Model tier",
+        kind=SettingKind.CHOICE,
+        default="fast",
+        choices=("fast", "reasoning"),
+        description="Fast answers cheaply; reasoning thinks harder and "
+        "costs more per turn.",
+    ),
+    SettingField(
+        key="budget.model_cap",
+        group="model",
+        label="Model spending cap",
+        kind=SettingKind.NUMBER,
+        default=0.0,
+        minimum=0.0,
+        maximum=10_000.0,
+        description="Stop calling the model once metered chat spending "
+        "reaches this many dollars (0 = no cap). Tasks still run.",
     ),
     # --- budget ----------------------------------------------------------
     SettingField(

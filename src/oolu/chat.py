@@ -109,6 +109,19 @@ class ChatModel(Protocol):
     def reply(self, messages: list[dict]) -> str: ...
 
 
+class ModelUnavailable(RuntimeError):
+    """The model could not answer (no key, network down, provider errors).
+
+    The assistant catches this and degrades to its model-less path — a dead
+    model must never mean a dead conversation.
+    """
+
+
+class ModelBudgetExceeded(RuntimeError):
+    """The model spending cap is reached. ``str(exc)`` is what the assistant
+    says out loud — a refusal in words, never a silent skip."""
+
+
 @dataclass(frozen=True)
 class ChatTurn:
     """One assistant answer: something to say, and optionally work to start.
@@ -733,6 +746,7 @@ class ChatAssistant:
         history: list[dict] | None = None,
         sender: str = "user",
         tools: ChatTools | None = None,
+        model: ChatModel | None = None,
     ) -> ChatTurn:
         envelope = MessageEnvelope(
             channel=self._channel,
@@ -744,44 +758,16 @@ class ChatAssistant:
         if decision.source == "rule" and decision.text:
             return ChatTurn(say=decision.text, task=None, source="rule")
 
-        if self._model is not None:
-            messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-            for entry in history or []:
-                role = entry.get("role")
-                content = entry.get("content")
-                if role in ("user", "assistant") and isinstance(content, str):
-                    messages.append({"role": role, "content": content})
-            messages.append({"role": "user", "content": message})
-            actions: list[dict] = []
-            for _ in range(MAX_TOOL_ROUNDS):
-                raw = self._model.reply(messages)
-                parsed = _parse_model_reply(raw)
-                if isinstance(parsed, _ToolCall):
-                    if tools is None:
-                        return ChatTurn(
-                            say="I can't reach any files on this host.",
-                            source="model",
-                            actions=actions,
-                        )
-                    result, action = _run_tool(tools, parsed)
-                    if action is not None:
-                        actions.append(action)
-                    messages.append({"role": "assistant", "content": raw})
-                    messages.append(
-                        {"role": "user", "content": f"[tool result]\n{result}"}
-                    )
-                    continue
-                return ChatTurn(
-                    say=parsed.say,
-                    task=parsed.task,
-                    source="model",
-                    actions=actions,
-                )
-            return ChatTurn(
-                say="I got tangled up in my tools — tell me exactly what you need.",
-                source="model",
-                actions=actions,
-            )
+        # A per-call model (the gateway's per-tenant router) outranks the
+        # constructor's; either way an unusable model degrades, not dies.
+        active = model or self._model
+        if active is not None:
+            try:
+                return self._model_turn(active, message, history, tools)
+            except ModelBudgetExceeded as exc:
+                return ChatTurn(say=str(exc), task=None, source="model")
+            except ModelUnavailable:
+                pass  # fall through to the model-less path below
 
         # Model-less installs stay useful: exact file commands work without
         # any model, and everything else is the intent.
@@ -790,3 +776,48 @@ class ChatAssistant:
             if command is not None:
                 return command
         return ChatTurn(say=ACK, task=message.strip(), source="intent")
+
+    def _model_turn(
+        self,
+        model: ChatModel,
+        message: str,
+        history: list[dict] | None,
+        tools: ChatTools | None,
+    ) -> ChatTurn:
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        for entry in history or []:
+            role = entry.get("role")
+            content = entry.get("content")
+            if role in ("user", "assistant") and isinstance(content, str):
+                messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": message})
+        actions: list[dict] = []
+        for _ in range(MAX_TOOL_ROUNDS):
+            raw = model.reply(messages)
+            parsed = _parse_model_reply(raw)
+            if isinstance(parsed, _ToolCall):
+                if tools is None:
+                    return ChatTurn(
+                        say="I can't reach any files on this host.",
+                        source="model",
+                        actions=actions,
+                    )
+                result, action = _run_tool(tools, parsed)
+                if action is not None:
+                    actions.append(action)
+                messages.append({"role": "assistant", "content": raw})
+                messages.append(
+                    {"role": "user", "content": f"[tool result]\n{result}"}
+                )
+                continue
+            return ChatTurn(
+                say=parsed.say,
+                task=parsed.task,
+                source="model",
+                actions=actions,
+            )
+        return ChatTurn(
+            say="I got tangled up in my tools — tell me exactly what you need.",
+            source="model",
+            actions=actions,
+        )

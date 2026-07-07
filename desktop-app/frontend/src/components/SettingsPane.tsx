@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
-import type { PaymentProfileView, PaymentsStatus, SettingItem } from "../api";
+import type {
+  ModelKeyView,
+  PaymentProfileView,
+  PaymentsStatus,
+  SettingItem,
+} from "../api";
 
 // The settings node, rendered. Every control is generated from the
 // declared catalog — the app never hardcodes a knob, so a control exists
@@ -11,6 +16,7 @@ const GROUP_LABELS: Record<string, string> = {
   app: "App",
   account: "Account",
   subscription: "Subscription",
+  model: "Model",
   budget: "Budget",
 };
 
@@ -60,10 +66,117 @@ export function SettingsPane() {
             .map((item) => (
               <SettingRow key={item.key} item={item} onSave={save} />
             ))}
+          {group === "model" && <ModelKeysSection />}
         </section>
       ))}
       <PaymentSection />
     </div>
+  );
+}
+
+// The BYO-key door: paste a provider API key once, keep only a fingerprint.
+const KEY_PROVIDERS = ["anthropic", "openai"];
+
+function ModelKeysSection() {
+  const [keys, setKeys] = useState<ModelKeyView[] | null>(null);
+  const [provider, setProvider] = useState("anthropic");
+  const [draft, setDraft] = useState("");
+  const [error, setError] = useState("");
+
+  const refresh = useCallback(async () => {
+    try {
+      const { items } = await api.modelKeys();
+      // Model keys not enabled on this host (or an unexpected shape):
+      // say nothing at all.
+      setKeys(Array.isArray(items) ? items : null);
+    } catch {
+      setKeys(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  if (keys === null) return null;
+
+  return (
+    <>
+      {keys.length === 0 && (
+        <p className="muted">
+          No model key yet — OoLu answers with its built-in rules. Paste an
+          Anthropic or OpenAI API key to give it a real mind. The key is
+          encrypted on this machine and never shown again; only the
+          fingerprint below proves it's in.
+        </p>
+      )}
+      {error && <div className="error">{error}</div>}
+
+      {keys.map((k) => (
+        <div key={k.provider} className="setting-row">
+          <div className="setting-label">
+            <span>{k.provider} key</span>
+            <span className="setting-desc">fingerprint {k.fingerprint}</span>
+          </div>
+          <div className="setting-control">
+            <button
+              className="linklike"
+              onClick={async () => {
+                await api.removeModelKey(k.provider);
+                void refresh();
+              }}
+            >
+              remove
+            </button>
+          </div>
+        </div>
+      ))}
+
+      <div className="setting-row">
+        <div className="setting-label">
+          <span>Add a model key</span>
+          <span className="setting-desc">
+            Stored encrypted on this machine only — it never syncs, never
+            appears in settings, and never comes back out.
+          </span>
+        </div>
+        <div className="setting-control row">
+          <select
+            aria-label="Key provider"
+            value={provider}
+            onChange={(e) => setProvider(e.target.value)}
+          >
+            {KEY_PROVIDERS.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </select>
+          <input
+            type="password"
+            aria-label="API key"
+            placeholder="paste key"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+          />
+          <button
+            disabled={draft.trim().length < 8}
+            onClick={async () => {
+              setError("");
+              try {
+                await api.addModelKey(provider, draft.trim());
+                setDraft("");
+                void refresh();
+              } catch (e) {
+                setError((e as Error).message);
+              }
+            }}
+          >
+            Add
+          </button>
+        </div>
+      </div>
+    </>
   );
 }
 

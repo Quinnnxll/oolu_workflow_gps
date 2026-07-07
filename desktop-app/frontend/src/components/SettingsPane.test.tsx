@@ -130,6 +130,100 @@ describe("PaymentSection", () => {
   });
 });
 
+const MODEL_CATALOG = {
+  items: [
+    ...CATALOG.items,
+    {
+      key: "model.provider",
+      group: "model",
+      label: "Model provider",
+      kind: "choice",
+      description: "Which provider answers chat.",
+      value: "auto",
+      choices: ["auto", "anthropic", "openai"],
+    },
+  ],
+};
+
+describe("ModelKeysSection", () => {
+  it("pastes a key in, gets only a fingerprint back", async () => {
+    routes["GET /v1/settings"] = { status: 200, body: MODEL_CATALOG };
+    routes["GET /v1/keys/model"] = { status: 200, body: { items: [] } };
+    routes["POST /v1/keys/model"] = {
+      status: 201,
+      body: { provider: "anthropic", fingerprint: "ab12cd34ef56" },
+    };
+    render(<SettingsPane />);
+
+    const input = (await screen.findByLabelText("API key")) as HTMLInputElement;
+    expect(input.type).toBe("password"); // never shown in the clear
+    expect(
+      screen.getByText(/OoLu answers with its built-in rules/),
+    ).toBeTruthy();
+
+    fireEvent.change(input, { target: { value: "sk-ant-0123456789" } });
+    routes["GET /v1/keys/model"] = {
+      status: 200,
+      body: {
+        items: [
+          {
+            provider: "anthropic",
+            fingerprint: "ab12cd34ef56",
+            added_at: "2026-07-07T10:00:00Z",
+          },
+        ],
+      },
+    };
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    // The exact key went to the one door in; the pane then shows only
+    // the fingerprint and the input is emptied.
+    await waitFor(() => {
+      const post = calls.find(
+        (c) => c.method === "POST" && c.path === "/v1/keys/model",
+      );
+      expect(post?.body).toEqual({
+        provider: "anthropic",
+        key: "sk-ant-0123456789",
+      });
+    });
+    expect(await screen.findByText(/fingerprint ab12cd34ef56/)).toBeTruthy();
+    expect(input.value).toBe("");
+  });
+
+  it("removes a stored key", async () => {
+    routes["GET /v1/settings"] = { status: 200, body: MODEL_CATALOG };
+    routes["GET /v1/keys/model"] = {
+      status: 200,
+      body: {
+        items: [
+          {
+            provider: "openai",
+            fingerprint: "99ff00aa11bb",
+            added_at: "2026-07-07T10:00:00Z",
+          },
+        ],
+      },
+    };
+    routes["DELETE /v1/keys/model/openai"] = {
+      status: 200,
+      body: { removed: "openai" },
+    };
+    render(<SettingsPane />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "remove" }));
+
+    await waitFor(() => {
+      expect(
+        calls.some(
+          (c) =>
+            c.method === "DELETE" && c.path === "/v1/keys/model/openai",
+        ),
+      ).toBe(true);
+    });
+  });
+});
+
 describe("SettingsPane", () => {
   it("renders controls generated from the catalog, grouped", async () => {
     routes["GET /v1/settings"] = { status: 200, body: CATALOG };

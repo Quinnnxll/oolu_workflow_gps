@@ -194,12 +194,22 @@ class AnthropicAdapter(ApiKeyProviderAdapter):
         *,
         model: str,
         max_tokens: int = 1024,
+        system: str | None = None,
         idempotency_key: str | None = None,
         cost: float = 1.0,
     ) -> dict:
+        body: dict[str, Any] = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": messages,
+        }
+        # Anthropic takes the system prompt as a top-level parameter, not a
+        # "system"-role message.
+        if system:
+            body["system"] = system
         return self.invoke(
             "/messages",
-            {"model": model, "max_tokens": max_tokens, "messages": messages},
+            body,
             idempotency_key=idempotency_key,
             cost=cost,
         )
