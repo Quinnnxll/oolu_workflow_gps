@@ -163,6 +163,12 @@ main {
   background: var(--panel);
 }
 
+/* A node restricted under the Node Policy (clone / fraud / zombie). */
+.phase-restricted {
+  color: #ff8484;
+  border-color: #ff8484;
+}
+
 /* The bottom-left row: pinned under the conversations (Settings lives
    here), separated by a hairline. */
 .convo-bottom {

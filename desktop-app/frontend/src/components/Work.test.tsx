@@ -123,6 +123,15 @@ describe("AddNode", () => {
       screen.getByLabelText(/Audit node — every request must be committed/),
     );
     fireEvent.click(screen.getByLabelText(/Auto-growing/));
+
+    // The Node Policy is agreed UPFRONT or nothing is created at all.
+    fireEvent.click(screen.getByRole("button", { name: "Create node" }));
+    expect(
+      await screen.findByText(/Please agree to the Node Policy first/),
+    ).toBeTruthy();
+    expect(calls.find((c) => c.path === "/v1/nodeplace")).toBeUndefined();
+
+    fireEvent.click(screen.getByLabelText(/I agree to the Node Policy/));
     fireEvent.click(screen.getByRole("button", { name: "Create node" }));
 
     await waitFor(() => expect(onDone).toHaveBeenCalledWith("n9"));
@@ -133,6 +142,7 @@ describe("AddNode", () => {
       audit_mode: true,
       allow_autodev_data: false,
       authority_level: 4,
+      accept_policy: true,
     });
   });
 
@@ -248,6 +258,7 @@ describe("NodeThread", () => {
     fireEvent.change(screen.getByLabelText("Authority"), {
       target: { value: "3" },
     });
+    fireEvent.click(screen.getByLabelText(/I agree to the Node Policy/));
     fireEvent.click(screen.getByRole("button", { name: "Create node" }));
 
     await waitFor(() => expect(onDone).toHaveBeenCalledWith("n8"));
@@ -258,6 +269,7 @@ describe("NodeThread", () => {
       audit_mode: true, // Supernodes always audit
       allow_autodev_data: true,
       authority_level: 3,
+      accept_policy: true,
     });
   });
 

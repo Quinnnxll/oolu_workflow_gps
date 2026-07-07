@@ -173,12 +173,14 @@ class CandidateAssembler:
         stats: StatsSource,
         ratings: RatingService | None = None,
         trust=None,  # (node_id) -> float: KYC trust multiplier (>= 1.0)
+        restricted=None,  # (node_id) -> bool: Node Policy restriction
         clock=None,
     ):
         self._registry = registry
         self._stats = stats
         self._ratings = ratings
         self._trust = trust
+        self._restricted = restricted
         self._clock = clock or (lambda: datetime.now(UTC))
 
     def contracts(self, query: str = "") -> list["MarketplaceContract"]:
@@ -257,6 +259,8 @@ class CandidateAssembler:
             node = self._registry.get_node(version.node_id)
             if node is None or node.revoked_at is not None:
                 continue
+            if self._restricted is not None and self._restricted(node.node_id):
+                continue  # restricted under the Node Policy: out of ranking
             policy = self._registry.get_pricing(listing.version_id)
             ask = gross_from_policy(policy) if policy is not None else 0.0
             stats = self._stats.version_stats(listing.version_id)

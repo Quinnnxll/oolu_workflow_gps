@@ -45,6 +45,13 @@ from .execution import (
     reserved_operations,
 )
 from .holds import PendingContractRecord, PendingContractStore
+from .hygiene import (
+    NODE_POLICY,
+    NODE_POLICY_VERSION,
+    HygieneFinding,
+    HygieneKind,
+    NodeHygieneService,
+)
 from .kyc import (
     VERIFIED_TRUST_MULTIPLIER,
     KycRecord,
@@ -169,6 +176,11 @@ __all__ = [
     "WorkDesk",
     "PendingContractRecord",
     "PendingContractStore",
+    "HygieneFinding",
+    "HygieneKind",
+    "NODE_POLICY",
+    "NODE_POLICY_VERSION",
+    "NodeHygieneService",
     "KycRecord",
     "KycScreen",
     "KycService",

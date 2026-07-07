@@ -93,7 +93,15 @@ def seed_handiwork_node(
         license="builtin",
     )
     node_id = result.node.node_id
-    desk.create_account(node_id, principal=principal, tenant=tenant)
+    from .hygiene import NODE_POLICY_VERSION
+
+    # The platform agrees to its own Node Policy like anyone else.
+    desk.create_account(
+        node_id,
+        principal=principal,
+        tenant=tenant,
+        policy_version=NODE_POLICY_VERSION,
+    )
     desk.update_account(
         node_id, principal=principal, tenant=tenant, status="live"
     )

@@ -88,6 +88,14 @@ class RegistryStore:
             ).fetchone()
         return Node.model_validate_json(row["payload_json"]) if row else None
 
+    def all_nodes(self) -> list[Node]:
+        """Every node on the install — the hygiene sweep's field of view."""
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                "SELECT payload_json FROM nodes ORDER BY created_at"
+            ).fetchall()
+        return [Node.model_validate_json(row["payload_json"]) for row in rows]
+
     def list_nodes(self, tenant_id: str, noder_principal: str) -> list[Node]:
         with self._conn.lock:
             rows = self._conn.db.execute(

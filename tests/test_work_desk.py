@@ -218,11 +218,10 @@ def test_work_routes_end_to_end(tmp_path):
                 "POST",
                 f"/v1/work/nodes/{node_id}/account",
                 token=token,
-                body={"audit_mode": True, "admin": "gov"},
+                body={"audit_mode": True, "admin": "gov", "accept_policy": True},
             )
         )
         assert saved.status == 200
-        assert saved.body["audit_mode"] is True
         assert saved.body["audit_mode"] is True
 
         # Authority is a fixed trait like the rest: any attempt to send it
@@ -289,7 +288,7 @@ def test_autodev_data_flag_defaults_on_and_roundtrips(tmp_path):
                 "POST",
                 f"/v1/work/nodes/{node_id}/account",
                 token=token,
-                body={"allow_autodev_data": False},
+                body={"allow_autodev_data": False, "accept_policy": True},
             )
         )
         assert saved.status == 200

@@ -150,7 +150,8 @@ def test_the_route_refuses_fixed_traits_and_onboard_takes_no_choices(tmp_path):
         _, node_id = _two_nodes(app, ident, registry)
         token = ident.token("noder-export", "t1")
 
-        created = app.handle(
+        # Creation without the upfront policy agreement never happens.
+        unsigned = app.handle(
             _req(
                 "POST",
                 f"/v1/work/nodes/{node_id}/account",
@@ -158,8 +159,24 @@ def test_the_route_refuses_fixed_traits_and_onboard_takes_no_choices(tmp_path):
                 body={"audit_mode": True, "allow_autodev_data": False},
             )
         )
+        assert unsigned.status == 409
+        assert "Node Policy" in unsigned.body["error"]["message"]
+
+        created = app.handle(
+            _req(
+                "POST",
+                f"/v1/work/nodes/{node_id}/account",
+                token=token,
+                body={
+                    "audit_mode": True,
+                    "allow_autodev_data": False,
+                    "accept_policy": True,
+                },
+            )
+        )
         assert created.status == 200
         assert created.body["audit_mode"] is True
+        assert created.body["policy_version"]  # the agreement is stamped
         assert created.body["authority_level"] is None  # standalone
 
         # Any fixed trait in an update is refused loudly, never merged.

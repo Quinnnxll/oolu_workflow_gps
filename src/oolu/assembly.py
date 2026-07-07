@@ -522,11 +522,23 @@ def build_host_runtime(
             "subscription.plan", "free"
         ),
     )
+    # Node hygiene: clone/fraud/zombie detection with the restriction the
+    # Node Policy (agreed at creation) authorizes. Restricted nodes leave
+    # ranking here and refuse new runs at the gateway.
+    from .nodeplace import NodeHygieneService
+
+    hygiene = NodeHygieneService(
+        registry=registry,
+        accounts=node_accounts,
+        stats=stats,
+        attribution=attribution,
+    )
     market = CandidateAssembler(
         registry=registry,
         stats=stats,
         ratings=ratings,
         trust=kyc.trust_multiplier,
+        restricted=hygiene.is_restricted,
     )
     # The Work environment's operator view: node accounts + earnings +
     # verified health + per-node execution feeds, over the same stores.
@@ -603,6 +615,7 @@ def build_host_runtime(
         accounts=accounts,
         desk=desk,
         kyc=kyc,
+        hygiene=hygiene,
         files=UserFileStore(conn),
         settings_node=settings_node,
         # The brain behind chat: the same keyring/meter planning uses —

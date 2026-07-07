@@ -179,6 +179,7 @@ class WorkDesk:
         allow_autodev_data: bool = True,
         authority_level: int | None = None,
         admin: str | None = None,
+        policy_version: str = "",
     ) -> NodeAccount:
         """A node's regime is decided ONCE, at creation.
 
@@ -221,6 +222,10 @@ class WorkDesk:
             audit_mode=True if is_supernode else audit_mode,
             allow_autodev_data=allow_autodev_data,
             authority_level=authority_level,
+            # Which Node Policy was agreed upfront — the public create
+            # door refuses creation without the agreement; internal
+            # callers stamp what they accepted.
+            policy_version=policy_version,
         )
         self._accounts.upsert(account)
         return account

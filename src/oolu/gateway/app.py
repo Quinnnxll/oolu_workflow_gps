@@ -55,6 +55,8 @@ from ..identity.tokens import OidcValidator
 from ..knowledge.traces import TraceStore
 from ..metering.attribution import AttributionStore
 from ..nodeplace import (
+    NODE_POLICY,
+    NODE_POLICY_VERSION,
     BudgetExceededError,
     BudgetPolicy,
     CandidateAssembler,
@@ -233,6 +235,7 @@ class GatewayApp:
         accounts=None,  # identity.LocalAccountService: local multi-user login
         desk: WorkDesk | None = None,  # the Work environment's node desk
         kyc=None,  # nodeplace.KycService: Supernode legal-entity verification
+        hygiene=None,  # nodeplace.NodeHygieneService: clone/fraud/zombie
         files: UserFileStore | None = None,  # user documents/sheets
         settings_node: SettingsNode | None = None,  # the settings node
         payments: PaymentMethodsService | None = None,  # card on file
@@ -300,6 +303,7 @@ class GatewayApp:
         self._accounts = accounts
         self._desk = desk
         self._kyc = kyc
+        self._hygiene = hygiene
         self._files = files
         self._settings = settings_node
         self._payments = payments
@@ -567,6 +571,9 @@ class GatewayApp:
         r.add("GET", "/v1/work/nodes/{node_id}/kyc", self._kyc_status)
         r.add("POST", "/v1/work/nodes/{node_id}/kyc", self._kyc_apply)
         r.add("POST", "/v1/work/nodes/{node_id}/kyc/decide", self._kyc_decide)
+        r.add("GET", "/v1/work/policy", self._node_policy)
+        r.add("GET", "/v1/work/hygiene", self._hygiene_inspect)
+        r.add("POST", "/v1/work/hygiene/sweep", self._hygiene_sweep)
         r.add("POST", "/v1/nodeplace", self._contribute)
         r.add("POST", "/v1/nodeplace/{node_id}/revoke", self._revoke_node)
         r.add("GET", "/v1/listings", self._discover_listings)
@@ -1614,6 +1621,7 @@ class GatewayApp:
         )
 
     _FIXED_ACCOUNT_TRAITS = (
+        "policy_version",
         "audit_mode",
         "allow_autodev_data",
         "is_supernode",
@@ -1642,10 +1650,20 @@ class GatewayApp:
                     tenant=session.tenant_id,
                 )
             elif desk.account_for(params["node_id"]) is None:
+                if not bool(body.get("accept_policy")):
+                    # Agreed UPFRONT, or not created at all: the policy is
+                    # what authorizes clone/fraud/zombie enforcement later.
+                    raise GatewayError(
+                        409,
+                        "policy_required",
+                        "creating a node means agreeing to the Node Policy "
+                        f"first ({NODE_POLICY_VERSION}): {NODE_POLICY}",
+                    )
                 account = desk.create_account(
                     params["node_id"],
                     principal=session.principal_id,
                     tenant=session.tenant_id,
+                    policy_version=NODE_POLICY_VERSION,
                     is_supernode=bool(body.get("is_supernode", False)),
                     supernode_id=body.get("supernode_id") or None,
                     audit_mode=bool(body.get("audit_mode", False)),
@@ -1800,6 +1818,60 @@ class GatewayApp:
             },
         )
         return json_response(200, record.model_dump(mode="json"))
+
+    # ------------------------------------------------------------------ #
+    # Node hygiene: the policy agreed upfront, and its enforcement.       #
+    # ------------------------------------------------------------------ #
+    def _node_policy(self, request, session, params) -> Response:
+        return json_response(
+            200, {"version": NODE_POLICY_VERSION, "text": NODE_POLICY}
+        )
+
+    def _require_hygiene(self):
+        if self._hygiene is None:
+            raise GatewayError(404, "not_found", "hygiene is not enabled here")
+        return self._hygiene
+
+    def _hygiene_inspect(self, request, session, params) -> Response:
+        """Detect only: what the sweep would do, without doing it."""
+        hygiene = self._require_hygiene()
+        return json_response(
+            200,
+            {"items": [f.model_dump(mode="json") for f in hygiene.inspect()]},
+        )
+
+    def _hygiene_sweep(self, request, session, params) -> Response:
+        """Enforce the Node Policy: revoke clones, restrict fraud and
+        zombies. A platform move — approve authority required — and every
+        action lands in the audit trail."""
+        hygiene = self._require_hygiene()
+        if self._approval is None:
+            raise GatewayError(404, "not_found", "approval authority is not configured")
+        try:
+            self._approval.approve(
+                session,
+                run_id="hygiene:sweep",
+                policy="hygiene.sweep",
+                requester_id="",
+                now=request.now or self._clock(),
+            )
+        except AuthorizationError as exc:
+            raise GatewayError(403, "forbidden", str(exc)) from exc
+        acted = hygiene.sweep()
+        for finding in acted:
+            self._durable.audit.append(
+                f"hygiene.{finding.action}",
+                {
+                    "run_id": f"hygiene:{finding.node_id}",
+                    "node_id": finding.node_id,
+                    "kind": finding.kind.value,
+                    "evidence": finding.evidence,
+                    "by": session.principal_id,
+                },
+            )
+        return json_response(
+            200, {"items": [f.model_dump(mode="json") for f in acted]}
+        )
 
     def _list_own_nodes(self, request, session, params) -> Response:
         nodeplace = self._require_nodeplace()
@@ -2113,14 +2185,27 @@ class GatewayApp:
         except ValueError as exc:
             raise GatewayError(400, "invalid_request", str(exc)) from exc
         reserved = reserved_operations(compiled)
+        children = (
+            contract.body.nodes
+            if isinstance(contract.body, SubgraphBody)
+            else [contract]
+        )
+        if self._hygiene is not None:
+            # The Node Policy's restriction is real: a restricted (or
+            # revoked) node refuses new contract runs outright.
+            blocked = self._hygiene.restricted_versions(
+                [c.id for c in children]
+            )
+            if blocked:
+                raise GatewayError(
+                    409,
+                    "restricted",
+                    "restricted under the Node Policy (clone/fraud/zombie) "
+                    "and cannot take new runs: " + ", ".join(sorted(blocked)),
+                )
         if self._desk is not None:
             # An audit node never runs unattended: its presence holds the
             # contract for a manual commit exactly like a reserved action.
-            children = (
-                contract.body.nodes
-                if isinstance(contract.body, SubgraphBody)
-                else [contract]
-            )
             reserved = sorted(
                 {*reserved, *self._desk.audit_holds_for([c.id for c in children])}
             )

@@ -26,6 +26,9 @@ class NodeStatus(str, Enum):
     LIVE = "live"
     NEEDS_VERIFICATION = "needs_verification"
     ERROR = "error"
+    # Placed under the Node Policy's restriction (clone / fraud / zombie):
+    # refuses new runs and leaves marketplace ranking until resolved.
+    RESTRICTED = "restricted"
 
 
 class NodeAccount(BaseModel):
@@ -62,6 +65,10 @@ class NodeAccount(BaseModel):
     # but leave nothing behind for the growth loop to learn from.
     # FIXED AT CREATION, like audit_mode.
     allow_autodev_data: bool = True
+    # Which Node Policy the creator agreed to, upfront, at creation —
+    # the agreement that authorizes hygiene (clone/fraud/zombie
+    # detection with restriction or removal). FIXED AT CREATION.
+    policy_version: str = ""
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 

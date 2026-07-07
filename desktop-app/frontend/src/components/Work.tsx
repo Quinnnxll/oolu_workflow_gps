@@ -145,12 +145,19 @@ export function AddNode({
   const [authority, setAuthority] = useState(1);
   const [audit, setAudit] = useState(false);
   const [autoGrow, setAutoGrow] = useState(true);
+  const [policyOk, setPolicyOk] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     setError("");
+    if (mode === "create" && !policyOk) {
+      // The Node Policy is agreed upfront or the node is not created.
+      setError("Please agree to the Node Policy first — it is what lets "
+        + "the platform restrict or remove clone, fraud, and zombie nodes.");
+      return;
+    }
     setBusy(true);
     try {
       if (mode === "onboard") {
@@ -166,6 +173,7 @@ export function AddNode({
         audit_mode: isSupernode ? true : audit,
         allow_autodev_data: autoGrow,
         authority_level: under ? authority : null,
+        accept_policy: policyOk,
       });
       onDone(id);
     } catch (e) {
@@ -276,6 +284,16 @@ export function AddNode({
               onChange={(e) => setAutoGrow(e.target.checked)}
             />
             Auto-growing — data passing this node may feed new development
+          </label>
+
+          <label className="checkline policy">
+            <input
+              type="checkbox"
+              checked={policyOk}
+              onChange={(e) => setPolicyOk(e.target.checked)}
+            />
+            I agree to the Node Policy — clone, fraud, and zombie nodes are
+            detected and can be restricted or removed by the platform
           </label>
         </>
       ) : (

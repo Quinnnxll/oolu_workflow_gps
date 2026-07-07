@@ -458,6 +458,10 @@ export interface NodeAccountCreate {
   audit_mode: boolean;
   allow_autodev_data: boolean;
   authority_level: number | null;
+  // The Node Policy, agreed UPFRONT: it authorizes clone/fraud/zombie
+  // detection with restriction or removal. The server refuses creation
+  // without it.
+  accept_policy: boolean;
 }
 
 // The mutable slice after creation — authority, like the rest of the
