@@ -1,5 +1,12 @@
-import { useState, type FormEvent } from "react";
-import { isRemote, login, register, session, signInWithGoogle } from "../api";
+import { useEffect, useState, type FormEvent } from "react";
+import {
+  clientConfig,
+  isRemote,
+  login,
+  register,
+  session,
+  signInWithGoogle,
+} from "../api";
 
 type View = "signin" | "register";
 
@@ -14,14 +21,29 @@ export function Login({
 }) {
   const [view, setView] = useState<View>("signin");
   const [server, setServer] = useState(session.server ?? "");
+  const [pairedServer, setPairedServer] = useState<string | null>(null);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // A local build signs into a server the user names; a remote build's
-  // server is baked in, so the field would be noise.
-  const askServer = !isRemote();
+  // The install may already know which online server it pairs with
+  // (OOLU_SERVER_URL) — then nobody has to type a server ever again.
+  useEffect(() => {
+    void clientConfig().then((cfg) => {
+      if (typeof cfg.server === "string" && cfg.server.trim()) {
+        setPairedServer(cfg.server.trim().replace(/\/+$/, ""));
+      }
+    });
+  }, []);
+
+  // A remote build's server is baked in; a paired install's comes from
+  // its config. Only the leftover case asks the user to type one.
+  const askServer = !isRemote() && !pairedServer;
+  const authTarget = (): string | undefined => {
+    if (isRemote()) return undefined;
+    return pairedServer ?? server;
+  };
 
   function switchView(next: View) {
     setView(next);
@@ -34,7 +56,7 @@ export function Login({
     try {
       // Opens the system browser to Google's consent page and polls the
       // host until the browser leg lands; the token never rides the URL.
-      await signInWithGoogle(askServer ? server : undefined);
+      await signInWithGoogle(authTarget());
       onSignedIn();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Google sign-in failed");
@@ -49,9 +71,9 @@ export function Login({
     setBusy(true);
     try {
       if (view === "signin") {
-        await login(username, password, askServer ? server : undefined);
+        await login(username, password, authTarget());
       } else {
-        await register(username, password, askServer ? server : undefined);
+        await register(username, password, authTarget());
       }
       onSignedIn();
     } catch (err) {
@@ -88,6 +110,11 @@ export function Login({
               onChange={(e) => setServer(e.target.value)}
             />
           </>
+        ) : null}
+        {pairedServer && !isRemote() ? (
+          <p className="muted paired-server">
+            Signing in to {pairedServer.replace(/^https?:\/\//, "")}
+          </p>
         ) : null}
 
         <label htmlFor="username">{view === "signin" ? "Username" : "E-mail"}</label>

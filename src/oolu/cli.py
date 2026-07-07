@@ -383,6 +383,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="CORS origin permitted to call this host (repeatable) — e.g. the "
         "desktop app's origin. Use '*' to allow any origin",
     )
+    host.add_argument(
+        "--open-registration",
+        action="store_true",
+        help="allow self-serve e-mail registration (POST /v1/auth/register). "
+        "Pre-launch: addresses are recorded but not yet verified — the "
+        "mail-sender milestone adds verification codes",
+    )
 
     sub.add_parser("show-config", help="print the effective settings").add_argument(
         "--config", metavar="PATH", help="path to a models.yaml settings file"
@@ -1242,6 +1249,8 @@ def _cmd_desktop(args, out) -> int:
             skills = [entry.skill for entry in registry.list()] or None
         finally:
             registry.close()
+    from .gateway import GatewayConfig
+
     runtime = build_host_runtime(
         Settings.load(args.config),
         data_dir=data_dir,
@@ -1252,6 +1261,9 @@ def _cmd_desktop(args, out) -> int:
         # The product face: the OoLu messenger (built React shell), not
         # the multi-user admin page `oolu host` serves.
         frontend="shell",
+        # The online server this app pairs with: the sign-in screen uses
+        # it instead of asking the user to type a server.
+        config=GatewayConfig(server_url=os.environ.get("OOLU_SERVER_URL")),
         # "Continue with Google" turns on when the operator provides a
         # Google OAuth client (Desktop-app type; the id is not a secret).
         google_client_id=os.environ.get("OOLU_GOOGLE_CLIENT_ID"),
@@ -1316,11 +1328,14 @@ def _cmd_host(args, out) -> int:
     ephemeral_secret = secret is None
     if ephemeral_secret:
         secret = secrets_module.token_urlsafe(32)
-    config = None
-    if args.allow_origin:
-        from .gateway import GatewayConfig
+    from .gateway import GatewayConfig
 
-        config = GatewayConfig(allowed_origins=frozenset(args.allow_origin))
+    config = GatewayConfig(
+        allowed_origins=frozenset(args.allow_origin),
+        open_registration=args.open_registration,
+        registration_tenant=args.tenant,
+        server_url=os.environ.get("OOLU_SERVER_URL"),
+    )
     try:
         runtime = build_host_runtime(
             Settings.load(args.config),

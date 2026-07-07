@@ -451,23 +451,25 @@ def build_host_runtime(
     price_book = PriceBook(data / "prices.db")
     traces = TraceStore(data / "traces.db")
 
+    # E-mail/IdP identities -> local accounts, shared by registration and
+    # Google sign-in so "already registered" means the same thing everywhere.
+    from .identity.google_signin import IdentityLinkStore
+
+    identity_links = IdentityLinkStore(conn)
+
     # "Continue with Google": only when an OAuth client is configured. The
     # id_token verifier is Google's JWKS (RS256) — requires the oidc extra;
     # the import error below says exactly how to get it.
     google = None
     if google_client_id:
-        from .identity.google_signin import (
-            GoogleSignIn,
-            GoogleSignInConfig,
-            IdentityLinkStore,
-        )
+        from .identity.google_signin import GoogleSignIn, GoogleSignInConfig
         from .identity.jwks import JwksVerifier
         from .providers.transport import HttpxTransport
 
         google_transport = HttpxTransport()
         google = GoogleSignIn(
             accounts,
-            IdentityLinkStore(conn),
+            identity_links,
             GoogleSignInConfig(
                 client_id=google_client_id, client_secret=google_client_secret
             ),
@@ -503,6 +505,7 @@ def build_host_runtime(
         model_keys=ModelKeyring(conn, key_path=data / "machine.key"),
         model_meter=ModelCallMeter(),
         google_signin=google,
+        identity_links=identity_links,
         # Pre-launch: the test card vault and a closed launch guard — the
         # real transaction port stays shut until an operator opens it.
         payments=PaymentMethodsService(PaymentProfileStore(conn), FakeCardVault()),
@@ -514,9 +517,16 @@ def build_host_runtime(
             audit=durable.audit, durable=durable, endpoints=endpoints, conn=conn
         ),
     )
+    # The shell may call exactly one origin beyond itself: the online
+    # server this install pairs with. The CSP widens to it and nothing else.
+    paired = getattr(config, "server_url", None) if config else None
     return HostRuntime(
         gateway=gateway,
-        asgi=GatewayASGI(gateway, frontend=frontend),
+        asgi=GatewayASGI(
+            gateway,
+            frontend=frontend,
+            connect_src=(paired,) if paired else (),
+        ),
         accounts=accounts,
         identity=identity,
         conn=conn,

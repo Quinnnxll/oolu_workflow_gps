@@ -5,7 +5,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 
 from .app import GatewayApp
 from .errors import GatewayError
@@ -41,17 +41,27 @@ _ASSET_HEADERS = {
 # route the SSE snapshot serves over HTTP, so a client upgrades in place.
 _EVENTS_PATH = re.compile(r"^/v1/runs/(?P<run_id>[^/]+)/events$")
 
-_FRONTEND_HEADERS = {
-    "Content-Type": "text/html; charset=utf-8",
-    "X-Content-Type-Options": "nosniff",
-    "X-Frame-Options": "DENY",
-    "Referrer-Policy": "no-referrer",
-    "Cache-Control": "no-store",
-    "Content-Security-Policy": (
-        "default-src 'self'; connect-src 'self'; img-src 'self' data:; "
-        "style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"
-    ),
-}
+def _frontend_headers(connect_src: tuple[str, ...] = ()) -> dict[str, str]:
+    """The index's security headers. ``connect_src`` widens the CSP to the
+    origins this install may call beyond itself — exactly the paired
+    online server (OOLU_SERVER_URL) and nothing else."""
+    extra = ""
+    for origin in connect_src:
+        parts = urlsplit(origin)
+        if parts.scheme and parts.netloc:
+            extra += f" {parts.scheme}://{parts.netloc}"
+    return {
+        "Content-Type": "text/html; charset=utf-8",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+        "Referrer-Policy": "no-referrer",
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": (
+            f"default-src 'self'; connect-src 'self'{extra}; "
+            "img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+            "script-src 'self' 'unsafe-inline'"
+        ),
+    }
 
 
 def _load_index(frontend: str) -> bytes:
@@ -93,6 +103,7 @@ class GatewayASGI:
         *,
         serve_frontend: bool = True,
         frontend: str = "host",
+        connect_src: tuple[str, ...] = (),
         poll_interval: float = 0.5,
     ) -> None:
         if frontend not in ("host", "shell"):
@@ -100,6 +111,7 @@ class GatewayASGI:
         self._app = app
         self._serve_frontend = serve_frontend
         self._frontend = frontend
+        self._frontend_headers = _frontend_headers(connect_src)
         self._shell_dir = _SHELL_DIR.resolve()
         self._index = _load_index(frontend) if serve_frontend else b""
         # How long the live stream waits for a client frame before polling the
@@ -121,7 +133,7 @@ class GatewayASGI:
         path = scope["path"]
         if self._serve_frontend and method == "GET":
             if path in ("/", "/index.html"):
-                await self._respond(send, 200, _FRONTEND_HEADERS, self._index)
+                await self._respond(send, 200, self._frontend_headers, self._index)
                 return
             asset = self._shell_asset(path)
             if asset is not None:

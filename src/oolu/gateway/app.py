@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -39,7 +40,12 @@ from ..durable.idempotency import IdempotencyLedger
 from ..durable.service import DurableWorkflowService
 from ..identity.apikeys import KEY_PREFIX, ApiKeyError, ApiKeyService, scope_allows
 from ..identity.errors import AuthenticationError, AuthorizationError
-from ..identity.google_signin import GoogleSignIn, SignInError
+from ..identity.google_signin import (
+    GoogleSignIn,
+    IdentityLinkStore,
+    SignInError,
+    username_from_email,
+)
 from ..identity.models import PrincipalKind, Session
 from ..identity.policy import AuthorityResolver
 from ..identity.service import IdentityApprovalAuthority
@@ -116,6 +122,8 @@ from .webhooks import WebhookVerifier
 
 # The hold lifecycle as it appears on the audit log — and therefore on the
 # approver's SSE feed. Every transition is one of these; nothing is silent.
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
 _HOLD_EVENT_TYPES = frozenset(
     {"contract.held", "contract.approved", "contract.declined", "contract.expired"}
 )
@@ -146,6 +154,16 @@ class GatewayConfig:
     max_runs_per_tenant: int = 10_000
     page_size_default: int = 20
     page_size_max: int = 100
+    # The online server this install pairs with (what the sign-in screen
+    # uses instead of asking the user for a server). None = ask.
+    server_url: str | None = None
+    # Self-serve e-mail registration. Off by default: an online host
+    # opts in with --open-registration. (E-mail *verification* arrives
+    # with the mail-sender milestone; until then this is honest,
+    # unverified sign-up for pre-launch testing.)
+    open_registration: bool = False
+    # Which tenant self-served accounts land in.
+    registration_tenant: str = "main"
     # How long a held reserved contract stays decidable. After this it is
     # swept (audited as contract.expired) — a stale hold must never be
     # released long after the submitter's intent went cold. None = never.
@@ -225,6 +243,7 @@ class GatewayApp:
         model_meter=None,  # billing.ModelCallMeter: chat spend enters books
         model_transport=None,  # providers.HttpTransport; None = real httpx
         google_signin: GoogleSignIn | None = None,  # "Continue with Google"
+        identity_links: IdentityLinkStore | None = None,  # email/IdP -> account
         value_patcher=None,  # orchestrator.ValuePatcher: fills creative inputs
         isolation=None,  # worker.IsolationPolicy: powers /v1/worker-health
         docker_available: bool = True,
@@ -294,6 +313,7 @@ class GatewayApp:
         self._model_transport = model_transport
         self._model_routers: dict[str, ChatModelRouter] = {}
         self._google = google_signin
+        self._identity_links = identity_links
         # What may run where, per trust level — rendered by the shell's
         # health screen from the policy that is actually enforced.
         from ..worker.policy import IsolationPolicy
@@ -559,6 +579,11 @@ class GatewayApp:
         # nature; management requires stored users:manage authority (the
         # bootstrap admin's role holds "*").
         r.add("POST", "/v1/auth/login", self._auth_login, public=True)
+        # What a client needs to know about this host before signing in:
+        # the paired online server, and which sign-in doors exist.
+        r.add("GET", "/v1/client-config", self._client_config, public=True)
+        # Self-serve e-mail registration (hosts opt in).
+        r.add("POST", "/v1/auth/register", self._auth_register, public=True)
         # Sign in with Google (RFC 8252): the app begins and polls; only
         # the browser's leg touches Google. All three answer 404 when no
         # Google client is configured on this host.
@@ -2390,6 +2415,86 @@ class GatewayApp:
                 "principal": result.principal,
             },
         )
+
+    # ------------------------------------------------------------------ #
+    # Client config + self-serve registration.                            #
+    # ------------------------------------------------------------------ #
+    def _client_config(self, request, session, params) -> Response:
+        """What a client should know before any sign-in: the online server
+        this install pairs with (so the sign-in screen doesn't have to ask)
+        and which doors this host offers. Public, secret-free."""
+        return json_response(
+            200,
+            {
+                "server": self._config.server_url,
+                "google": self._google is not None,
+                "registration": bool(
+                    self._config.open_registration and self._accounts is not None
+                ),
+            },
+        )
+
+    def _auth_register(self, request, session, params) -> Response:
+        """Create an account from e-mail + password, where the host allows.
+
+        The e-mail is recorded as an identity link so the same address
+        cannot register twice; *verification* of the address arrives with
+        the mail-sender milestone — until then hosts opt in knowingly via
+        --open-registration (pre-launch testing)."""
+        accounts = self._require_accounts()
+        if not self._config.open_registration:
+            raise GatewayError(
+                404, "not_found", "registration is not open on this host"
+            )
+        body = request.body or {}
+        email = str(body.get("email", "")).strip().lower()
+        password = str(body.get("password", ""))
+        if not _EMAIL_RE.match(email):
+            raise GatewayError(400, "invalid_request", "a valid e-mail is required")
+        if len(password) < 8:
+            raise GatewayError(
+                400, "invalid_request", "passwords need at least 8 characters"
+            )
+        if self._identity_links is not None and self._identity_links.lookup(
+            "email", email
+        ):
+            raise GatewayError(
+                409, "conflict", "this e-mail is already registered — sign in instead"
+            )
+        username = self._fresh_username(email, accounts)
+        tenant = self._config.registration_tenant
+        try:
+            accounts.create_user(
+                username, password, tenant=tenant, granted_by="self-registration"
+            )
+        except ValueError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        if self._identity_links is not None:
+            self._identity_links.link(
+                provider="email", subject=email, tenant=tenant,
+                username=username, email=email, at=self._clock(),
+            )
+        result = accounts.login(username, password, now=self._clock())
+        self._metrics["registrations"] += 1
+        return json_response(
+            201,
+            {
+                "token": result.token,
+                "expires_at": result.expires_at.isoformat(),
+                "tenant": result.tenant_id,
+                "principal": result.principal,
+            },
+        )
+
+    @staticmethod
+    def _fresh_username(email: str, accounts) -> str:
+        base = username_from_email(email)
+        candidate = base
+        for suffix in range(2, 100):
+            if accounts.user(candidate) is None:
+                return candidate
+            candidate = f"{base}-{suffix}"
+        raise GatewayError(409, "conflict", "could not derive a free username")
 
     # ------------------------------------------------------------------ #
     # Sign in with Google.                                                #

@@ -136,6 +136,19 @@ def build_openapi() -> dict:
                 "(unknown key or out-of-bounds value → 400)"
             ),
         },
+        "/v1/client-config": {
+            "get": op(
+                "What a client should know before signing in: the paired "
+                "online server and which sign-in doors exist (public)"
+            ),
+        },
+        "/v1/auth/register": {
+            "post": op(
+                "Self-serve e-mail registration where the host opts in "
+                "(--open-registration); the e-mail is linked so it cannot "
+                "register twice (public)"
+            ),
+        },
         "/v1/auth/google/start": {
             "get": op(
                 "Begin Sign in with Google: the consent URL + a one-shot "

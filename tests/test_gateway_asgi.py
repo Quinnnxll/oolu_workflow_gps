@@ -88,6 +88,28 @@ def test_desktop_shell_serves_the_built_react_app(tmp_path):
         conn.close()
 
 
+def test_paired_server_widens_the_csp_to_exactly_that_origin(tmp_path):
+    """OOLU_SERVER_URL must be callable from the shell: connect-src gains
+    the paired origin (and only the origin — path stripped), nothing else."""
+    app, conn, _ = _app(tmp_path)
+    try:
+        asgi = GatewayASGI(
+            app,
+            frontend="shell",
+            connect_src=("https://cloud.oolu.example/some/path",),
+        )
+        _, headers, _ = _call(asgi, "GET", "/")
+        csp = headers["Content-Security-Policy"]
+        assert "connect-src 'self' https://cloud.oolu.example;" in csp
+
+        # Unpaired installs stay locked to themselves.
+        plain = GatewayASGI(app, frontend="shell")
+        _, headers, _ = _call(plain, "GET", "/")
+        assert "connect-src 'self';" in headers["Content-Security-Policy"]
+    finally:
+        conn.close()
+
+
 def test_shell_assets_cannot_reach_outside_the_dist(tmp_path):
     app, conn, _ = _app(tmp_path)
     try:

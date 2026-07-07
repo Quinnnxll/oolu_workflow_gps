@@ -87,6 +87,25 @@ export const session = {
 
 export const requiresLogin = (): boolean => isRemote() && !session.signedIn();
 
+// What this install knows before any sign-in: the online server it pairs
+// with (so the sign-in screen doesn't ask) and which doors the host offers.
+export interface ClientConfig {
+  server?: string | null;
+  google?: boolean;
+  registration?: boolean;
+}
+
+export async function clientConfig(): Promise<ClientConfig> {
+  try {
+    const res = await fetch(BASE() + "/v1/client-config");
+    if (!res.ok) return {};
+    const data = (await res.json().catch(() => ({}))) as ClientConfig;
+    return data && typeof data === "object" ? data : {};
+  } catch {
+    return {};
+  }
+}
+
 interface LoginResponse {
   token: string;
   principal: string;

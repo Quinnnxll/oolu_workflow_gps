@@ -135,7 +135,7 @@ class IdentityLinkStore:
 _USERNAME_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
-def _username_from_email(email: str) -> str:
+def username_from_email(email: str) -> str:
     base = _USERNAME_SAFE.sub("-", email.split("@", 1)[0]).strip("-._") or "user"
     return base if len(base) >= 3 else f"{base}-user"
 
@@ -341,7 +341,7 @@ class GoogleSignIn:
         return self._accounts.external_login(username, now=now)
 
     def _fresh_username(self, email: str) -> str:
-        base = _username_from_email(email)
+        base = username_from_email(email)
         candidate = base
         for suffix in range(2, 100):
             if self._accounts.user(candidate) is None:

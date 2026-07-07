@@ -80,7 +80,9 @@ describe("Login", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create account" }));
 
     await waitFor(() => expect(onSignedIn).toHaveBeenCalled());
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls.find(([u]) =>
+      String(u).endsWith("/v1/auth/register"),
+    ) as [string, RequestInit];
     expect(url).toBe("https://host.example/v1/auth/register");
     expect(JSON.parse(String(init.body))).toEqual({
       email: "bob@example.com",
@@ -153,6 +155,54 @@ describe("Login", () => {
     ).toBeTruthy();
   });
 
+  describe("paired install (OOLU_SERVER_URL configured)", () => {
+    beforeEach(() => {
+      window.__OOLU_REMOTE__ = false;
+      window.__OOLU_API__ = ""; // the local engine serves client-config
+    });
+
+    it("never asks for a server: the field is gone, the pairing is shown", async () => {
+      fetchMock.mockImplementation(async (input: string | URL) => {
+        const url = String(input);
+        if (url.endsWith("/v1/client-config")) {
+          return reply(200, {
+            server: "https://cloud.oolu.example/",
+            google: true,
+            registration: true,
+          });
+        }
+        if (url.endsWith("/v1/auth/login")) {
+          return reply(200, { token: "t", principal: "alice", tenant: "main" });
+        }
+        return reply(404, {});
+      });
+      const onSignedIn = vi.fn();
+      render(<Login onSignedIn={onSignedIn} />);
+
+      expect(
+        await screen.findByText(/Signing in to cloud.oolu.example/),
+      ).toBeTruthy();
+      expect(screen.queryByLabelText("Server")).toBeNull();
+
+      fireEvent.change(screen.getByLabelText("Username"), {
+        target: { value: "alice" },
+      });
+      fireEvent.change(screen.getByLabelText("Password"), {
+        target: { value: "pw" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+      await waitFor(() => expect(onSignedIn).toHaveBeenCalled());
+      // The sign-in went to the paired server, no typing involved.
+      const login = fetchMock.mock.calls.find(([u]) =>
+        String(u).endsWith("/v1/auth/login"),
+      ) as [string, RequestInit];
+      expect(String(login[0])).toBe(
+        "https://cloud.oolu.example/v1/auth/login",
+      );
+    });
+  });
+
   describe("local build (no baked-in server)", () => {
     beforeEach(() => {
       window.__OOLU_REMOTE__ = false;
@@ -177,7 +227,9 @@ describe("Login", () => {
       fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
       await waitFor(() => expect(onSignedIn).toHaveBeenCalled());
-      const [url] = fetchMock.mock.calls[0] as [string];
+      const [url] = fetchMock.mock.calls.find(([u]) =>
+        String(u).includes("/v1/auth/login"),
+      ) as [string];
       expect(url).toBe("https://online.oolu.example/v1/auth/login");
       expect(session.server).toBe("https://online.oolu.example");
     });
@@ -189,7 +241,12 @@ describe("Login", () => {
       fireEvent.click(screen.getByRole("button", { name: "Stay local" }));
 
       expect(onStayLocal).toHaveBeenCalled();
-      expect(fetchMock).not.toHaveBeenCalled();
+      // Staying local sends nothing to any auth door; only the mount-time
+      // client-config probe (which is local and secret-free) happened.
+      const authCalls = fetchMock.mock.calls.filter(([u]) =>
+        String(u).includes("/v1/auth/"),
+      );
+      expect(authCalls).toEqual([]);
     });
   });
 });
