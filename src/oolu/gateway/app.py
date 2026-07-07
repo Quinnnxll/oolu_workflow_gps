@@ -1602,6 +1602,7 @@ class GatewayApp:
         "allow_autodev_data",
         "is_supernode",
         "supernode_id",
+        "authority_level",
     )
 
     def _work_account(self, request, session, params) -> Response:
@@ -1609,8 +1610,9 @@ class GatewayApp:
 
         Three shapes: ``{"onboard": true}`` takes responsibility with NO
         choices; a body against a node with no account CREATES it, fixing
-        its regime (supernode, under-supernode, audit, auto-growing)
-        forever; anything else is an UPDATE limited to the mutable slice —
+        its regime (supernode, under-supernode, authority level, audit,
+        auto-growing) forever — for everyone, the Supernode's humans
+        included; anything else is an UPDATE limited to the mutable slice —
         a fixed trait in an update body is refused loudly, never merged.
         """
         desk = self._require_desk()
@@ -1652,7 +1654,6 @@ class GatewayApp:
                     tenant=session.tenant_id,
                     status=body.get("status"),
                     admin=body.get("admin"),
-                    authority_level=int(level) if level is not None else None,
                 )
         except OwnershipError as exc:
             raise GatewayError(403, "forbidden", str(exc)) from exc

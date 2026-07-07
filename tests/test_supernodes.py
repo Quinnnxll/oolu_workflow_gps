@@ -1,11 +1,11 @@
-"""Issue 3: a node's regime is fixed at creation; Supernodes rule authority.
+"""Issue 3: a node's whole regime — authority included — is fixed at creation.
 
-The walls under test: audit / auto-growing / supernode-ness / membership
-can never change after creation (the update path has no parameters for
-them, and the route refuses them loudly); authority exists only under a
-Supernode and only its humans set it; onboarding offers no choices; and
-the human desk on a hold can allow, sign (recorded in the audit), or type
-a reply back to the requester.
+The walls under test: audit / auto-growing / supernode-ness / membership /
+authority level can never change after creation, for anyone — the update
+path has no parameters for them and the route refuses them loudly.
+Authority exists only under a Supernode and is set once, when the node is
+created there; onboarding offers no choices; and the human desk on a hold
+can allow, sign (recorded in the audit), or type a reply back.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ def _two_nodes(app, ident, registry):
     )
 
 
-def test_a_supernode_rules_its_members_authority(tmp_path):
+def test_member_authority_is_fixed_at_creation_for_everyone(tmp_path):
     app, conn, ident, registry, *_rest, desk, _ = _desk_build(tmp_path)
     try:
         super_id, member_id = _two_nodes(app, ident, registry)
@@ -38,8 +38,8 @@ def test_a_supernode_rules_its_members_authority(tmp_path):
         )
         assert boss.is_supernode and boss.audit_mode is True
 
-        # A member created under it carries an authority level. Only the
-        # Supernode's creator could do this (ownership enforced below).
+        # A member created under it carries its authority level from birth.
+        # Only the Supernode's owner can create under it (walls tested below).
         member = desk.create_account(
             member_id,
             principal="noder-export",
@@ -51,17 +51,52 @@ def test_a_supernode_rules_its_members_authority(tmp_path):
         assert member.supernode_id == super_id
         assert member.authority_level == 3
 
-        # Its authority is the Supernode humans' call: they may change it;
-        # anyone else — including the member's own responsible if that were
-        # someone else — is refused.
-        raised = desk.update_account(
-            member_id, principal="noder-export", tenant="t1", authority_level=5
-        )
-        assert raised.authority_level == 5
-        with pytest.raises(OwnershipError, match="Supernode's humans"):
+        # And from then on it is fixed — for everyone, the Supernode's own
+        # humans included. The desk has no parameter for it at all...
+        with pytest.raises(TypeError):
             desk.update_account(
-                member_id, principal="stranger", tenant="t1", authority_level=1
+                member_id,
+                principal="noder-export",
+                tenant="t1",
+                authority_level=5,
             )
+        # ...and the route refuses it loudly, like every fixed trait.
+        refused = app.handle(
+            _req(
+                "POST",
+                f"/v1/work/nodes/{member_id}/account",
+                token=ident.token("noder-export", "t1"),
+                body={"authority_level": 5},
+            )
+        )
+        assert refused.status == 409
+        assert "fixed at creation" in refused.body["error"]["message"]
+        assert desk.account_for(member_id).authority_level == 3
+    finally:
+        conn.close()
+
+
+def test_supernodes_nest_with_authority(tmp_path):
+    """A division's Supernode lives under the ministry's, carrying an
+    authority level like any member — and still always audits."""
+    app, conn, ident, registry, *_rest, desk, _ = _desk_build(tmp_path)
+    try:
+        ministry_id, division_id = _two_nodes(app, ident, registry)
+        desk.create_account(
+            ministry_id, principal="noder-export", tenant="t1", is_supernode=True
+        )
+        division = desk.create_account(
+            division_id,
+            principal="noder-export",
+            tenant="t1",
+            is_supernode=True,
+            supernode_id=ministry_id,
+            authority_level=3,
+        )
+        assert division.is_supernode is True
+        assert division.supernode_id == ministry_id
+        assert division.authority_level == 3
+        assert division.audit_mode is True  # Supernodes always audit
     finally:
         conn.close()
 

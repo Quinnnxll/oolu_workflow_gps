@@ -460,10 +460,10 @@ export interface NodeAccountCreate {
   authority_level: number | null;
 }
 
-// The mutable slice after creation.
+// The mutable slice after creation — authority, like the rest of the
+// regime, is fixed for everyone, the Supernode's humans included.
 export interface NodeAccountPatch {
   admin: string;
-  authority_level: number;
   status: string;
 }
 

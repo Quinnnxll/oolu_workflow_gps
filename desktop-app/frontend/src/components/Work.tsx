@@ -7,8 +7,9 @@ import { FilesPane } from "./FilesPane";
 
 // The Work environment: where a noder manages and observes their nodes.
 // A node's REGIME — Supernode or not, under which Supernode, audit or
-// not, auto-growing or not — is fixed when it is created and can never be
-// changed afterwards; authority levels exist only under a Supernode. The
+// not, auto-growing or not, and its authority level — is fixed when it is
+// created and can never be changed afterwards, not even by the Supernode's
+// humans; authority levels exist only under a Supernode. The
 // list is node accounts (name, cumulative earnings, health); the thread is
 // the node's execution feed plus, where humans are in control (audit nodes
 // and Supernodes), the allow / sign / reply desk for held requests.
@@ -76,7 +77,6 @@ export function Work({ onLife }: { onLife: () => void }) {
             <span className="convo-body">
               <span className="convo-name">{n.title}</span>
               <span className="convo-sub">
-                {n.account.is_supernode ? "Supernode · " : ""}
                 {money(n.earnings_micros)} · {healthLabel(n)}
               </span>
             </span>
@@ -95,12 +95,7 @@ export function Work({ onLife }: { onLife: () => void }) {
           />
         )}
         {active && (
-          <NodeThread
-            key={active.node_id}
-            node={active}
-            allNodes={nodes}
-            onChanged={refresh}
-          />
+          <NodeThread key={active.node_id} node={active} allNodes={nodes} />
         )}
         {!selected && (
           <div className="pane-empty">
@@ -115,6 +110,17 @@ export function Work({ onLife }: { onLife: () => void }) {
 
 function money(micros: number): string {
   return `$${(micros / 1_000_000).toFixed(2)}`;
+}
+
+// "(L4, Audit, Auto-growing)": say only what the node IS; silence for
+// what it isn't (no auto-growing => no mention at all).
+export function regimeTag(account: WorkNode["account"]): string {
+  const parts: string[] = [];
+  if (account.is_supernode) parts.push("Supernode");
+  if (account.authority_level != null) parts.push(`L${account.authority_level}`);
+  if (account.audit_mode) parts.push("Audit");
+  if (account.allow_autodev_data) parts.push("Auto-growing");
+  return parts.length ? `(${parts.join(", ")})` : "(standalone)";
 }
 
 function healthLabel(n: WorkNode): string {
@@ -155,11 +161,11 @@ export function AddNode({
       const id = (await api.createNode(title.trim(), summary.trim())).node_id;
       await api.workAccountCreate(id, {
         is_supernode: isSupernode,
-        supernode_id: !isSupernode && under ? under : null,
+        supernode_id: under || null,
         // A Supernode always audits — humans in full control.
         audit_mode: isSupernode ? true : audit,
         allow_autodev_data: autoGrow,
-        authority_level: !isSupernode && under ? authority : null,
+        authority_level: under ? authority : null,
       });
       onDone(id);
     } catch (e) {
@@ -219,7 +225,7 @@ export function AddNode({
             government division, with humans in full control (always audits)
           </label>
 
-          {!isSupernode && supernodes.length > 0 && (
+          {supernodes.length > 0 && (
             <>
               <label htmlFor="node-under">Under Supernode</label>
               <select
@@ -237,7 +243,7 @@ export function AddNode({
             </>
           )}
 
-          {!isSupernode && under && (
+          {under && (
             <label htmlFor="node-authority">
               Authority
               <select
@@ -269,7 +275,7 @@ export function AddNode({
               checked={autoGrow}
               onChange={(e) => setAutoGrow(e.target.checked)}
             />
-            Auto-growing — data passing this node may feed auto-development
+            Auto-growing — data passing this node may feed new development
           </label>
         </>
       ) : (
@@ -301,11 +307,9 @@ export function AddNode({
 export function NodeThread({
   node,
   allNodes,
-  onChanged,
 }: {
   node: WorkNode;
   allNodes: WorkNode[];
-  onChanged: () => void;
 }) {
   const [activity, setActivity] = useState<NodeRunSteps[] | null>(null);
   const [holds, setHolds] = useState<HoldItem[]>([]);
@@ -364,31 +368,16 @@ export function NodeThread({
         </span>
       </div>
 
-      {/* The regime, fixed at creation: badges, never knobs. */}
+      {/* The regime, fixed at creation: one concise tag, never knobs. */}
       <div className="account-row regime">
-        {account.is_supernode && (
-          <span className="badge">Supernode — humans in full control</span>
-        )}
+        <span className="badge">{regimeTag(account)}</span>
         {account.supernode_id && (
-          <span className="badge">
-            L{account.authority_level ?? "?"} under{" "}
+          <span className="muted">
+            under{" "}
             {allNodes.find((n) => n.node_id === account.supernode_id)?.title ??
               account.supernode_id.slice(0, 8)}
           </span>
         )}
-        {!account.supernode_id && !account.is_supernode && (
-          <span className="badge muted-badge">no authority (standalone)</span>
-        )}
-        <span className="badge">
-          {account.audit_mode
-            ? "Audit — every request commits manually"
-            : "Unattended runs allowed"}
-        </span>
-        <span className="badge">
-          {account.allow_autodev_data
-            ? "Auto-growing: data may feed development"
-            : "Data never feeds auto-development"}
-        </span>
       </div>
 
       {account.is_supernode && members.length > 0 && (
@@ -399,25 +388,8 @@ export function NodeThread({
               <span>
                 {m.title} · {m.account.responsible}
               </span>
-              <label>
-                Authority
-                <select
-                  aria-label={`Authority for ${m.title}`}
-                  value={m.account.authority_level ?? 1}
-                  onChange={async (e) => {
-                    await api.workAccount(m.node_id, {
-                      authority_level: Number(e.target.value),
-                    });
-                    onChanged();
-                  }}
-                >
-                  {[1, 2, 3, 4, 5].map((level) => (
-                    <option key={level} value={level}>
-                      L{level}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              {/* Fixed at creation, authority included: display only. */}
+              <span className="muted">{regimeTag(m.account)}</span>
             </div>
           ))}
         </div>
@@ -537,6 +509,14 @@ function HoldDesk({
           placeholder="type your name to sign"
           value={signature}
           onChange={(e) => setSignature(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && signature.trim()) {
+              e.preventDefault();
+              void act(() =>
+                api.decideHold(hold.pending_id, true, signature.trim()),
+              );
+            }
+          }}
         />
         <button
           disabled={!signature.trim()}
@@ -555,6 +535,15 @@ function HoldDesk({
           placeholder="type a reply to the requester"
           value={reply}
           onChange={(e) => setReply(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && reply.trim()) {
+              e.preventDefault();
+              void act(async () => {
+                await api.holdReply(hold.pending_id, reply.trim());
+                setReply("");
+              });
+            }
+          }}
         />
         <button
           disabled={!reply.trim()}

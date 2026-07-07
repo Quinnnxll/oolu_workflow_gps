@@ -196,8 +196,8 @@ class WorkDesk:
                 "this node already has an account — its regime was fixed "
                 "when it was created"
             )
-        if is_supernode and supernode_id:
-            raise ValueError("a Supernode cannot live under another Supernode")
+        # Supernodes nest: a division's Supernode can live under a
+        # ministry's, carrying an authority level like any member.
         if authority_level is not None and not supernode_id:
             raise ValueError(
                 "authority levels exist only under a Supernode — a "
@@ -259,13 +259,13 @@ class WorkDesk:
         tenant: str,
         status: str | None = None,
         admin: str | None = None,
-        authority_level: int | None = None,
     ) -> NodeAccount:
-        """The mutable slice of an account: status, admin, and — only for
-        a node under a Supernode, only by that Supernode's humans — the
-        authority level. Audit, auto-growing, and Supernode membership were
-        fixed at creation and are refused here by construction: this method
-        simply has no parameters for them."""
+        """The mutable slice of an account: status and admin. NOTHING else.
+
+        Authority level, Supernode membership, audit, and auto-growing were
+        all fixed at creation — for everyone, the Supernode's humans
+        included — and are refused here by construction: this method simply
+        has no parameters for them."""
         node = self._registry.get_node(node_id)
         if node is None or node.tenant_id != tenant:
             raise ContributionError(f"no node '{node_id}'")
@@ -275,31 +275,14 @@ class WorkDesk:
         allowed = {node.noder_principal, current.responsible}
         if current.admin:
             allowed.add(current.admin)
-        if principal not in allowed and authority_level is None:
+        if principal not in allowed:
             raise OwnershipError(
                 "only the node's owner, responsible, or admin may change its account"
             )
-        level = current.authority_level
-        if authority_level is not None:
-            if not current.supernode_id:
-                raise ValueError(
-                    "authority levels exist only under a Supernode — a "
-                    "standalone node has no authority"
-                )
-            parent = self._accounts.get(current.supernode_id)
-            if parent is None or principal not in {
-                parent.responsible,
-                parent.admin,
-            }:
-                raise OwnershipError(
-                    "only the Supernode's humans set its members' authority"
-                )
-            level = authority_level
         account = current.model_copy(
             update={
                 "status": current.status if status is None else NodeStatus(status),
                 "admin": current.admin if admin is None else (admin or None),
-                "authority_level": level,
                 "updated_at": datetime.now(UTC),
             }
         )

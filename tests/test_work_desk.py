@@ -186,10 +186,10 @@ def test_onboarding_claims_responsibility_and_strangers_cannot_rewrite(tmp_path)
         )
         assert updated.status is NodeStatus.LIVE
         assert updated.admin == "ops-team"
-        # Audit is fixed at creation: update_account has no parameter for
-        # it at all (absent by construction), and a standalone node can
-        # never gain authority.
-        with pytest.raises(ValueError, match="only under a Supernode"):
+        # Everything else — audit, auto-growing, Supernode membership,
+        # authority level — is fixed at creation: update_account has no
+        # parameter for any of it, absent by construction.
+        with pytest.raises(TypeError):
             desk.update_account(
                 node_id, principal="steward", tenant="t1", authority_level=4
             )
@@ -225,6 +225,8 @@ def test_work_routes_end_to_end(tmp_path):
         assert saved.body["audit_mode"] is True
         assert saved.body["audit_mode"] is True
 
+        # Authority is a fixed trait like the rest: any attempt to send it
+        # after creation is refused loudly, whatever the value.
         bad = app.handle(
             _req(
                 "POST",
@@ -233,7 +235,8 @@ def test_work_routes_end_to_end(tmp_path):
                 body={"authority_level": 9},
             )
         )
-        assert bad.status == 400
+        assert bad.status == 409
+        assert "fixed at creation" in bad.body["error"]["message"]
 
         activity = app.handle(
             _req("GET", f"/v1/work/nodes/{node_id}/activity", token=token)

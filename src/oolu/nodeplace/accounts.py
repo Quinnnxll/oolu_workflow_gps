@@ -39,13 +39,14 @@ class NodeAccount(BaseModel):
     admin: str | None = None
     # Authority exists ONLY under a Supernode: a standalone node has no
     # level at all (None). Nodes created under a Supernode carry 1-5,
-    # assigned by the humans running that Supernode.
+    # set by the Supernode's humans at creation and FIXED from then on —
+    # nobody, the Supernode's humans included, can change it later.
     authority_level: int | None = Field(
         default=None, ge=AUTHORITY_MIN, le=AUTHORITY_MAX
     )
     # A Supernode is a node that manages many nodes — a group, a
     # corporation, or a government division — with humans in full control:
-    # it is always an audit node, and its members' authority is its call.
+    # it is always an audit node.
     is_supernode: bool = False
     # The Supernode this node was created under, if any. Fixed at creation.
     supernode_id: str | None = None

@@ -187,7 +187,7 @@ describe("NodeThread", () => {
       },
     };
     render(
-      <NodeThread node={workNode()} allNodes={[workNode()]} onChanged={vi.fn()} />,
+      <NodeThread node={workNode()} allNodes={[workNode()]} />,
     );
 
     // Function words, not event codes — the raw type stays in the tooltip.
@@ -197,27 +197,71 @@ describe("NodeThread", () => {
     expect(screen.getByText("run run12345")).toBeTruthy();
   });
 
-  it("the regime is badges, never knobs", async () => {
+  it("the regime is one concise tag — silent about what the node isn't", async () => {
     routes["GET /v1/work/nodes/n1/activity"] = {
       status: 200,
       body: { items: [] },
     };
+    // Auto-growing ON, audit off: only Auto-growing is mentioned.
     render(
-      <NodeThread node={workNode()} allNodes={[workNode()]} onChanged={vi.fn()} />,
+      <NodeThread node={workNode()} allNodes={[workNode()]} />,
     );
-
-    expect(
-      await screen.findByText("no authority (standalone)"),
-    ).toBeTruthy();
-    expect(screen.getByText("Unattended runs allowed")).toBeTruthy();
-    expect(
-      screen.getByText("Auto-growing: data may feed development"),
-    ).toBeTruthy();
+    expect(await screen.findByText("(Auto-growing)")).toBeTruthy();
     // No checkbox or select can touch the fixed regime.
     expect(screen.queryByRole("checkbox")).toBeNull();
+    cleanup();
+
+    // L4 + audit, auto-growing OFF: "(L4, Audit)" and not a word more.
+    const strict = workNode({
+      account: {
+        ...workNode().account,
+        supernode_id: "sn1",
+        authority_level: 4,
+        audit_mode: true,
+        allow_autodev_data: false,
+      },
+    });
+    routes["GET /v1/runs/contract/holds"] = { status: 200, body: { items: [] } };
+    render(
+      <NodeThread node={strict} allNodes={[strict]} />,
+    );
+    expect(await screen.findByText("(L4, Audit)")).toBeTruthy();
+    expect(screen.queryByText(/auto-grow/i)).toBeNull();
   });
 
-  it("a Supernode manages member authority and sees member holds", async () => {
+  it("a Supernode can be created under a Supernode, with authority", async () => {
+    routes["POST /v1/nodeplace"] = { status: 201, body: { node_id: "n8" } };
+    routes["POST /v1/work/nodes/n8/account"] = {
+      status: 200,
+      body: workNode().account,
+    };
+    const onDone = vi.fn();
+    render(<AddNode supernodes={[supernode()]} onDone={onDone} />);
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Tax Office" },
+    });
+    fireEvent.click(screen.getByLabelText(/Supernode — manages many nodes/));
+    fireEvent.change(screen.getByLabelText("Under Supernode"), {
+      target: { value: "sn1" },
+    });
+    fireEvent.change(screen.getByLabelText("Authority"), {
+      target: { value: "3" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create node" }));
+
+    await waitFor(() => expect(onDone).toHaveBeenCalledWith("n8"));
+    const account = calls.find((c) => c.path === "/v1/work/nodes/n8/account");
+    expect(account?.body).toEqual({
+      is_supernode: true,
+      supernode_id: "sn1",
+      audit_mode: true, // Supernodes always audit
+      allow_autodev_data: true,
+      authority_level: 3,
+    });
+  });
+
+  it("a Supernode sees member holds; member authority is display-only", async () => {
     const sn = supernode();
     const member = workNode({
       node_id: "n2",
@@ -249,26 +293,21 @@ describe("NodeThread", () => {
         ],
       },
     };
-    routes["POST /v1/work/nodes/n2/account"] = {
-      status: 200,
-      body: member.account,
-    };
     render(
-      <NodeThread node={sn} allNodes={[sn, member]} onChanged={vi.fn()} />,
+      <NodeThread node={sn} allNodes={[sn, member]} />,
     );
 
     // The member's hold surfaces on the Supernode's desk.
     expect(await screen.findByText(/file-the-taxes/)).toBeTruthy();
-    // And the member's authority is the Supernode humans' dial.
-    fireEvent.change(screen.getByLabelText("Authority for Tax Filer"), {
-      target: { value: "5" },
-    });
-    await waitFor(() => {
-      const patch = calls.find(
+    // But the member's authority is fixed at creation — even for the
+    // Supernode's humans it is a tag to read, never a dial to turn.
+    expect(screen.getByText("(L2, Auto-growing)")).toBeTruthy();
+    expect(screen.queryByLabelText("Authority for Tax Filer")).toBeNull();
+    expect(
+      calls.find(
         (c) => c.method === "POST" && c.path === "/v1/work/nodes/n2/account",
-      );
-      expect(patch?.body).toEqual({ authority_level: 5 });
-    });
+      ),
+    ).toBeUndefined();
   });
 
   it("a held request can be allowed, signed, or replied to", async () => {
@@ -301,15 +340,17 @@ describe("NodeThread", () => {
       body: { replies: [{ author: "alice", message: "why?", at: "t" }] },
     };
     render(
-      <NodeThread node={audited} allNodes={[audited]} onChanged={vi.fn()} />,
+      <NodeThread node={audited} allNodes={[audited]} />,
     );
     await screen.findByText(/clean-the-books/);
 
-    // Reply: type and send, deciding nothing.
+    // Reply: type and press Enter — deciding nothing.
     fireEvent.change(screen.getByLabelText("Reply to clean-the-books"), {
       target: { value: "why?" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Send reply" }));
+    fireEvent.keyDown(screen.getByLabelText("Reply to clean-the-books"), {
+      key: "Enter",
+    });
     await waitFor(() =>
       expect(
         calls.some((c) => c.path === "/v1/runs/contract/holds/p1/reply"),
