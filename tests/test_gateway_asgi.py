@@ -59,6 +59,54 @@ def test_serves_frontend_index(tmp_path):
         conn.close()
 
 
+def test_desktop_shell_serves_the_built_react_app(tmp_path):
+    """`oolu desktop` (what setup.bat starts) must show the product UI:
+    the index references a built asset, and that exact asset serves."""
+    import re
+
+    app, conn, _ = _app(tmp_path)
+    try:
+        asgi = GatewayASGI(app, frontend="shell")
+
+        status, headers, body = _call(asgi, "GET", "/")
+        assert status == 200
+        assert headers["Content-Type"].startswith("text/html")
+        script = re.search(rb'src="(/assets/[^"]+\.js)"', body)
+        assert script, "shell index does not reference a built script"
+
+        status, headers, _ = _call(asgi, "GET", script.group(1).decode())
+        assert status == 200
+        assert headers["Content-Type"].startswith("text/javascript")
+        assert "immutable" in headers["Cache-Control"]
+
+        style = re.search(rb'href="(/assets/[^"]+\.css)"', body)
+        assert style, "shell index does not reference a built stylesheet"
+        status, headers, _ = _call(asgi, "GET", style.group(1).decode())
+        assert status == 200
+        assert headers["Content-Type"].startswith("text/css")
+    finally:
+        conn.close()
+
+
+def test_shell_assets_cannot_reach_outside_the_dist(tmp_path):
+    app, conn, _ = _app(tmp_path)
+    try:
+        asgi = GatewayASGI(app, frontend="shell")
+        # A crafted traversal that resolves to real source code must not
+        # serve it; a missing asset falls through to the router's 404.
+        for path in (
+            "/assets/../../../asgi.py",
+            "/assets/../index.html",
+            "/assets/nope.js",
+            "/asgi.py",
+        ):
+            status, _, body = _call(asgi, "GET", path)
+            assert status != 200, path
+            assert b"GatewayASGI" not in body, path
+    finally:
+        conn.close()
+
+
 def test_public_openapi_through_asgi(tmp_path):
     app, conn, _ = _app(tmp_path)
     try:

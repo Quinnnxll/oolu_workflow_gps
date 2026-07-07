@@ -11,7 +11,31 @@ from .app import GatewayApp
 from .errors import GatewayError
 from .http import Request, Response
 
-_FRONTEND_INDEX = Path(__file__).parent / "frontend" / "index.html"
+# Two faces over the same gateway. "host" is the multi-user admin surface
+# (sign-in, users, health) — one hand-written page. "shell" is the product:
+# the OoLu messenger, built from desktop-app/frontend into frontend/shell/
+# by `npm run build:shell` and committed, so a plain `pip install` (what
+# setup.bat/setup.sh do) ships it without needing Node on the user's machine.
+_FRONTEND_ROOT = Path(__file__).parent / "frontend"
+_FRONTEND_INDEX = _FRONTEND_ROOT / "index.html"
+_SHELL_DIR = _FRONTEND_ROOT / "shell"
+
+_ASSET_TYPES = {
+    ".js": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".map": "application/json",
+    ".png": "image/png",
+    ".ico": "image/x-icon",
+    ".woff2": "font/woff2",
+}
+
+# Vite emits content-hashed asset names, so they are safe to cache forever;
+# the index that references them is what must stay fresh.
+_ASSET_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "public, max-age=31536000, immutable",
+}
 
 # Live event stream path (ADR-0004). The WebSocket transport binds to the same
 # route the SSE snapshot serves over HTTP, so a client upgrades in place.
@@ -30,7 +54,9 @@ _FRONTEND_HEADERS = {
 }
 
 
-def _load_index() -> bytes:
+def _load_index(frontend: str) -> bytes:
+    if frontend == "shell":
+        return (_SHELL_DIR / "index.html").read_bytes()
     return _FRONTEND_INDEX.read_bytes()
 
 
@@ -66,11 +92,16 @@ class GatewayASGI:
         app: GatewayApp,
         *,
         serve_frontend: bool = True,
+        frontend: str = "host",
         poll_interval: float = 0.5,
     ) -> None:
+        if frontend not in ("host", "shell"):
+            raise ValueError(f"unknown frontend {frontend!r}: use 'host' or 'shell'")
         self._app = app
         self._serve_frontend = serve_frontend
-        self._index = _load_index() if serve_frontend else b""
+        self._frontend = frontend
+        self._shell_dir = _SHELL_DIR.resolve()
+        self._index = _load_index(frontend) if serve_frontend else b""
         # How long the live stream waits for a client frame before polling the
         # durable audit log for new events. A production push seam would replace
         # this poll with a durable subscription; the loop shape stays the same.
@@ -88,9 +119,14 @@ class GatewayASGI:
 
         method = scope["method"]
         path = scope["path"]
-        if self._serve_frontend and method == "GET" and path in ("/", "/index.html"):
-            await self._respond(send, 200, _FRONTEND_HEADERS, self._index)
-            return
+        if self._serve_frontend and method == "GET":
+            if path in ("/", "/index.html"):
+                await self._respond(send, 200, _FRONTEND_HEADERS, self._index)
+                return
+            asset = self._shell_asset(path)
+            if asset is not None:
+                await self._respond(send, 200, asset[1], asset[0])
+                return
 
         request = await self._build_request(scope, method, path, receive)
         response = self._app.handle(request)
@@ -98,6 +134,27 @@ class GatewayASGI:
         headers = dict(response.headers)
         headers["Content-Type"] = content_type
         await self._respond(send, response.status, headers, payload)
+
+    def _shell_asset(self, path: str) -> tuple[bytes, dict[str, str]] | None:
+        """A built shell file for this GET path, or None to fall through.
+
+        Only the shell serves files beyond the index, only from its own
+        ``assets/`` output, and only files that resolve inside the shell
+        directory — a crafted ``..`` path can never reach source code.
+        """
+        if self._frontend != "shell" or not path.startswith("/assets/"):
+            return None
+        candidate = (self._shell_dir / path.lstrip("/")).resolve()
+        if not candidate.is_relative_to(self._shell_dir):
+            return None
+        if not candidate.is_file():
+            return None
+        content_type = _ASSET_TYPES.get(candidate.suffix)
+        if content_type is None:
+            return None
+        headers = dict(_ASSET_HEADERS)
+        headers["Content-Type"] = content_type
+        return candidate.read_bytes(), headers
 
     # ------------------------------------------------------------------ #
     # Live WebSocket transport (ADR-0004).                                #

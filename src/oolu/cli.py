@@ -1199,7 +1199,9 @@ def _cmd_desktop(args, out) -> int:
     """The desktop shell: the unified gateway surface, bound to loopback.
 
     The same multi-tenant gateway `oolu host` serves — same routes, same
-    front-end, same identity semantics — with a local user
+    identity semantics, but the product front-end (the OoLu messenger,
+    the built React shell) instead of the host-admin page — with a local
+    user
     auto-provisioned and signed in: the browser opens straight into the
     shell, no sign-in screen, because on this machine the loopback bind
     (OS ownership), not a password, is the trust boundary.
@@ -1247,6 +1249,9 @@ def _cmd_desktop(args, out) -> int:
         skills=skills,
         # A desktop session should outlive a workday without re-auth.
         token_ttl_seconds=7 * 24 * 3600,
+        # The product face: the OoLu messenger (built React shell), not
+        # the multi-user admin page `oolu host` serves.
+        frontend="shell",
     )
     password = secrets_module.token_urlsafe(16)
     if not runtime.accounts.bootstrap(

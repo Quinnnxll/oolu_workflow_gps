@@ -330,6 +330,7 @@ def build_host_runtime(
     executors: dict[str, ActionExecutor] | None = None,
     config: Any = None,  # gateway.GatewayConfig
     database_url: str | None = None,
+    frontend: str = "host",
 ) -> HostRuntime:
     """The multi-user web host: the full multi-tenant gateway over one
     data directory, with LOCAL accounts as the identity provider.
@@ -475,7 +476,7 @@ def build_host_runtime(
     )
     return HostRuntime(
         gateway=gateway,
-        asgi=GatewayASGI(gateway),
+        asgi=GatewayASGI(gateway, frontend=frontend),
         accounts=accounts,
         identity=identity,
         conn=conn,

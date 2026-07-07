@@ -54,8 +54,18 @@ path — so a drift in either side fails fast.
 ## Build
 
 ```sh
-cd frontend && npm run build   # → frontend/dist, embedded by the Tauri shell
+cd frontend && npm run build         # → frontend/dist, embedded by the Tauri shell
+cd frontend && npm run build:shell   # → src/oolu/gateway/frontend/shell/
 ```
+
+`build:shell` is what `setup.bat` / `setup.sh` users actually see: it builds
+the same app into the Python package, where `oolu desktop` serves it at `/`
+(with `#auth=<token>` from the launch banner signing the tab in). The output
+is **committed**, so a plain `pip install` ships the UI without Node on the
+user's machine — after changing anything under `frontend/src`, re-run
+`npm run build:shell` and commit the refreshed `shell/` files, or setup users
+keep seeing the previous UI. `oolu host` keeps its own admin front-end; only
+`oolu desktop` serves this shell.
 
 ## Shell (`src-tauri/`)
 
