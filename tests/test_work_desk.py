@@ -78,7 +78,7 @@ def test_account_store_defaults_and_roundtrip(tmp_path):
 
         account = NodeAccount(node_id="n1", responsible="alice")
         assert account.status is NodeStatus.NEEDS_VERIFICATION
-        assert account.authority_level == 1
+        assert account.authority_level is None  # authority needs a Supernode
         assert account.audit_mode is False
 
         store.upsert(account)
@@ -160,30 +160,39 @@ def test_onboarding_claims_responsibility_and_strangers_cannot_rewrite(tmp_path)
         exporter, _ = _seed_chain(app, ident, registry)
         node_id = registry.get_version(exporter).node_id
 
-        # No account yet: onboarding is self-service in the tenant.
-        onboarded = desk.save_account(node_id, principal="steward", tenant="t1")
+        # No account yet: onboarding is self-service in the tenant — and
+        # it offers NO choices; the standalone defaults apply.
+        onboarded = desk.onboard_account(node_id, principal="steward", tenant="t1")
         assert onboarded.responsible == "steward"
+        assert onboarded.audit_mode is False
+        assert onboarded.authority_level is None  # standalone: no authority
 
-        # A live account is protected: only owner/responsible/admin write.
+        # A live account is protected: a stranger can neither update it
+        # nor onboard it out from under its responsible.
         with pytest.raises(OwnershipError):
-            desk.save_account(
-                node_id, principal="stranger", tenant="t1", audit_mode=True
+            desk.update_account(
+                node_id, principal="stranger", tenant="t1", status="live"
             )
+        with pytest.raises(OwnershipError):
+            desk.onboard_account(node_id, principal="stranger", tenant="t1")
 
-        # The responsible promotes it to live under authority 4, audited.
-        updated = desk.save_account(
+        # The responsible updates the MUTABLE slice: status and admin.
+        updated = desk.update_account(
             node_id,
             principal="steward",
             tenant="t1",
-            authority_level=4,
             status="live",
-            audit_mode=True,
             admin="ops-team",
         )
-        assert updated.authority_level == 4
         assert updated.status is NodeStatus.LIVE
-        assert updated.audit_mode is True
         assert updated.admin == "ops-team"
+        # Audit is fixed at creation: update_account has no parameter for
+        # it at all (absent by construction), and a standalone node can
+        # never gain authority.
+        with pytest.raises(ValueError, match="only under a Supernode"):
+            desk.update_account(
+                node_id, principal="steward", tenant="t1", authority_level=4
+            )
     finally:
         conn.close()
 
@@ -202,18 +211,18 @@ def test_work_routes_end_to_end(tmp_path):
         assert listed.status == 200
         (item,) = listed.body["items"]
         assert item["title"] == "raw exporter"
-        assert item["account"]["authority_level"] == 1
+        assert item["account"]["authority_level"] is None  # standalone
 
         saved = app.handle(
             _req(
                 "POST",
                 f"/v1/work/nodes/{node_id}/account",
                 token=token,
-                body={"authority_level": 5, "audit_mode": True, "admin": "gov"},
+                body={"audit_mode": True, "admin": "gov"},
             )
         )
         assert saved.status == 200
-        assert saved.body["authority_level"] == 5
+        assert saved.body["audit_mode"] is True
         assert saved.body["audit_mode"] is True
 
         bad = app.handle(
@@ -299,7 +308,7 @@ def test_no_autodev_node_leaves_nothing_in_the_trace_corpus(tmp_path):
     try:
         exporter, cleaner = _seed_chain(app, ident, registry)
         exporter_node = registry.get_version(exporter).node_id
-        desk.save_account(
+        desk.create_account(
             exporter_node,
             principal="noder-export",
             tenant="t1",
@@ -339,7 +348,7 @@ def test_audit_node_holds_the_contract_for_manual_commit(tmp_path):
     try:
         exporter, _cleaner = _seed_chain(app, ident, registry)
         node_id = registry.get_version(exporter).node_id
-        desk.save_account(
+        desk.create_account(
             node_id, principal="noder-export", tenant="t1", audit_mode=True
         )
         contract = _assembled_contract(app, ident)

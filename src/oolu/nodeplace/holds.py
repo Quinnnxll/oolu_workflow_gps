@@ -25,6 +25,15 @@ _SCHEMA = """CREATE TABLE IF NOT EXISTS pending_contracts (
     payload_json TEXT NOT NULL
 )"""
 
+# The conversation attached to a hold: instead of (or before) deciding,
+# the human in control can type an answer back to whoever submitted it.
+_REPLIES_SCHEMA = """CREATE TABLE IF NOT EXISTS pending_replies (
+    pending_id TEXT NOT NULL,
+    author TEXT NOT NULL,
+    message TEXT NOT NULL,
+    at TEXT NOT NULL
+)"""
+
 
 class PendingContractRecord(BaseModel):
     """One held contract: what to run, and the terms it was confirmed on."""
@@ -54,6 +63,29 @@ class PendingContractStore:
         self._conn = conn
         with self._conn.transaction() as db:
             db.execute(_SCHEMA)
+            db.execute(_REPLIES_SCHEMA)
+
+    def add_reply(
+        self, pending_id: str, *, author: str, message: str, at: datetime
+    ) -> None:
+        with self._conn.transaction() as db:
+            db.execute(
+                "INSERT INTO pending_replies (pending_id, author, message, at)"
+                " VALUES (?, ?, ?, ?)",
+                (pending_id, author, message, at.isoformat()),
+            )
+
+    def replies(self, pending_id: str) -> list[dict]:
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                "SELECT author, message, at FROM pending_replies"
+                " WHERE pending_id = ? ORDER BY at",
+                (pending_id,),
+            ).fetchall()
+        return [
+            {"author": r["author"], "message": r["message"], "at": r["at"]}
+            for r in rows
+        ]
 
     def add(self, record: PendingContractRecord) -> bool:
         with self._conn.transaction() as db:

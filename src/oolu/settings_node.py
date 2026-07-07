@@ -156,8 +156,10 @@ SETTINGS_CATALOG: tuple[SettingField, ...] = (
         group="account",
         label="Auto-build nodes on my paths",
         kind=SettingKind.BOOL,
-        default=True,
-        description="Let OoLu build missing nodes and publish them under my account.",
+        default=False,
+        description="Let OoLu build missing nodes and publish them under my "
+        "account. Off by default: when a task has no existing path, OoLu "
+        "asks you to turn this on before building anything new.",
     ),
     # --- subscription: DISPLAY-ONLY here. The plan is a commitment with
     # money attached, not a preference — changing it takes the account

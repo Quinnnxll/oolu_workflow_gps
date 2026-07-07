@@ -164,54 +164,144 @@ class WorkDesk:
     # ------------------------------------------------------------------ #
     # Accountability: create-as-admin / onboard-as-responsible.           #
     # ------------------------------------------------------------------ #
-    def save_account(
+    def account_for(self, node_id: str) -> NodeAccount | None:
+        return self._accounts.get(node_id)
+
+    def create_account(
         self,
         node_id: str,
         *,
         principal: str,
         tenant: str,
-        admin: str | None = None,
+        is_supernode: bool = False,
+        supernode_id: str | None = None,
+        audit_mode: bool = False,
+        allow_autodev_data: bool = True,
         authority_level: int | None = None,
-        status: str | None = None,
-        audit_mode: bool | None = None,
-        allow_autodev_data: bool | None = None,
+        admin: str | None = None,
     ) -> NodeAccount:
-        """Create or update a node's account.
+        """A node's regime is decided ONCE, at creation.
 
-        The node's owner, its current responsible, or its admin may write.
-        A node with no account yet can be ONBOARDED: the caller becomes the
-        responsible — taking accountability is self-service; taking over
-        someone else's live account is not.
+        Whether it is a Supernode, which Supernode it lives under (the
+        creator must own that Supernode), whether it audits, and whether
+        its data may feed auto-development are all fixed here and can never
+        be changed later. Authority exists only under a Supernode, and a
+        Supernode itself always audits — humans in full control.
+        """
+        node = self._registry.get_node(node_id)
+        if node is None or node.tenant_id != tenant:
+            raise ContributionError(f"no node '{node_id}'")
+        if self._accounts.get(node_id) is not None:
+            raise OwnershipError(
+                "this node already has an account — its regime was fixed "
+                "when it was created"
+            )
+        if is_supernode and supernode_id:
+            raise ValueError("a Supernode cannot live under another Supernode")
+        if authority_level is not None and not supernode_id:
+            raise ValueError(
+                "authority levels exist only under a Supernode — a "
+                "standalone node has no authority"
+            )
+        if supernode_id:
+            parent = self._accounts.get(supernode_id)
+            if parent is None or not parent.is_supernode:
+                raise ContributionError(f"no Supernode '{supernode_id}'")
+            if principal not in {parent.responsible, parent.admin}:
+                raise OwnershipError(
+                    "you must own the Supernode to create nodes under it"
+                )
+        account = NodeAccount(
+            node_id=node_id,
+            responsible=principal,
+            admin=admin or None,
+            is_supernode=is_supernode,
+            supernode_id=supernode_id or None,
+            # Humans in full control: a Supernode always audits.
+            audit_mode=True if is_supernode else audit_mode,
+            allow_autodev_data=allow_autodev_data,
+            authority_level=authority_level,
+        )
+        self._accounts.upsert(account)
+        return account
+
+    def onboard_account(
+        self, node_id: str, *, principal: str, tenant: str
+    ) -> NodeAccount:
+        """Take responsibility for an existing node — with NO choices.
+
+        Audit, auto-growing, Supernode membership, and authority were fixed
+        when the node was created; onboarding only answers "who is
+        responsible now". A node created under a Supernode arrives with its
+        regime and authority already set; a node with no account at all
+        gets the standalone defaults.
         """
         node = self._registry.get_node(node_id)
         if node is None or node.tenant_id != tenant:
             raise ContributionError(f"no node '{node_id}'")
         current = self._accounts.get(node_id)
-        allowed = {node.noder_principal}
-        if current is not None:
-            allowed.add(current.responsible)
-            if current.admin:
-                allowed.add(current.admin)
-        if current is not None and principal not in allowed:
+        if current is None:
+            account = NodeAccount(node_id=node_id, responsible=principal)
+            self._accounts.upsert(account)
+            return account
+        if principal in {current.responsible, current.admin, node.noder_principal}:
+            return current  # already yours; onboarding is idempotent
+        raise OwnershipError(
+            "this node already has a responsible — taking over someone "
+            "else's live account is not self-service"
+        )
+
+    def update_account(
+        self,
+        node_id: str,
+        *,
+        principal: str,
+        tenant: str,
+        status: str | None = None,
+        admin: str | None = None,
+        authority_level: int | None = None,
+    ) -> NodeAccount:
+        """The mutable slice of an account: status, admin, and — only for
+        a node under a Supernode, only by that Supernode's humans — the
+        authority level. Audit, auto-growing, and Supernode membership were
+        fixed at creation and are refused here by construction: this method
+        simply has no parameters for them."""
+        node = self._registry.get_node(node_id)
+        if node is None or node.tenant_id != tenant:
+            raise ContributionError(f"no node '{node_id}'")
+        current = self._accounts.get(node_id)
+        if current is None:
+            raise ContributionError(f"node '{node_id}' has no account yet")
+        allowed = {node.noder_principal, current.responsible}
+        if current.admin:
+            allowed.add(current.admin)
+        if principal not in allowed and authority_level is None:
             raise OwnershipError(
                 "only the node's owner, responsible, or admin may change its account"
             )
-        base = current or NodeAccount(node_id=node_id, responsible=principal)
-        account = NodeAccount(
-            node_id=node_id,
-            responsible=principal if current is None else base.responsible,
-            admin=base.admin if admin is None else (admin or None),
-            authority_level=(
-                base.authority_level if authority_level is None else authority_level
-            ),
-            status=base.status if status is None else NodeStatus(status),
-            audit_mode=base.audit_mode if audit_mode is None else audit_mode,
-            allow_autodev_data=(
-                base.allow_autodev_data
-                if allow_autodev_data is None
-                else allow_autodev_data
-            ),
-            updated_at=datetime.now(UTC),
+        level = current.authority_level
+        if authority_level is not None:
+            if not current.supernode_id:
+                raise ValueError(
+                    "authority levels exist only under a Supernode — a "
+                    "standalone node has no authority"
+                )
+            parent = self._accounts.get(current.supernode_id)
+            if parent is None or principal not in {
+                parent.responsible,
+                parent.admin,
+            }:
+                raise OwnershipError(
+                    "only the Supernode's humans set its members' authority"
+                )
+            level = authority_level
+        account = current.model_copy(
+            update={
+                "status": current.status if status is None else NodeStatus(status),
+                "admin": current.admin if admin is None else (admin or None),
+                "authority_level": level,
+                "updated_at": datetime.now(UTC),
+            }
         )
         self._accounts.upsert(account)
         return account

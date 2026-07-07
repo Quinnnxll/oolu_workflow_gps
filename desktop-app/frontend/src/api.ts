@@ -441,18 +441,30 @@ export interface NodeAccountView {
   node_id: string;
   responsible: string;
   admin: string | null;
-  authority_level: number;
+  // Authority exists only under a Supernode; standalone nodes carry null.
+  authority_level: number | null;
+  is_supernode: boolean;
+  supernode_id: string | null;
   status: string;
   audit_mode: boolean;
   allow_autodev_data: boolean;
 }
 
+// The regime fixed at creation — audit, auto-growing, supernode-ness and
+// membership can never be changed afterwards.
+export interface NodeAccountCreate {
+  is_supernode: boolean;
+  supernode_id: string | null;
+  audit_mode: boolean;
+  allow_autodev_data: boolean;
+  authority_level: number | null;
+}
+
+// The mutable slice after creation.
 export interface NodeAccountPatch {
   admin: string;
   authority_level: number;
   status: string;
-  audit_mode: boolean;
-  allow_autodev_data: boolean;
 }
 
 export interface WorkNode {
@@ -481,6 +493,7 @@ export interface HoldItem {
   submitted_by: string | null;
   created_at: string;
   expires_at: string | null;
+  replies: { author: string; message: string; at: string }[];
 }
 
 export const api = {
@@ -586,14 +599,29 @@ export const api = {
     req<{ deleted: boolean }>("DELETE", `/v1/files/${id}`),
   // ---- the Work environment: node accounts and stewardship -------------
   workNodes: () => req<{ items: WorkNode[] }>("GET", "/v1/work/nodes"),
+  workAccountCreate: (nodeId: string, fixed: NodeAccountCreate) =>
+    req<NodeAccountView>("POST", `/v1/work/nodes/${nodeId}/account`, fixed),
+  workOnboard: (nodeId: string) =>
+    req<NodeAccountView>("POST", `/v1/work/nodes/${nodeId}/account`, {
+      onboard: true,
+    }),
   workAccount: (nodeId: string, patch: Partial<NodeAccountPatch>) =>
     req<NodeAccountView>("POST", `/v1/work/nodes/${nodeId}/account`, patch),
   workActivity: (nodeId: string) =>
     req<{ items: NodeRunSteps[] }>("GET", `/v1/work/nodes/${nodeId}/activity`),
   // Manual-commit queue: held contract runs (audit nodes land here).
   holds: () => req<{ items: HoldItem[] }>("GET", "/v1/runs/contract/holds"),
-  decideHold: (pendingId: string, approved: boolean) =>
-    req<unknown>("POST", `/v1/runs/contract/holds/${pendingId}`, { approved }),
+  decideHold: (pendingId: string, approved: boolean, signature?: string) =>
+    req<unknown>("POST", `/v1/runs/contract/holds/${pendingId}`, {
+      approved,
+      ...(signature ? { signature } : {}),
+    }),
+  holdReply: (pendingId: string, message: string) =>
+    req<{ replies: HoldItem["replies"] }>(
+      "POST",
+      `/v1/runs/contract/holds/${pendingId}/reply`,
+      { message },
+    ),
   // Create a node as admin: contribute a draft (its first real version
   // arrives from work or a manual publish), then shape its account.
   createNode: (title: string, summary: string) =>

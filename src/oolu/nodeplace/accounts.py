@@ -37,18 +37,29 @@ class NodeAccount(BaseModel):
     # Optional management group above the responsible — organizations and
     # government deployments; personal nodes leave it unset.
     admin: str | None = None
-    authority_level: int = Field(
-        default=AUTHORITY_MIN, ge=AUTHORITY_MIN, le=AUTHORITY_MAX
+    # Authority exists ONLY under a Supernode: a standalone node has no
+    # level at all (None). Nodes created under a Supernode carry 1-5,
+    # assigned by the humans running that Supernode.
+    authority_level: int | None = Field(
+        default=None, ge=AUTHORITY_MIN, le=AUTHORITY_MAX
     )
+    # A Supernode is a node that manages many nodes — a group, a
+    # corporation, or a government division — with humans in full control:
+    # it is always an audit node, and its members' authority is its call.
+    is_supernode: bool = False
+    # The Supernode this node was created under, if any. Fixed at creation.
+    supernode_id: str | None = None
     # New nodes are not live until verified; errors demote explicitly.
     status: NodeStatus = NodeStatus.NEEDS_VERIFICATION
     # An audit node never runs unattended: every request is held until a
-    # human commits it.
+    # human commits it. FIXED AT CREATION — a node cannot quietly shed
+    # its audit regime later.
     audit_mode: bool = False
     # May data passing through this node feed auto-development (trace
     # learning, node synthesis)? Enterprise and government nodes that carry
     # customer or citizen data turn this OFF: their runs execute normally
     # but leave nothing behind for the growth loop to learn from.
+    # FIXED AT CREATION, like audit_mode.
     allow_autodev_data: bool = True
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 

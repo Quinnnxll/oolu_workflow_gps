@@ -575,6 +575,11 @@ class GatewayApp:
         r.add("GET", "/v1/runs/contract/holds/events", self._hold_events)
         r.add(
             "POST",
+            "/v1/runs/contract/holds/{pending_id}/reply",
+            self._reply_contract_hold,
+        )
+        r.add(
+            "POST",
             "/v1/runs/contract/holds/{pending_id}",
             self._decide_contract_hold,
         )
@@ -675,8 +680,20 @@ class GatewayApp:
                 if exc.code != "cannot_execute":
                     raise
                 # The engine refused the plan: the assistant says so in the
-                # conversation instead of the client showing a raw error.
+                # conversation instead of the client showing a raw error —
+                # and when auto-build could close the gap, it asks for the
+                # consent switch instead of silently building.
                 say = f"I can't run that on this machine yet — {exc.message}."
+                if self._settings is not None and not bool(
+                    self._settings.effective(session.tenant_id).get(
+                        "account.autobuild_consent", False
+                    )
+                ):
+                    say += (
+                        " If you want me to auto-build what's missing, turn "
+                        "on 'Auto-build nodes on my paths' in Settings and "
+                        "ask me again."
+                    )
         return json_response(
             200,
             {
@@ -1580,29 +1597,63 @@ class GatewayApp:
             200, {"items": [e.model_dump(mode="json") for e in entries]}
         )
 
+    _FIXED_ACCOUNT_TRAITS = (
+        "audit_mode",
+        "allow_autodev_data",
+        "is_supernode",
+        "supernode_id",
+    )
+
     def _work_account(self, request, session, params) -> Response:
-        """Create/update a node account — or onboard: a node with no account
-        yet gets the caller as its responsible."""
+        """The account door, honoring what is fixed at creation.
+
+        Three shapes: ``{"onboard": true}`` takes responsibility with NO
+        choices; a body against a node with no account CREATES it, fixing
+        its regime (supernode, under-supernode, audit, auto-growing)
+        forever; anything else is an UPDATE limited to the mutable slice —
+        a fixed trait in an update body is refused loudly, never merged.
+        """
         desk = self._require_desk()
         body = request.body or {}
         level = body.get("authority_level")
         try:
-            account = desk.save_account(
-                params["node_id"],
-                principal=session.principal_id,
-                tenant=session.tenant_id,
-                admin=body.get("admin"),
-                authority_level=int(level) if level is not None else None,
-                status=body.get("status"),
-                audit_mode=(
-                    bool(body["audit_mode"]) if "audit_mode" in body else None
-                ),
-                allow_autodev_data=(
-                    bool(body["allow_autodev_data"])
-                    if "allow_autodev_data" in body
-                    else None
-                ),
-            )
+            if body.get("onboard"):
+                account = desk.onboard_account(
+                    params["node_id"],
+                    principal=session.principal_id,
+                    tenant=session.tenant_id,
+                )
+            elif desk.account_for(params["node_id"]) is None:
+                account = desk.create_account(
+                    params["node_id"],
+                    principal=session.principal_id,
+                    tenant=session.tenant_id,
+                    is_supernode=bool(body.get("is_supernode", False)),
+                    supernode_id=body.get("supernode_id") or None,
+                    audit_mode=bool(body.get("audit_mode", False)),
+                    allow_autodev_data=bool(
+                        body.get("allow_autodev_data", True)
+                    ),
+                    authority_level=int(level) if level is not None else None,
+                    admin=body.get("admin"),
+                )
+            else:
+                fixed = [k for k in self._FIXED_ACCOUNT_TRAITS if k in body]
+                if fixed:
+                    raise GatewayError(
+                        409,
+                        "conflict",
+                        "fixed at creation and cannot be changed: "
+                        + ", ".join(fixed),
+                    )
+                account = desk.update_account(
+                    params["node_id"],
+                    principal=session.principal_id,
+                    tenant=session.tenant_id,
+                    status=body.get("status"),
+                    admin=body.get("admin"),
+                    authority_level=int(level) if level is not None else None,
+                )
         except OwnershipError as exc:
             raise GatewayError(403, "forbidden", str(exc)) from exc
         except ContributionError as exc:
@@ -2151,10 +2202,46 @@ class GatewayApp:
                     if record.expires_at is not None
                     else None
                 ),
+                "replies": self._holds.replies(record.pending_id),
             }
             for record in self._holds.list(tenant=session.tenant_id)
         ]
         return json_response(200, {"items": items})
+
+    def _reply_contract_hold(self, request, session, params) -> Response:
+        """Type and send an answer on a held request — the third option
+        beside allowing and rejecting: the human in control talks back to
+        whoever submitted it, without deciding yet."""
+        record = self._holds.get(params["pending_id"])
+        if record is None or record.consumer_tenant != session.tenant_id:
+            raise GatewayError(404, "not_found", "no such held contract")
+        body = request.body or {}
+        message = str(body.get("message", "")).strip()
+        if not message:
+            raise GatewayError(400, "invalid_request", "message is required")
+        moment = request.now or self._clock()
+        self._holds.add_reply(
+            record.pending_id,
+            author=session.principal_id,
+            message=message,
+            at=moment,
+        )
+        self._durable.audit.append(
+            "contract.hold.reply",
+            {
+                "pending_id": record.pending_id,
+                "tenant": record.consumer_tenant,
+                "by": session.principal_id,
+                "message": message,
+            },
+        )
+        return json_response(
+            200,
+            {
+                "pending_id": record.pending_id,
+                "replies": self._holds.replies(record.pending_id),
+            },
+        )
 
     def _decide_contract_hold(self, request, session, params) -> Response:
         """Decide a held reserved contract — approval mints from identity.
@@ -2273,6 +2360,9 @@ class GatewayApp:
                 "approval_id": approval.id,
                 "by": session.principal_id,
                 "reserved": record.reserved,
+                # A deliberate, typed signature (audit nodes/Supernodes);
+                # plain allows carry None. Either way `by` names the human.
+                "signature": str(body.get("signature") or "") or None,
             },
         )
         payload = result.model_dump(mode="json")
