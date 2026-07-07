@@ -189,14 +189,48 @@ SETTINGS_CATALOG: tuple[SettingField, ...] = (
     # --- model (the brain behind chat; keys live in the keyring, NOT here —
     # this catalog is visible data, so a secret must never be a setting) ----
     SettingField(
+        key="model.source",
+        group="model",
+        label="Default model",
+        kind=SettingKind.CHOICE,
+        default="subscription",
+        choices=("subscription", "own-api", "local"),
+        description="Where the brain lives. Subscription follows your OoLu "
+        "plan (Claude first). Own API makes the key you added below the "
+        "default model, overriding the plan. Local uses a model server "
+        "running on this machine — no key, no cloud.",
+    ),
+    SettingField(
         key="model.provider",
         group="model",
         label="Model provider",
         kind=SettingKind.CHOICE,
         default="auto",
         choices=("auto", "anthropic", "openai"),
-        description="Which provider answers chat. Auto tries Anthropic "
-        "first, then OpenAI — whichever has a key configured.",
+        description="Which of your own keys answers when the default model "
+        "is own API. Auto tries Anthropic first, then OpenAI — whichever "
+        "has a key configured.",
+    ),
+    SettingField(
+        key="model.local_url",
+        group="model",
+        label="Local model URL",
+        kind=SettingKind.TEXT,
+        default="http://127.0.0.1:11434/v1",
+        max_length=200,
+        description="The OpenAI-compatible endpoint of the model server on "
+        "this machine (Ollama, LM Studio, llama.cpp server). Used only "
+        "when the default model is local.",
+    ),
+    SettingField(
+        key="model.local_model",
+        group="model",
+        label="Local model name",
+        kind=SettingKind.TEXT,
+        default="",
+        max_length=80,
+        description="The model to request from the local server, e.g. "
+        "llama3.2 or qwen3. Required when the default model is local.",
     ),
     SettingField(
         key="model.tier",

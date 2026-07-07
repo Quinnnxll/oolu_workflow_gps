@@ -44,6 +44,14 @@ DEFAULT_MODELS: dict[str, dict[str, str]] = {
 # The purpose tag every chat consultation is metered under.
 CHAT_PURPOSE = "chat.turn"
 
+# Where the default brain lives (the model.source setting):
+#   subscription — the OoLu plan's brain, Claude first, always.
+#   own-api      — the key the user added IS the default model; their
+#                  model.provider preference overrides the plan's order.
+#   local        — a model server on this machine (OpenAI-compatible:
+#                  Ollama, LM Studio, llama.cpp server), no key, no cloud.
+MODEL_SOURCES = ("subscription", "own-api", "local")
+
 
 @dataclass(frozen=True)
 class _Telemetry:
@@ -54,6 +62,20 @@ class _Telemetry:
     prompt_tokens: int
     completion_tokens: int
     duration_s: float
+
+
+def _parse_openai_shape(data: dict) -> tuple[str, int, int]:
+    """(text, prompt_tokens, completion_tokens) from a chat/completions
+    response — the wire shape OpenAI and every local server speaks."""
+    choices = data.get("choices") or []
+    message = (choices[0] or {}).get("message", {}) if choices else {}
+    text = message.get("content") or ""
+    usage = data.get("usage", {}) or {}
+    return (
+        text,
+        int(usage.get("prompt_tokens", 0) or 0),
+        int(usage.get("completion_tokens", 0) or 0),
+    )
 
 
 def _split_system(messages: list[dict]) -> tuple[str, list[dict]]:
@@ -83,6 +105,9 @@ class ChatModelRouter:
         budget: Callable[[], float] | None = None,  # USD cap; 0/None = no cap
         preference: Callable[[], str] | None = None,  # auto|anthropic|openai
         tier: Callable[[], str] | None = None,  # fast|reasoning
+        source: Callable[[], str] | None = None,  # see MODEL_SOURCES
+        local_url: Callable[[], str] | None = None,  # OpenAI-compatible base
+        local_model: Callable[[], str] | None = None,  # e.g. llama3.2
         max_tokens: int = 1024,
         purpose: str = CHAT_PURPOSE,  # what the meter books this under
     ) -> None:
@@ -93,6 +118,9 @@ class ChatModelRouter:
         self._budget = budget or (lambda: 0.0)
         self._preference = preference or (lambda: "auto")
         self._tier = tier or (lambda: "fast")
+        self._source = source or (lambda: "subscription")
+        self._local_url = local_url or (lambda: "")
+        self._local_model = local_model or (lambda: "")
         self._max_tokens = max_tokens
         self._purpose = purpose
         self._adapters: dict[tuple[str, str], Any] = {}
@@ -100,6 +128,12 @@ class ChatModelRouter:
     # ------------------------------------------------------------------ #
     def reply(self, messages: list[dict]) -> str:
         self._check_budget()
+        if self._source() == "local":
+            # The machine's own brain: no key, no cloud, no fallback into
+            # one — choosing local means local, so a dead local server
+            # degrades to the model-less path instead of quietly phoning
+            # a provider.
+            return self._ask_local(messages)
         errors: list[str] = []
         for provider in self._order():
             secret = self._keyring.secret_for(self._tenant, provider)
@@ -132,6 +166,11 @@ class ChatModelRouter:
             )
 
     def _order(self) -> tuple[str, ...]:
+        # The subscription's brain is Claude first — the plan's order, not
+        # the user's key preference. Setting model.source to "own-api" is
+        # the explicit act that lets the added key override that default.
+        if self._source() == "subscription":
+            return PROVIDERS
         preferred = self._preference()
         if preferred in PROVIDERS:
             rest = tuple(p for p in PROVIDERS if p != preferred)
@@ -166,6 +205,57 @@ class ChatModelRouter:
         self._adapters[cache_key] = adapter
         return adapter
 
+    def _local_adapter(self, url: str):
+        # Cached by URL so pointing at a different server gets a fresh
+        # adapter. Local servers (Ollama, LM Studio) speak the OpenAI wire
+        # shape and ignore the bearer token — "local" is a placeholder,
+        # not a secret.
+        cache_key = ("local", url)
+        cached = self._adapters.get(cache_key)
+        if cached is not None:
+            return cached
+        vault = SecretVault()
+        ref = vault.put("local", kind="api_key")
+        adapter = OpenAiAdapter(
+            vault=vault,
+            transport=self._transport_or_real(),
+            api_key_ref=ref,
+            base_url=url,
+        )
+        self._adapters[cache_key] = adapter
+        return adapter
+
+    def _ask_local(self, messages: list[dict]) -> str:
+        url = str(self._local_url() or "").strip().rstrip("/")
+        model_id = str(self._local_model() or "").strip()
+        if not url or not model_id:
+            raise ModelUnavailable(
+                "local model is selected but not configured — set the "
+                "local model URL and name in Settings"
+            )
+        started = time.monotonic()
+        try:
+            data = self._local_adapter(url).chat(messages, model=model_id)
+        except ProviderError as exc:
+            raise ModelUnavailable(f"local ({url}): {exc}") from exc
+        text, prompt_tokens, completion_tokens = _parse_openai_shape(data)
+        if self._meter is not None:
+            # Local turns still enter the books — usage is real telemetry
+            # even when the marginal dollar cost is the machine's own.
+            self._meter.record(
+                self._purpose,
+                _Telemetry(
+                    model=str(data.get("model") or model_id),
+                    tier="local",
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    duration_s=time.monotonic() - started,
+                ),
+            )
+        if not text:
+            raise ModelUnavailable(f"local ({url}) returned an empty reply")
+        return text
+
     def _ask(self, provider: str, secret: str, messages: list[dict]) -> str:
         tier = self._tier()
         model_id = DEFAULT_MODELS[provider].get(
@@ -188,12 +278,7 @@ class ChatModelRouter:
             completion_tokens = int(usage.get("output_tokens", 0) or 0)
         else:
             data = adapter.chat(messages, model=model_id)
-            choices = data.get("choices") or []
-            message = (choices[0] or {}).get("message", {}) if choices else {}
-            text = message.get("content") or ""
-            usage = data.get("usage", {}) or {}
-            prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
-            completion_tokens = int(usage.get("completion_tokens", 0) or 0)
+            text, prompt_tokens, completion_tokens = _parse_openai_shape(data)
         if self._meter is not None:
             self._meter.record(
                 self._purpose,

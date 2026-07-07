@@ -63,6 +63,15 @@ export function SettingsPane() {
               there to change terms).
             </p>
           )}
+          {group === "model" && (
+            <p className="muted">
+              Where OoLu's brain lives. Subscription follows your OoLu plan
+              (Claude first). Add your own API key below and switch the
+              default model to own API to override the plan with your key —
+              or run a local model server on this machine and choose local:
+              no key, no cloud.
+            </p>
+          )}
           {items
             .filter((i) => i.group === group)
             .map((item) => (

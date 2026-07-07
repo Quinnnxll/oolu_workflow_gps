@@ -131,14 +131,20 @@ def test_failover_to_the_next_configured_provider(rig):
     assert text == "Backup here."
 
 
-def test_preference_reorders_the_line(rig):
+def test_preference_reorders_the_line_under_own_api(rig):
     keyring, transport, meter = rig
     keyring.store("t1", "anthropic", "sk-ant-0123456789")
     keyring.store("t1", "openai", "sk-openai-0123456789")
     transport.script("anthropic.com", 200, _anthropic_reply("A"))
     transport.script("openai.com", 200, _openai_reply("O"))
 
-    router = _router(keyring, transport, meter, preference=lambda: "openai")
+    # The provider preference is the own-api dial; under the default
+    # subscription source the plan's order rules (tested further down).
+    router = _router(
+        keyring, transport, meter,
+        source=lambda: "own-api",
+        preference=lambda: "openai",
+    )
     assert router.reply(MESSAGES) == "O"
 
 
@@ -168,6 +174,97 @@ def test_the_spending_cap_refuses_in_words(rig):
     with pytest.raises(ModelBudgetExceeded) as excinfo:
         router.reply(MESSAGES)
     assert "spending cap" in str(excinfo.value)
+
+
+# --------------------------------------------------------------------------- #
+# Where the default brain lives: subscription / own-api / local.               #
+# --------------------------------------------------------------------------- #
+def test_subscription_stays_claude_first_whatever_the_preference(rig):
+    keyring, transport, meter = rig
+    keyring.store("t1", "anthropic", "sk-ant-0123456789")
+    keyring.store("t1", "openai", "sk-openai-0123456789")
+    transport.script("anthropic.com", 200, _anthropic_reply("A"))
+    transport.script("openai.com", 200, _openai_reply("O"))
+
+    router = _router(
+        keyring, transport, meter,
+        source=lambda: "subscription",
+        preference=lambda: "openai",
+    )
+    # The plan's brain is Claude first; a key preference doesn't reorder it.
+    assert router.reply(MESSAGES) == "A"
+
+
+def test_own_api_lets_the_users_key_override_the_plan(rig):
+    keyring, transport, meter = rig
+    keyring.store("t1", "anthropic", "sk-ant-0123456789")
+    keyring.store("t1", "openai", "sk-openai-0123456789")
+    transport.script("anthropic.com", 200, _anthropic_reply("A"))
+    transport.script("openai.com", 200, _openai_reply("O"))
+
+    router = _router(
+        keyring, transport, meter,
+        source=lambda: "own-api",
+        preference=lambda: "openai",
+    )
+    assert router.reply(MESSAGES) == "O"
+
+
+def test_local_asks_the_machine_with_no_key_at_all(rig):
+    keyring, transport, meter = rig  # note: the keyring stays EMPTY
+    transport.script(
+        "127.0.0.1:11434",
+        200,
+        {
+            "model": "llama3.2",
+            "choices": [{"message": {"role": "assistant", "content": "Hi."}}],
+            "usage": {"prompt_tokens": 9, "completion_tokens": 3},
+        },
+    )
+    router = _router(
+        keyring, transport, meter,
+        source=lambda: "local",
+        local_url=lambda: "http://127.0.0.1:11434/v1",
+        local_model=lambda: "llama3.2",
+    )
+
+    assert router.reply(MESSAGES) == "Hi."
+    call = transport.requests[-1]
+    assert call["url"].startswith("http://127.0.0.1:11434/v1")
+    assert call["body"]["model"] == "llama3.2"
+    # And it still enters the books, tagged as the machine's own tier.
+    (record,) = meter.charges("chat.turn")
+    assert record.tier == "local"
+
+
+def test_local_never_falls_back_into_the_cloud(rig):
+    keyring, transport, meter = rig
+    keyring.store("t1", "anthropic", "sk-ant-0123456789")
+    transport.script("127.0.0.1:11434", 500, {"error": "dead"})
+    transport.script("anthropic.com", 200, _anthropic_reply("A"))
+
+    router = _router(
+        keyring, transport, meter,
+        source=lambda: "local",
+        local_url=lambda: "http://127.0.0.1:11434/v1",
+        local_model=lambda: "llama3.2",
+    )
+    # Choosing local means local: a dead server degrades, it doesn't
+    # quietly phone a provider the user pointed away from.
+    with pytest.raises(ModelUnavailable):
+        router.reply(MESSAGES)
+    assert all("anthropic" not in r["url"] for r in transport.requests)
+
+
+def test_local_unconfigured_says_what_to_set(rig):
+    keyring, transport, meter = rig
+    router = _router(
+        keyring, transport, meter,
+        source=lambda: "local",
+        local_model=lambda: "",
+    )
+    with pytest.raises(ModelUnavailable, match="Settings"):
+        router.reply(MESSAGES)
 
 
 # --------------------------------------------------------------------------- #

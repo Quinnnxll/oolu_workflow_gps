@@ -365,6 +365,7 @@ def build_host_runtime(
     google_client_id: str | None = None,
     google_client_secret: str = "",
     google_default_tenant: str = "main",
+    seed_handiwork_for: str | None = None,
 ) -> HostRuntime:
     """The multi-user web host: the full multi-tenant gateway over one
     data directory, with LOCAL accounts as the identity provider.
@@ -458,6 +459,9 @@ def build_host_runtime(
             budget=lambda: float(_model_setting("budget.model_cap", 0.0) or 0.0),
             preference=lambda: str(_model_setting("model.provider", "auto")),
             tier=lambda: str(_model_setting("model.tier", "fast")),
+            source=lambda: str(_model_setting("model.source", "subscription")),
+            local_url=lambda: str(_model_setting("model.local_url", "")),
+            local_model=lambda: str(_model_setting("model.local_model", "")),
             purpose=purpose,
         )
 
@@ -518,6 +522,21 @@ def build_host_runtime(
     price_book = PriceBook(data / "prices.db")
     traces = TraceStore(data / "traces.db")
 
+    nodeplace_service = NodeplaceService(registry)
+    if seed_handiwork_for:
+        # The desktop's prebuilt hands, packaged as ONE visible node the
+        # local user answers for. Idempotent — created on first launch.
+        from .nodeplace.handiwork import seed_handiwork_node
+
+        seed_handiwork_node(
+            nodeplace_service,
+            desk,
+            registry,
+            tenant=home_tenant,
+            principal=seed_handiwork_for,
+            skills=skills,
+        )
+
     # E-mail/IdP identities -> local accounts, shared by registration and
     # Google sign-in so "already registered" means the same thing everywhere.
     from .identity.google_signin import IdentityLinkStore
@@ -555,7 +574,7 @@ def build_host_runtime(
         resolver=resolver,
         approval_authority=IdentityApprovalAuthority(resolver),
         config=config,
-        nodeplace=NodeplaceService(registry),
+        nodeplace=nodeplace_service,
         ratings=ratings,
         market=market,
         price_book=price_book,

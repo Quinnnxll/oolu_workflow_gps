@@ -266,6 +266,42 @@ describe("SettingsPane", () => {
     }
   });
 
+  it("explains the model section: plan, own API override, local", async () => {
+    routes["GET /v1/settings"] = {
+      status: 200,
+      body: {
+        items: [
+          {
+            key: "model.source",
+            group: "model",
+            label: "Default model",
+            kind: "choice",
+            description: "Where the brain lives.",
+            value: "subscription",
+            choices: ["subscription", "own-api", "local"],
+          },
+          {
+            key: "model.local_url",
+            group: "model",
+            label: "Local model URL",
+            kind: "text",
+            description: "OpenAI-compatible endpoint.",
+            value: "http://127.0.0.1:11434/v1",
+            max_length: 200,
+          },
+        ],
+      },
+    };
+    render(<SettingsPane />);
+
+    // One clear section: the source dial, the local endpoint, and the
+    // words that say own API overrides the plan's Claude-first default.
+    expect(await screen.findByLabelText("Default model")).toBeTruthy();
+    expect(screen.getByLabelText("Local model URL")).toBeTruthy();
+    expect(screen.getByText(/override the plan/)).toBeTruthy();
+    expect(screen.getByText(/no key, no cloud/)).toBeTruthy();
+  });
+
   it("saves a change through the node", async () => {
     routes["GET /v1/settings"] = { status: 200, body: CATALOG };
     routes["PUT /v1/settings"] = { status: 200, body: CATALOG };

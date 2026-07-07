@@ -1393,17 +1393,24 @@ class GatewayApp:
         dropped whenever the tenant's keys change. Settings are read through
         closures at call time, so a settings change needs no invalidation.
         """
-        if self._model_keys is None or not self._model_keys.providers(tenant):
+        if self._model_keys is None:
+            return None
+        settings = self._settings
+
+        def _effective(key: str, fallback):
+            if settings is None:
+                return fallback
+            return settings.effective(tenant).get(key, fallback)
+
+        # No key normally means no brain — EXCEPT when the default model
+        # is the machine's own local server, which needs no key at all.
+        if (
+            not self._model_keys.providers(tenant)
+            and str(_effective("model.source", "subscription")) != "local"
+        ):
             return None
         router = self._model_routers.get(tenant)
         if router is None:
-            settings = self._settings
-
-            def _effective(key: str, fallback):
-                if settings is None:
-                    return fallback
-                return settings.effective(tenant).get(key, fallback)
-
             router = ChatModelRouter(
                 self._model_keys,
                 tenant,
@@ -1412,6 +1419,9 @@ class GatewayApp:
                 budget=lambda: float(_effective("budget.model_cap", 0.0) or 0.0),
                 preference=lambda: str(_effective("model.provider", "auto")),
                 tier=lambda: str(_effective("model.tier", "fast")),
+                source=lambda: str(_effective("model.source", "subscription")),
+                local_url=lambda: str(_effective("model.local_url", "")),
+                local_model=lambda: str(_effective("model.local_model", "")),
             )
             self._model_routers[tenant] = router
         return router

@@ -78,17 +78,6 @@ export function Life() {
           </span>
         </button>
 
-        <button
-          className={`convo ${selected.kind === "settings" ? "on" : ""}`}
-          onClick={() => setSelected({ kind: "settings" })}
-        >
-          <span className="convo-avatar file">⚙</span>
-          <span className="convo-body">
-            <span className="convo-name">Settings</span>
-            <span className="convo-sub">app, account, budget</span>
-          </span>
-        </button>
-
         <div className="convo-group">Friends</div>
         <button
           className={`convo ${selected.kind === "friends" ? "on" : ""}`}
@@ -130,6 +119,20 @@ export function Life() {
             </span>
           </button>
         ))}
+
+        {/* Settings lives at the bottom-left, out of the conversations. */}
+        <button
+          className={`convo convo-bottom ${
+            selected.kind === "settings" ? "on" : ""
+          }`}
+          onClick={() => setSelected({ kind: "settings" })}
+        >
+          <span className="convo-avatar file">⚙</span>
+          <span className="convo-body">
+            <span className="convo-name">Settings</span>
+            <span className="convo-sub">app, account, model, budget</span>
+          </span>
+        </button>
       </aside>
 
       <section className="convo-pane">

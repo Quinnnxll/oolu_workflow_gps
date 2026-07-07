@@ -1284,6 +1284,9 @@ def _cmd_desktop(args, out) -> int:
         google_client_id=os.environ.get("OOLU_GOOGLE_CLIENT_ID"),
         google_client_secret=os.environ.get("OOLU_GOOGLE_CLIENT_SECRET", ""),
         google_default_tenant="local",
+        # The prebuilt functions above, packaged as one Work node
+        # ("Handiwork") owned by this machine's local user.
+        seed_handiwork_for="local",
     )
     password = secrets_module.token_urlsafe(16)
     if not runtime.accounts.bootstrap(

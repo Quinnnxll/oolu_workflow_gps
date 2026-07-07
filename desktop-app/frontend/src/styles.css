@@ -163,6 +163,15 @@ main {
   background: var(--panel);
 }
 
+/* The bottom-left row: pinned under the conversations (Settings lives
+   here), separated by a hairline. */
+.convo-bottom {
+  margin-top: auto;
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 10px 10px;
+  padding-top: 10px;
+}
+
 .convo-avatar {
   width: 34px;
   height: 34px;

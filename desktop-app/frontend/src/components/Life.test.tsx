@@ -84,6 +84,19 @@ describe("Life", () => {
       await screen.findByText(/people and businesses will live here/i),
     ).toBeTruthy();
   });
+
+  it("keeps Settings on the bottom-left row and opens the pane", async () => {
+    routes["GET /v1/settings"] = { status: 200, body: { items: [] } };
+    const { container } = render(<Life />);
+    const entry = screen.getByText("Settings").closest("button");
+    // Pinned at the bottom of the left column, after every conversation.
+    expect(entry?.className).toContain("convo-bottom");
+    const rows = container.querySelectorAll("aside .convo");
+    expect(rows[rows.length - 1]).toBe(entry);
+
+    fireEvent.click(entry as HTMLElement);
+    expect(await screen.findByText("Settings", { selector: "div" })).toBeTruthy();
+  });
 });
 
 describe("NoderThread", () => {

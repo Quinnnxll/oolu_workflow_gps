@@ -65,8 +65,11 @@ class ModelPriceTable(BaseModel):
 
 
 DEFAULT_MODEL_PRICES = ModelPriceTable(
-    prompt_per_million={"fast": 0.10, "reasoning": 0.60},
-    completion_per_million={"fast": 0.30, "reasoning": 1.80},
+    # "local" is a KNOWN free tier — the machine's own model costs the
+    # user nothing per token (usage is still recorded as telemetry, and
+    # it never eats the spending cap). Unknown tiers still price dearest.
+    prompt_per_million={"fast": 0.10, "reasoning": 0.60, "local": 0.0},
+    completion_per_million={"fast": 0.30, "reasoning": 1.80, "local": 0.0},
     default_prompt_per_million=0.60,
     default_completion_per_million=1.80,
 )
