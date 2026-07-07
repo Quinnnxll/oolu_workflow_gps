@@ -161,12 +161,12 @@ describe("Login", () => {
       window.__OOLU_API__ = ""; // the local engine serves client-config
     });
 
-    it("never asks for a server: the field is gone, the pairing is shown", async () => {
+    it("redirects Global to the paired server, never showing a raw host", async () => {
       fetchMock.mockImplementation(async (input: string | URL) => {
         const url = String(input);
         if (url.endsWith("/v1/client-config")) {
           return reply(200, {
-            server: "https://cloud.oolu.example/",
+            server: "http://127.0.0.1:8771/",
             google: true,
             registration: true,
           });
@@ -177,11 +177,17 @@ describe("Login", () => {
         return reply(404, {});
       });
       const onSignedIn = vi.fn();
-      render(<Login onSignedIn={onSignedIn} />);
+      render(<Login onSignedIn={onSignedIn} onStayLocal={vi.fn()} />);
+      await waitFor(() =>
+        expect(
+          fetchMock.mock.calls.some(([u]) =>
+            String(u).endsWith("/v1/client-config"),
+          ),
+        ).toBe(true),
+      );
 
-      expect(
-        await screen.findByText(/Signing in to cloud.oolu.example/),
-      ).toBeTruthy();
+      // The raw host:port never appears anywhere on the screen.
+      expect(screen.queryByText(/127\.0\.0\.1/)).toBeNull();
       expect(screen.queryByLabelText("Server")).toBeNull();
 
       fireEvent.change(screen.getByLabelText("Username"), {
@@ -193,31 +199,30 @@ describe("Login", () => {
       fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
       await waitFor(() => expect(onSignedIn).toHaveBeenCalled());
-      // The sign-in went to the paired server, no typing involved.
+      // ...but Global quietly targets the paired server.
       const login = fetchMock.mock.calls.find(([u]) =>
         String(u).endsWith("/v1/auth/login"),
       ) as [string, RequestInit];
-      expect(String(login[0])).toBe(
-        "https://cloud.oolu.example/v1/auth/login",
-      );
+      expect(String(login[0])).toBe("http://127.0.0.1:8771/v1/auth/login");
     });
   });
 
-  describe("local build (no baked-in server)", () => {
+  describe("local build: Edge or Global, never a server field", () => {
     beforeEach(() => {
       window.__OOLU_REMOTE__ = false;
+      window.__OOLU_API__ = "";
     });
 
-    it("asks which server to sign in to and remembers it", async () => {
-      fetchMock.mockResolvedValue(
-        reply(200, { token: "t", principal: "alice" }),
-      );
-      const onSignedIn = vi.fn();
-      render(<Login onSignedIn={onSignedIn} />);
-
-      fireEvent.change(screen.getByLabelText("Server"), {
-        target: { value: "https://online.oolu.example" },
+    it("Global signs into the OoLu service by default", async () => {
+      fetchMock.mockImplementation(async (input: string | URL) => {
+        const url = String(input);
+        if (url.endsWith("/v1/client-config")) return reply(200, {});
+        return reply(200, { token: "t", principal: "alice" });
       });
+      const onSignedIn = vi.fn();
+      render(<Login onSignedIn={onSignedIn} onStayLocal={vi.fn()} />);
+
+      expect(screen.queryByLabelText("Server")).toBeNull();
       fireEvent.change(screen.getByLabelText("Username"), {
         target: { value: "alice" },
       });
@@ -230,19 +235,24 @@ describe("Login", () => {
       const [url] = fetchMock.mock.calls.find(([u]) =>
         String(u).includes("/v1/auth/login"),
       ) as [string];
-      expect(url).toBe("https://online.oolu.example/v1/auth/login");
-      expect(session.server).toBe("https://online.oolu.example");
+      expect(url).toBe("https://ooludomaintobedetermined/v1/auth/login");
+      expect(session.server).toBe("https://ooludomaintobedetermined");
     });
 
-    it("lets the user stay local instead of signing in", () => {
+    it("Edge keeps everything on this device", async () => {
+      fetchMock.mockResolvedValue(reply(200, {}));
       const onStayLocal = vi.fn();
       render(<Login onSignedIn={vi.fn()} onStayLocal={onStayLocal} />);
 
-      fireEvent.click(screen.getByRole("button", { name: "Stay local" }));
+      fireEvent.click(screen.getByRole("button", { name: "Edge" }));
+      expect(
+        screen.getByText(/account, your engine, and everything you teach/),
+      ).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Continue on Edge" }));
 
       expect(onStayLocal).toHaveBeenCalled();
-      // Staying local sends nothing to any auth door; only the mount-time
-      // client-config probe (which is local and secret-free) happened.
+      // Edge sends nothing to any auth door; only the mount-time
+      // client-config probe (local and secret-free) happened.
       const authCalls = fetchMock.mock.calls.filter(([u]) =>
         String(u).includes("/v1/auth/"),
       );

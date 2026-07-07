@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { resetAvatarSignals } from "../avatar";
 import { Chat, RunCard } from "./Chat";
 
@@ -97,12 +104,14 @@ describe("Chat", () => {
     expect(screen.queryByRole("button", { name: "My tasks" })).toBeNull();
   });
 
-  it("dictation sends the final transcript; no mic without an engine", async () => {
-    // jsdom default: no engine, no button.
-    const { unmount } = render(<Chat />);
+  it("has no mic and no mute button — the chat stays clean", () => {
+    render(<Chat />);
     expect(screen.queryByLabelText("Speak to OoLu")).toBeNull();
-    unmount();
+    expect(screen.queryByLabelText("Speak replies aloud")).toBeNull();
+    expect(screen.queryByLabelText("Stop speaking replies")).toBeNull();
+  });
 
+  it("holding Send starts a voice conversation; the release never double-fires", async () => {
     class FakeRecognition {
       static last: FakeRecognition | null = null;
       lang = "";
@@ -123,16 +132,33 @@ describe("Chat", () => {
       body: { reply: "On it.", source: "intent", run_id: null },
     };
     routes["GET /v1/runs/r1"] = { status: 200, body: baseRun() };
+    vi.useFakeTimers();
     try {
       render(<Chat />);
-      fireEvent.click(screen.getByLabelText("Speak to OoLu"));
+      const send = screen.getByRole("button", { name: "Send" });
+
+      fireEvent.pointerDown(send);
+      act(() => {
+        vi.advanceTimersByTime(600); // past the long-press threshold
+      });
       const rec = FakeRecognition.last!;
       expect(rec.start).toHaveBeenCalled();
 
-      rec.onresult!({
-        resultIndex: 0,
-        results: [{ isFinal: true, 0: { transcript: "email bob the numbers" } }],
+      // The release (and the browser's trailing click) is swallowed —
+      // the hold must not also send the empty draft.
+      fireEvent.pointerUp(send);
+      fireEvent.click(screen.getByRole("button", { name: "Stop listening" }));
+      expect(calls.filter((c) => c.path === "/v1/chat")).toEqual([]);
+
+      act(() => {
+        rec.onresult!({
+          resultIndex: 0,
+          results: [
+            { isFinal: true, 0: { transcript: "email bob the numbers" } },
+          ],
+        });
       });
+      vi.useRealTimers();
 
       expect(await screen.findByText("On it.")).toBeTruthy();
       const chat = calls.find((c) => c.path === "/v1/chat");
@@ -140,11 +166,12 @@ describe("Chat", () => {
         "email bob the numbers",
       );
     } finally {
+      vi.useRealTimers();
       delete (window as unknown as Record<string, unknown>).webkitSpeechRecognition;
     }
   });
 
-  it("speaks replies aloud when the voice toggle is on", async () => {
+  it("speaks replies aloud by default — no toggle involved", async () => {
     const speakSpy = vi.fn();
     vi.stubGlobal("speechSynthesis", { cancel: vi.fn(), speak: speakSpy });
     vi.stubGlobal(
@@ -160,7 +187,6 @@ describe("Chat", () => {
     };
     render(<Chat />);
 
-    fireEvent.click(screen.getByLabelText("Speak replies aloud"));
     fireEvent.change(screen.getByPlaceholderText("Message OoLu…"), {
       target: { value: "thanks" },
     });
@@ -170,7 +196,48 @@ describe("Chat", () => {
     expect(
       (speakSpy.mock.calls[0][0] as { text: string }).text,
     ).toBe("Anytime.");
-    expect(localStorage.getItem("oolu_voice_out")).toBe("on");
+  });
+
+  it("goes silent when Settings says so (app.voice_replies off)", async () => {
+    const speakSpy = vi.fn();
+    vi.stubGlobal("speechSynthesis", { cancel: vi.fn(), speak: speakSpy });
+    vi.stubGlobal(
+      "SpeechSynthesisUtterance",
+      class {
+        constructor(public text: string) {}
+      },
+    );
+    routes["GET /v1/settings"] = {
+      status: 200,
+      body: {
+        items: [
+          {
+            key: "app.voice_replies",
+            group: "app",
+            label: "Speak replies aloud",
+            kind: "bool",
+            description: "",
+            value: false,
+          },
+        ],
+      },
+    };
+    routes["POST /v1/chat"] = {
+      status: 200,
+      body: { reply: "Anytime.", source: "rule", run_id: null },
+    };
+    render(<Chat />);
+    await waitFor(() =>
+      expect(calls.some((c) => c.path === "/v1/settings")).toBe(true),
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("Message OoLu…"), {
+      target: { value: "thanks" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await screen.findByText("Anytime.");
+    expect(speakSpy).not.toHaveBeenCalled();
   });
 
   it("sends a message with history and renders both sides", async () => {

@@ -13,12 +13,7 @@ import {
 } from "../avatar";
 import type { Mood } from "../avatar";
 import { OoLuAvatar } from "./OoLuAvatar";
-import {
-  createRecognizer,
-  speak,
-  speechInputSupported,
-  speechOutputSupported,
-} from "../voice";
+import { createRecognizer, speak, speechInputSupported } from "../voice";
 import type { Recognizer } from "../voice";
 import { Clarification } from "./Clarification";
 
@@ -32,8 +27,9 @@ type Msg =
   | { kind: "run"; runId: string };
 
 const CHAT_KEY = "oolu_chat";
-const SPEAK_KEY = "oolu_voice_out";
 const WELCOME = "Hi! I'm OoLu. Tell me what you need done.";
+// Holding Send this long starts a voice conversation instead of sending.
+const LONG_PRESS_MS = 550;
 
 // The presence line under the name — what the companion is up to,
 // phrased like a friend's status, not a system state.
@@ -70,13 +66,27 @@ export function Chat() {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [listening, setListening] = useState(false);
-  const [speakReplies, setSpeakReplies] = useState(
-    localStorage.getItem(SPEAK_KEY) === "on",
-  );
+  // Replies are spoken along with the message BY DEFAULT; the switch to
+  // silence lives in Settings (app.voice_replies), not in the chat.
+  const [speakReplies, setSpeakReplies] = useState(true);
   const endRef = useRef<HTMLDivElement>(null);
   const recognizerRef = useRef<Recognizer | null>(null);
+  const pressRef = useRef<{ timer: number | null; long: boolean }>({
+    timer: null,
+    long: false,
+  });
   const speakRef = useRef(speakReplies);
   speakRef.current = speakReplies;
+
+  useEffect(() => {
+    void api
+      .settings()
+      .then(({ items }) => {
+        const voice = (items ?? []).find((i) => i.key === "app.voice_replies");
+        if (voice) setSpeakReplies(voice.value === true);
+      })
+      .catch(() => {}); // settings unreachable: keep the spoken default
+  }, []);
   // The companion lives here, at the head of the conversation.
   const [mood, setMood] = useState<Mood>(
     () => moodOf(currentAvatarSignals()).mood,
@@ -138,12 +148,8 @@ export function Chat() {
     updateAvatarSignals({ listening: open });
   }
 
-  function toggleListening() {
-    if (listening) {
-      recognizerRef.current?.stop();
-      setEars(false);
-      return;
-    }
+  function startListening() {
+    if (listening || !speechInputSupported()) return;
     // A fresh recognizer per press: dictation ends on the final result.
     recognizerRef.current = createRecognizer({
       onFinal: (text) => {
@@ -157,6 +163,40 @@ export function Chat() {
       setEars(true);
       recognizerRef.current.start();
     }
+  }
+
+  // The Send button is also the voice button: hold it to start a voice
+  // conversation, tap to send (or to stop listening). The click after a
+  // long press is swallowed so the hold never double-fires.
+  function pressStart() {
+    if (!speechInputSupported() || listening) return;
+    pressRef.current.long = false;
+    pressRef.current.timer = window.setTimeout(() => {
+      pressRef.current.long = true;
+      pressRef.current.timer = null;
+      startListening();
+    }, LONG_PRESS_MS);
+  }
+
+  function pressCancel() {
+    if (pressRef.current.timer !== null) {
+      clearTimeout(pressRef.current.timer);
+      pressRef.current.timer = null;
+    }
+  }
+
+  function pressFinish() {
+    pressCancel();
+    if (pressRef.current.long) {
+      pressRef.current.long = false; // the hold already did its job
+      return;
+    }
+    if (listening) {
+      recognizerRef.current?.stop();
+      setEars(false);
+      return;
+    }
+    void send();
   }
 
   return (
@@ -206,16 +246,6 @@ export function Chat() {
         <div ref={endRef} />
       </div>
       <div className="chat-composer">
-        {speechInputSupported() && (
-          <button
-            className={`mic ${listening ? "listening" : ""}`}
-            title={listening ? "Stop listening" : "Speak to OoLu"}
-            aria-label={listening ? "Stop listening" : "Speak to OoLu"}
-            onClick={toggleListening}
-          >
-            {listening ? "◉" : "🎤"}
-          </button>
-        )}
         <textarea
           placeholder={listening ? "Listening…" : "Message OoLu…"}
           value={draft}
@@ -228,24 +258,23 @@ export function Chat() {
             }
           }}
         />
-        {speechOutputSupported() && (
-          <button
-            className="mic"
-            title={speakReplies ? "Stop speaking replies" : "Speak replies aloud"}
-            aria-label={
-              speakReplies ? "Stop speaking replies" : "Speak replies aloud"
-            }
-            onClick={() => {
-              const next = !speakReplies;
-              setSpeakReplies(next);
-              localStorage.setItem(SPEAK_KEY, next ? "on" : "off");
-            }}
-          >
-            {speakReplies ? "🔊" : "🔇"}
-          </button>
-        )}
-        <button disabled={busy || !draft.trim()} onClick={() => void send()}>
-          {busy ? "…" : "Send"}
+        <button
+          className={listening ? "listening" : ""}
+          disabled={busy}
+          title={
+            speechInputSupported()
+              ? listening
+                ? "Listening — tap to stop"
+                : "Tap to send · hold to speak"
+              : "Send"
+          }
+          aria-label={listening ? "Stop listening" : "Send"}
+          onPointerDown={pressStart}
+          onPointerUp={pressCancel}
+          onPointerLeave={pressCancel}
+          onClick={pressFinish}
+        >
+          {listening ? "◉" : busy ? "…" : "Send"}
         </button>
       </div>
     </div>

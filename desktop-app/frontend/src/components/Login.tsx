@@ -1,34 +1,37 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
+  DEFAULT_GLOBAL_SERVER,
   clientConfig,
   isRemote,
   login,
   register,
-  session,
   signInWithGoogle,
 } from "../api";
 
 type View = "signin" | "register";
+type Scope = "edge" | "global";
 
+// The sign-in screen never shows a raw host:port. The choice is Edge —
+// this device: account, engine, and data stay here — or Global, the OoLu
+// online service (a paired OOLU_SERVER_URL overrides its address quietly).
 export function Login({
   onSignedIn,
   onStayLocal,
 }: {
   onSignedIn: () => void;
   // Present when the local engine is running underneath: the screen is an
-  // offer, not a wall, and this is the way back to it.
+  // offer, not a wall, and Edge is the way back to it.
   onStayLocal?: () => void;
 }) {
   const [view, setView] = useState<View>("signin");
-  const [server, setServer] = useState(session.server ?? "");
+  const [scope, setScope] = useState<Scope>("global");
   const [pairedServer, setPairedServer] = useState<string | null>(null);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // The install may already know which online server it pairs with
-  // (OOLU_SERVER_URL) — then nobody has to type a server ever again.
+  // A paired install (OOLU_SERVER_URL) redirects Global to its own server.
   useEffect(() => {
     void clientConfig().then((cfg) => {
       if (typeof cfg.server === "string" && cfg.server.trim()) {
@@ -37,13 +40,10 @@ export function Login({
     });
   }, []);
 
-  // A remote build's server is baked in; a paired install's comes from
-  // its config. Only the leftover case asks the user to type one.
-  const askServer = !isRemote() && !pairedServer;
-  const authTarget = (): string | undefined => {
-    if (isRemote()) return undefined;
-    return pairedServer ?? server;
-  };
+  const globalServer = pairedServer ?? DEFAULT_GLOBAL_SERVER;
+  const authTarget = (): string | undefined =>
+    isRemote() ? undefined : globalServer;
+  const showScope = !isRemote() && Boolean(onStayLocal);
 
   function switchView(next: View) {
     setView(next);
@@ -93,103 +93,117 @@ export function Login({
     <div className="login">
       <form className="login-card" onSubmit={submit}>
         <div className="brand">OoLu</div>
-        <p className="muted">
-          {view === "signin"
-            ? "Sign in to your host."
-            : "Create an account on the online server."}
-        </p>
 
-        {askServer ? (
-          <>
-            <label htmlFor="server">Server</label>
-            <input
-              id="server"
-              placeholder="https://your-oolu-host"
-              autoComplete="url"
-              value={server}
-              onChange={(e) => setServer(e.target.value)}
-            />
-          </>
-        ) : null}
-        {pairedServer && !isRemote() ? (
-          <p className="muted paired-server">
-            Signing in to {pairedServer.replace(/^https?:\/\//, "")}
-          </p>
-        ) : null}
-
-        <label htmlFor="username">{view === "signin" ? "Username" : "E-mail"}</label>
-        <input
-          id="username"
-          autoComplete={view === "signin" ? "username" : "email"}
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-        />
-        <label htmlFor="password">Password</label>
-        <input
-          id="password"
-          type="password"
-          autoComplete={view === "signin" ? "current-password" : "new-password"}
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-        />
-        <button type="submit" disabled={busy}>
-          {view === "signin"
-            ? busy
-              ? "Signing in…"
-              : "Sign in"
-            : busy
-              ? "Creating account…"
-              : "Create account"}
-        </button>
-
-        <div className="alt-auth">
-          <button type="button" disabled={busy} onClick={() => void google()}>
-            Continue with Google
-          </button>
-          {view === "register" ? (
-            <button type="button" disabled title="Coming soon">
-              Continue with phone
+        {showScope ? (
+          <div className="mode-tabs scope-tabs">
+            <button
+              type="button"
+              className={scope === "edge" ? "on" : ""}
+              onClick={() => setScope("edge")}
+            >
+              Edge
             </button>
-          ) : null}
-        </div>
-
-        {error ? <div className="error">{error}</div> : null}
-
-        <div className="login-switch">
-          {view === "signin" ? (
-            <>
-              No account?{" "}
-              <button
-                type="button"
-                className="linklike"
-                onClick={() => switchView("register")}
-              >
-                Create one
-              </button>
-            </>
-          ) : (
-            <>
-              Have an account?{" "}
-              <button
-                type="button"
-                className="linklike"
-                onClick={() => switchView("signin")}
-              >
-                Sign in
-              </button>
-            </>
-          )}
-        </div>
-
-        {onStayLocal ? (
-          <div className="stay-local">
-            Prefer to keep working offline? Learned paths and generated skills
-            stay in your local database either way.{" "}
-            <button type="button" className="linklike" onClick={onStayLocal}>
-              Stay local
+            <button
+              type="button"
+              className={scope === "global" ? "on" : ""}
+              onClick={() => setScope("global")}
+            >
+              Global
             </button>
           </div>
         ) : null}
+
+        {showScope && scope === "edge" ? (
+          <>
+            <p className="muted">
+              Edge is this device: your account, your engine, and everything
+              you teach OoLu stay here.
+            </p>
+            <button type="button" onClick={onStayLocal}>
+              Continue on Edge
+            </button>
+          </>
+        ) : (
+          <>
+            <p className="muted">
+              {view === "signin"
+                ? "Sign in to OoLu Global."
+                : "Create your OoLu Global account."}
+            </p>
+
+            <label htmlFor="username">
+              {view === "signin" ? "Username" : "E-mail"}
+            </label>
+            <input
+              id="username"
+              autoComplete={view === "signin" ? "username" : "email"}
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+            />
+            <label htmlFor="password">Password</label>
+            <input
+              id="password"
+              type="password"
+              autoComplete={
+                view === "signin" ? "current-password" : "new-password"
+              }
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+            <button type="submit" disabled={busy}>
+              {view === "signin"
+                ? busy
+                  ? "Signing in…"
+                  : "Sign in"
+                : busy
+                  ? "Creating account…"
+                  : "Create account"}
+            </button>
+
+            <div className="alt-auth">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void google()}
+              >
+                Continue with Google
+              </button>
+              {view === "register" ? (
+                <button type="button" disabled title="Coming soon">
+                  Continue with phone
+                </button>
+              ) : null}
+            </div>
+
+            {error ? <div className="error">{error}</div> : null}
+
+            <div className="login-switch">
+              {view === "signin" ? (
+                <>
+                  No account?{" "}
+                  <button
+                    type="button"
+                    className="linklike"
+                    onClick={() => switchView("register")}
+                  >
+                    Create one
+                  </button>
+                </>
+              ) : (
+                <>
+                  Have an account?{" "}
+                  <button
+                    type="button"
+                    className="linklike"
+                    onClick={() => switchView("signin")}
+                  >
+                    Sign in
+                  </button>
+                </>
+              )}
+            </div>
+          </>
+        )}
       </form>
     </div>
   );

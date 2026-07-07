@@ -132,6 +132,15 @@ SETTINGS_CATALOG: tuple[SettingField, ...] = (
         default=True,
         description="Notify me when a task finishes or needs me.",
     ),
+    SettingField(
+        key="app.voice_replies",
+        group="app",
+        label="Speak replies aloud",
+        kind=SettingKind.BOOL,
+        default=True,
+        description="OoLu reads its replies out loud along with the message. "
+        "Turn off here for silent conversations.",
+    ),
     # --- account ---------------------------------------------------------
     SettingField(
         key="account.display_name",

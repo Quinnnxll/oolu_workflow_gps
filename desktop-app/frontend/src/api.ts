@@ -87,6 +87,11 @@ export const session = {
 
 export const requiresLogin = (): boolean => isRemote() && !session.signedIn();
 
+// The Global service: OoLu's own online server. A paired install
+// (OOLU_SERVER_URL, e.g. a self-hosted server) overrides it; nobody is
+// ever shown a raw host:port — the choice is simply Edge or Global.
+export const DEFAULT_GLOBAL_SERVER = "https://ooludomaintobedetermined";
+
 // What this install knows before any sign-in: the online server it pairs
 // with (so the sign-in screen doesn't ask) and which doors the host offers.
 export interface ClientConfig {
