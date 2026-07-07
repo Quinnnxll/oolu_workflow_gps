@@ -73,6 +73,7 @@ from ..nodeplace import (
     ReviewRequiredError,
     StepCandidates,
     SubscriptionPlan,
+    SubscriptionRequired,
     UnverifiedRunError,
     Visibility,
     WorkDesk,
@@ -231,6 +232,7 @@ class GatewayApp:
         webhook_verifier: WebhookVerifier | None = None,
         accounts=None,  # identity.LocalAccountService: local multi-user login
         desk: WorkDesk | None = None,  # the Work environment's node desk
+        kyc=None,  # nodeplace.KycService: Supernode legal-entity verification
         files: UserFileStore | None = None,  # user documents/sheets
         settings_node: SettingsNode | None = None,  # the settings node
         payments: PaymentMethodsService | None = None,  # card on file
@@ -297,6 +299,7 @@ class GatewayApp:
         # IdP keep a 404 there and lose nothing.
         self._accounts = accounts
         self._desk = desk
+        self._kyc = kyc
         self._files = files
         self._settings = settings_node
         self._payments = payments
@@ -561,6 +564,9 @@ class GatewayApp:
         r.add("GET", "/v1/work/nodes", self._work_nodes)
         r.add("POST", "/v1/work/nodes/{node_id}/account", self._work_account)
         r.add("GET", "/v1/work/nodes/{node_id}/activity", self._work_activity)
+        r.add("GET", "/v1/work/nodes/{node_id}/kyc", self._kyc_status)
+        r.add("POST", "/v1/work/nodes/{node_id}/kyc", self._kyc_apply)
+        r.add("POST", "/v1/work/nodes/{node_id}/kyc/decide", self._kyc_decide)
         r.add("POST", "/v1/nodeplace", self._contribute)
         r.add("POST", "/v1/nodeplace/{node_id}/revoke", self._revoke_node)
         r.add("GET", "/v1/listings", self._discover_listings)
@@ -1683,6 +1689,117 @@ class GatewayApp:
         return json_response(
             200, {"items": [r.model_dump(mode="json") for r in feed]}
         )
+
+    # ------------------------------------------------------------------ #
+    # Supernode KYC: verified legal entities earn global trust.           #
+    # ------------------------------------------------------------------ #
+    def _require_kyc(self):
+        if self._kyc is None:
+            raise GatewayError(404, "not_found", "KYC is not enabled here")
+        return self._kyc
+
+    def _kyc_status(self, request, session, params) -> Response:
+        kyc = self._require_kyc()
+        record = kyc.status_for(params["node_id"])
+        if record is not None and record.tenant != session.tenant_id:
+            record = None  # another tenant's application does not exist here
+        return json_response(
+            200,
+            {
+                "application": (
+                    record.model_dump(mode="json") if record else None
+                ),
+                # What ranking actually multiplies by — own verification
+                # or the nearest verified Supernode above.
+                "trust_multiplier": kyc.trust_multiplier(params["node_id"]),
+            },
+        )
+
+    def _kyc_apply(self, request, session, params) -> Response:
+        """A Supernode obeys the KYC policy: apply as a legal entity.
+
+        The deterministic screen runs here — a personal mailbox is refused
+        with a 400 before anything is stored; trusted company domains are
+        fast-tracked; the paying-plan gate answers 402."""
+        kyc = self._require_kyc()
+        body = request.body or {}
+        try:
+            record = kyc.apply(
+                params["node_id"],
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+                legal_name=str(body.get("legal_name", "")),
+                company_email=str(body.get("company_email", "")),
+                registration_no=str(body.get("registration_no", "")),
+            )
+        except SubscriptionRequired as exc:
+            raise GatewayError(402, "subscription_required", str(exc)) from exc
+        except OwnershipError as exc:
+            raise GatewayError(403, "forbidden", str(exc)) from exc
+        except ContributionError as exc:
+            raise GatewayError(404, "not_found", str(exc)) from exc
+        except ValueError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        self._durable.audit.append(
+            "kyc.applied",
+            {
+                "run_id": f"kyc:{record.node_id}",
+                "node_id": record.node_id,
+                "legal_name": record.legal_name,
+                "screen": record.screen.value,
+                "applicant": session.principal_id,
+            },
+        )
+        return json_response(201, record.model_dump(mode="json"))
+
+    def _kyc_decide(self, request, session, params) -> Response:
+        """A human reviewer's verdict — approve authority required, the
+        decision audited. The screen sorted the queue; a person decides."""
+        kyc = self._require_kyc()
+        if self._approval is None:
+            raise GatewayError(404, "not_found", "approval authority is not configured")
+        current = kyc.status_for(params["node_id"])
+        if current is None or current.tenant != session.tenant_id:
+            raise GatewayError(404, "not_found", "no KYC application here")
+        body = request.body or {}
+        if "approved" not in body:
+            raise GatewayError(
+                400, "invalid_request", "approved (true or false) is required"
+            )
+        try:
+            self._approval.approve(
+                session,
+                run_id=f"kyc:{params['node_id']}",
+                policy="kyc.review",
+                requester_id=current.applicant,
+                required_assurance=int(body.get("required_assurance", 1)),
+                now=request.now or self._clock(),
+            )
+        except AuthorizationError as exc:
+            raise GatewayError(403, "forbidden", str(exc)) from exc
+        try:
+            record = kyc.decide(
+                params["node_id"],
+                reviewer=session.principal_id,
+                approved=bool(body["approved"]),
+                note=str(body.get("note", "")),
+            )
+        except ContributionError as exc:
+            raise GatewayError(404, "not_found", str(exc)) from exc
+        except ValueError as exc:
+            raise GatewayError(409, "conflict", str(exc)) from exc
+        self._durable.audit.append(
+            "kyc.decided",
+            {
+                "run_id": f"kyc:{record.node_id}",
+                "node_id": record.node_id,
+                "status": record.status.value,
+                "multiplier": record.multiplier,
+                "reviewer": session.principal_id,
+                "note": record.decision_note,
+            },
+        )
+        return json_response(200, record.model_dump(mode="json"))
 
     def _list_own_nodes(self, request, session, params) -> Response:
         nodeplace = self._require_nodeplace()

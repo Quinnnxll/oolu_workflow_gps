@@ -310,6 +310,73 @@ describe("NodeThread", () => {
     ).toBeUndefined();
   });
 
+  it("a Supernode applies for KYC; a personal mailbox is refused in words", async () => {
+    const sn = supernode();
+    routes["GET /v1/work/nodes/sn1/activity"] = {
+      status: 200,
+      body: { items: [] },
+    };
+    routes["GET /v1/runs/contract/holds"] = { status: 200, body: { items: [] } };
+    routes["GET /v1/work/nodes/sn1/kyc"] = {
+      status: 200,
+      body: { application: null, trust_multiplier: 1.0 },
+    };
+    routes["POST /v1/work/nodes/sn1/kyc"] = {
+      status: 400,
+      body: {
+        error: {
+          message:
+            "a company mailbox is required — gmail.com is a personal mailbox provider",
+        },
+      },
+    };
+    render(<NodeThread node={sn} allNodes={[sn]} />);
+
+    expect(await screen.findByText("KYC — legal entity")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Legal entity name"), {
+      target: { value: "Mphepo Ltd" },
+    });
+    fireEvent.change(screen.getByLabelText("Company email"), {
+      target: { value: "quinn@gmail.com" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    expect(
+      await screen.findByText(/personal mailbox provider/),
+    ).toBeTruthy();
+  });
+
+  it("a verified Supernode wears the global trust badge, no form", async () => {
+    const sn = supernode();
+    routes["GET /v1/work/nodes/sn1/activity"] = {
+      status: 200,
+      body: { items: [] },
+    };
+    routes["GET /v1/runs/contract/holds"] = { status: 200, body: { items: [] } };
+    routes["GET /v1/work/nodes/sn1/kyc"] = {
+      status: 200,
+      body: {
+        application: {
+          node_id: "sn1",
+          legal_name: "Mphepo Ltd",
+          company_email: "quinn@mphepo.io",
+          registration_no: "",
+          screen: "fast_track",
+          screen_note: "",
+          status: "verified",
+          decision_note: "",
+          multiplier: 1.5,
+        },
+        trust_multiplier: 1.5,
+      },
+    };
+    render(<NodeThread node={sn} allNodes={[sn]} />);
+
+    expect(
+      await screen.findByText(/KYC verified · global trust ×1.5/),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Apply" })).toBeNull();
+  });
+
   it("a held request can be allowed, signed, or replied to", async () => {
     const audited = workNode({
       account: { ...workNode().account, audit_mode: true },

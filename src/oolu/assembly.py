@@ -508,12 +508,31 @@ def build_host_runtime(
     stats = LiveVersionStats(
         metering=metering, audit=durable.audit, attribution=attribution
     )
-    market = CandidateAssembler(registry=registry, stats=stats, ratings=ratings)
+    node_accounts = NodeAccountStore(conn)
+    # Supernode KYC: verified legal entities carry a global trust-ranking
+    # multiplier. The reviewing work rides on the paying plan's fee, and
+    # applications are screened by company-mail domain before any human
+    # looks (OOLU_KYC_TRUSTED_DOMAINS fast-tracks verified domains).
+    from .nodeplace import KycService, KycStore
+
+    kyc = KycService(
+        KycStore(conn),
+        accounts=node_accounts,
+        plan_for=lambda tenant: settings_node.effective(tenant).get(
+            "subscription.plan", "free"
+        ),
+    )
+    market = CandidateAssembler(
+        registry=registry,
+        stats=stats,
+        ratings=ratings,
+        trust=kyc.trust_multiplier,
+    )
     # The Work environment's operator view: node accounts + earnings +
     # verified health + per-node execution feeds, over the same stores.
     desk = WorkDesk(
         registry=registry,
-        accounts=NodeAccountStore(conn),
+        accounts=node_accounts,
         metering=metering,
         stats=stats,
         attribution=attribution,
@@ -583,6 +602,7 @@ def build_host_runtime(
         contract_executors=executors,
         accounts=accounts,
         desk=desk,
+        kyc=kyc,
         files=UserFileStore(conn),
         settings_node=settings_node,
         # The brain behind chat: the same keyring/meter planning uses —

@@ -496,6 +496,24 @@ export interface HoldItem {
   replies: { author: string; message: string; at: string }[];
 }
 
+// Supernode KYC: a verified legal entity earns a global trust multiplier.
+export interface KycApplication {
+  node_id: string;
+  legal_name: string;
+  company_email: string;
+  registration_no: string;
+  screen: "fast_track" | "standard";
+  screen_note: string;
+  status: "pending_review" | "verified" | "rejected";
+  decision_note: string;
+  multiplier: number;
+}
+
+export interface KycView {
+  application: KycApplication | null;
+  trust_multiplier: number;
+}
+
 export const api = {
   // One turn with the assistant. The conversation is client-held, so the
   // recent history rides along; a work turn comes back with the run id the
@@ -609,6 +627,13 @@ export const api = {
     req<NodeAccountView>("POST", `/v1/work/nodes/${nodeId}/account`, patch),
   workActivity: (nodeId: string) =>
     req<{ items: NodeRunSteps[] }>("GET", `/v1/work/nodes/${nodeId}/activity`),
+  // Supernode KYC: status + apply (a reviewer decides platform-side).
+  kycStatus: (nodeId: string) =>
+    req<KycView>("GET", `/v1/work/nodes/${nodeId}/kyc`),
+  kycApply: (
+    nodeId: string,
+    body: { legal_name: string; company_email: string; registration_no?: string },
+  ) => req<KycApplication>("POST", `/v1/work/nodes/${nodeId}/kyc`, body),
   // Manual-commit queue: held contract runs (audit nodes land here).
   holds: () => req<{ items: HoldItem[] }>("GET", "/v1/runs/contract/holds"),
   decideHold: (pendingId: string, approved: boolean, signature?: string) =>

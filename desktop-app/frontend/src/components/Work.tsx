@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api } from "../api";
-import type { HoldItem, NodeRunSteps, WorkNode } from "../api";
+import type { HoldItem, KycView, NodeRunSteps, WorkNode } from "../api";
 import { identityHue } from "../avatar";
 import { humanizeEvent } from "../humanize";
 import { FilesPane } from "./FilesPane";
@@ -380,6 +380,8 @@ export function NodeThread({
         )}
       </div>
 
+      {account.is_supernode && <KycSection nodeId={node.node_id} />}
+
       {account.is_supernode && members.length > 0 && (
         <div className="commits">
           <div className="convo-group">Member nodes</div>
@@ -567,6 +569,126 @@ function HoldDesk({
         </div>
       )}
       {error ? <div className="error">{error}</div> : null}
+    </div>
+  );
+}
+
+// ---- Supernode KYC: a verified legal entity earns global trust ------------
+// Applying is the Supernode owner's move; the platform's reviewers decide.
+// Personal mailboxes are refused before anything is stored, and the fee
+// rides on the paying plan — both walls answer here in words.
+export function KycSection({ nodeId }: { nodeId: string }) {
+  const [view, setView] = useState<KycView | null>(null);
+  const [legalName, setLegalName] = useState("");
+  const [email, setEmail] = useState("");
+  const [regNo, setRegNo] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const refresh = useCallback(async () => {
+    try {
+      setView(await api.kycStatus(nodeId));
+    } catch {
+      setView(null); // KYC not enabled on this host: say nothing at all
+    }
+  }, [nodeId]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  if (view === null) return null;
+  const app = view.application;
+
+  async function submit() {
+    setError("");
+    setBusy(true);
+    try {
+      await api.kycApply(nodeId, {
+        legal_name: legalName.trim(),
+        company_email: email.trim(),
+        ...(regNo.trim() ? { registration_no: regNo.trim() } : {}),
+      });
+      await refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="commits kyc">
+      <div className="convo-group">KYC — legal entity</div>
+
+      {app?.status === "verified" && (
+        <div className="commit-row">
+          <span className="badge">
+            ✓ KYC verified · global trust ×{view.trust_multiplier}
+          </span>
+          <span className="muted">
+            {app.legal_name} · every node under this Supernode ranks with it
+          </span>
+        </div>
+      )}
+
+      {app?.status === "pending_review" && (
+        <div className="commit-row">
+          <span className="badge">Under review</span>
+          <span className="muted">
+            {app.screen === "fast_track"
+              ? "fast lane — trusted company domain"
+              : "standard queue"}{" "}
+            · {app.legal_name}
+          </span>
+        </div>
+      )}
+
+      {app?.status === "rejected" && (
+        <p className="muted">
+          The last application was rejected
+          {app.decision_note ? ` — ${app.decision_note}` : ""}. You can apply
+          again below.
+        </p>
+      )}
+
+      {(!app || app.status === "rejected") && (
+        <>
+          <p className="muted">
+            Obey the KYC policy to rank with global trust: verification
+            rides on your paying plan, and a verified Supernode carries a
+            trust multiplier for every node under it. Use a company
+            mailbox — personal mailboxes are refused.
+          </p>
+          <div className="setting-control row">
+            <input
+              aria-label="Legal entity name"
+              placeholder="legal entity name"
+              value={legalName}
+              onChange={(e) => setLegalName(e.target.value)}
+            />
+            <input
+              aria-label="Company email"
+              placeholder="you@company.example"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+            <input
+              aria-label="Registration number"
+              placeholder="registration no. (optional)"
+              value={regNo}
+              onChange={(e) => setRegNo(e.target.value)}
+            />
+            <button
+              disabled={busy || !legalName.trim() || !email.trim()}
+              onClick={() => void submit()}
+            >
+              Apply
+            </button>
+          </div>
+          {error && <div className="error">{error}</div>}
+        </>
+      )}
     </div>
   );
 }

@@ -172,11 +172,13 @@ class CandidateAssembler:
         registry: RegistryStore,
         stats: StatsSource,
         ratings: RatingService | None = None,
+        trust=None,  # (node_id) -> float: KYC trust multiplier (>= 1.0)
         clock=None,
     ):
         self._registry = registry
         self._stats = stats
         self._ratings = ratings
+        self._trust = trust
         self._clock = clock or (lambda: datetime.now(UTC))
 
     def contracts(self, query: str = "") -> list["MarketplaceContract"]:
@@ -263,6 +265,12 @@ class CandidateAssembler:
                 if self._ratings is not None
                 else 1.0
             )
+            if self._trust is not None:
+                # The KYC dividend: a node whose responsible legal entity
+                # is a verified Supernode (anywhere up its chain) ranks
+                # with a global trust multiplier — fraud has nowhere to
+                # rank, verified entities win workflow.
+                reputation *= max(1.0, float(self._trust(version.node_id)))
             node_class, class_key = classify_listing(listing.tags, listing.title)
             days_since_update = max(
                 0.0, (now - version.published_at).total_seconds() / 86_400.0
