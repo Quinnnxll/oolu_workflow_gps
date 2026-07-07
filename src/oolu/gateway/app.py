@@ -18,6 +18,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from html import escape as _escape
 from uuid import uuid4
 
 from pydantic import ValidationError
@@ -38,6 +39,7 @@ from ..durable.idempotency import IdempotencyLedger
 from ..durable.service import DurableWorkflowService
 from ..identity.apikeys import KEY_PREFIX, ApiKeyError, ApiKeyService, scope_allows
 from ..identity.errors import AuthenticationError, AuthorizationError
+from ..identity.google_signin import GoogleSignIn, SignInError
 from ..identity.models import PrincipalKind, Session
 from ..identity.policy import AuthorityResolver
 from ..identity.service import IdentityApprovalAuthority
@@ -222,6 +224,7 @@ class GatewayApp:
         model_keys: ModelKeyring | None = None,  # tenant model API keys
         model_meter=None,  # billing.ModelCallMeter: chat spend enters books
         model_transport=None,  # providers.HttpTransport; None = real httpx
+        google_signin: GoogleSignIn | None = None,  # "Continue with Google"
         value_patcher=None,  # orchestrator.ValuePatcher: fills creative inputs
         isolation=None,  # worker.IsolationPolicy: powers /v1/worker-health
         docker_available: bool = True,
@@ -290,6 +293,7 @@ class GatewayApp:
         self._model_meter = model_meter
         self._model_transport = model_transport
         self._model_routers: dict[str, ChatModelRouter] = {}
+        self._google = google_signin
         # What may run where, per trust level — rendered by the shell's
         # health screen from the policy that is actually enforced.
         from ..worker.policy import IsolationPolicy
@@ -555,6 +559,14 @@ class GatewayApp:
         # nature; management requires stored users:manage authority (the
         # bootstrap admin's role holds "*").
         r.add("POST", "/v1/auth/login", self._auth_login, public=True)
+        # Sign in with Google (RFC 8252): the app begins and polls; only
+        # the browser's leg touches Google. All three answer 404 when no
+        # Google client is configured on this host.
+        r.add("GET", "/v1/auth/google/start", self._google_start, public=True)
+        r.add("GET", "/v1/auth/google/callback", self._google_callback, public=True)
+        r.add("POST", "/v1/auth/google/finish", self._google_finish, public=True)
+        # Attaching Google to the CALLER's account needs the caller.
+        r.add("POST", "/v1/auth/google/link", self._google_link)
         r.add(
             "GET",
             "/v1/auth/users",
@@ -2378,6 +2390,81 @@ class GatewayApp:
                 "principal": result.principal,
             },
         )
+
+    # ------------------------------------------------------------------ #
+    # Sign in with Google.                                                #
+    # ------------------------------------------------------------------ #
+    def _require_google(self) -> GoogleSignIn:
+        if self._google is None:
+            raise GatewayError(
+                404,
+                "not_found",
+                "Google sign-in is not configured on this host "
+                "(set OOLU_GOOGLE_CLIENT_ID)",
+            )
+        return self._google
+
+    def _google_redirect_uri(self, request) -> str:
+        """Where Google sends the browser back: this same gateway.
+
+        Derived from the Host header (the loopback bind on the desktop);
+        an online host would front this with TLS and its own hostname."""
+        host = request.header("host") or "127.0.0.1:8765"
+        scheme = "https" if request.header("x-forwarded-proto") == "https" else "http"
+        return f"{scheme}://{host}/v1/auth/google/callback"
+
+    def _google_start(self, request, session, params) -> Response:
+        google = self._require_google()
+        begun = google.begin(self._google_redirect_uri(request))
+        return json_response(200, begun)
+
+    def _google_link(self, request, session, params) -> Response:
+        """Attach Google to the signed-in account: the local-mode upgrade
+        path. Same browser flow; on completion the flow logs into THIS
+        account instead of creating one."""
+        google = self._require_google()
+        begun = google.begin(
+            self._google_redirect_uri(request),
+            link_to=(session.tenant_id, session.principal_id),
+        )
+        return json_response(200, begun)
+
+    def _google_callback(self, request, session, params) -> Response:
+        """The browser's landing: complete the exchange, show a plain page.
+
+        The page never carries the session token — the app collects that
+        through finish() on its own channel."""
+        google = self._require_google()
+        try:
+            principal = google.callback(request.query)
+            page = (
+                "<!doctype html><meta charset='utf-8'><title>OoLu</title>"
+                "<body style='font-family:system-ui;margin:3rem'>"
+                f"<h2>Signed in as {_escape(principal)}.</h2>"
+                "<p>You can close this window and return to OoLu.</p>"
+            )
+            return Response(status=200, body=page, content_type="text/html; charset=utf-8")
+        except SignInError as exc:
+            page = (
+                "<!doctype html><meta charset='utf-8'><title>OoLu</title>"
+                "<body style='font-family:system-ui;margin:3rem'>"
+                f"<h2>Sign-in failed.</h2><p>{_escape(str(exc))}</p>"
+                "<p>Close this window and try again from OoLu.</p>"
+            )
+            return Response(status=400, body=page, content_type="text/html; charset=utf-8")
+
+    def _google_finish(self, request, session, params) -> Response:
+        """The app's poll: pending until the browser leg lands, then the
+        session token exactly once."""
+        google = self._require_google()
+        body = request.body or {}
+        state = str(body.get("state", ""))
+        if not state:
+            raise GatewayError(400, "invalid_request", "state is required")
+        try:
+            return json_response(200, google.finish(state))
+        except SignInError as exc:
+            raise GatewayError(404, "not_found", str(exc)) from exc
 
     @staticmethod
     def _user_view(user) -> dict:

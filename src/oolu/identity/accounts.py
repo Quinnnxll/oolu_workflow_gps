@@ -325,6 +325,33 @@ class LocalAccountService:
             principal=username,
         )
 
+    def external_login(
+        self, username: str, *, method: str = "sso", now: datetime | None = None
+    ) -> LoginResult:
+        """A session for an identity verified OUTSIDE the password store —
+        an IdP-verified sign-in (e.g. a validated Google id_token). The
+        caller vouches for the verification; this only refuses accounts
+        that don't exist or are disabled, and stamps how the user arrived
+        (``amr``) so the token records it wasn't a password."""
+        moment = now or self._clock()
+        user = self._users.get(username)
+        if user is None or user.disabled:
+            raise AuthenticationError("invalid credentials")
+        expires_at = moment + timedelta(seconds=self._ttl)
+        token = self._signer.mint(
+            subject=username,
+            tenant_id=user.tenant_id,
+            ttl_seconds=self._ttl,
+            now=moment,
+            amr=[method],
+        )
+        return LoginResult(
+            token=token,
+            expires_at=expires_at,
+            tenant_id=user.tenant_id,
+            principal=username,
+        )
+
     def set_disabled(self, username: str, disabled: bool) -> bool:
         return self._users.set_disabled(username, disabled)
 

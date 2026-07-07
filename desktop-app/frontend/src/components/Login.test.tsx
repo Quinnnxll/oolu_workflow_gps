@@ -89,18 +89,68 @@ describe("Login", () => {
     expect(session.token).toBe("t");
   });
 
-  it("offers Google and phone sign-up, disabled until a provider exists", () => {
+  it("phone sign-up stays disabled until a provider exists", () => {
     render(<Login onSignedIn={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "Create one" }));
 
-    const google = screen.getByRole("button", {
-      name: "Continue with Google",
-    }) as HTMLButtonElement;
     const phone = screen.getByRole("button", {
       name: "Continue with phone",
     }) as HTMLButtonElement;
-    expect(google.disabled).toBe(true);
     expect(phone.disabled).toBe(true);
+  });
+
+  it("signs in with Google: opens the consent page, polls, stores the token", async () => {
+    const opened = vi.fn();
+    vi.stubGlobal("open", opened);
+    fetchMock.mockImplementation(async (input: string | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/auth/google/start")) {
+        return reply(200, {
+          auth_url: "https://accounts.google.com/o/oauth2/v2/auth?x=1",
+          state: "st-1",
+        });
+      }
+      if (url.endsWith("/v1/auth/google/finish")) {
+        return reply(200, {
+          status: "complete",
+          token: "g-token",
+          principal: "quinn",
+          tenant: "main",
+        });
+      }
+      return reply(404, { error: { message: "nope" } });
+    });
+    const onSignedIn = vi.fn();
+    render(<Login onSignedIn={onSignedIn} />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Continue with Google" }),
+    );
+
+    await waitFor(() => expect(onSignedIn).toHaveBeenCalled());
+    expect(String(opened.mock.calls[0][0])).toContain(
+      "accounts.google.com",
+    );
+    // The finish poll carried the one-shot state; the token is stored.
+    const finish = fetchMock.mock.calls.find(([u]) =>
+      String(u).endsWith("/v1/auth/google/finish"),
+    ) as [string, RequestInit];
+    expect(JSON.parse(String(finish[1].body))).toEqual({ state: "st-1" });
+    expect(session.token).toBe("g-token");
+    expect(session.principal).toBe("quinn");
+  });
+
+  it("says so plainly when the host has no Google client", async () => {
+    fetchMock.mockResolvedValue(reply(404, {}));
+    render(<Login onSignedIn={vi.fn()} />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Continue with Google" }),
+    );
+
+    expect(
+      await screen.findByText(/does not offer Google sign-in yet/),
+    ).toBeTruthy();
   });
 
   describe("local build (no baked-in server)", () => {

@@ -136,6 +136,30 @@ def build_openapi() -> dict:
                 "(unknown key or out-of-bounds value → 400)"
             ),
         },
+        "/v1/auth/google/start": {
+            "get": op(
+                "Begin Sign in with Google: the consent URL + a one-shot "
+                "state (public)"
+            ),
+        },
+        "/v1/auth/google/callback": {
+            "get": op(
+                "Google's browser redirect lands here; the page never "
+                "carries the session token (public)"
+            ),
+        },
+        "/v1/auth/google/finish": {
+            "post": op(
+                "The app's poll: pending until the browser leg lands, "
+                "then the session token exactly once (public)"
+            ),
+        },
+        "/v1/auth/google/link": {
+            "post": op(
+                "Attach Google to the signed-in account — the local-mode "
+                "upgrade path that keeps all local data"
+            ),
+        },
         "/v1/keys/model": {
             "get": op(
                 "Configured model providers with key fingerprints — "

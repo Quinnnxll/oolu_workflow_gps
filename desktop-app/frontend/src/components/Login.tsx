@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { isRemote, login, register, session } from "../api";
+import { isRemote, login, register, session, signInWithGoogle } from "../api";
 
 type View = "signin" | "register";
 
@@ -26,6 +26,21 @@ export function Login({
   function switchView(next: View) {
     setView(next);
     setError("");
+  }
+
+  async function google() {
+    setError("");
+    setBusy(true);
+    try {
+      // Opens the system browser to Google's consent page and polls the
+      // host until the browser leg lands; the token never rides the URL.
+      await signInWithGoogle(askServer ? server : undefined);
+      onSignedIn();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Google sign-in failed");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function submit(event: FormEvent) {
@@ -100,16 +115,16 @@ export function Login({
               : "Create account"}
         </button>
 
-        {view === "register" ? (
-          <div className="alt-auth">
-            <button type="button" disabled title="Coming soon">
-              Continue with Google
-            </button>
+        <div className="alt-auth">
+          <button type="button" disabled={busy} onClick={() => void google()}>
+            Continue with Google
+          </button>
+          {view === "register" ? (
             <button type="button" disabled title="Coming soon">
               Continue with phone
             </button>
-          </div>
-        ) : null}
+          ) : null}
+        </div>
 
         {error ? <div className="error">{error}</div> : null}
 

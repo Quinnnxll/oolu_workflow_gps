@@ -331,6 +331,9 @@ def build_host_runtime(
     config: Any = None,  # gateway.GatewayConfig
     database_url: str | None = None,
     frontend: str = "host",
+    google_client_id: str | None = None,
+    google_client_secret: str = "",
+    google_default_tenant: str = "main",
 ) -> HostRuntime:
     """The multi-user web host: the full multi-tenant gateway over one
     data directory, with LOCAL accounts as the identity provider.
@@ -448,6 +451,35 @@ def build_host_runtime(
     price_book = PriceBook(data / "prices.db")
     traces = TraceStore(data / "traces.db")
 
+    # "Continue with Google": only when an OAuth client is configured. The
+    # id_token verifier is Google's JWKS (RS256) — requires the oidc extra;
+    # the import error below says exactly how to get it.
+    google = None
+    if google_client_id:
+        from .identity.google_signin import (
+            GoogleSignIn,
+            GoogleSignInConfig,
+            IdentityLinkStore,
+        )
+        from .identity.jwks import JwksVerifier
+        from .providers.transport import HttpxTransport
+
+        google_transport = HttpxTransport()
+        google = GoogleSignIn(
+            accounts,
+            IdentityLinkStore(conn),
+            GoogleSignInConfig(
+                client_id=google_client_id, client_secret=google_client_secret
+            ),
+            verifier=JwksVerifier(
+                fetch=lambda: google_transport.request(
+                    "GET", "https://www.googleapis.com/oauth2/v3/certs"
+                ).json
+            ),
+            transport=google_transport,
+            default_tenant=google_default_tenant,
+        )
+
     gateway = GatewayApp(
         durable,
         validator=validator,
@@ -470,6 +502,7 @@ def build_host_runtime(
         # and every model consultation is metered spend.
         model_keys=ModelKeyring(conn, key_path=data / "machine.key"),
         model_meter=ModelCallMeter(),
+        google_signin=google,
         # Pre-launch: the test card vault and a closed launch guard — the
         # real transaction port stays shut until an operator opens it.
         payments=PaymentMethodsService(PaymentProfileStore(conn), FakeCardVault()),

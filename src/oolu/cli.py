@@ -1252,6 +1252,11 @@ def _cmd_desktop(args, out) -> int:
         # The product face: the OoLu messenger (built React shell), not
         # the multi-user admin page `oolu host` serves.
         frontend="shell",
+        # "Continue with Google" turns on when the operator provides a
+        # Google OAuth client (Desktop-app type; the id is not a secret).
+        google_client_id=os.environ.get("OOLU_GOOGLE_CLIENT_ID"),
+        google_client_secret=os.environ.get("OOLU_GOOGLE_CLIENT_SECRET", ""),
+        google_default_tenant="local",
     )
     password = secrets_module.token_urlsafe(16)
     if not runtime.accounts.bootstrap(
@@ -1323,6 +1328,9 @@ def _cmd_host(args, out) -> int:
             secret=secret,
             database_url=args.database_url,
             config=config,
+            google_client_id=os.environ.get("OOLU_GOOGLE_CLIENT_ID"),
+            google_client_secret=os.environ.get("OOLU_GOOGLE_CLIENT_SECRET", ""),
+            google_default_tenant=args.tenant,
         )
     except ValueError as exc:
         raise _CliError(str(exc)) from exc

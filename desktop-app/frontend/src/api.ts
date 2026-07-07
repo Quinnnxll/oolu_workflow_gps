@@ -163,6 +163,60 @@ export async function register(
   session.set(ok.token, ok.principal, ok.tenant ?? "");
 }
 
+// Sign in with Google (RFC 8252): begin on the server, open the consent
+// page in the system browser, then poll finish until the browser leg lands.
+// The session token travels only on this channel — never through the browser.
+export async function signInWithGoogle(
+  server?: string,
+  opts: {
+    pollMs?: number;
+    timeoutMs?: number;
+    open?: (url: string) => void;
+  } = {},
+): Promise<void> {
+  const base = authBase(server);
+  const res = await fetch(base + "/v1/auth/google/start");
+  const data = (await res.json().catch(() => ({}))) as {
+    auth_url?: string;
+    state?: string;
+    error?: { message?: string };
+  };
+  if (res.status === 404) {
+    throw new Error(
+      data?.error?.message ?? "this server does not offer Google sign-in yet",
+    );
+  }
+  if (!res.ok || !data.auth_url || !data.state) {
+    throw new Error(data?.error?.message ?? "could not start Google sign-in");
+  }
+  (opts.open ?? ((url: string) => window.open(url, "_blank")))(data.auth_url);
+
+  const deadline = Date.now() + (opts.timeoutMs ?? 120_000);
+  while (Date.now() < deadline) {
+    const fin = await fetch(base + "/v1/auth/google/finish", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ state: data.state }),
+    });
+    const body = (await fin.json().catch(() => ({}))) as {
+      status?: string;
+      token?: string;
+      principal?: string;
+      tenant?: string;
+      error?: { message?: string };
+    };
+    if (!fin.ok) {
+      throw new Error(body?.error?.message ?? "Google sign-in failed");
+    }
+    if (body.status === "complete" && body.token && body.principal) {
+      session.set(body.token, body.principal, body.tenant ?? "");
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, opts.pollMs ?? 1500));
+  }
+  throw new Error("Google sign-in timed out — try again");
+}
+
 export function signOut(): void {
   session.clear();
   location.reload();
