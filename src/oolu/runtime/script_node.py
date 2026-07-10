@@ -39,7 +39,8 @@ from ..cache.signature import (
     make_node_script_cache_key,
 )
 from ..cache.store import ScriptCache
-from ..models import ErrorClass, ExecutionResult
+from ..models import ErrorClass, ExecutionResult, Phase
+from ..nodeplace.screening import screen_script
 from ..skills.models import ActionEvent, ExecutionOutcome, ExecutionStatus
 from .backend import ExecutionBackend, ExecutionRequest, ResourceLimits
 from .dependency import classify
@@ -466,6 +467,18 @@ class NodeScriptRunner:
     def _run_script(
         self, script: str, dependencies: list[str], session_id: str
     ) -> ExecutionResult:
+        # The antivirus screen at the last gate: no script — provided,
+        # synthesized, repaired, or replayed from cache — reaches the
+        # backend without passing it. Defense in depth behind the sandbox,
+        # so a hostile pattern is refused as a failed run, never executed.
+        flags = screen_script(script)
+        if flags:
+            return ExecutionResult(
+                phase=Phase.EXECUTE,
+                exit_code=1,
+                stderr="refused by the safety screen: " + "; ".join(flags),
+                contract_ok=False,
+            )
         return self._backend.run(
             ExecutionRequest(
                 script=script,

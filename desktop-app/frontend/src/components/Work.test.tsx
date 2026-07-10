@@ -248,6 +248,40 @@ describe("AddNode", () => {
     });
   });
 
+  it("carries a developer's uploaded function into the created node", async () => {
+    routes["POST /v1/nodeplace"] = { status: 201, body: { node_id: "n5" } };
+    routes["POST /v1/work/nodes/n5/account"] = {
+      status: 200,
+      body: workNode().account,
+    };
+    const onDone = vi.fn();
+    render(<AddNode supernodes={[]} onDone={onDone} />);
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "CSV Normalizer" },
+    });
+    fireEvent.change(
+      screen.getByLabelText(/Function \(optional — bring your own code\)/),
+      {
+        target: {
+          value: "from _oolu_runtime import emit_result\nemit_result('ok')",
+        },
+      },
+    );
+    fireEvent.click(screen.getByLabelText(/I agree to the Node Policy/));
+    fireEvent.click(screen.getByRole("button", { name: "Create node" }));
+
+    await waitFor(() => expect(onDone).toHaveBeenCalledWith("n5"));
+    const contribute = calls.find((c) => c.path === "/v1/nodeplace");
+    const skill = (contribute?.body as { skill: Record<string, unknown> })
+      .skill;
+    // The node is born a SCRIPT node carrying the developer's function.
+    expect((skill.signature as { adapter: string }).adapter).toBe("script");
+    const action = (skill.actions as { adapter: string; parameters: { script: string } }[])[0];
+    expect(action.adapter).toBe("script");
+    expect(action.parameters.script).toContain("emit_result('ok')");
+  });
+
   it("a Supernode always audits — the checkbox locks on", () => {
     render(<AddNode supernodes={[]} onDone={vi.fn()} />);
 

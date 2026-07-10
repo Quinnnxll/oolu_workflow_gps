@@ -838,14 +838,61 @@ export const api = {
     ),
   // Create a node as admin: contribute a draft (its first real version
   // arrives from work or a manual publish), then shape its account.
-  createNode: (title: string, summary: string) =>
+  // Create a node. With a function uploaded (a developer's own code,
+  // written outside OoLu), the node is born WITH it: a script action the
+  // sandbox runs and verifies, screened before it is ever stored. Without
+  // one, an empty draft whose function arrives from work or a later push.
+  createNode: (
+    title: string,
+    summary: string,
+    functionScript?: string,
+    io?: { inputs?: { name: string; type: string }[]; outputs?: { name: string; type: string }[] },
+  ) =>
     req<{ node_id: string }>("POST", "/v1/nodeplace", {
       skill: {
         name: title,
         description: summary || title,
-        signature: { application: "cli", adapter: "cli" },
-        actions: [{ correlation_id: "draft", adapter: "cli", operation: "run" }],
+        signature: functionScript
+          ? { application: "script", adapter: "script" }
+          : { application: "cli", adapter: "cli" },
+        parameters: (io?.inputs ?? []).map((i) => ({
+          name: i.name,
+          value_type: i.type,
+          required: true,
+        })),
+        actions: functionScript
+          ? [
+              {
+                correlation_id: "function",
+                adapter: "script",
+                operation: "run",
+                parameters: {
+                  goal: summary || title,
+                  script: functionScript,
+                  node_key: `upload:${title}`,
+                },
+              },
+            ]
+          : [{ correlation_id: "draft", adapter: "cli", operation: "run" }],
       },
+      ...(io?.inputs?.length
+        ? {
+            consumes: io.inputs.map((i) => ({
+              name: i.name,
+              value_type: i.type,
+              role: "input",
+            })),
+          }
+        : {}),
+      ...(io?.outputs?.length
+        ? {
+            produces: io.outputs.map((o) => ({
+              name: o.name,
+              value_type: o.type,
+              role: "result",
+            })),
+          }
+        : {}),
       title,
       summary: summary || title,
       visibility: "public",

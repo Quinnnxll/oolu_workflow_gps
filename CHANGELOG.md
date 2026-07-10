@@ -4,6 +4,36 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Developers bring their own functions — and the gate holds:
+
+- **Upload a function when creating a node.** The Create-a-node form now
+  takes a Python function (upload a .py or paste it): the node is born
+  a script node carrying it, the way a developer prefers to work. Left
+  empty, the node still starts as a draft. The gatekeeping is identical
+  to OoLu's own functions, because it is the SAME path.
+- **An antivirus screen at every gate.** A new `screen_script` refuses
+  obviously hostile code — reverse shells, decode-into-exec, raw
+  sockets, credential reach, container-boundary probes, miner markers —
+  and names the reason. It runs at contribute (a hostile upload is
+  refused BEFORE it is ever stored) AND inside the script runner (no
+  script — uploaded, synthesized, repaired, or replayed — reaches the
+  backend without passing it). This is a screen, not the wall: the
+  sandbox (docker isolation on a public host, network-severed execution
+  on the desktop) and verify-by-execution remain the real walls behind
+  it, and a public host still keeps the script hand off entirely without
+  real isolation (`require_isolation`).
+- **Build never edits the node you're in.** Confirmed and made explicit:
+  the interact-window build command always creates a SEPARATE new node
+  that expands the current node's path — it never changes the existing
+  node's code (a public-safety rule) — and, once proven, the two can be
+  merged into one throughout solution. The build reply and the model's
+  context both say so.
+- Tests: the screen's pass/refuse verdicts, a clean upload contributing
+  and a hostile one refused before storage, the runner refusing a
+  hostile script without running it, and interact-build leaving the
+  current node byte-for-byte unchanged. 185 vitest and the entire
+  backend suite green; shell rebuilt.
+
 One node per goal, its own function on every run, a model that repairs
 its own code, and a declared interface:
 

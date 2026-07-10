@@ -19,6 +19,7 @@ from .models import (
 )
 from .safety import NodeSafetyGate
 from .sanitize import sanitize_skill
+from .screening import screen_script
 from .store import RegistryStore
 
 
@@ -76,6 +77,24 @@ class NodeplaceService:
         )
         if not report.safe:
             raise SafetyViolation(report.violations)
+        # The antivirus screen: every script action's code — whether OoLu
+        # wrote it or a developer uploaded it — is checked for obviously
+        # hostile patterns BEFORE it is stored, so a malicious upload is
+        # refused with the reason instead of reaching the registry. The
+        # sandbox and verify-by-execution remain the real walls behind it.
+        for action in skill.actions:
+            script = (action.parameters or {}).get("script")
+            if not script:
+                continue
+            flags = screen_script(str(script))
+            if flags:
+                raise SafetyViolation(
+                    [
+                        "the uploaded function was refused by the safety "
+                        "screen — it " + reason
+                        for reason in flags
+                    ]
+                )
         sanitized, content_hash = sanitize_skill(skill)
 
         node = (

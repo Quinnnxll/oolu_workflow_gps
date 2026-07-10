@@ -1301,10 +1301,13 @@ class GatewayApp:
                 + ", ".join(f"{p.name}:{p.value_type}" for p in produces)
             )
             return (
-                f"Built “{name}” ({new_id[:8]}) WITH its own execution "
-                f"function ({interface}), {placing}. It starts "
-                "needs-verification and becomes a callable, routable step "
-                "on this node's path as its runs verify."
+                f"Built a NEW node “{name}” ({new_id[:8]}) WITH its own "
+                f"execution function ({interface}), {placing}. This node "
+                f"“{entry.title}” is unchanged — for public safety, build "
+                "never edits an existing node's code; it adds a fresh node "
+                "that expands the path. It starts needs-verification and "
+                "becomes a callable, routable step as its runs verify; once "
+                "proven, the two can be merged into one throughout solution."
             )
 
         health = entry.health
@@ -1320,7 +1323,10 @@ class GatewayApp:
             f"automation {reliability}). Help them accelerate this node's "
             "work: decide or sign its held requests, reply to requesters, "
             "and (with their auto-build consent) build missing execution "
-            "nodes on its path. Extra tools available ONLY here:\n"
+            "nodes on its path. build_node NEVER changes THIS node's code "
+            "(a public-safety rule): it always creates a SEPARATE new node "
+            "that expands the path, which can be merged in later once "
+            "proven. Extra tools available ONLY here:\n"
             '  {"tool": "node_holds", "args": {}}\n'
             '  {"tool": "decide_hold", "args": {"pending_id": "<id>", '
             '"approved": true, "signature": "<typed name, optional>"}}\n'

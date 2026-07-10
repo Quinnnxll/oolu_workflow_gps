@@ -8,6 +8,7 @@ import type {
   WorkNode,
 } from "../api";
 import { identityHue } from "../avatar";
+import { pickLocalFiles } from "../device";
 import { humanizeEvent } from "../humanize";
 import { useT } from "../ui";
 import { FilesPane } from "./FilesPane";
@@ -162,6 +163,11 @@ export function AddNode({
   const [audit, setAudit] = useState(false);
   const [autoGrow, setAutoGrow] = useState(true);
   const [policyOk, setPolicyOk] = useState(false);
+  // A developer's own function, brought from outside OoLu. The node is
+  // born WITH it (a script the sandbox runs and verifies, screened before
+  // it is stored); left empty, the node starts as a draft as before.
+  const [fnScript, setFnScript] = useState("");
+  const [fnName, setFnName] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -181,7 +187,13 @@ export function AddNode({
         onDone(nodeId.trim());
         return;
       }
-      const id = (await api.createNode(title.trim(), summary.trim())).node_id;
+      const id = (
+        await api.createNode(
+          title.trim(),
+          summary.trim(),
+          fnScript.trim() || undefined,
+        )
+      ).node_id;
       await api.workAccountCreate(id, {
         is_supernode: isSupernode,
         supernode_id: under || null,
@@ -232,6 +244,38 @@ export function AddNode({
             id="node-summary"
             value={summary}
             onChange={(e) => setSummary(e.target.value)}
+          />
+
+          <label htmlFor="node-function">
+            Function (optional — bring your own code)
+          </label>
+          <div className="row">
+            <button
+              type="button"
+              className="ghost"
+              onClick={async () => {
+                const [file] = await pickLocalFiles();
+                if (!file) return;
+                setFnName(file.name);
+                setFnScript(await file.text());
+              }}
+            >
+              Upload a .py function
+            </button>
+            {fnName && <span className="muted">{fnName}</span>}
+          </div>
+          <textarea
+            id="node-function"
+            className="node-function"
+            placeholder={
+              "Paste or upload a self-contained Python function. It must " +
+              "call emit_result once with its output. It runs sandboxed — " +
+              "no network, no host credentials — and is screened and " +
+              "verified before it is ever stored."
+            }
+            value={fnScript}
+            rows={6}
+            onChange={(e) => setFnScript(e.target.value)}
           />
 
           <p className="muted fixed-note">
