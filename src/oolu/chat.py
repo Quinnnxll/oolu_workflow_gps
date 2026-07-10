@@ -458,12 +458,51 @@ NO_TASK
 
 Otherwise write the node's execution function:
 1. A short numbered plan (one step per line).
-2. ONE complete, self-contained Python script in a single fenced
+2. ONE line starting with IO: declaring the node's interface as JSON —
+   what it consumes and what it produces, so nodes chain reliably on a
+   route. Types are str, path, or number:
+   IO: {"inputs": [{"name": "...", "type": "str"}], "outputs": [{"name": "result", "type": "str"}]}
+3. ONE complete, self-contained Python script in a single fenced
    ```python block that performs the whole task in one run. The script
    MUST import and call emit_result exactly once with its final answer:
        from _oolu_runtime import emit_result
    Missing third-party packages install automatically; the sandbox has NO
    network and NO host credentials at run time."""
+
+
+_IO_LINE_RE = re.compile(r"^\s*IO:\s*(\{.*\})\s*$", re.M)
+_IO_TYPES = {"str", "path", "number"}
+
+
+def parse_node_io(raw: str) -> dict:
+    """The declared interface from the model's IO: line — normalized to
+    ``{"inputs": [...], "outputs": [...]}`` with only the fields the slot
+    vocabulary knows. A missing or broken declaration degrades to the
+    honest default: no inputs, one string result."""
+    default = {"inputs": [], "outputs": [{"name": "result", "type": "str"}]}
+    match = _IO_LINE_RE.search(raw or "")
+    if not match:
+        return default
+    try:
+        declared = json.loads(match.group(1))
+    except ValueError:
+        return default
+    def clean(items):
+        out = []
+        for item in items if isinstance(items, list) else []:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", "")).strip()
+            if not name:
+                continue
+            kind = str(item.get("type", "str")).strip().lower()
+            out.append(
+                {"name": name, "type": kind if kind in _IO_TYPES else "str"}
+            )
+        return out
+    inputs = clean(declared.get("inputs"))
+    outputs = clean(declared.get("outputs")) or default["outputs"]
+    return {"inputs": inputs, "outputs": outputs}
 
 _CHAT_SHAPED = frozenset(
     phrase for rule in DEFAULT_RULES for phrase in rule.phrases
@@ -481,12 +520,16 @@ def obviously_chat(goal: str) -> bool:
     return text.casefold().rstrip(".!?") in _CHAT_SHAPED
 
 
-def author_node_function(model: ChatModel, goal: str) -> tuple[str | None, str]:
-    """``(script, refusal_reason)`` — the two creation gates in one call.
+def author_node_function(
+    model: ChatModel, goal: str
+) -> tuple[str | None, dict, str]:
+    """``(script, io, refusal_reason)`` — the creation gates in one call.
 
     ``script`` is the node's own execution function, or None with the
     exact reason nothing was built: the sentence is conversation, the
     model wrote no usable code, or the model could not be reached.
+    ``io`` is the declared interface (inputs/outputs) that makes the
+    node chainable on a route — defaulted when the model omits it.
     """
     from .routing.gateway import extract_script
 
@@ -498,19 +541,23 @@ def author_node_function(model: ChatModel, goal: str) -> tuple[str | None, str]:
             ]
         )
     except Exception as exc:  # noqa: BLE001 - a dead model builds nothing
-        return None, f"the model could not be reached to write the function: {exc}"
+        return (
+            None,
+            {},
+            f"the model could not be reached to write the function: {exc}",
+        )
     if "NO_TASK" in raw.strip().upper()[:40]:
-        return None, (
+        return None, {}, (
             "that reads as conversation, not an executable task — a node "
             "is its function, so there is nothing to build"
         )
     script = extract_script(raw)
     if not script:
-        return None, (
+        return None, {}, (
             "the model wrote no usable function, so nothing was built — "
             "an empty node is unnecessary"
         )
-    return script, ""
+    return script, parse_node_io(raw), ""
 
 
 class NodeChatTools(GatewayChatTools):

@@ -1190,6 +1190,29 @@ class GatewayApp:
                     "task — a node is its function, so there is nothing "
                     "to build"
                 )
+            nodeplace = self._require_nodeplace()
+            # ONE node per goal, forever: the skill id derives from the
+            # goal itself, so rebuilding the same sentence finds the node
+            # that already answers for it — every execution then lands in
+            # THAT node's log instead of minting a twin.
+            skill_id = self._function_skill_id(session.tenant_id, goal)
+            existing = next(
+                (
+                    n
+                    for n in nodeplace.list_own_nodes(
+                        noder_principal=session.principal_id,
+                        tenant_id=session.tenant_id,
+                    )
+                    if n.skill_id == skill_id
+                ),
+                None,
+            )
+            if existing is not None:
+                return (
+                    f"That node already exists — “{concise_name(goal)}” "
+                    f"({existing.node_id[:8]}). No copy was made: running "
+                    "it again lands every execution in its own log."
+                )
             author = self._node_function_author(session.tenant_id)
             if author is None:
                 return (
@@ -1197,16 +1220,27 @@ class GatewayApp:
                     "function, and no model is configured to write it — "
                     "add a model key (or a local model) in Settings"
                 )
-            script, refusal = author_node_function(author, goal)
+            script, io, refusal = author_node_function(author, goal)
             if script is None:
                 return f"error: {refusal}"
-            nodeplace = self._require_nodeplace()
             name = concise_name(goal)
             skill = ReusableSkill.model_validate(
                 {
+                    "id": skill_id,
                     "name": name,
                     "description": goal,
                     "signature": {"application": "script", "adapter": "script"},
+                    # The node's declared interface: what it consumes, as
+                    # induced parameters — the same vocabulary the route
+                    # assembler chains on.
+                    "parameters": [
+                        {
+                            "name": item["name"],
+                            "value_type": item["type"],
+                            "required": True,
+                        }
+                        for item in io.get("inputs", [])
+                    ],
                     # The node's OWN function: a script action the script
                     # runtime executes (verified before trusted, per node).
                     "actions": [
@@ -1217,12 +1251,20 @@ class GatewayApp:
                             "parameters": {
                                 "goal": goal,
                                 "script": script,
-                                "node_key": f"node:{name}",
+                                "node_key": f"node:{skill_id}",
                             },
                         }
                     ],
                 }
             )
+            consumes = [
+                Slot(name=item["name"], value_type=item["type"], role="input")
+                for item in io.get("inputs", [])
+            ]
+            produces = [
+                Slot(name=item["name"], value_type=item["type"], role="result")
+                for item in io.get("outputs", [])
+            ]
             try:
                 result = nodeplace.contribute(
                     noder_principal=session.principal_id,
@@ -1231,6 +1273,8 @@ class GatewayApp:
                     semver="1.0.0",
                     title=name,
                     summary=goal,
+                    consumes=consumes or None,
+                    produces=produces or None,
                 )
                 under = entry.account.is_supernode
                 desk.create_account(
@@ -1250,11 +1294,17 @@ class GatewayApp:
                 if under
                 else "on your desk, with you as its responsible"
             )
+            interface = (
+                "consumes "
+                + (", ".join(f"{c.name}:{c.value_type}" for c in consumes) or "nothing")
+                + " → produces "
+                + ", ".join(f"{p.name}:{p.value_type}" for p in produces)
+            )
             return (
                 f"Built “{name}” ({new_id[:8]}) WITH its own execution "
-                f"function, {placing}. It starts needs-verification and "
-                "becomes a callable, routable step on this node's path as "
-                "its runs verify."
+                f"function ({interface}), {placing}. It starts "
+                "needs-verification and becomes a callable, routable step "
+                "on this node's path as its runs verify."
             )
 
         health = entry.health
@@ -1330,6 +1380,63 @@ class GatewayApp:
             say += f" {autobuild['hint']}"
         return say
 
+    @staticmethod
+    def _function_goal_key(text: str) -> str:
+        return re.sub(r"\s+", " ", str(text or "").strip().casefold())
+
+    def _function_skill_id(self, tenant: str, goal: str) -> str:
+        import hashlib
+
+        digest = hashlib.sha256(
+            f"{tenant}|{self._function_goal_key(goal)}".encode()
+        ).hexdigest()[:16]
+        return f"fn-{digest}"
+
+    def _resolve_node_function(self, session, intent: str) -> dict | None:
+        """The node that already answers for this exact goal, if the user
+        built one: its stored function becomes the run's route, so a
+        re-run executes the node's OWN code — never a re-plan onto some
+        other hand — and its executions accumulate in one log."""
+        if self._nodeplace is None:
+            return None
+        skill_id = self._function_skill_id(session.tenant_id, intent)
+        try:
+            nodes = self._nodeplace.list_own_nodes(
+                noder_principal=session.principal_id,
+                tenant_id=session.tenant_id,
+            )
+        except Exception:  # noqa: BLE001 - resolution is best-effort
+            return None
+        node = next((n for n in nodes if n.skill_id == skill_id), None)
+        if node is None:
+            return None
+        version = self._nodeplace.latest_version(node.node_id)
+        if version is None:
+            return None
+        try:
+            skill = ReusableSkill.model_validate_json(
+                version.sanitized_skill_json
+            )
+        except Exception:  # noqa: BLE001
+            return None
+        action = next(
+            (a for a in skill.actions if a.adapter == "script"), None
+        )
+        script = (action.parameters or {}).get("script") if action else None
+        if not script:
+            return None
+        return {
+            "node_id": node.node_id,
+            "skill_id": skill_id,
+            "title": skill.name,
+            "goal": skill.description,
+            "script": str(script),
+            "node_key": str(
+                (action.parameters or {}).get("node_key")
+                or f"node:{skill_id}"
+            ),
+        }
+
     def _start_intent_run(self, session, intent: str, *, max_recovery: int = 1) -> dict:
         """Submit a plain intent as a run: the non-marketplace core of
         ``_submit_run``, shared with the chat surface."""
@@ -1340,10 +1447,16 @@ class GatewayApp:
         )
         if tenant_runs >= self._config.max_runs_per_tenant:
             raise GatewayError(429, "quota_exceeded", "tenant run quota exceeded")
+        metadata: dict = {"tenant_id": session.tenant_id}
+        # A goal the user already built a node for runs THAT node's own
+        # function — the route is the stored code, not a fresh plan.
+        function = self._resolve_node_function(session, intent)
+        if function is not None:
+            metadata["node_function"] = function
         contract = TaskContract(
             intent=intent,
             submitted_by=session.principal_id,
-            metadata={"tenant_id": session.tenant_id},
+            metadata=metadata,
         )
         try:
             state = self._durable.submit(
@@ -1394,10 +1507,15 @@ class GatewayApp:
                         "not_found",
                         f"no active public listing for version '{node_version_id}'",
                     )
+            metadata: dict = {"tenant_id": session.tenant_id}
+            if node_version_id is None:
+                function = self._resolve_node_function(session, intent)
+                if function is not None:
+                    metadata["node_function"] = function
             contract = TaskContract(
                 intent=intent,
                 submitted_by=session.principal_id,
-                metadata={"tenant_id": session.tenant_id},
+                metadata=metadata,
             )
             try:
                 state = self._durable.submit(

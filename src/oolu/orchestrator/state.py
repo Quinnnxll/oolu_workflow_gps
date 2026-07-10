@@ -162,7 +162,8 @@ class Blueprint(BaseModel):
     # nodes; "llm_rebuild" routes were planned and written by a model after
     # the user's retries were exhausted. ``plan_notes`` carries the planner's
     # own step narrative (the model's numbered plan) for the user to read.
-    origin: Literal["planned", "llm_rebuild"] = "planned"
+    # "node_function" routes execute a node's OWN stored function.
+    origin: Literal["planned", "llm_rebuild", "node_function"] = "planned"
     plan_notes: list[str] = Field(default_factory=list)
 
 

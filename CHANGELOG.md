@@ -4,6 +4,41 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+One node per goal, its own function on every run, a model that repairs
+its own code, and a declared interface:
+
+- **Rebuilding a goal reuses its node.** The built node's skill id now
+  derives from the goal itself, so "build" for a sentence that already
+  has a node finds it instead of minting a twin (and spends no model
+  call saying so). Every execution accumulates in ONE node's log.
+- **A re-run executes the node's OWN function.** A run whose goal the
+  user built a node for no longer re-plans onto whatever hand the
+  generic planner finds (the "workflow.executed always fetches a URL"
+  symptom): the gateway attaches the node's stored function to the
+  contract and the orchestrator routes it straight through the script
+  hand (`origin: node_function`). Stored model-written code still
+  re-earns the human's confirmation before it runs.
+- **The model edits the failing function.** When a node's script fails,
+  the runner now hands the model the goal, the CURRENT code, and the
+  exact failure, and asks for an edit — not a rewrite. Each edit is
+  verified by execution before it is trusted; the loop is bounded (two
+  rounds); a verified repair becomes the node's cached function, so
+  every later run executes the healed code. Beyond the bound, the
+  failure is honest: "repair could not close the gap".
+- **Nodes declare what they consume and produce.** The function-writing
+  prompt now requires an `IO:` line (inputs/outputs with str/path/number
+  types); it lands as the skill's parameters and the listing's
+  consumes/produces slots — the exact vocabulary the route assembler
+  chains on — and the build reply spells the interface out. A missing
+  declaration degrades to the honest default (no inputs, one string
+  result).
+- Tests: node reuse with a single model spend, the IO parse and its
+  degradation, the interface on the listing, goal→function resolution
+  (spacing/case-proof), the forced node-function route executing through
+  the script hand with the generic hand never firing, and the repair
+  loop's edit-verify-cache cycle plus its bound. Entire backend suite
+  green (frontend untouched).
+
 Files that arrive from the device, and act as a group:
 
 - **Upload from the device.** The Files drawer's new Upload button opens

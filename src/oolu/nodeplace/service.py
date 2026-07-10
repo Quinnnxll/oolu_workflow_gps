@@ -191,6 +191,11 @@ class NodeplaceService:
     def list_own_nodes(self, *, noder_principal: str, tenant_id: str) -> list[Node]:
         return self._store.list_nodes(tenant_id, noder_principal)
 
+    def latest_version(self, node_id: str) -> NodeVersion | None:
+        """The node's newest version — its current function."""
+        versions = self._store.list_versions(node_id)
+        return versions[-1] if versions else None
+
     def runnable_version(self, version_id: str) -> NodeVersion | None:
         version = self._store.get_version(version_id)
         if version is None:

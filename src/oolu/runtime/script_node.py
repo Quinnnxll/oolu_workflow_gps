@@ -140,6 +140,44 @@ class ChatModelSynthesizer:
             return None
         return NodeSynthesis(script=script, tier=self._tier, model="chat-router")
 
+    def repair(self, goal: str, script: str, error: str) -> str | None:
+        """EDIT the node's failing function instead of rewriting from
+        scratch: the model sees the goal, the current code, and the exact
+        failure, and returns the corrected full script — which the runner
+        still verifies by execution before trusting anything."""
+        from ..routing.gateway import extract_script
+
+        try:
+            raw = self._model.reply(
+                [
+                    {"role": "system", "content": REPAIR_SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Goal:\n{goal}\n\nCurrent function:\n"
+                            f"```python\n{script}\n```\n\n"
+                            f"It failed with:\n{error}\n\n"
+                            "Return the corrected COMPLETE script."
+                        ),
+                    },
+                ]
+            )
+        except Exception as exc:  # noqa: BLE001 - a dead model repairs nothing
+            logger.warning("chat-model repair failed: %s", exc)
+            return None
+        return extract_script(raw) or None
+
+
+REPAIR_SYSTEM_PROMPT = """\
+You repair the execution function of an OoLu node. You are given the
+node's goal, its current Python script, and the exact failure it hit.
+Edit the script to close the gap — fix the cause of THAT failure, keep
+everything that already works. Same contract as before: ONE complete,
+self-contained Python script in a single ```python fence that performs
+the whole task in one run and calls emit_result exactly once:
+    from _oolu_runtime import emit_result
+The sandbox has NO network and NO host credentials at run time."""
+
 
 def render_node_goal(goal: str, bindings: dict[str, Any]) -> str:
     """The exact synthesis prompt for a bound node — deterministic, so the
@@ -306,6 +344,61 @@ class NodeScriptRunner:
                 f"provided script failed verification: {record.error_class.value}"
             )
             logger.info("provided script failed for %s (%s)", node_key, stale_error)
+
+            # --- edit path: the model REPAIRS the node's own function ---- #
+            # Bounded: the model sees the exact failure, edits the code,
+            # and the edit is verified by execution before it is trusted
+            # or cached — the loop closes the gap or says it could not.
+            repairer = getattr(self._synthesizer, "repair", None)
+            if repairer is not None:
+                current = str(provided)
+                failure_words = (
+                    f"{record.error_class.value}: "
+                    + (result.stderr or result.stdout or "")[-800:]
+                )
+                for attempt in range(1, 3):
+                    edited = repairer(
+                        render_node_goal(str(goal), bindings),
+                        current,
+                        failure_words,
+                    )
+                    if not edited or edited.strip() == current.strip():
+                        break
+                    deps = []
+                    result = self._run_script(edited, deps, idempotency_key)
+                    record = classify(result)
+                    if record is None:
+                        # The repaired function is the node's function now:
+                        # cached under the node's own key, so every later
+                        # run executes the healed code.
+                        self._cache.store_success(
+                            key,
+                            script=edited,
+                            dependencies=deps,
+                            tier="repaired",
+                            model="chat-router",
+                        )
+                        return self._outcome(
+                            action,
+                            idempotency_key,
+                            ExecutionStatus.SUCCEEDED,
+                            started,
+                            evidence={
+                                "cache": "repaired",
+                                "cache_key": key,
+                                "repair_rounds": attempt,
+                                "result": result.contract_payload,
+                            },
+                        )
+                    current = edited
+                    failure_words = (
+                        f"{record.error_class.value}: "
+                        + (result.stderr or result.stdout or "")[-800:]
+                    )
+                stale_error = (
+                    "the function failed and repair could not close the "
+                    f"gap: {record.error_class.value}"
+                )
 
         # --- miss / repair path: re-synthesize THIS node only ------------ #
         if self._synthesizer is None:

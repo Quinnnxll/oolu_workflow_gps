@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from ..skills.models import ExecutionStatus
+from ..skills.models import ActionEvent, ExecutionStatus
 from ..skills.ports import EventSink
 from ..skills.requirements import (
     BriefStatus,
@@ -39,13 +39,16 @@ from .ports import (
 )
 from .rebuild import RebuildDecision, RouteRebuilder
 from .state import (
+    Blueprint,
     ConfirmationRecord,
     Incident,
     PauseKind,
     PauseToken,
     Phase,
     PhaseTransition,
+    ReservedAction,
     ResumeInput,
+    RoutePlan,
     RunState,
     TaskContract,
 )
@@ -242,14 +245,74 @@ class WorkflowOrchestrator:
         grounding = self._grounder.ground(state.brief)
         state.grounding = grounding
         if grounding.unresolved_terms:
+            if self._node_function_route(state) is not None:
+                # The node's own stored function IS the route — unresolved
+                # vocabulary cannot block code that already exists.
+                return self._advance(
+                    state,
+                    Phase.ROUTE_OPTIMIZATION,
+                    "the node's own function carries the route",
+                )
             return self._fail(
                 state,
                 "could not ground terms: " + ", ".join(grounding.unresolved_terms),
             )
         return self._advance(state, Phase.ROUTE_OPTIMIZATION, "intent grounded")
 
+    @staticmethod
+    def _node_function_route(state: RunState) -> RoutePlan | None:
+        """A run whose goal the user already built a node for executes
+        THAT node's stored function: the gateway attaches it to the
+        contract, and it outranks planning — re-running a node must never
+        re-plan onto some other hand (the URL fetch of old)."""
+        metadata = state.contract.metadata or {}
+        function = metadata.get("node_function")
+        if not isinstance(function, dict) or not function.get("script"):
+            return None
+        action = ActionEvent(
+            correlation_id="node-function",
+            adapter="script",
+            operation="run",
+            parameters={
+                "goal": str(function.get("goal") or state.contract.intent),
+                "script": str(function["script"]),
+                "node_key": str(
+                    function.get("node_key")
+                    or f"node:{function.get('skill_id', '')}"
+                ),
+                "skill_id": str(function.get("skill_id") or "node-function"),
+            },
+        )
+        blueprint = Blueprint(
+            name=str(function.get("title") or "node function"),
+            actions=[
+                ReservedAction(
+                    action=action,
+                    required_capabilities=frozenset({"run"}),
+                    reserved=False,
+                    # Stored model-written code still re-earns the human's
+                    # confirmation before it runs.
+                    risk="write",
+                )
+            ],
+            estimated_cost=0.0,
+            origin="node_function",
+            plan_notes=[
+                f"runs the node's own function ({function.get('skill_id', '')})"
+            ],
+        )
+        return RoutePlan(chosen=blueprint, alternatives=[], total_cost=0.0)
+
     def _phase_route(self, state: RunState) -> RunState:
         assert state.brief is not None and state.grounding is not None
+        forced = self._node_function_route(state)
+        if forced is not None:
+            state.route = forced
+            return self._advance(
+                state,
+                Phase.HUMAN_CONTROL,
+                f"route '{forced.chosen.name}' (the node's own function)",
+            )
         route = self._optimizer.optimize(state.brief, state.grounding)
         state.route = route
         if route.chosen.excluded:
