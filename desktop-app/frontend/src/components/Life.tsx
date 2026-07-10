@@ -21,10 +21,32 @@ type Selection =
   | { kind: "friends" }
   | { kind: "noder"; run: RunSummary };
 
+const GROUPS_KEY = "oolu_groups_open";
+
+function loadGroups(): { friends: boolean; noder: boolean } {
+  try {
+    const raw = localStorage.getItem(GROUPS_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return { friends: parsed.friends !== false, noder: parsed.noder !== false };
+  } catch {
+    return { friends: true, noder: true };
+  }
+}
+
 export function Life() {
   const [mode, setMode] = useState<"life" | "work">("life");
   const [selected, setSelected] = useState<Selection>({ kind: "oolu" });
   const [runs, setRuns] = useState<RunSummary[]>([]);
+  // Long lists fold away for a clear view; the choice survives restarts.
+  const [groups, setGroups] = useState(loadGroups);
+
+  function toggleGroup(name: "friends" | "noder") {
+    setGroups((g) => {
+      const next = { ...g, [name]: !g[name] };
+      localStorage.setItem(GROUPS_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
 
   const refreshRuns = useCallback(async () => {
     try {
@@ -92,22 +114,38 @@ export function Life() {
           </span>
         </button>
 
-        <div className="convo-group">Friends</div>
         <button
-          className={`convo ${selected.kind === "friends" ? "on" : ""}`}
-          onClick={() => setSelected({ kind: "friends" })}
+          className="convo-group toggle"
+          aria-expanded={groups.friends}
+          onClick={() => toggleGroup("friends")}
         >
-          <span className="convo-avatar">+</span>
-          <span className="convo-body">
-            <span className="convo-sub">No conversations yet</span>
-          </span>
+          {groups.friends ? "▾" : "▸"} Friends
         </button>
+        {groups.friends && (
+          <button
+            className={`convo ${selected.kind === "friends" ? "on" : ""}`}
+            onClick={() => setSelected({ kind: "friends" })}
+          >
+            <span className="convo-avatar">+</span>
+            <span className="convo-body">
+              <span className="convo-sub">No conversations yet</span>
+            </span>
+          </button>
+        )}
 
-        <div className="convo-group">Noder</div>
-        {runs.length === 0 && (
+        <button
+          className="convo-group toggle"
+          aria-expanded={groups.noder}
+          onClick={() => toggleGroup("noder")}
+        >
+          {groups.noder ? "▾" : "▸"} Noder
+          {runs.length > 0 ? ` (${runs.length})` : ""}
+        </button>
+        {groups.noder && runs.length === 0 && (
           <div className="convo-empty">Node activity appears here.</div>
         )}
-        {runs.map((r) => (
+        {groups.noder &&
+          runs.map((r) => (
           <button
             key={r.run_id}
             className={`convo ${

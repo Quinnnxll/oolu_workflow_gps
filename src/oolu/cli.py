@@ -390,6 +390,14 @@ def build_parser() -> argparse.ArgumentParser:
         "Pre-launch: addresses are recorded but not yet verified — the "
         "mail-sender milestone adds verification codes",
     )
+    host.add_argument(
+        "--global-service",
+        action="store_true",
+        help="run as the OoLu GLOBAL service: Supernodes here serve the whole "
+        "ecosystem with a higher trust score, so the KYC policy (and its "
+        "paying-plan gate) is enforced. Edge installs — this device or a "
+        "private-network server — leave it off: no KYC, no subscription",
+    )
 
     sub.add_parser("show-config", help="print the effective settings").add_argument(
         "--config", metavar="PATH", help="path to a models.yaml settings file"
@@ -1358,6 +1366,7 @@ def _cmd_host(args, out) -> int:
         open_registration=args.open_registration,
         registration_tenant=args.tenant,
         server_url=os.environ.get("OOLU_SERVER_URL"),
+        global_service=args.global_service,
     )
     try:
         runtime = build_host_runtime(

@@ -166,3 +166,62 @@ def test_files_require_auth_name_and_a_store(tmp_path):
         assert resp.status == 404
     finally:
         conn2.close()
+
+
+def test_folders_organize_a_drawer(tmp_path):
+    app, conn, ident = _files_app(tmp_path)
+    try:
+        token = ident.token("user-1", "t1")
+
+        # A file is created INSIDE a folder; the path is normalized.
+        created = app.handle(
+            _req(
+                "POST",
+                "/v1/files",
+                token=token,
+                body={
+                    "name": "q3.md",
+                    "content": "# Q3",
+                    "folder": " /reports/2026/ ",
+                },
+            )
+        )
+        assert created.status == 201, created.body
+        assert created.body["folder"] == "reports/2026"
+        file_id = created.body["file_id"]
+
+        # The listing carries the folder so a client can navigate.
+        listed = app.handle(_req("GET", "/v1/files", token=token))
+        assert listed.body["items"][0]["folder"] == "reports/2026"
+
+        # Moving a file is just updating its folder; content is untouched.
+        moved = app.handle(
+            _req(
+                "PUT",
+                f"/v1/files/{file_id}",
+                token=token,
+                body={"folder": "archive"},
+            )
+        )
+        assert moved.status == 200
+        assert moved.body["folder"] == "archive"
+        assert moved.body["content"] == "# Q3"
+
+        # A root file simply has no folder.
+        root = app.handle(
+            _req("POST", "/v1/files", token=token, body={"name": "note.md"})
+        )
+        assert root.body["folder"] == ""
+
+        # A silly-long path is refused, never truncated silently.
+        refused = app.handle(
+            _req(
+                "POST",
+                "/v1/files",
+                token=token,
+                body={"name": "x.md", "folder": "a/" * 200},
+            )
+        )
+        assert refused.status == 400
+    finally:
+        conn.close()

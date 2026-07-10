@@ -36,7 +36,12 @@ from ..billing import (
 from ..billing.launch import LaunchGuard
 from ..billing.subscription import SubscriptionError, SubscriptionService
 from ..chat import ChatAssistant, GatewayChatTools
-from ..durable.files import FileTooLargeError, UserFile, UserFileStore
+from ..durable.files import (
+    FileTooLargeError,
+    UserFile,
+    UserFileStore,
+    normalize_folder,
+)
 from ..durable.idempotency import IdempotencyLedger
 from ..durable.service import DurableWorkflowService
 from ..identity.apikeys import KEY_PREFIX, ApiKeyError, ApiKeyService, scope_allows
@@ -282,6 +287,12 @@ class GatewayConfig:
     open_registration: bool = False
     # Which tenant self-served accounts land in.
     registration_tenant: str = "main"
+    # Is this deployment the OoLu GLOBAL service? Supernodes serving the
+    # global ecosystem carry a higher trust score and must obey the KYC
+    # policy (with its paying-plan gate). Edge installs — the desktop and
+    # self-hosted/private-network servers — leave this off: their
+    # Supernodes owe nobody a verification or a subscription.
+    global_service: bool = False
     # How long a held reserved contract stays decidable. After this it is
     # swept (audited as contract.expired) — a stale hold must never be
     # released long after the submitter's intent went cold. None = never.
@@ -1673,6 +1684,7 @@ class GatewayApp:
             "file_id": file.file_id,
             "node_id": file.node_id,
             "name": file.name,
+            "folder": file.folder,
             "media_type": file.media_type,
             "size": file.size,
             "created_at": file.created_at.isoformat(),
@@ -1698,10 +1710,15 @@ class GatewayApp:
         name = body.get("name")
         if not name or not isinstance(name, str):
             raise GatewayError(400, "invalid_request", "name is required")
+        try:
+            folder = normalize_folder(body.get("folder"))
+        except ValueError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
         file = UserFile(
             tenant_id=session.tenant_id,
             node_id=(str(body["node_id"]) if body.get("node_id") else None),
             name=name.strip(),
+            folder=folder,
             media_type=str(body.get("media_type") or _media_type_for(name)),
             content=str(body.get("content") or ""),
         )
@@ -1728,11 +1745,20 @@ class GatewayApp:
         store = self._require_files()
         file = self._load_file(params, session)
         body = request.body or {}
+        try:
+            folder = (
+                normalize_folder(body["folder"])
+                if "folder" in body and body["folder"] is not None
+                else file.folder
+            )
+        except ValueError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
         updated = file.model_copy(
             update={
                 "name": (
                     str(body["name"]).strip() if body.get("name") else file.name
                 ),
+                "folder": folder,
                 "content": (
                     str(body["content"])
                     if "content" in body and body["content"] is not None
@@ -1881,6 +1907,9 @@ class GatewayApp:
                 # What ranking actually multiplies by — own verification
                 # or the nearest verified Supernode above.
                 "trust_multiplier": kyc.trust_multiplier(params["node_id"]),
+                # KYC binds only on the Global service; an Edge install's
+                # Supernodes need no verification and no subscription.
+                "required": bool(self._config.global_service),
             },
         )
 
@@ -1889,8 +1918,18 @@ class GatewayApp:
 
         The deterministic screen runs here — a personal mailbox is refused
         with a 400 before anything is stored; trusted company domains are
-        fast-tracked; the paying-plan gate answers 402."""
+        fast-tracked; the paying-plan gate answers 402. KYC binds only on
+        the GLOBAL service, where a verified Supernode serves the whole
+        ecosystem with a higher trust score; an Edge install (this device
+        or a private network) refuses the application as unnecessary."""
         kyc = self._require_kyc()
+        if not self._config.global_service:
+            raise GatewayError(
+                409,
+                "conflict",
+                "KYC applies to Supernodes serving the Global ecosystem — "
+                "an Edge install needs no verification and no subscription",
+            )
         body = request.body or {}
         try:
             record = kyc.apply(

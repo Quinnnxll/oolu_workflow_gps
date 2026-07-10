@@ -435,6 +435,66 @@ describe("NodeThread", () => {
     expect(screen.queryByRole("button", { name: "Apply" })).toBeNull();
   });
 
+  it("shows no KYC block at all on an Edge install", async () => {
+    const sn = supernode();
+    routes["GET /v1/work/nodes/sn1/activity"] = {
+      status: 200,
+      body: { items: [] },
+    };
+    routes["GET /v1/runs/contract/holds"] = { status: 200, body: { items: [] } };
+    routes["GET /v1/work/nodes/sn1/kyc"] = {
+      status: 200,
+      // Edge: KYC does not bind and no subscription is required.
+      body: { application: null, trust_multiplier: 1.0, required: false },
+    };
+    render(<NodeThread node={sn} allNodes={[sn]} />);
+
+    // The thread settles with no KYC section, no form, no plan nag.
+    expect(await screen.findByText(/Finance Division/)).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        calls.some((c) => c.path === "/v1/work/nodes/sn1/kyc"),
+      ).toBe(true),
+    );
+    expect(screen.queryByText("KYC — legal entity")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Apply" })).toBeNull();
+  });
+
+  it("member nodes fold away for a clear view", async () => {
+    const sn = supernode();
+    const member = workNode({
+      node_id: "n2",
+      title: "Tax Filer",
+      account: {
+        ...workNode().account,
+        node_id: "n2",
+        supernode_id: "sn1",
+        authority_level: 2,
+      },
+    });
+    routes["GET /v1/work/nodes/sn1/activity"] = {
+      status: 200,
+      body: { items: [] },
+    };
+    routes["GET /v1/runs/contract/holds"] = { status: 200, body: { items: [] } };
+    routes["GET /v1/work/nodes/sn1/kyc"] = {
+      status: 200,
+      body: { application: null, trust_multiplier: 1.0, required: false },
+    };
+    render(<NodeThread node={sn} allNodes={[sn, member]} />);
+
+    // Open by default, with the count on the header.
+    const header = await screen.findByRole("button", {
+      name: /Member nodes \(1\)/,
+    });
+    expect(screen.getByText(/Tax Filer/)).toBeTruthy();
+
+    fireEvent.click(header);
+    expect(screen.queryByText(/Tax Filer/)).toBeNull();
+    fireEvent.click(header);
+    expect(screen.getByText(/Tax Filer/)).toBeTruthy();
+  });
+
   it("a held request can be allowed, signed, or replied to", async () => {
     const audited = workNode({
       account: { ...workNode().account, audit_mode: true },

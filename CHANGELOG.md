@@ -4,6 +4,41 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Folders in the drawers, KYC only where it binds, and lists that fold:
+
+- **Folders organize a file drawer.** `UserFile` gains a `folder` path
+  ('/'-separated, normalized, bounded; '' = root) — folders are derived
+  from the files that name them, organization rather than a separate
+  object. The gateway accepts `folder` on create and update (moving a
+  file is just updating its folder), and every drawer — a node's files
+  in Work (Supernodes included) and the Life drawer — navigates them:
+  folder tiles, a breadcrumb with "up one level", "New folder" (held
+  client-side until a document lands in it), and "New document" creating
+  in the current folder.
+- **KYC binds only on the Global service.** New
+  `GatewayConfig.global_service` (set by `oolu host --global-service`;
+  the desktop and private-network hosts never set it): a Supernode
+  created under a GLOBAL account serves the whole ecosystem with a
+  higher trust score, so the KYC policy and its paying-plan gate are
+  enforced there — and only there. On an Edge install the KYC status
+  answers `required: false`, the Work UI shows **no KYC block at all**
+  (no form, no subscription nag), and applying is refused as
+  unnecessary (409, never a 402 plan nag). And once a review IS done,
+  the block disappears everywhere: a verified Supernode shows one quiet
+  "✓ KYC verified · global trust ×N" badge instead of the section.
+- **Lists fold for a clear view.** The Life sidebar's Friends and Noder
+  groups and a Supernode's Member nodes section are now collapsible
+  headers (▾/▸ with a count); Life's choices survive restarts via
+  localStorage, and everything defaults open.
+- Tests: folder round-trip/move/refusal through the gateway
+  (`test_user_files.py`), Edge-vs-Global KYC (`test_supernode_kyc.py`:
+  `required` flag, 409 apply, nothing stored), FilesPane folder
+  navigation + empty-folder creation, the hidden-on-Edge KYC block, the
+  verified badge, and folding Member nodes / Friends / Noder (persisted).
+  131 vitest and the entire backend suite green; verified live through
+  `build_host_runtime` (folder create/move; Edge default). Shell
+  rebuilt.
+
 The endless conversation keeps its promises, and names become labels:
 
 - **The chat reminds an idle user of unfinished work.** A conversation

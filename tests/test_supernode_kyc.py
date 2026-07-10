@@ -46,8 +46,14 @@ def test_the_screen_sorts_the_queue_and_refuses_personal_mailboxes():
     assert screen is KycScreen.STANDARD
 
 
-def _kyc_rig(tmp_path, plans=None):
-    app, conn, ident, registry, *_rest, desk, _ = _desk_build(tmp_path)
+def _kyc_rig(tmp_path, plans=None, *, global_service=True):
+    # KYC binds only on the GLOBAL service, so the rig defaults to one;
+    # the edge test flips the flag off.
+    from oolu.gateway import GatewayConfig
+
+    app, conn, ident, registry, *_rest, desk, _ = _desk_build(
+        tmp_path, config=GatewayConfig(global_service=global_service)
+    )
     plans = plans if plans is not None else {}
     kyc = KycService(
         KycStore(conn),
@@ -294,5 +300,59 @@ def test_the_kyc_routes_screen_gate_decide_and_audit(tmp_path):
             for e in app._durable.audit.records(run_id=f"kyc:{super_id}")
         ]
         assert events == ["kyc.applied", "kyc.decided"]
+    finally:
+        conn.close()
+
+
+def test_edge_installs_owe_no_kyc_and_no_subscription(tmp_path):
+    # The desktop and private-network hosts are Edge: a Supernode there
+    # serves its own people, not the global ecosystem — no KYC policy, no
+    # paying-plan gate. Only the Global service enforces either.
+    app, conn, ident, registry, desk, kyc, plans = _kyc_rig(
+        tmp_path, global_service=False
+    )
+    try:
+        super_id, _ = _seed_supernode(app, ident, registry, desk)
+        owner = ident.token("noder-export", "t1")
+
+        # The status says so, and the UI hides the whole block on it.
+        status = app.handle(
+            _req("GET", f"/v1/work/nodes/{super_id}/kyc", token=owner)
+        )
+        assert status.status == 200
+        assert status.body["required"] is False
+        assert status.body["application"] is None
+
+        # Applying is refused as unnecessary — 409, never a plan nag (402).
+        refused = app.handle(
+            _req(
+                "POST",
+                f"/v1/work/nodes/{super_id}/kyc",
+                token=owner,
+                body={
+                    "legal_name": "Mphepo Ltd",
+                    "company_email": "quinn@mphepo.io",
+                },
+            )
+        )
+        assert refused.status == 409
+        assert "Edge install" in refused.body["error"]["message"]
+        assert kyc.status_for(super_id) is None  # nothing was stored
+    finally:
+        conn.close()
+
+
+def test_the_global_service_reports_kyc_as_required(tmp_path):
+    app, conn, ident, registry, desk, kyc, plans = _kyc_rig(tmp_path)
+    try:
+        super_id, _ = _seed_supernode(app, ident, registry, desk)
+        status = app.handle(
+            _req(
+                "GET",
+                f"/v1/work/nodes/{super_id}/kyc",
+                token=ident.token("noder-export", "t1"),
+            )
+        )
+        assert status.body["required"] is True
     finally:
         conn.close()

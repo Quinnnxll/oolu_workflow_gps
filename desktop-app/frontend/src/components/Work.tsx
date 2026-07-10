@@ -344,6 +344,8 @@ export function NodeThread({
   const [activity, setActivity] = useState<NodeRunSteps[] | null>(null);
   const [holds, setHolds] = useState<HoldItem[]>([]);
   const [tab, setTab] = useState<"activity" | "files">("activity");
+  // A large fleet folds away for a clear view of the thread itself.
+  const [showMembers, setShowMembers] = useState(true);
   const account = node.account;
   const members = allNodes.filter(
     (n) => n.account.supernode_id === node.node_id,
@@ -426,17 +428,25 @@ export function NodeThread({
 
       {account.is_supernode && members.length > 0 && (
         <div className="commits">
-          <div className="convo-group">Member nodes</div>
-          {members.map((m) => (
-            <div key={m.node_id} className="commit-row">
-              <span>
-                {m.title} ·{" "}
-                {m.account.responsible || "not onboarded — keep its id private"}
-              </span>
-              {/* Fixed at creation, authority included: display only. */}
-              <span className="muted">{regimeTag(m.account)}</span>
-            </div>
-          ))}
+          <button
+            className="convo-group toggle"
+            aria-expanded={showMembers}
+            onClick={() => setShowMembers((s) => !s)}
+          >
+            {showMembers ? "▾" : "▸"} Member nodes ({members.length})
+          </button>
+          {showMembers &&
+            members.map((m) => (
+              <div key={m.node_id} className="commit-row">
+                <span>
+                  {m.title} ·{" "}
+                  {m.account.responsible ||
+                    "not onboarded — keep its id private"}
+                </span>
+                {/* Fixed at creation, authority included: display only. */}
+                <span className="muted">{regimeTag(m.account)}</span>
+              </div>
+            ))}
         </div>
       )}
 
@@ -646,6 +656,24 @@ export function KycSection({ nodeId }: { nodeId: string }) {
   if (view === null) return null;
   const app = view.application;
 
+  // The review is DONE: the block disappears — one quiet badge remains.
+  if (app?.status === "verified") {
+    return (
+      <div className="account-row">
+        <span className="badge">
+          ✓ KYC verified · global trust ×{view.trust_multiplier}
+        </span>
+        <span className="muted">{app.legal_name}</span>
+      </div>
+    );
+  }
+
+  // KYC binds only on the Global service, where a Supernode serves the
+  // whole ecosystem with a higher trust score. On an Edge install (this
+  // device or a private network) there is nothing to comply with and
+  // nothing to subscribe to — so nothing to show.
+  if (view.required === false) return null;
+
   async function submit() {
     setError("");
     setBusy(true);
@@ -666,17 +694,6 @@ export function KycSection({ nodeId }: { nodeId: string }) {
   return (
     <div className="commits kyc">
       <div className="convo-group">KYC — legal entity</div>
-
-      {app?.status === "verified" && (
-        <div className="commit-row">
-          <span className="badge">
-            ✓ KYC verified · global trust ×{view.trust_multiplier}
-          </span>
-          <span className="muted">
-            {app.legal_name} · every node under this Supernode ranks with it
-          </span>
-        </div>
-      )}
 
       {app?.status === "pending_review" && (
         <div className="commit-row">

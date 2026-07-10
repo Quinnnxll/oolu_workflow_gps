@@ -91,6 +91,27 @@ describe("Life", () => {
     ).toBeTruthy();
   });
 
+  it("Friends and Noder fold away for a clear view, and stay folded", async () => {
+    routes["GET /v1/runs"] = { status: 200, body: { items: [RUN] } };
+    const { unmount } = render(<Life />);
+
+    // Open by default, with the count on the Noder header.
+    const noder = await screen.findByRole("button", { name: /Noder \(1\)/ });
+    expect(await screen.findByText("Convert Report Pdf")).toBeTruthy();
+
+    fireEvent.click(noder);
+    expect(screen.queryByText("Convert Report Pdf")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Friends/ }));
+    expect(screen.queryByText("No conversations yet")).toBeNull();
+
+    // The folded state survives a remount (it lives in localStorage).
+    unmount();
+    render(<Life />);
+    expect(screen.queryByText("No conversations yet")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Friends/ }));
+    expect(screen.getByText("No conversations yet")).toBeTruthy();
+  });
+
   it("keeps Settings right below Files, above the conversations", async () => {
     routes["GET /v1/settings"] = { status: 200, body: { items: [] } };
     routes["GET /v1/runs"] = { status: 200, body: { items: [RUN] } };

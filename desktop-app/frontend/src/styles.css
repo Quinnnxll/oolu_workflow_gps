@@ -227,6 +227,19 @@ main {
   color: var(--muted);
 }
 
+/* A group header that folds its list away for a clear view. */
+button.convo-group.toggle {
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.convo-group.toggle:hover {
+  color: var(--fg);
+}
+
 .convo-empty {
   font-size: 12px;
   color: var(--muted);
@@ -1037,6 +1050,27 @@ main.chat-main {
 .file-tile-sub {
   font-size: 11px;
   color: var(--muted);
+}
+
+/* Folders inside a drawer: same tiles, a shelf accent. */
+.file-tile.folder .file-tile-icon {
+  color: var(--accent);
+}
+
+.files-path {
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--fg);
+}
+
+.files-newfolder {
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
+}
+
+.files-newfolder input {
+  max-width: 240px;
 }
 
 textarea,

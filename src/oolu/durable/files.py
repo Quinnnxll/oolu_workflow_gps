@@ -29,6 +29,20 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+MAX_FOLDER_CHARS = 200
+
+
+def normalize_folder(folder: object) -> str:
+    """A folder path in canonical form: '/'-separated segments, no blank
+    segments, no leading/trailing slashes, bounded length. '' = the root."""
+    text = str(folder or "").strip()
+    segments = [s.strip() for s in text.split("/") if s.strip()]
+    normalized = "/".join(segments)
+    if len(normalized) > MAX_FOLDER_CHARS:
+        raise ValueError(f"folder path exceeds {MAX_FOLDER_CHARS} characters")
+    return normalized
+
+
 class UserFile(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -38,6 +52,10 @@ class UserFile(BaseModel):
     # drawer; a node id = that node's own independent files in Work.
     node_id: str | None = None
     name: str
+    # Where the file sits INSIDE its drawer: a '/'-separated folder path
+    # ('' = the drawer's root). Folders are derived from the files that
+    # name them — organization, not a separate object.
+    folder: str = ""
     media_type: str = "text/markdown"
     content: str = ""
     created_at: datetime = Field(default_factory=_now)
