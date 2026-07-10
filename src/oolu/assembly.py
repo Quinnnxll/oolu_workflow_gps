@@ -456,6 +456,9 @@ def build_host_runtime(
     # place. The webhook secret (whsec_...) opens /v1/webhooks/stripe.
     stripe_secret_key: str | None = None,
     stripe_webhook_secret: str | None = None,
+    # The desktop's own disk for the chat's local file search. ONLY the
+    # loopback desktop sets this; a public host must never touch it.
+    local_files_root: str | Path | None = None,
 ) -> HostRuntime:
     """The multi-user web host: the full multi-tenant gateway over one
     data directory, with LOCAL accounts as the identity provider.
@@ -581,6 +584,7 @@ def build_host_runtime(
             source=lambda: str(_model_setting("model.source", "subscription")),
             local_url=lambda: str(_model_setting("model.local_url", "")),
             local_model=lambda: str(_model_setting("model.local_model", "")),
+            web_search=lambda: bool(_model_setting("model.web_search", True)),
             purpose=purpose,
         )
 
@@ -857,6 +861,7 @@ def build_host_runtime(
         # always there so verified marks survive sender changes.
         mail=mail,
         mail_codes=_mail_codes,
+        local_files_root=Path(local_files_root) if local_files_root else None,
         # People talking to people, and one OoLu thread per account that
         # every signed-in device shares.
         direct_messages=DirectMessageStore(conn),

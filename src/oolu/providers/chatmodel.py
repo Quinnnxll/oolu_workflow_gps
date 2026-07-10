@@ -111,6 +111,10 @@ class ChatModelRouter:
         source: Callable[[], str] | None = None,  # see MODEL_SOURCES
         local_url: Callable[[], str] | None = None,  # OpenAI-compatible base
         local_model: Callable[[], str] | None = None,  # e.g. llama3.2
+        # Whether the model may use its provider's server-side web search
+        # (Anthropic today). The search happens inside the API call — the
+        # local machine needs no web access of its own.
+        web_search: Callable[[], bool] | None = None,
         max_tokens: int = 1024,
         purpose: str = CHAT_PURPOSE,  # what the meter books this under
         # billing.SubscriptionBrain: the HOSTED plan's keys + allowance.
@@ -129,6 +133,7 @@ class ChatModelRouter:
         self._source = source or (lambda: "subscription")
         self._local_url = local_url or (lambda: "")
         self._local_model = local_model or (lambda: "")
+        self._web_search = web_search or (lambda: False)
         self._max_tokens = max_tokens
         self._purpose = purpose
         self._adapters: dict[tuple[str, str], Any] = {}
@@ -339,7 +344,11 @@ class ChatModelRouter:
         if provider == "anthropic":
             system, rest = _split_system(messages)
             data = adapter.messages(
-                rest, model=model_id, max_tokens=self._max_tokens, system=system
+                rest,
+                model=model_id,
+                max_tokens=self._max_tokens,
+                system=system,
+                web_search=self._web_search(),
             )
             text = "".join(
                 block.get("text", "")

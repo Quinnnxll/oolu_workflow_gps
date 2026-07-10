@@ -61,6 +61,7 @@ one, answer with EXACTLY one JSON object of the shape:
   {"tool": "list_files", "args": {}}
   {"tool": "read_file", "args": {"name": "<file name>"}}
   {"tool": "write_file", "args": {"name": "<file name>", "content": "<the full new content>"}}
+  {"tool": "find_local_files", "args": {"pattern": "<name or glob like *.pdf>"}}   (desktop app only: finds files on the user's own computer)
   {"tool": "list_runs", "args": {}}
   {"tool": "run_log", "args": {"run_id": "<a run id, or a phrase from its intent>"}}
   {"tool": "list_nodes", "args": {}}
@@ -300,6 +301,10 @@ class GatewayChatTools(FileChatTools):
         durable=None,  # durable.DurableWorkflowService
         desk=None,  # nodeplace.WorkDesk
         settings=None,  # settings_node.SettingsNode
+        # The DESKTOP's own machine, when this gateway runs on it (the
+        # `oolu desktop` loopback). A multi-user host never sets this —
+        # a server has no business in anyone's home directory.
+        local_root=None,  # pathlib.Path | None
     ):
         super().__init__(store, tenant=tenant)
         self._chat_tenant = tenant
@@ -307,6 +312,63 @@ class GatewayChatTools(FileChatTools):
         self._durable = durable
         self._desk = desk
         self._settings = settings
+        self._local_root = local_root
+
+    def local_search_enabled(self) -> bool:
+        return self._local_root is not None
+
+    def search_local_files(self, pattern: str) -> list[dict]:
+        """Find files on THIS computer by name or glob — Edge's own disk.
+
+        Listing only (path + size), never content: finding a file and
+        reading it are different trust levels. Bounded walk: hidden and
+        bulky tool directories are skipped, the scan stops after a cap,
+        and at most 40 matches return."""
+        if self._local_root is None:
+            return []
+        import fnmatch
+        import os
+
+        wanted = str(pattern or "").strip()
+        if not wanted:
+            return []
+        needle = wanted.casefold()
+        is_glob = any(ch in wanted for ch in "*?[")
+        skip = {
+            ".git", "node_modules", ".cache", "__pycache__", ".venv",
+            "venv", "AppData", "Library", ".Trash", ".oolu",
+        }
+        matches: list[dict] = []
+        scanned = 0
+        for dirpath, dirnames, filenames in os.walk(self._local_root):
+            dirnames[:] = [
+                d for d in dirnames if d not in skip and not d.startswith(".")
+            ]
+            for name in filenames:
+                scanned += 1
+                if scanned > 50_000:
+                    return matches
+                hit = (
+                    fnmatch.fnmatch(name.casefold(), needle)
+                    if is_glob
+                    else needle in name.casefold()
+                )
+                if not hit:
+                    continue
+                path = os.path.join(dirpath, name)
+                try:
+                    size = os.path.getsize(path)
+                except OSError:
+                    size = 0
+                matches.append(
+                    {
+                        "path": os.path.relpath(path, self._local_root),
+                        "size": size,
+                    }
+                )
+                if len(matches) >= 40:
+                    return matches
+        return matches
 
     def list_runs(self) -> list[dict]:
         if self._durable is None:
@@ -1053,6 +1115,21 @@ def _run_tool(tools: ChatTools, call: _ToolCall) -> tuple[str, dict | None]:
         except FileTooLargeError as exc:
             return f"error: {exc}", None
         return f"saved {saved.name}", {"tool": "write_file", "name": saved.name}
+    if call.name == "find_local_files":
+        search = getattr(tools, "search_local_files", None)
+        enabled = getattr(tools, "local_search_enabled", None)
+        if search is None or enabled is None or not enabled():
+            return (
+                "error: local file search lives on the desktop app — this"
+                " host has no access to your computer's files",
+                None,
+            )
+        results = search(str(call.args.get("pattern", "")))
+        listing = (
+            "\n".join(f"{r['path']} ({r['size']} bytes)" for r in results)
+            or "(no matching files on this computer)"
+        )
+        return listing, {"tool": "find_local_files"}
     if call.name == "list_runs" and isinstance(tools, EngineTools):
         runs = tools.list_runs()
         listing = (

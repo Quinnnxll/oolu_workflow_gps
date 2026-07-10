@@ -4,6 +4,30 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The web through the model's own hands, and the desktop's own disk:
+
+- **Model web search.** The Anthropic adapter can now carry the
+  provider's server-side web-search tool (`web_search_20250305`, max 3
+  uses per turn): the search runs INSIDE the API call on Anthropic's
+  servers, so any keyed OoLu — an own key on Edge, or the Global
+  subscription brain — answers current-facts questions from any
+  install, with no web access needed on the machine itself. The new
+  `model.web_search` setting (default on) closes the door; a local
+  model never searches (local means local), and a keyless install stays
+  deterministic by design — that part was a feature, not a bug.
+- **The desktop finds its own files.** The chat's new
+  `find_local_files` tool searches the user's computer by name or glob
+  — home-rooted, listing only (path + size, never content), bounded
+  (hidden and bulky tool directories skipped, scan capped, 40 matches
+  max). ONLY `oolu desktop` wires it; `oolu host` never does — a server
+  has no business in anyone's home directory, and the tool says so in
+  words when asked there.
+- Tests: the web-search tool riding the Anthropic request (and the
+  setting removing it), the catalog knob, bounded home-rooted disk
+  search with hidden-directory privacy, the host wall, and the chat
+  tool answering on desktop / refusing on hosts. 180 vitest and the
+  entire backend suite green.
+
 The device's senses on demand, and reminders that point back:
 
 - **Microphone, camera, location — asked for exactly when needed.** A

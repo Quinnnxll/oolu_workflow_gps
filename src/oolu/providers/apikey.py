@@ -197,6 +197,7 @@ class AnthropicAdapter(ApiKeyProviderAdapter):
         system: str | None = None,
         idempotency_key: str | None = None,
         cost: float = 1.0,
+        web_search: bool = False,
     ) -> dict:
         body: dict[str, Any] = {
             "model": model,
@@ -207,6 +208,18 @@ class AnthropicAdapter(ApiKeyProviderAdapter):
         # "system"-role message.
         if system:
             body["system"] = system
+        # The provider's own web-search tool: the SEARCH runs on Anthropic's
+        # servers inside this same API call — the machine here needs no web
+        # access of its own, which is exactly what lets a keyed OoLu answer
+        # current-facts questions from any install.
+        if web_search:
+            body["tools"] = [
+                {
+                    "type": "web_search_20250305",
+                    "name": "web_search",
+                    "max_uses": 3,
+                }
+            ]
         return self.invoke(
             "/messages",
             body,

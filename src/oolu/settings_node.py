@@ -131,6 +131,16 @@ SETTINGS_CATALOG: tuple[SettingField, ...] = (
         description="Interface language.",
     ),
     SettingField(
+        key="model.web_search",
+        group="model",
+        label="Model web search",
+        kind=SettingKind.BOOL,
+        default=True,
+        description="Let the model search the web for current facts when "
+        "it needs to (runs inside the provider's API call — Claude today; "
+        "a local model never searches).",
+    ),
+    SettingField(
         key="app.notifications",
         group="app",
         label="Notifications",

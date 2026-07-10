@@ -1367,6 +1367,10 @@ def _cmd_desktop(args, out) -> int:
         # widens it; OOLU_HTTP_ALLOWLIST / OOLU_HTTP_ALLOW_PRIVATE keep
         # their meaning for the HTTP hand.
         executors=build_desktop_hands(data_dir=data_dir),
+        # Edge means the user's OWN machine: the chat can find files on
+        # this computer (find_local_files, home-rooted, listing only).
+        # `oolu host` never passes this — a server stays out of homes.
+        local_files_root=Path.home(),
         # A desktop session should outlive a workday without re-auth.
         token_ttl_seconds=7 * 24 * 3600,
         # The product face: the OoLu messenger (built React shell), not

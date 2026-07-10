@@ -409,6 +409,8 @@ class GatewayApp:
         # thread per account, shared by every signed-in device
         legal_dir=None,  # where the operator's terms.md/privacy.md live;
         # marked templates answer until those files exist
+        local_files_root=None,  # the DESKTOP's own disk for the chat's
+        # find_local_files tool; a multi-user host never sets this
         value_patcher=None,  # orchestrator.ValuePatcher: fills creative inputs
         isolation=None,  # worker.IsolationPolicy: powers /v1/worker-health
         docker_available: bool = True,
@@ -490,6 +492,7 @@ class GatewayApp:
         self._direct_messages = direct_messages
         self._assistant_history = assistant_history
         self._legal_dir = legal_dir
+        self._local_files_root = local_files_root
         # What may run where, per trust level — rendered by the shell's
         # health screen from the policy that is actually enforced.
         from ..worker.policy import IsolationPolicy
@@ -898,6 +901,7 @@ class GatewayApp:
                     durable=self._durable,
                     desk=self._desk,
                     settings=self._settings,
+                    local_root=self._local_files_root,
                 )
         # OoLu's voice follows its mood: the client sends the avatar's
         # current mood, and the turn is coloured to match the face.
@@ -2259,6 +2263,7 @@ class GatewayApp:
                 source=lambda: str(_effective("model.source", "subscription")),
                 local_url=lambda: str(_effective("model.local_url", "")),
                 local_model=lambda: str(_effective("model.local_model", "")),
+                web_search=lambda: bool(_effective("model.web_search", True)),
             )
             self._model_routers[tenant] = router
         return router
