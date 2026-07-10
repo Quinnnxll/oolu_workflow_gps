@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, TERMINAL_PHASES } from "../api";
 import { identityHue, updateAvatarSignals } from "../avatar";
+import { conciseName } from "../naming";
 import type { RunSummary, TimelineEvent } from "../types";
 import { Chat } from "./Chat";
 import { FilesPane } from "./FilesPane";
@@ -114,6 +115,7 @@ export function Life() {
                 ? "on"
                 : ""
             }`}
+            title={r.intent}
             onClick={() => setSelected({ kind: "noder", run: r })}
           >
             <span
@@ -124,10 +126,13 @@ export function Life() {
                 borderColor: "transparent",
               }}
             >
-              {r.intent.slice(0, 1).toUpperCase()}
+              {conciseName(r.intent).slice(0, 1).toUpperCase()}
             </span>
             <span className="convo-body">
-              <span className="convo-name">{r.intent}</span>
+              {/* A name is a label, not a transcript: the keywords name
+                  the thread; the full request lives in the tooltip and
+                  the thread itself. */}
+              <span className="convo-name">{conciseName(r.intent)}</span>
               <span className="convo-sub">{r.awaiting ?? r.phase}</span>
             </span>
           </button>
@@ -193,7 +198,8 @@ export function NoderThread({
     <div className="noder-thread">
       <div className="noder-head">
         <div>
-          <div className="run-card-intent">{run.intent}</div>
+          <div className="run-card-intent">{conciseName(run.intent)}</div>
+          <div className="muted">“{run.intent}”</div>
           <div className="muted">
             {run.run_id} · {run.awaiting ?? run.phase}
           </div>

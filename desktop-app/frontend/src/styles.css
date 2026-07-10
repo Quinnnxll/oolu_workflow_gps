@@ -526,6 +526,24 @@ main.chat-main {
   overflow-wrap: anywhere;
 }
 
+/* The chat's own nudge about unfinished work. */
+.bubble.reminder {
+  border: 1px dashed var(--line);
+  background: transparent;
+  color: var(--muted);
+}
+
+.reminder-chip {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
 .bubble.user {
   align-self: flex-end;
   background: var(--accent);

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, TERMINAL_PHASES } from "../api";
 import type { ChatAction } from "../api";
 import { humanizeEvent, statusSentence } from "../humanize";
+import { conciseName } from "../naming";
 import type { TaskView, TimelineEvent } from "../types";
 import {
   currentAvatarSignals,
@@ -15,6 +16,11 @@ import type { Mood } from "../avatar";
 import { OoLuAvatar } from "./OoLuAvatar";
 import { createRecognizer, speak, speechInputSupported } from "../voice";
 import type { Recognizer } from "../voice";
+import {
+  REMIND_CHECK_MS,
+  reminderDue,
+  reminderText,
+} from "../reminders";
 import { Clarification } from "./Clarification";
 
 // The whole product face: one conversation with OoLu. Work the assistant
@@ -24,6 +30,9 @@ import { Clarification } from "./Clarification";
 type Msg =
   | { kind: "user"; text: string }
   | { kind: "assistant"; text: string; actions?: ChatAction[] }
+  // The chat's own nudge about unfinished work — not a model turn, so it
+  // never enters the history sent to the assistant.
+  | { kind: "reminder"; text: string }
   | { kind: "run"; runId: string };
 
 const CHAT_KEY = "oolu_chat";
@@ -98,16 +107,40 @@ export function Chat() {
     endRef.current?.scrollIntoView?.({ block: "end" });
   }, [thread]);
 
+  // The conversation is endless, so unfinished work surfaces ITSELF: once
+  // the user has been idle a while, a reminder bubble lists what is still
+  // running and what waits on them — at a bounded cadence, never a storm.
+  const clockRef = useRef({ lastActivityAt: Date.now(), lastReminderAt: 0 });
+  useEffect(() => {
+    const t = setInterval(async () => {
+      const now = Date.now();
+      if (!reminderDue(clockRef.current, now)) return;
+      try {
+        const text = reminderText((await api.runs()).items);
+        if (!text) return;
+        clockRef.current.lastReminderAt = now;
+        setThread((thread_) => [...thread_, { kind: "reminder", text }]);
+      } catch {
+        /* the run list being unreachable is never worth a chat error */
+      }
+    }, REMIND_CHECK_MS);
+    return () => clearInterval(t);
+  }, []);
+
   async function send(message?: string) {
     const text = (message ?? draft).trim();
     if (!text || busy) return;
     setDraft("");
     setBusy(true);
+    clockRef.current.lastActivityAt = Date.now();
     updateAvatarSignals({ userMood: deriveUserMood(text) });
     setThread((t) => [...t, { kind: "user", text }]);
     try {
       const history = thread
-        .filter((m): m is Exclude<Msg, { kind: "run" }> => m.kind !== "run")
+        .filter(
+          (m): m is Extract<Msg, { kind: "user" } | { kind: "assistant" }> =>
+            m.kind === "user" || m.kind === "assistant",
+        )
         .slice(-12)
         .map((m) => ({
           role: m.kind === "user" ? ("user" as const) : ("assistant" as const),
@@ -228,6 +261,11 @@ export function Chat() {
         {thread.map((m, i) =>
           m.kind === "run" ? (
             <RunCard key={m.runId} runId={m.runId} />
+          ) : m.kind === "reminder" ? (
+            <div key={i} className="bubble assistant reminder">
+              <span className="reminder-chip">reminder</span>
+              {m.text}
+            </div>
           ) : (
             <div key={i} className={`bubble ${m.kind}`}>
               {m.text}
@@ -331,7 +369,9 @@ export function RunCard({ runId }: { runId: string }) {
   return (
     <div className="run-card">
       <div className="run-card-head">
-        <span className="run-card-intent">{task.intent}</span>
+        <span className="run-card-intent" title={task.intent}>
+          {conciseName(task.intent)}
+        </span>
         <span className={`phase phase-${task.awaiting ?? task.phase}`}>
           {statusLabel(task)}
         </span>

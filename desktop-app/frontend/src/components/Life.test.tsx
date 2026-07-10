@@ -69,10 +69,16 @@ describe("Life", () => {
     };
     render(<Life />);
 
-    fireEvent.click(await screen.findByText("convert report to pdf"));
+    // The list names the thread by keywords — never the whole sentence —
+    // and keeps the full request as the tooltip.
+    const entry = await screen.findByText("Convert Report Pdf");
+    expect(entry.closest("button")?.title).toBe("convert report to pdf");
+    fireEvent.click(entry);
 
     expect(await screen.findByText("run.submitted")).toBeTruthy();
     expect(screen.getByText("route.chosen")).toBeTruthy();
+    // The thread header shows the keyword name plus the full request.
+    expect(screen.getByText("“convert report to pdf”")).toBeTruthy();
     // The messy log is labelled as such, with OoLu as the human path.
     expect(screen.getByText(/ask OoLu/i)).toBeTruthy();
   });

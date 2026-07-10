@@ -1109,9 +1109,14 @@ def _cmd_record(args, out, *, session=None) -> int:
             headless=args.headless,
             audit_db=args.audit_db,
         )
+        from .naming import concise_name
+
         learned = SkillLearner(registry, scrub_pii=True).learn(
             recording.demonstration,
-            name=args.name or args.intent,
+            # A name is a label, not a transcript: without an explicit
+            # --name the skill is named by the intent's keywords, and the
+            # full sentence lives on as the description.
+            name=args.name or concise_name(args.intent),
             description=args.intent,
             adapter="browser",
             mode="actions",

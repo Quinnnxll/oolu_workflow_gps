@@ -4,6 +4,40 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The endless conversation keeps its promises, and names become labels:
+
+- **The chat reminds an idle user of unfinished work.** A conversation
+  with OoLu never ends, so open work must not rely on scrolling back:
+  once the user has been idle for two minutes, a dashed "reminder"
+  bubble lists what is still WAITING ON THEM (needs an answer / a
+  decision / an approval / hit a snag) and what is still working —
+  capped at three each with an "and N more", repeated at most every
+  five minutes, and reset the moment the user speaks. Reminders are the
+  chat's own words: they never enter the history sent to the model.
+  Logic lives in pure `reminders.ts` (`reminderDue`/`reminderText`),
+  wired into `Chat` on a 30-second check.
+- **Names are labels, not transcripts.** New keyword-naming helpers —
+  frontend `naming.ts` (`conciseName`) and backend `oolu/naming.py`
+  (`concise_name`/`keyword_slug`) — distill a task sentence into its
+  first four distinct non-stopword keywords ("convert the quarterly
+  report to pdf and email it" → "Convert Quarterly Report Pdf"), with
+  the trimmed original as the all-stopwords fallback. Applied wherever
+  the system names things itself, explicit names always honored:
+  the Life Noder list and thread header (full request kept as tooltip
+  and quoted line), the chat run card, `wfgps record` without `--name`
+  (the learned skill's name — and therefore its `learned.…` id — is now
+  keywords; the full intent stays as the description), the gateway's
+  listing-title fallback for contributions without a title, and the
+  desk title fallback (a bare `learned.…` skill id now reads "Convert
+  Quarterly Report Pdf", never a dotted sentence).
+- Tests: `reminders.test.ts` (idle window, five-minute cadence,
+  activity reset, capped concise listing), a fake-timers Chat
+  integration test (the bubble appears once and does not repeat inside
+  the window), `naming.test.ts` + `tests/test_naming.py` (keyword
+  order, dedup, stopword fallback, learned-id derivation, desk-title
+  condensation). 126 vitest and the entire backend suite green; shell
+  rebuilt.
+
 The messenger straightened out — the list, the Edge doors, who answers
 for a node, and money in the user's own currency:
 

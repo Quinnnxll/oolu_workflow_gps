@@ -115,7 +115,14 @@ class WorkDesk:
             listing = self._registry.listing_for_version(version_id)
             if listing is not None:
                 return listing.title
-        return node.skill_id
+        # No listing yet: condense the skill id into a readable keyword
+        # name ("learned.convert.quarterly.report.pdf" -> "Convert
+        # Quarterly Report Pdf") instead of surfacing the raw id.
+        from ..naming import concise_name
+
+        skill_id = str(node.skill_id)
+        stem = skill_id.split(".", 1)[1] if skill_id.startswith("learned.") else skill_id
+        return concise_name(stem.replace(".", " ").replace("_", " ")) or skill_id
 
     def _earnings_by_version(
         self, principal: str, owned: set[str]

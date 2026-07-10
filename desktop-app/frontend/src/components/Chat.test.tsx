@@ -316,6 +316,39 @@ describe("Chat", () => {
     expect(screen.getByText("Anytime.")).toBeTruthy();
   });
 
+  it("reminds an idle user of pending work — once, at a bounded cadence", async () => {
+    vi.useFakeTimers();
+    try {
+      routes["GET /v1/runs"] = {
+        status: 200,
+        body: {
+          items: [
+            baseRun({ awaiting: "confirmation", phase: "confirmation" }),
+          ],
+        },
+      };
+      render(<Chat />);
+
+      // Two idle minutes pass; the next 30s check drops the reminder in.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2 * 60_000 + 30_000);
+      });
+      expect(screen.getByText("reminder")).toBeTruthy();
+      // Concise keyword name, never the whole sentence.
+      expect(
+        screen.getByText(/“Email Bob Numbers” \(needs a decision\)/),
+      ).toBeTruthy();
+      // Reminders never enter the model-bound history and never repeat
+      // inside the five-minute window.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(screen.getAllByText("reminder")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("turns a transport failure into an apology, not a crash", async () => {
     routes["POST /v1/chat"] = {
       status: 500,

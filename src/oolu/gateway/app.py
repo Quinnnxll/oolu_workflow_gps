@@ -96,6 +96,7 @@ from ..orchestrator import (
     OrchestratorError,
     patch_or_defaults,
 )
+from ..naming import concise_name
 from ..orchestrator.rebuild import AUTOBUILD_CONSENT_KEY, AUTOBUILD_HINT
 from ..orchestrator.state import (
     PauseKind,
@@ -1271,7 +1272,10 @@ class GatewayApp:
                 tenant_id=session.tenant_id,
                 skill=skill,
                 semver=str(body.get("semver", "1.0.0")),
-                title=str(body.get("title", skill.name)),
+                # An explicit title is honored verbatim; the FALLBACK is
+                # condensed to keywords so a skill named by a whole task
+                # sentence never becomes a sentence-long listing title.
+                title=str(body.get("title") or concise_name(skill.name)),
                 summary=str(body.get("summary", skill.description)),
                 tags=list(body.get("tags", [])),
                 license=str(body.get("license", "proprietary")),
