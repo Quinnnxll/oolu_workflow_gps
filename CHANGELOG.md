@@ -4,6 +4,35 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The retry that wouldn't press, the button acceleration never needed,
+and a desk that hands you the task id:
+
+- **Retry presses now.** The run card's 2.5-second poll rebuilt the DOM
+  under the user's finger on every tick (a new task object every poll),
+  so a click could land on a button that no longer existed — and a
+  refused decision vanished into an unhandled rejection. The poll now
+  re-renders only on REAL change, the decision buttons disable and
+  relabel while the call is out ("Retrying…"), a refusal lands in the
+  card as words, and the incident card counts the retries ("2 retries so
+  far — the next retry lets OoLu plan and rebuild the path").
+- **Acceleration is automatic, not a button.** Whatever can move on a
+  node's path already moved; the interact window now surfaces exactly
+  the work that waits on a human, by itself: each waiting task appears
+  as a clickable chip (name + task id) the moment the window opens.
+  Typing "accelerate" still answers honestly.
+- **Pending · Sign · Build, one row.** The interact quick actions are
+  now three: "Pending" lists what waits (each line carries the task id),
+  "Sign" pre-fills `sign <task id> as ` — the id auto-appends when
+  exactly one task waits, or comes from tapping a task chip / the
+  pending list — and signing passes the task to the next node; "Build"
+  pre-fills `build `. The thread's held-request heading is "Pending".
+  The assistant's pending reply teaches the same commands.
+- Tests: the incident Retry's press feedback, decision post, retry
+  count, and surfaced refusal; the one-row quick actions; Sign's id
+  append (single task) and open-endedness (several); the task chips'
+  click-to-fill. 174 vitest and the entire backend suite green; shell
+  rebuilt.
+
 The settings that lied, and the forward menu that wouldn't behave:
 
 - **The theme actually changes.** The whole stylesheet now reads

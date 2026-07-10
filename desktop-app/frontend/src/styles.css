@@ -652,6 +652,13 @@ main.chat-main {
   overflow-y: auto;
 }
 
+/* The interact window's waiting-task chips: tap one to sign it onward. */
+.hold-chips {
+  align-items: center;
+  gap: 6px;
+}
+
+
 .forward-done {
   margin-left: 6px;
   font-size: 11px;

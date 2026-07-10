@@ -486,4 +486,69 @@ describe("RunCard", () => {
     expect(await screen.findByText("failed")).toBeTruthy();
     expect(screen.getByText("no mail account")).toBeTruthy();
   });
+
+  it("a pressed Retry shows it was pressed and posts the decision", async () => {
+    routes["GET /v1/runs/r1"] = {
+      status: 200,
+      body: baseRun({
+        phase: "recovery",
+        awaiting: "incident",
+        prompt: "node X failed — retry?",
+        user_retries: 1,
+      }),
+    };
+    routes["POST /v1/runs/r1/incidents"] = {
+      status: 200,
+      body: baseRun({
+        phase: "recovery",
+        awaiting: "incident",
+        prompt: "node X failed — retry?",
+        user_retries: 2,
+      }),
+    };
+    render(<RunCard runId="r1" />);
+
+    // The card says where the retries stand before the press...
+    expect(await screen.findByText(/1 retry so far/)).toBeTruthy();
+    const retry = screen.getByRole("button", { name: "Retry" });
+    expect((retry as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(retry);
+
+    // ...and the press lands: the decision posted, the count moved on.
+    await waitFor(() => {
+      const post = calls.find(
+        (c) => c.method === "POST" && c.path === "/v1/runs/r1/incidents",
+      );
+      expect(post?.body).toEqual({ decision: "retry" });
+    });
+    expect(await screen.findByText(/2 retries so far/)).toBeTruthy();
+    expect(screen.getByText(/plan and rebuild the path/)).toBeTruthy();
+  });
+
+  it("a refused Retry lands in the card instead of dying silently", async () => {
+    routes["GET /v1/runs/r1"] = {
+      status: 200,
+      body: baseRun({
+        phase: "recovery",
+        awaiting: "incident",
+        prompt: "node X failed — retry?",
+      }),
+    };
+    routes["POST /v1/runs/r1/incidents"] = {
+      status: 409,
+      body: { error: { message: "this run is no longer paused" } },
+    };
+    render(<RunCard runId="r1" />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+
+    expect(
+      await screen.findByText(/no longer paused/),
+    ).toBeTruthy();
+    // The buttons come back for another try — nothing is wedged.
+    expect(
+      (screen.getByRole("button", { name: "Retry" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+  });
 });

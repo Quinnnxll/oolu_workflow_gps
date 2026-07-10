@@ -94,7 +94,7 @@ describe("NodeInteract", () => {
     expect((chat?.body as { node_id: string }).node_id).toBe("n1");
   });
 
-  it("quick actions send or pre-fill the command", async () => {
+  it("one row — Pending sends, Sign and Build pre-fill", async () => {
     routes["POST /v1/chat"] = {
       status: 200,
       body: {
@@ -106,7 +106,10 @@ describe("NodeInteract", () => {
     };
     render(<NodeInteract node={node()} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Pending requests" }));
+    // Accelerate is nobody's button anymore — it happens by itself.
+    expect(screen.queryByRole("button", { name: /accelerate/i })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Pending" }));
     await waitFor(() =>
       expect(calls.some((c) => c.path === "/v1/chat")).toBe(true),
     );
@@ -115,14 +118,67 @@ describe("NodeInteract", () => {
         .message,
     ).toBe("pending");
 
-    // "Sign all…" only pre-fills — signing needs the user's typed name.
-    fireEvent.click(screen.getByRole("button", { name: "Sign all…" }));
+    const box = screen.getByPlaceholderText(
+      "Message OoLu about Invoice Cleaner…",
+    ) as HTMLTextAreaElement;
+    // With no known waiting task, Sign pre-fills and the id comes from
+    // "pending" (or a task chip); signing still needs the typed name.
+    fireEvent.click(screen.getByRole("button", { name: "Sign" }));
+    expect(box.value).toBe("sign ");
+    fireEvent.click(screen.getByRole("button", { name: "Build" }));
+    expect(box.value).toBe("build ");
+  });
+
+  const HOLD = {
+    pending_id: "a1b2c3d4e5f60718",
+    name: "clean-the-books",
+    reserved: ["audit-node:n1"],
+    submitted_by: "consumer-1",
+    created_at: "2026-07-10T10:00:00Z",
+    expires_at: null,
+    replies: [],
+  };
+
+  it("Sign appends the task id when exactly one task waits", () => {
+    render(<NodeInteract node={node()} holds={[HOLD]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Sign" }));
     expect(
       (
         screen.getByPlaceholderText(
           "Message OoLu about Invoice Cleaner…",
         ) as HTMLTextAreaElement
       ).value,
-    ).toBe("sign all as ");
+    ).toBe("sign a1b2c3d4 as ");
+  });
+
+  it("waiting tasks surface as chips; tapping one fills its sign command", () => {
+    const second = {
+      ...HOLD,
+      pending_id: "ffee00112233",
+      name: "export-raw",
+    };
+    render(<NodeInteract node={node()} holds={[HOLD, second]} />);
+
+    // Both tasks visible with their ids — the click IS the id handover.
+    fireEvent.click(
+      screen.getByRole("button", { name: "export-raw · ffee0011" }),
+    );
+    expect(
+      (
+        screen.getByPlaceholderText(
+          "Message OoLu about Invoice Cleaner…",
+        ) as HTMLTextAreaElement
+      ).value,
+    ).toBe("sign ffee0011 as ");
+
+    // With several waiting, the bare Sign stays open-ended.
+    fireEvent.click(screen.getByRole("button", { name: "Sign" }));
+    expect(
+      (
+        screen.getByPlaceholderText(
+          "Message OoLu about Invoice Cleaner…",
+        ) as HTMLTextAreaElement
+      ).value,
+    ).toBe("sign ");
   });
 });

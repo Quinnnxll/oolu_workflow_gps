@@ -470,7 +470,7 @@ export function NodeThread({
 
       {watchesHolds && holds.length > 0 && (
         <div className="commits">
-          <div className="convo-group">Pending requests</div>
+          <div className="convo-group">Pending</div>
           {holds.map((h) => (
             <HoldDesk key={h.pending_id} hold={h} onDecided={refresh} />
           ))}
@@ -498,7 +498,7 @@ export function NodeThread({
         </button>
       </div>
 
-      {tab === "interact" && <NodeInteract node={node} />}
+      {tab === "interact" && <NodeInteract node={node} holds={holds} />}
       {tab === "files" && <FilesPane nodeId={node.node_id} />}
 
       {tab === "activity" && (

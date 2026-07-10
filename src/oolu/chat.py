@@ -567,27 +567,34 @@ def _node_command(text: str, tools: "NodeTools") -> ChatTurn | None:
     lowered = text.casefold().rstrip(".!?")
 
     if lowered in _PENDING_PHRASES or lowered == "accelerate":
+        # "accelerate" still answers when typed, but it is not a button:
+        # everything that can move automatically already moved — what's
+        # listed here is exactly the work that waits on a human.
         holds = tools.node_holds()
         if not holds:
-            say = "Nothing is waiting on this node right now."
+            say = (
+                "Nothing is waiting on this node right now — everything "
+                "that could move has moved."
+            )
             if lowered == "accelerate":
                 say += (
-                    " To speed the node up: run more tasks through it — "
-                    "every verified run raises its automation reliability — "
-                    "or say “build <what's missing>” and I'll put a new "
-                    "execution node on its path."
+                    " To speed the node up further: run more tasks through "
+                    "it — every verified run raises its automation "
+                    "reliability — or say “build <what's missing>” and I'll "
+                    "put a new execution node on its path."
                 )
             return ChatTurn(
                 say=say, source="tool", actions=[{"tool": "node_holds"}]
             )
         listing = "\n".join(_speak_hold(h) for h in holds)
-        say = f"Held requests on this node:\n{listing}"
-        if lowered == "accelerate":
-            say += (
-                "\nSay “sign all as <your name>” to clear them in one stroke, "
-                "“allow <name>” / “reject <name>” to decide one, or "
-                "“reply <name>: <message>” to talk back first."
-            )
+        say = (
+            f"Waiting on you:\n{listing}\n"
+            "Sign one onward with “sign <task id> as <your name>” — the "
+            "task id is in the parentheses — and it passes to the next "
+            "node. “sign all as <your name>” clears everything; “allow” / "
+            "“reject <task id>” decides without signing; “reply <task id>: "
+            "<message>” talks back first."
+        )
         return ChatTurn(say=say, source="tool", actions=[{"tool": "node_holds"}])
 
     sign_all = _SIGN_ALL_RE.match(text)

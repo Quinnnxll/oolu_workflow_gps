@@ -411,15 +411,42 @@ export function RunCard({ runId }: { runId: string }) {
   const [gone, setGone] = useState(false);
   const [steps, setSteps] = useState<TimelineEvent[] | null>(null);
   const [showSteps, setShowSteps] = useState(false);
+  // A pressed decision shows it was pressed: buttons disable while the
+  // call is out, and a refusal lands in the card instead of vanishing.
+  const [acting, setActing] = useState(false);
+  const [actError, setActError] = useState("");
+  const lastTaskJson = useRef("");
 
   const refresh = useCallback(async () => {
     try {
-      setTask(await api.task(runId));
+      const fresh = await api.task(runId);
+      // Only re-render on real change: the 2.5s poll must never rebuild
+      // the DOM under the user's finger — that is how a button gets a
+      // mousedown and then loses its mouseup, i.e. "cannot be pressed".
+      const json = JSON.stringify(fresh);
+      if (json !== lastTaskJson.current) {
+        lastTaskJson.current = json;
+        setTask(fresh);
+      }
     } catch {
       // A vanished run (host wiped, other device) shouldn't wedge the chat.
       setGone(true);
     }
   }, [runId]);
+
+  const decide = useCallback(async (call: () => Promise<TaskView>) => {
+    setActing(true);
+    setActError("");
+    try {
+      const fresh = await call();
+      lastTaskJson.current = JSON.stringify(fresh);
+      setTask(fresh);
+    } catch (e) {
+      setActError((e as Error).message);
+    } finally {
+      setActing(false);
+    }
+  }, []);
 
   const refreshSteps = useCallback(async () => {
     try {
@@ -471,12 +498,16 @@ export function RunCard({ runId }: { runId: string }) {
         <div className="decision">
           {task.prompt && <p>{task.prompt}</p>}
           <div className="row">
-            <button onClick={async () => setTask(await api.confirm(task.run_id, true))}>
-              Approve
+            <button
+              disabled={acting}
+              onClick={() => void decide(() => api.confirm(task.run_id, true))}
+            >
+              {acting ? "…" : "Approve"}
             </button>
             <button
               className="ghost"
-              onClick={async () => setTask(await api.confirm(task.run_id, false))}
+              disabled={acting}
+              onClick={() => void decide(() => api.confirm(task.run_id, false))}
             >
               Reject
             </button>
@@ -487,18 +518,29 @@ export function RunCard({ runId }: { runId: string }) {
       {task.awaiting === "incident" && (
         <div className="decision">
           {task.prompt && <p>{task.prompt}</p>}
+          {task.user_retries > 0 && (
+            <p className="muted">
+              {task.user_retries}{" "}
+              {task.user_retries === 1 ? "retry" : "retries"} so far
+              {task.user_retries >= 2
+                ? " — the next retry lets OoLu plan and rebuild the path"
+                : ""}
+            </p>
+          )}
           <div className="row">
             <button
-              onClick={async () =>
-                setTask(await api.resolveIncident(task.run_id, "retry"))
+              disabled={acting}
+              onClick={() =>
+                void decide(() => api.resolveIncident(task.run_id, "retry"))
               }
             >
-              Retry
+              {acting ? "Retrying…" : "Retry"}
             </button>
             <button
               className="ghost"
-              onClick={async () =>
-                setTask(await api.resolveIncident(task.run_id, "abort"))
+              disabled={acting}
+              onClick={() =>
+                void decide(() => api.resolveIncident(task.run_id, "abort"))
               }
             >
               Abort
@@ -506,6 +548,8 @@ export function RunCard({ runId }: { runId: string }) {
           </div>
         </div>
       )}
+
+      {actError && <div className="error">{actError}</div>}
 
       {task.failure_reason && <div className="error">{task.failure_reason}</div>}
       {task.result && (
