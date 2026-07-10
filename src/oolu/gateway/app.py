@@ -18,7 +18,7 @@ import re
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from html import escape as _escape
 from uuid import uuid4
 
@@ -35,7 +35,13 @@ from ..billing import (
 )
 from ..billing.launch import LaunchGuard
 from ..billing.subscription import SubscriptionError, SubscriptionService
-from ..chat import ChatAssistant, GatewayChatTools, NodeChatTools
+from ..chat import (
+    ChatAssistant,
+    GatewayChatTools,
+    NodeChatTools,
+    author_node_function,
+    obviously_chat,
+)
 from ..durable.files import (
     FileTooLargeError,
     UserFile,
@@ -937,18 +943,45 @@ class GatewayApp:
                 )
             ):
                 return f"error: auto-build is off — {AUTOBUILD_HINT}"
+            # A node IS its function: the sentence must first read as
+            # executable work, and the model must actually write the
+            # execution function — otherwise nothing is created, because
+            # an empty node called by the global machinery is unnecessary.
+            if obviously_chat(goal):
+                return (
+                    "error: that reads as conversation, not an executable "
+                    "task — a node is its function, so there is nothing "
+                    "to build"
+                )
+            author = self._node_function_author(session.tenant_id)
+            if author is None:
+                return (
+                    "error: building a node means writing its execution "
+                    "function, and no model is configured to write it — "
+                    "add a model key (or a local model) in Settings"
+                )
+            script, refusal = author_node_function(author, goal)
+            if script is None:
+                return f"error: {refusal}"
             nodeplace = self._require_nodeplace()
             name = concise_name(goal)
             skill = ReusableSkill.model_validate(
                 {
                     "name": name,
                     "description": goal,
-                    "signature": {"application": "cli", "adapter": "cli"},
+                    "signature": {"application": "script", "adapter": "script"},
+                    # The node's OWN function: a script action the script
+                    # runtime executes (verified before trusted, per node).
                     "actions": [
                         {
-                            "correlation_id": "draft",
-                            "adapter": "cli",
+                            "correlation_id": "function",
+                            "adapter": "script",
                             "operation": "run",
+                            "parameters": {
+                                "goal": goal,
+                                "script": script,
+                                "node_key": f"node:{name}",
+                            },
                         }
                     ],
                 }
@@ -981,9 +1014,10 @@ class GatewayApp:
                 else "on your desk, with you as its responsible"
             )
             return (
-                f"Built “{name}” ({new_id[:8]}) {placing}. It starts "
-                "needs-verification and becomes a callable, routable step "
-                "on this node's path as its runs verify."
+                f"Built “{name}” ({new_id[:8]}) WITH its own execution "
+                f"function, {placing}. It starts needs-verification and "
+                "becomes a callable, routable step on this node's path as "
+                "its runs verify."
             )
 
         health = entry.health
@@ -1789,6 +1823,12 @@ class GatewayApp:
             self._model_routers[tenant] = router
         return router
 
+    def _node_function_author(self, tenant: str):
+        """The model that writes a new node's execution function — the
+        tenant's own chat brain by default; a seam so tests (or a future
+        dedicated authoring model) can supply their own."""
+        return self._tenant_model(tenant)
+
     def _model_keys_list(self, request, session, params) -> Response:
         keyring = self._require_model_keys()
         return json_response(
@@ -2063,15 +2103,134 @@ class GatewayApp:
         return json_response(200, account.model_dump(mode="json"))
 
     def _work_activity(self, request, session, params) -> Response:
-        """The node's execution feed: bound runs expanded into audit steps."""
+        """The node's execution feed: bound runs expanded into audit steps.
+
+        Every item names the node that EXECUTED it (a Supernode's feed
+        aggregates its members', so the human reads who did what, not just
+        that something ran), and each fetch materializes the node's daily
+        execution log file — the full-fidelity record kept for legal use.
+        """
         desk = self._require_desk()
+        node_id = params["node_id"]
+        entries = {
+            e.node_id: e
+            for e in desk.overview(
+                principal=session.principal_id, tenant=session.tenant_id
+            )
+        }
+        entry = entries.get(node_id)
         try:
-            feed = desk.activity(params["node_id"], tenant=session.tenant_id)
+            feed = desk.activity(node_id, tenant=session.tenant_id)
         except ContributionError as exc:
             raise GatewayError(404, "not_found", str(exc)) from exc
-        return json_response(
-            200, {"items": [r.model_dump(mode="json") for r in feed]}
-        )
+        title = entry.title if entry else node_id[:8]
+        items = [
+            {**r.model_dump(mode="json"), "node_title": title} for r in feed
+        ]
+        if entry is not None and entry.account.is_supernode:
+            for member in entries.values():
+                if member.account.supernode_id != node_id:
+                    continue
+                try:
+                    member_feed = desk.activity(
+                        member.node_id, tenant=session.tenant_id
+                    )
+                except ContributionError:
+                    continue
+                items.extend(
+                    {**r.model_dump(mode="json"), "node_title": member.title}
+                    for r in member_feed
+                )
+            items.sort(
+                key=lambda r: max((s["at"] for s in r["steps"]), default=""),
+                reverse=True,
+            )
+            items = items[:20]
+        self._save_daily_node_log(request, session, node_id, items)
+        return json_response(200, {"items": items})
+
+    # What each node's daily execution log files live under.
+    _LOG_FOLDER = "logs"
+    _LOG_NAME_RE = re.compile(r"^execution-(\d{4}-\d{2}-\d{2})\.log$")
+
+    def _save_daily_node_log(
+        self, request, session, node_id: str, items: list[dict]
+    ) -> None:
+        """Materialize today's execution log file for the node and prune
+        logs past the legal retention window.
+
+        The file is the full-fidelity record (ISO timestamps, run ids,
+        executing node, raw event types) — the UI simplifies, the file
+        does not. Lines merge idempotently, so repeated fetches never
+        duplicate an entry, and pruning follows the
+        ``account.log_retention_days`` setting.
+        """
+        if self._files is None:
+            return
+        now = request.now or self._clock()
+        today = now.date().isoformat()
+        lines: set[str] = set()
+        for item in items:
+            for step in item.get("steps", []):
+                at = str(step.get("at", ""))
+                if not at.startswith(today):
+                    continue
+                lines.add(
+                    f"{at}\t{item.get('run_id', '')}\t{step.get('seq', '')}\t"
+                    f"{item.get('node_title', '')}\t{step.get('event_type', '')}"
+                )
+        existing = {
+            f.name: f
+            for f in self._files.list(tenant=session.tenant_id, node_id=node_id)
+            if f.folder == self._LOG_FOLDER
+        }
+        if lines:
+            name = f"execution-{today}.log"
+            current = existing.get(name)
+            if current is not None:
+                lines |= {
+                    line
+                    for line in current.content.splitlines()
+                    if line and not line.startswith("#")
+                }
+            content = (
+                f"# Execution log — {today} — kept for legal use\n"
+                + "\n".join(sorted(lines))
+            )
+            if current is not None:
+                if current.content != content:
+                    self._files.save(current.model_copy(update={"content": content}))
+            else:
+                self._files.save(
+                    UserFile(
+                        tenant_id=session.tenant_id,
+                        node_id=node_id,
+                        name=name,
+                        folder=self._LOG_FOLDER,
+                        media_type="text/plain",
+                        content=content,
+                    )
+                )
+        retention = 180
+        if self._settings is not None:
+            retention = int(
+                float(
+                    self._settings.effective(session.tenant_id).get(
+                        "account.log_retention_days", 180
+                    )
+                    or 180
+                )
+            )
+        for name, file in existing.items():
+            match = self._LOG_NAME_RE.match(name)
+            if match is None:
+                continue
+            try:
+                aged = (now.date() - date.fromisoformat(match.group(1))).days
+            except ValueError:
+                continue
+            if aged > retention:
+                self._files.delete(file.file_id, tenant=session.tenant_id)
 
     # ------------------------------------------------------------------ #
     # Supernode KYC: verified legal entities earn global trust.           #

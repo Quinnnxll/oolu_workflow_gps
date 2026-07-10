@@ -169,6 +169,19 @@ SETTINGS_CATALOG: tuple[SettingField, ...] = (
         "meter's internal unit uses fixed reference rates.",
     ),
     SettingField(
+        key="account.log_retention_days",
+        group="account",
+        label="Execution log retention",
+        kind=SettingKind.NUMBER,
+        default=180.0,
+        minimum=7.0,
+        maximum=3650.0,
+        unit="days",
+        description="How long each node keeps its daily execution log "
+        "files (in its Files drawer under logs/) before pruning. Set it to "
+        "your legal record-keeping requirement.",
+    ),
+    SettingField(
         key="account.autobuild_consent",
         group="account",
         label="Auto-build nodes on my paths",

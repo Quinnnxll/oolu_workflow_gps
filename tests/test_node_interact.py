@@ -147,34 +147,88 @@ def test_replying_lands_on_the_hold(tmp_path):
         conn.close()
 
 
-def test_build_node_needs_consent_then_registers_a_callable_child(tmp_path):
+FUNCTION_ANSWER = (
+    "1. Normalize the rows.\n"
+    "```python\nfrom _oolu_runtime import emit_result\nemit_result('tidy')\n```"
+)
+
+
+class FakeAuthor:
+    """The function-writing model: scripted answers, calls recorded."""
+
+    def __init__(self, answer=FUNCTION_ANSWER):
+        self._answer = answer
+        self.calls: list[list[dict]] = []
+
+    def reply(self, messages):
+        self.calls.append(messages)
+        return self._answer
+
+
+def test_build_node_needs_consent_a_task_and_a_written_function(tmp_path):
     app, conn, ident, registry, desk, node_id, pending_id = _rig(tmp_path)
     try:
         # Consent off: the refusal names the settings switch.
         refused = _chat(app, ident, node_id, "build normalize invoice csv files")
         assert "Auto-build nodes on my paths" in refused.body["reply"]
 
-        from oolu.durable import DurableConnection  # noqa: F401 (import guard)
         from oolu.settings_node import SettingsNode, SettingsStore
 
         settings = SettingsNode(SettingsStore(conn))
         settings.set("t1", "account.autobuild_consent", True)
         app._settings = settings
 
+        # Obvious conversation never becomes a node — no model needed.
+        chatty = _chat(app, ident, node_id, "build what is the weather today?")
+        assert "conversation, not an executable task" in chatty.body["reply"]
+
+        # No model: no function writer, so nothing is built.
+        no_model = _chat(app, ident, node_id, "build normalize invoice csv files")
+        assert "no model is configured to write it" in no_model.body["reply"]
+
+        # The model judges the sentence conversation: refused, not built.
+        app._node_function_author = lambda tenant: FakeAuthor("NO_TASK")
+        judged = _chat(app, ident, node_id, "build normalize invoice csv files")
+        assert "conversation, not an executable task" in judged.body["reply"]
+
+        # A model that writes no code builds nothing — an empty node is
+        # unnecessary.
+        app._node_function_author = lambda tenant: FakeAuthor(
+            "I would suggest a spreadsheet."
+        )
+        no_code = _chat(app, ident, node_id, "build normalize invoice csv files")
+        assert "empty node is unnecessary" in no_code.body["reply"]
+        mine = desk.overview(principal="noder-export", tenant="t1")
+        assert "Normalize Invoice Csv Files" not in {e.title for e in mine}
+
+        # The model writes the function: the node is born WITH it.
+        author = FakeAuthor()
+        app._node_function_author = lambda tenant: author
         built = _chat(app, ident, node_id, "build normalize invoice csv files")
         assert built.status == 200, built.body
         assert "Built" in built.body["reply"]
+        assert "own execution function" in built.body["reply"]
         assert built.body["actions"] == [{"tool": "build_node"}]
+        assert len(author.calls) == 1  # one consultation: verify + write
 
         # The execution node is REGISTERED — a citizen the planner can
         # route to — named by keywords, owned by the caller (this node is
-        # not a Supernode, so it lands standalone on their desk).
+        # not a Supernode, so it lands standalone on their desk) — and it
+        # CARRIES its function: a script action, never an empty draft.
         mine = desk.overview(principal="noder-export", tenant="t1")
-        titles = {e.title for e in mine}
-        assert "Normalize Invoice Csv Files" in titles
         new = next(e for e in mine if e.title == "Normalize Invoice Csv Files")
         assert new.account.responsible == "noder-export"
         assert new.status == "needs_verification"
+        from oolu.skills.models import ReusableSkill
+
+        versions = registry.list_versions(new.node_id)
+        skill = ReusableSkill.model_validate_json(
+            versions[-1].sanitized_skill_json
+        )
+        (action,) = skill.actions
+        assert action.adapter == "script" and action.operation == "run"
+        assert "emit_result" in action.parameters["script"]
+        assert action.parameters["goal"] == "normalize invoice csv files"
     finally:
         conn.close()
 
@@ -204,6 +258,7 @@ def test_build_under_a_supernode_starts_unclaimed(tmp_path):
         settings = SettingsNode(SettingsStore(conn))
         settings.set("t1", "account.autobuild_consent", True)
         app._settings = settings
+        app._node_function_author = lambda tenant: FakeAuthor()
 
         built = _chat(app, ident, super_id, "build tax filing checker")
         assert "UNCLAIMED" in built.body["reply"], built.body

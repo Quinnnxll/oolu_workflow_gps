@@ -333,6 +333,82 @@ class GatewayChatTools(FileChatTools):
         return f"set {key} to {applied}"
 
 
+# --------------------------------------------------------------------------- #
+# Node creation: a node IS its function.                                       #
+# --------------------------------------------------------------------------- #
+# The key thing about creating a node is creating its own function for the
+# task — an empty shell called by the global workflow machinery is not a
+# node. So building takes two verified steps in ONE model consultation:
+# first the sentence must be judged executable work (not conversation),
+# then the model must actually WRITE the node's execution function. Either
+# gate failing means nothing is created.
+NODE_FUNCTION_PROMPT = """\
+You are the function writer for OoLu nodes. A node is published only WITH
+its own execution function — an empty node is unnecessary.
+
+First decide: does the request describe executable work (fetching,
+converting, computing, organizing, automating — something a program can
+DO)? If it is conversation, a greeting, or a question to answer in words,
+reply with exactly:
+NO_TASK
+
+Otherwise write the node's execution function:
+1. A short numbered plan (one step per line).
+2. ONE complete, self-contained Python script in a single fenced
+   ```python block that performs the whole task in one run. The script
+   MUST import and call emit_result exactly once with its final answer:
+       from _oolu_runtime import emit_result
+   Missing third-party packages install automatically; the sandbox has NO
+   network and NO host credentials at run time."""
+
+_CHAT_SHAPED = frozenset(
+    phrase for rule in DEFAULT_RULES for phrase in rule.phrases
+)
+
+
+def obviously_chat(goal: str) -> bool:
+    """The cheap pre-filter: greetings, thanks, and questions are
+    conversation, never a node — no model needed to refuse them."""
+    text = (goal or "").strip()
+    if not text:
+        return True
+    if text.endswith("?"):
+        return True
+    return text.casefold().rstrip(".!?") in _CHAT_SHAPED
+
+
+def author_node_function(model: ChatModel, goal: str) -> tuple[str | None, str]:
+    """``(script, refusal_reason)`` — the two creation gates in one call.
+
+    ``script`` is the node's own execution function, or None with the
+    exact reason nothing was built: the sentence is conversation, the
+    model wrote no usable code, or the model could not be reached.
+    """
+    from .routing.gateway import extract_script
+
+    try:
+        raw = model.reply(
+            [
+                {"role": "system", "content": NODE_FUNCTION_PROMPT},
+                {"role": "user", "content": goal},
+            ]
+        )
+    except Exception as exc:  # noqa: BLE001 - a dead model builds nothing
+        return None, f"the model could not be reached to write the function: {exc}"
+    if "NO_TASK" in raw.strip().upper()[:40]:
+        return None, (
+            "that reads as conversation, not an executable task — a node "
+            "is its function, so there is nothing to build"
+        )
+    script = extract_script(raw)
+    if not script:
+        return None, (
+            "the model wrote no usable function, so nothing was built — "
+            "an empty node is unnecessary"
+        )
+    return script, ""
+
+
 class NodeChatTools(GatewayChatTools):
     """The gateway tools plus one node's own desk, bound by injected hands.
 

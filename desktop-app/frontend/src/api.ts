@@ -519,6 +519,9 @@ export interface WorkNode {
 export interface NodeRunSteps {
   run_id: string;
   gross: number;
+  // The node that EXECUTED this run — a Supernode's feed aggregates its
+  // members', each tagged with the executing node's name.
+  node_title?: string;
   steps: { seq: number; event_type: string; at: string }[];
 }
 

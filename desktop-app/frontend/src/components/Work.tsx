@@ -113,6 +113,12 @@ function money(micros: number): string {
   return `$${(micros / 1_000_000).toFixed(2)}`;
 }
 
+// The feed's clock: down-to-the-second, nothing more — full ISO detail
+// lives in the tooltip and the daily log files.
+function clock(iso: string): string {
+  return iso.includes("T") ? iso.split("T")[1].slice(0, 8) : iso;
+}
+
 // "(L4, Audit, Auto-growing)": say only what the node IS; silence for
 // what it isn't (no auto-growing => no mention at all).
 export function regimeTag(account: WorkNode["account"]): string {
@@ -498,14 +504,22 @@ export function NodeThread({
           {activity?.map((run) => (
             <div key={run.run_id} className="feed-run">
               <div className="feed-run-head">
-                <span className="log-label">run {run.run_id.slice(0, 8)}</span>
+                {/* Who executed it, by NAME — the raw run id stays in the
+                    tooltip and the legal log files. */}
+                <span className="log-label" title={`run ${run.run_id}`}>
+                  {run.node_title ?? `run ${run.run_id.slice(0, 8)}`}
+                </span>
                 <span className="muted">
                   {money(Math.round(run.gross * 1e6))}
                 </span>
               </div>
               {run.steps.map((s) => (
-                <div key={s.seq} className="log-line" title={s.event_type}>
-                  <span className="log-at">{s.at}</span>
+                <div
+                  key={s.seq}
+                  className="log-line"
+                  title={`${s.at} · ${s.event_type} · run ${run.run_id}`}
+                >
+                  <span className="log-at">{clock(s.at)}</span>
                   <span className="log-label">
                     {humanizeEvent(s.event_type)}
                   </span>

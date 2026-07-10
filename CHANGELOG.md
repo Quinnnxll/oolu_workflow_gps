@@ -4,6 +4,44 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+A node IS its function; the record is a file; the feed reads like words:
+
+- **No more empty nodes.** Building a node through OoLu now takes two
+  verified gates in ONE model consultation (`author_node_function` +
+  `NODE_FUNCTION_PROMPT`): first the sentence must be judged EXECUTABLE
+  WORK — a greeting, a question, or conversation answers `NO_TASK` and
+  nothing is created (`obviously_chat` refuses the obvious cases before
+  any model) — then the model must actually WRITE the node's execution
+  function. The published node carries it as its own script action
+  (`adapter="script"`, the verified-before-trusted runtime from the
+  retry work), never a placeholder draft; no model, no code, no node —
+  "an empty node is unnecessary." Contract runs now receive the same
+  executor set as the orchestrator (script hand included), so a node's
+  own function executes and routes locally instead of falling back to
+  the global machinery. The Work UI's manual create form is unchanged —
+  a human's deliberate draft stays a human's choice.
+- **Daily execution logs, kept as files for legal use.** Every activity
+  fetch materializes the node's daily log in its own Files drawer
+  (`logs/execution-YYYY-MM-DD.log`): full fidelity — ISO timestamps,
+  run ids, executing node, raw event types — merged idempotently so
+  nothing duplicates, and pruned after the new
+  `account.log_retention_days` setting (default 180 days, 7–3650; set
+  it to your legal record-keeping requirement).
+- **The Supernode's feed reads like words.** A Supernode's activity now
+  aggregates its members' executions, and every item names the node
+  that EXECUTED it. The display simplifies for humans: the executing
+  node's NAME instead of a run id, the clock down to the second
+  (10:00:02, not an ISO blob), and plan/status words instead of
+  function calls ("Carried out the actions", never
+  `workflow.executed`) — with the full detail one tooltip away and in
+  the log files.
+- Tests: the four creation gates + the function riding the published
+  version (`test_node_interact.py`), log materialization/idempotence/
+  retention pruning and the member-named Supernode feed
+  (`test_execution_logs.py`), and the humanized feed
+  (`Work.test.tsx`). 135 vitest and the entire backend suite green;
+  shell rebuilt.
+
 The node's interaction window — OoLu called out to act ON a node:
 
 - **An Interact tab beside Activity and Files** on every Work node

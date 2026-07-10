@@ -246,10 +246,13 @@ describe("NodeThread", () => {
       <NodeThread node={workNode()} allNodes={[workNode()]} />,
     );
 
-    // Function words, not event codes — the raw type stays in the tooltip.
+    // Function words, not event codes — the full detail (time, raw type,
+    // run id) stays in the tooltip and the daily log files.
     expect(await screen.findByText("Started working")).toBeTruthy();
     expect(screen.getByText("Carried out the actions")).toBeTruthy();
-    expect(screen.getByTitle("workflow.executed")).toBeTruthy();
+    expect(
+      screen.getByTitle("t2 · workflow.executed · run run12345678"),
+    ).toBeTruthy();
     expect(screen.getByText("run run12345")).toBeTruthy();
   });
 
@@ -433,6 +436,38 @@ describe("NodeThread", () => {
       await screen.findByText(/KYC verified · global trust ×1.5/),
     ).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Apply" })).toBeNull();
+  });
+
+  it("reads the activity feed in human words: node name, seconds, plan status", async () => {
+    routes["GET /v1/work/nodes/n1/activity"] = {
+      status: 200,
+      body: {
+        items: [
+          {
+            run_id: "r1234567890",
+            gross: 0.5,
+            node_title: "Tax Filer",
+            steps: [
+              {
+                seq: 1,
+                event_type: "workflow.executed",
+                at: "2026-07-10T10:00:02.123456+00:00",
+              },
+            ],
+          },
+        ],
+      },
+    };
+    render(<NodeThread node={workNode()} allNodes={[workNode()]} />);
+
+    // The executing node by NAME, never a raw run id...
+    expect(await screen.findByText("Tax Filer")).toBeTruthy();
+    expect(screen.queryByText(/run r1234567/)).toBeNull();
+    // ...the clock down to the second, not the ISO blob...
+    expect(screen.getByText("10:00:02")).toBeTruthy();
+    // ...and the step in plan/status words, not the function call.
+    expect(screen.getByText("Carried out the actions")).toBeTruthy();
+    expect(screen.queryByText("workflow.executed")).toBeNull();
   });
 
   it("shows no KYC block at all on an Edge install", async () => {

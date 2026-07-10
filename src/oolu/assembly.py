@@ -686,7 +686,11 @@ def build_host_runtime(
         price_book=price_book,
         attribution=attribution,
         trace_store=traces,
-        contract_executors=executors,
+        # Contract runs get the same hands as the orchestrator — the
+        # script executor included, so a node's OWN function (its script
+        # action) executes and routes locally instead of falling back to
+        # the global machinery.
+        contract_executors=run_executors,
         accounts=accounts,
         desk=desk,
         kyc=kyc,
