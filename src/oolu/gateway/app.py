@@ -35,7 +35,7 @@ from ..billing import (
 )
 from ..billing.launch import LaunchGuard
 from ..billing.subscription import SubscriptionError, SubscriptionService
-from ..chat import ChatAssistant, GatewayChatTools
+from ..chat import ChatAssistant, GatewayChatTools, NodeChatTools
 from ..durable.files import (
     FileTooLargeError,
     UserFile,
@@ -232,6 +232,7 @@ def _no_route_view(state: RunState) -> dict | None:
             )
     grounding = state.grounding
     return {
+        "code": "PLAN_NO_ROUTE",
         "reason": state.failure_reason or "no route could be planned",
         "unresolved_terms": list(grounding.unresolved_terms) if grounding else [],
         "resolved_capabilities": (
@@ -242,12 +243,22 @@ def _no_route_view(state: RunState) -> dict | None:
 
 
 def _failure_view(state: RunState) -> dict | None:
-    """The exact node that caused the most recent execution failure."""
+    """The exact node that caused the most recent execution failure.
+
+    ``code`` is the stable machine label for what went wrong — when a
+    node's automation fails, this is the error code the user keeps to fix
+    it later: EXEC_BLOCKED (a control/capability gate refused the node),
+    EXEC_NODE_FAILED (the node ran and broke)."""
     execution = state.execution
     if execution is None or execution.status is ExecutionStatus.SUCCEEDED:
         return None
     payload = state.pause.payload if state.pause else {}
     return {
+        "code": (
+            "EXEC_BLOCKED"
+            if execution.status is ExecutionStatus.BLOCKED
+            else "EXEC_NODE_FAILED"
+        ),
         "node_id": execution.failed_action_id,
         "node_label": execution.failed_action_label,
         "error": execution.error,
@@ -789,25 +800,32 @@ class GatewayApp:
         history = body.get("history") or []
         if not isinstance(history, list):
             raise GatewayError(400, "invalid_request", "history must be a list")
-        # The assistant's hands: the caller's own files, tenant-bound.
-        tools = (
-            GatewayChatTools(
-                self._files,
-                tenant=session.tenant_id,
-                principal=session.principal_id,
-                durable=self._durable,
-                desk=self._desk,
-                settings=self._settings,
-            )
-            if self._files is not None
-            else None
-        )
+        # The assistant's hands: the caller's own files, tenant-bound —
+        # and, inside a node's interact window, that node's own desk.
+        tools = None
+        context_note = None
+        if self._files is not None:
+            node_id = body.get("node_id")
+            if node_id:
+                tools, context_note = self._node_chat_tools(
+                    request, session, str(node_id)
+                )
+            else:
+                tools = GatewayChatTools(
+                    self._files,
+                    tenant=session.tenant_id,
+                    principal=session.principal_id,
+                    durable=self._durable,
+                    desk=self._desk,
+                    settings=self._settings,
+                )
         turn = self._chat.respond(
             message,
             history=[h for h in history if isinstance(h, dict)][-20:],
             sender=session.principal_id,
             tools=tools,
             model=self._tenant_model(session.tenant_id),
+            context=context_note,
         )
         run = None
         say = turn.say
@@ -847,6 +865,171 @@ class GatewayApp:
             },
         )
 
+    def _node_chat_tools(self, request, session, node_id: str):
+        """The interact window's hands: one node's desk, gateway-walled.
+
+        Every callable goes through the gateway's own handlers or stores,
+        so tenant scope, approve authority, budget re-checks, audit, and
+        the auto-build consent all apply exactly as they do on the routes.
+        Returns ``(NodeChatTools, context_note)`` — the note tells the
+        model where it is standing and which extra tools exist there.
+        """
+        desk = self._require_desk()
+        entries = {
+            e.node_id: e
+            for e in desk.overview(
+                principal=session.principal_id, tenant=session.tenant_id
+            )
+        }
+        entry = entries.get(node_id)
+        if entry is None:
+            raise GatewayError(404, "not_found", "no such node on your desk")
+        reason = f"audit-node:{node_id}"
+
+        def holds_list() -> list[dict]:
+            if self._holds is None:
+                return []
+            self._sweep_holds(request)
+            return [
+                {
+                    "pending_id": record.pending_id,
+                    "name": str(record.contract.get("name", "contract")),
+                    "submitted_by": record.consumer_principal,
+                    "created_at": record.created_at.isoformat(),
+                }
+                for record in self._holds.list(tenant=session.tenant_id)
+                if reason in record.reserved
+            ]
+
+        def _via_handler(handler, pending_id: str, payload: dict) -> str:
+            call = Request(
+                method="POST",
+                path="/internal",
+                headers={},
+                query={},
+                body=payload,
+                now=request.now,
+            )
+            try:
+                handler(call, session, {"pending_id": pending_id})
+            except GatewayError as exc:
+                return f"error: {exc.message}"
+            return "done"
+
+        def holds_decide(pending_id: str, approved: bool, signature: str) -> str:
+            payload: dict = {"approved": bool(approved)}
+            if signature:
+                payload["signature"] = signature
+            return _via_handler(self._decide_contract_hold, pending_id, payload)
+
+        def holds_reply(pending_id: str, message: str) -> str:
+            return _via_handler(
+                self._reply_contract_hold, pending_id, {"message": message}
+            )
+
+        def builder(goal: str) -> str:
+            goal = (goal or "").strip()
+            if not goal:
+                return "error: tell me what the node should do"
+            if self._settings is None or not bool(
+                self._settings.effective(session.tenant_id).get(
+                    AUTOBUILD_CONSENT_KEY, False
+                )
+            ):
+                return f"error: auto-build is off — {AUTOBUILD_HINT}"
+            nodeplace = self._require_nodeplace()
+            name = concise_name(goal)
+            skill = ReusableSkill.model_validate(
+                {
+                    "name": name,
+                    "description": goal,
+                    "signature": {"application": "cli", "adapter": "cli"},
+                    "actions": [
+                        {
+                            "correlation_id": "draft",
+                            "adapter": "cli",
+                            "operation": "run",
+                        }
+                    ],
+                }
+            )
+            try:
+                result = nodeplace.contribute(
+                    noder_principal=session.principal_id,
+                    tenant_id=session.tenant_id,
+                    skill=skill,
+                    semver="1.0.0",
+                    title=name,
+                    summary=goal,
+                )
+                under = entry.account.is_supernode
+                desk.create_account(
+                    result.node.node_id,
+                    principal=session.principal_id,
+                    tenant=session.tenant_id,
+                    supernode_id=node_id if under else None,
+                    authority_level=1 if under else None,
+                    policy_version=NODE_POLICY_VERSION,
+                )
+            except (ContributionError, OwnershipError, ValueError) as exc:
+                return f"error: {exc}"
+            new_id = result.node.node_id
+            placing = (
+                "under this Supernode — it starts UNCLAIMED: share its node "
+                "id only with the person who should onboard it"
+                if under
+                else "on your desk, with you as its responsible"
+            )
+            return (
+                f"Built “{name}” ({new_id[:8]}) {placing}. It starts "
+                "needs-verification and becomes a callable, routable step "
+                "on this node's path as its runs verify."
+            )
+
+        health = entry.health
+        verified = health.verified_successes + health.verified_failures
+        reliability = (
+            f"{health.score * 100:.1f}% reliable over {verified} verified runs"
+            if health.score is not None
+            else "no verified runs yet"
+        )
+        context_note = (
+            f"You are inside the interact window of the user's node "
+            f"'{entry.title}' ({node_id[:8]}, status {entry.status}, "
+            f"automation {reliability}). Help them accelerate this node's "
+            "work: decide or sign its held requests, reply to requesters, "
+            "and (with their auto-build consent) build missing execution "
+            "nodes on its path. Extra tools available ONLY here:\n"
+            '  {"tool": "node_holds", "args": {}}\n'
+            '  {"tool": "decide_hold", "args": {"pending_id": "<id>", '
+            '"approved": true, "signature": "<typed name, optional>"}}\n'
+            '  {"tool": "reply_hold", "args": {"pending_id": "<id>", '
+            '"message": "<text>"}}\n'
+            '  {"tool": "build_node", "args": {"goal": "<what it must do>"}}\n'
+            "Never decide or sign a held request the user did not ask you "
+            "to. When automation fails, give the user the error code so "
+            "they can fix it later."
+        )
+        tools = NodeChatTools(
+            self._files,
+            tenant=session.tenant_id,
+            principal=session.principal_id,
+            durable=self._durable,
+            desk=self._desk,
+            settings=self._settings,
+            node={
+                "node_id": node_id,
+                "title": entry.title,
+                "status": entry.status,
+                "reliability": reliability,
+            },
+            holds_list=holds_list,
+            holds_decide=holds_decide,
+            holds_reply=holds_reply,
+            builder=builder,
+        )
+        return tools, context_note
+
     @staticmethod
     def _describe_run_failure(say: str, run: dict | None) -> str:
         """Fold an execution failure into the assistant's reply: the exact
@@ -862,6 +1045,11 @@ class GatewayApp:
             if failure.get("error"):
                 say += f": {failure['error']}"
             say += "."
+            if failure.get("code"):
+                say += (
+                    f" Error code {failure['code']} — saved with the run "
+                    "so you can fix it later."
+                )
         elif run.get("failure_reason"):
             say += f" The run failed — {run['failure_reason']}."
         if failure.get("rebuild_refusal"):

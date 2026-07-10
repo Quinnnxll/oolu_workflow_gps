@@ -470,7 +470,7 @@ export function RunCard({ runId }: { runId: string }) {
 }
 
 // The chip's verb: what the assistant actually touched this turn.
-function actionLabel(action: ChatAction): string {
+export function actionLabel(action: ChatAction): string {
   if (action.tool === "list_files") return "listed your files";
   if (action.tool === "read_file") return `read ${action.name ?? "a file"}`;
   if (action.tool === "write_file") return `updated ${action.name ?? "a file"}`;
@@ -478,6 +478,12 @@ function actionLabel(action: ChatAction): string {
   if (action.tool === "list_nodes") return "checked your nodes";
   if (action.tool === "run_log") return `reviewed run ${action.name ?? ""}`.trim();
   if (action.tool === "run_again") return `re-ran ${action.name ?? "a task"}`;
+  if (action.tool === "node_holds") return "checked the pending requests";
+  if (action.tool === "decide_hold")
+    return `decided ${action.name ?? "a held request"}`;
+  if (action.tool === "reply_hold")
+    return `replied on ${action.name ?? "a held request"}`;
+  if (action.tool === "build_node") return "built a node on the path";
   return action.tool;
 }
 

@@ -115,6 +115,9 @@ export function TaskPane({ task, setTask, onChanged }: Props) {
 
           {task.failure && task.failure.node_label && (
             <div className="failure-node">
+              {task.failure.code && (
+                <span className="error-code">{task.failure.code}</span>
+              )}{" "}
               Failed at node <strong>{task.failure.node_label}</strong>
               {task.failure.error ? <>: {task.failure.error}</> : null}
               {task.user_retries > 0 && (

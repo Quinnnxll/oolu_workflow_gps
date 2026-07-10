@@ -38,7 +38,10 @@ export interface NoRouteView {
 
 // The exact node that caused the most recent execution failure, plus the
 // retry state and — when the LLM rebuild ran and refused — its reason.
+// `code` is the stable machine label (EXEC_NODE_FAILED / EXEC_BLOCKED)
+// the user keeps to fix the automation later.
 export interface FailureView {
+  code?: string;
   node_id: string | null;
   node_label: string | null;
   error: string | null;

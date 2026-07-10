@@ -4,6 +4,7 @@ import type { HoldItem, KycView, NodeRunSteps, WorkNode } from "../api";
 import { identityHue } from "../avatar";
 import { humanizeEvent } from "../humanize";
 import { FilesPane } from "./FilesPane";
+import { NodeInteract } from "./NodeInteract";
 
 // The Work environment: where a noder manages and observes their nodes.
 // A node's REGIME — Supernode or not, under which Supernode, audit or
@@ -343,7 +344,9 @@ export function NodeThread({
 }) {
   const [activity, setActivity] = useState<NodeRunSteps[] | null>(null);
   const [holds, setHolds] = useState<HoldItem[]>([]);
-  const [tab, setTab] = useState<"activity" | "files">("activity");
+  const [tab, setTab] = useState<"activity" | "interact" | "files">(
+    "activity",
+  );
   // A large fleet folds away for a clear view of the thread itself.
   const [showMembers, setShowMembers] = useState(true);
   const account = node.account;
@@ -467,6 +470,12 @@ export function NodeThread({
           Activity
         </button>
         <button
+          className={tab === "interact" ? "on" : ""}
+          onClick={() => setTab("interact")}
+        >
+          Interact
+        </button>
+        <button
           className={tab === "files" ? "on" : ""}
           onClick={() => setTab("files")}
         >
@@ -474,6 +483,7 @@ export function NodeThread({
         </button>
       </div>
 
+      {tab === "interact" && <NodeInteract node={node} />}
       {tab === "files" && <FilesPane nodeId={node.node_id} />}
 
       {tab === "activity" && (

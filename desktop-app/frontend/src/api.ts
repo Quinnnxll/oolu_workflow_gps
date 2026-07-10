@@ -560,7 +560,13 @@ export const api = {
   chat: (
     message: string,
     history: { role: "user" | "assistant"; content: string }[],
-  ) => req<ChatTurnReply>("POST", "/v1/chat", { message, history }),
+    nodeId?: string,
+  ) =>
+    req<ChatTurnReply>("POST", "/v1/chat", {
+      message,
+      history,
+      ...(nodeId ? { node_id: nodeId } : {}),
+    }),
   submitTask: (intent: string) => mutateRun("POST", "/v1/runs", { intent }),
   task: async (id: string) =>
     composeTask(await req<RunDict>("GET", `/v1/runs/${id}`)),

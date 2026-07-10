@@ -1300,6 +1300,32 @@ button.ghost {
   font-size: 13px;
 }
 
+/* The stable machine label for a failed automation — kept to fix later. */
+.error-code {
+  display: inline-block;
+  padding: 0 7px;
+  border: 1px solid var(--danger);
+  border-radius: 10px;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+}
+
+/* The node's interaction window: OoLu acting on one node. */
+.node-interact {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 8px;
+}
+
+.node-interact-thread {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  min-height: 120px;
+}
+
 .retry-count {
   color: var(--muted);
 }

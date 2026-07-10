@@ -479,6 +479,8 @@ def test_run_views_show_plan_failure_and_no_route():
     failure = _failure_view(state)
     assert failure["node_label"] == "test/two"
     assert failure["error"] == "two broke"
+    # The stable error code the user keeps to fix the automation later.
+    assert failure["code"] == "EXEC_NODE_FAILED"
 
     # A run that failed in planning explains why there was no route.
     from oolu.orchestrator.state import RunState
@@ -493,3 +495,4 @@ def test_run_views_show_plan_failure_and_no_route():
     )
     view = _no_route_view(planning_failed)
     assert view["reason"].startswith("no viable route")
+    assert view["code"] == "PLAN_NO_ROUTE"

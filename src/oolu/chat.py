@@ -333,6 +333,265 @@ class GatewayChatTools(FileChatTools):
         return f"set {key} to {applied}"
 
 
+class NodeChatTools(GatewayChatTools):
+    """The gateway tools plus one node's own desk, bound by injected hands.
+
+    The gateway supplies the callables, so every wall it already enforces —
+    tenant scope, approve authority, the budget re-check, the audit trail,
+    the auto-build consent — applies unchanged; this class only holds the
+    node the conversation is standing in.
+    """
+
+    def __init__(
+        self,
+        store: UserFileStore,
+        *,
+        tenant: str,
+        principal: str = "",
+        durable=None,
+        desk=None,
+        settings=None,
+        node: dict,
+        holds_list,  # () -> list[dict]
+        holds_decide,  # (pending_id, approved, signature) -> str
+        holds_reply,  # (pending_id, message) -> str
+        builder,  # (goal) -> str
+    ):
+        super().__init__(
+            store,
+            tenant=tenant,
+            principal=principal,
+            durable=durable,
+            desk=desk,
+            settings=settings,
+        )
+        self._node = dict(node)
+        self._holds_list = holds_list
+        self._holds_decide = holds_decide
+        self._holds_reply = holds_reply
+        self._builder = builder
+
+    def node_context(self) -> dict:
+        return dict(self._node)
+
+    def node_holds(self) -> list[dict]:
+        return self._holds_list()
+
+    def decide_hold(
+        self, pending_id: str, approved: bool, signature: str = ""
+    ) -> str:
+        return self._holds_decide(pending_id, approved, signature)
+
+    def reply_hold(self, pending_id: str, message: str) -> str:
+        return self._holds_reply(pending_id, message)
+
+    def build_node(self, goal: str) -> str:
+        return self._builder(goal)
+
+
+@runtime_checkable
+class NodeTools(Protocol):
+    """The assistant's hands INSIDE one node's thread (the Work interact
+    window): the held-request desk and consented node building. Every
+    method returns words — an ``error: …`` prefix means refusal, and the
+    tool loop hands the string straight back to the model or the user."""
+
+    def node_context(self) -> dict: ...
+    def node_holds(self) -> list[dict]: ...
+    def decide_hold(
+        self, pending_id: str, approved: bool, signature: str = ""
+    ) -> str: ...
+    def reply_hold(self, pending_id: str, message: str) -> str: ...
+    def build_node(self, goal: str) -> str: ...
+
+
+def _resolve_hold(holds: list[dict], ref: str) -> list[dict]:
+    """A held request by id, id prefix, or name substring — never a guess."""
+    wanted = ref.strip().casefold()
+    if not wanted:
+        return []
+    exact = [h for h in holds if h["pending_id"].casefold() == wanted]
+    if exact:
+        return exact
+    prefix = [h for h in holds if h["pending_id"].casefold().startswith(wanted)]
+    if len(prefix) == 1:
+        return prefix
+    by_name = [h for h in holds if wanted in str(h.get("name", "")).casefold()]
+    if by_name:
+        return by_name
+    return prefix
+
+
+def _speak_hold(hold: dict) -> str:
+    return (
+        f"• {hold.get('name', 'contract')} — from"
+        f" {hold.get('submitted_by') or 'unknown'} ({hold['pending_id'][:8]})"
+    )
+
+
+_SIGN_ALL_RE = re.compile(r"^sign\s+all\s+as\s+(.+?)\s*$", re.I)
+_SIGN_RE = re.compile(r"^sign\s+(.+?)\s+as\s+(.+?)\s*$", re.I)
+_DECIDE_RE = re.compile(r"^(allow|approve|reject|decline)\s+(.+?)\s*$", re.I)
+_HOLD_REPLY_RE = re.compile(r"^reply\s+([^:]+):\s*(.+)$", re.I | re.S)
+_BUILD_RE = re.compile(r"^build\s+(?:a\s+node\s+(?:for|to)\s+)?(.+?)\s*$", re.I)
+_PENDING_PHRASES = frozenset(
+    {"pending", "holds", "pending requests", "show pending", "what is pending",
+     "what's pending"}
+)
+
+
+def _node_command(text: str, tools: "NodeTools") -> ChatTurn | None:
+    """Deterministic node-desk commands for the interact window.
+
+    The manual floor of the automation vision: listing, allowing,
+    signing (single or ALL — the fast path for final-result audit
+    signing), replying, and consented building all work with no model."""
+    lowered = text.casefold().rstrip(".!?")
+
+    if lowered in _PENDING_PHRASES or lowered == "accelerate":
+        holds = tools.node_holds()
+        if not holds:
+            say = "Nothing is waiting on this node right now."
+            if lowered == "accelerate":
+                say += (
+                    " To speed the node up: run more tasks through it — "
+                    "every verified run raises its automation reliability — "
+                    "or say “build <what's missing>” and I'll put a new "
+                    "execution node on its path."
+                )
+            return ChatTurn(
+                say=say, source="tool", actions=[{"tool": "node_holds"}]
+            )
+        listing = "\n".join(_speak_hold(h) for h in holds)
+        say = f"Held requests on this node:\n{listing}"
+        if lowered == "accelerate":
+            say += (
+                "\nSay “sign all as <your name>” to clear them in one stroke, "
+                "“allow <name>” / “reject <name>” to decide one, or "
+                "“reply <name>: <message>” to talk back first."
+            )
+        return ChatTurn(say=say, source="tool", actions=[{"tool": "node_holds"}])
+
+    sign_all = _SIGN_ALL_RE.match(text)
+    if sign_all:
+        holds = tools.node_holds()
+        if not holds:
+            return ChatTurn(
+                say="Nothing is pending — there is nothing to sign.",
+                source="tool",
+            )
+        signature = sign_all.group(1).strip()
+        outcomes, actions = [], []
+        for hold in holds:
+            result = tools.decide_hold(hold["pending_id"], True, signature)
+            if result.startswith("error:"):
+                outcomes.append(f"• {hold.get('name')}: {result[7:].strip()}")
+            else:
+                outcomes.append(f"• {hold.get('name')}: signed and allowed")
+                actions.append(
+                    {"tool": "decide_hold", "name": hold["pending_id"][:8]}
+                )
+        return ChatTurn(
+            say="Signed as " + signature + ":\n" + "\n".join(outcomes),
+            source="tool",
+            actions=actions,
+        )
+
+    sign_one = _SIGN_RE.match(text)
+    if sign_one:
+        matches = _resolve_hold(tools.node_holds(), sign_one.group(1))
+        if len(matches) == 1:
+            result = tools.decide_hold(
+                matches[0]["pending_id"], True, sign_one.group(2).strip()
+            )
+            if result.startswith("error:"):
+                return ChatTurn(
+                    say=f"I couldn't: {result[7:].strip()}", source="tool"
+                )
+            return ChatTurn(
+                say=f"Signed and allowed {matches[0].get('name')}.",
+                source="tool",
+                actions=[
+                    {"tool": "decide_hold", "name": matches[0]["pending_id"][:8]}
+                ],
+            )
+        if len(matches) > 1:
+            return ChatTurn(
+                say="Which one: "
+                + "; ".join(_speak_hold(h) for h in matches[:6]),
+                source="tool",
+            )
+        return ChatTurn(
+            say=f"No held request matches “{sign_one.group(1).strip()}”.",
+            source="tool",
+        )
+
+    decide = _DECIDE_RE.match(text)
+    if decide:
+        approved = decide.group(1).casefold() in {"allow", "approve"}
+        matches = _resolve_hold(tools.node_holds(), decide.group(2))
+        if len(matches) == 1:
+            result = tools.decide_hold(matches[0]["pending_id"], approved)
+            if result.startswith("error:"):
+                return ChatTurn(
+                    say=f"I couldn't: {result[7:].strip()}", source="tool"
+                )
+            verdict = "Allowed" if approved else "Rejected"
+            return ChatTurn(
+                say=f"{verdict} {matches[0].get('name')}.",
+                source="tool",
+                actions=[
+                    {"tool": "decide_hold", "name": matches[0]["pending_id"][:8]}
+                ],
+            )
+        if len(matches) > 1:
+            return ChatTurn(
+                say="Which one: "
+                + "; ".join(_speak_hold(h) for h in matches[:6]),
+                source="tool",
+            )
+        # Nothing pending by that name: probably not a desk command.
+        return None
+
+    hold_reply = _HOLD_REPLY_RE.match(text)
+    if hold_reply:
+        matches = _resolve_hold(tools.node_holds(), hold_reply.group(1))
+        if len(matches) == 1:
+            result = tools.reply_hold(
+                matches[0]["pending_id"], hold_reply.group(2).strip()
+            )
+            if result.startswith("error:"):
+                return ChatTurn(
+                    say=f"I couldn't: {result[7:].strip()}", source="tool"
+                )
+            return ChatTurn(
+                say=f"Reply sent on {matches[0].get('name')}.",
+                source="tool",
+                actions=[
+                    {"tool": "reply_hold", "name": matches[0]["pending_id"][:8]}
+                ],
+            )
+        if len(matches) > 1:
+            return ChatTurn(
+                say="Which one: "
+                + "; ".join(_speak_hold(h) for h in matches[:6]),
+                source="tool",
+            )
+        return None
+
+    build = _BUILD_RE.match(text)
+    if build:
+        result = tools.build_node(build.group(1).strip())
+        if result.startswith("error:"):
+            return ChatTurn(
+                say=f"I couldn't: {result[7:].strip()}", source="tool"
+            )
+        return ChatTurn(
+            say=result, source="tool", actions=[{"tool": "build_node"}]
+        )
+    return None
+
+
 # The engine's events in the assistant's voice (compact, chat-sized; the
 # frontend keeps its own richer map for run cards).
 _EVENT_WORDS = {
@@ -451,6 +710,11 @@ def _file_command(message: str, tools: ChatTools) -> ChatTurn | None:
             source="tool",
             actions=[{"tool": "write_file", "name": saved.name}],
         )
+
+    if isinstance(tools, NodeTools):
+        node = _node_command(text, tools)
+        if node is not None:
+            return node
 
     if isinstance(tools, EngineTools):
         engine = _engine_command(text, tools)
@@ -722,6 +986,43 @@ def _run_tool(tools: ChatTools, call: _ToolCall) -> tuple[str, dict | None]:
             or "(none)"
         )
         return listing, {"tool": "list_nodes"}
+    if call.name == "node_holds" and isinstance(tools, NodeTools):
+        holds = tools.node_holds()
+        listing = (
+            "\n".join(
+                f"{h['pending_id'][:8]} {h.get('name')} — from"
+                f" {h.get('submitted_by') or 'unknown'}"
+                for h in holds
+            )
+            or "(none)"
+        )
+        return listing, {"tool": "node_holds"}
+    if call.name == "decide_hold" and isinstance(tools, NodeTools):
+        pending_id = str(call.args.get("pending_id", ""))
+        result = tools.decide_hold(
+            pending_id,
+            bool(call.args.get("approved", False)),
+            str(call.args.get("signature", "") or ""),
+        )
+        action = None if result.startswith("error:") else {
+            "tool": "decide_hold",
+            "name": pending_id[:8],
+        }
+        return result, action
+    if call.name == "reply_hold" and isinstance(tools, NodeTools):
+        pending_id = str(call.args.get("pending_id", ""))
+        result = tools.reply_hold(
+            pending_id, str(call.args.get("message", "")).strip()
+        )
+        action = None if result.startswith("error:") else {
+            "tool": "reply_hold",
+            "name": pending_id[:8],
+        }
+        return result, action
+    if call.name == "build_node" and isinstance(tools, NodeTools):
+        result = tools.build_node(str(call.args.get("goal", "")).strip())
+        action = None if result.startswith("error:") else {"tool": "build_node"}
+        return result, action
     return f"error: unknown tool '{call.name}'", None
 
 
@@ -747,7 +1048,11 @@ class ChatAssistant:
         sender: str = "user",
         tools: ChatTools | None = None,
         model: ChatModel | None = None,
+        context: str | None = None,
     ) -> ChatTurn:
+        """``context`` scopes the turn (e.g. one node's interact window):
+        an extra system note for the model describing where the assistant
+        is standing and which extra tools apply there."""
         envelope = MessageEnvelope(
             channel=self._channel,
             conversation_id=sender,
@@ -763,7 +1068,9 @@ class ChatAssistant:
         active = model or self._model
         if active is not None:
             try:
-                return self._model_turn(active, message, history, tools)
+                return self._model_turn(
+                    active, message, history, tools, context=context
+                )
             except ModelBudgetExceeded as exc:
                 return ChatTurn(say=str(exc), task=None, source="model")
             except ModelUnavailable:
@@ -783,8 +1090,12 @@ class ChatAssistant:
         message: str,
         history: list[dict] | None,
         tools: ChatTools | None,
+        *,
+        context: str | None = None,
     ) -> ChatTurn:
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        if context:
+            messages.append({"role": "system", "content": context})
         for entry in history or []:
             role = entry.get("role")
             content = entry.get("content")

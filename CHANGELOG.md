@@ -4,6 +4,45 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The node's interaction window — OoLu called out to act ON a node:
+
+- **An Interact tab beside Activity and Files** on every Work node
+  thread: a node-scoped conversation with OoLu (`POST /v1/chat` +
+  `node_id`, tenant-guarded to the caller's desk). Quick actions:
+  Pending requests, Accelerate, Sign all…, Build a node…
+- **OoLu's hands on the node's desk** (`NodeChatTools`): list its held
+  requests, allow/reject them, SIGN them — single or "sign all as
+  <name>", the fast manual floor of final-result audit signing — and
+  reply to requesters. Every hand goes through the gateway's own
+  handlers, so tenant scope, approve authority (a submitter still can't
+  approve their own ask), the budget re-check, and the audit trail
+  apply unchanged. Deterministic commands work with no model
+  (pending / accelerate / allow / reject / sign … as … / reply …: … /
+  build …); a configured model gets the same tools plus a node-context
+  system note and is told never to decide a hold unasked.
+- **Building on the node's path**: "build <goal>" (consent-gated on
+  'Auto-build nodes on my paths') contributes a keyword-named draft
+  node to the registry — a citizen the planner can find and route to,
+  becoming callable as its runs verify — created UNDER the node when
+  it is a Supernode (unclaimed: the node id is the claim ticket) or
+  standalone on the caller's desk otherwise.
+- **The automation vision, made visible and honest**: the Interact tab
+  leads with the node's automation reliability ("99.2% over 133
+  verified runs — every verified run takes this node closer to
+  hands-off"), computed from platform-verified health. And when a
+  node's automation FAILS, the failure now carries a stable error
+  code — `EXEC_NODE_FAILED`, `EXEC_BLOCKED`, `PLAN_NO_ROUTE` — shown
+  as a chip on the run view and spoken by chat ("saved with the run so
+  you can fix it later").
+- Tests: `tests/test_node_interact.py` (pending/accelerate listing,
+  sign-all landing the typed signature in the audit trail and emptying
+  the queue, the authority wall answering in words, replies, consent-
+  gated building standalone and under a Supernode, 404 off the desk)
+  and `NodeInteract.test.tsx` (reliability line, node-scoped turns +
+  action chips, quick actions send vs pre-fill). Error-code asserts in
+  `test_execution_retry.py`. 134 vitest and the entire backend suite
+  green; shell rebuilt.
+
 Folders in the drawers, KYC only where it binds, and lists that fold:
 
 - **Folders organize a file drawer.** `UserFile` gains a `folder` path
