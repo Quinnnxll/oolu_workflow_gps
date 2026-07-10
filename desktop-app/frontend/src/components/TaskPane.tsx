@@ -1,8 +1,16 @@
 import { useState } from "react";
 import { api } from "../api";
-import type { TaskView } from "../types";
+import type { PlanView, TaskView } from "../types";
 import { Clarification } from "./Clarification";
 import { Timeline } from "./Timeline";
+
+const STATUS_GLYPH: Record<string, string> = {
+  planned: "○",
+  succeeded: "✓",
+  failed: "✗",
+  blocked: "⛔",
+  cancelled: "–",
+};
 
 interface Props {
   task: TaskView | null;
@@ -87,7 +95,13 @@ export function TaskPane({ task, setTask, onChanged }: Props) {
             <Decision
               prompt={task.prompt}
               actions={[
-                { label: "Retry", run: () => api.resolveIncident(task.run_id, "retry") },
+                {
+                  label:
+                    task.user_retries < 2
+                      ? `Retry (${2 - task.user_retries} left before AI rebuild)`
+                      : "Retry",
+                  run: () => api.resolveIncident(task.run_id, "retry"),
+                },
                 { label: "Abort", run: () => api.resolveIncident(task.run_id, "abort") },
               ]}
               onDone={(t) => {
@@ -95,6 +109,54 @@ export function TaskPane({ task, setTask, onChanged }: Props) {
                 onChanged();
               }}
             />
+          )}
+
+          {task.plan && <Plan plan={task.plan} />}
+
+          {task.failure && task.failure.node_label && (
+            <div className="failure-node">
+              Failed at node <strong>{task.failure.node_label}</strong>
+              {task.failure.error ? <>: {task.failure.error}</> : null}
+              {task.user_retries > 0 && (
+                <span className="retry-count">
+                  {" "}
+                  ({task.user_retries} {task.user_retries === 1 ? "retry" : "retries"}{" "}
+                  so far)
+                </span>
+              )}
+            </div>
+          )}
+
+          {task.failure?.rebuild_refusal && (
+            <div className="hint">{task.failure.rebuild_refusal}</div>
+          )}
+          {task.autobuild?.hint && !task.failure?.rebuild_refusal && (
+            <div className="hint">{task.autobuild.hint}</div>
+          )}
+
+          {task.no_route && (
+            <div className="no-route">
+              <div className="no-route-title">
+                OoLu could not find a route to execute this.
+              </div>
+              <div>{task.no_route.reason}</div>
+              {task.no_route.unresolved_terms.length > 0 && (
+                <div>
+                  Nothing to search from for:{" "}
+                  {task.no_route.unresolved_terms.join(", ")}
+                </div>
+              )}
+              {task.no_route.candidates.length > 0 && (
+                <ul>
+                  {task.no_route.candidates.map((c) => (
+                    <li key={c.name}>
+                      <strong>{c.name}</strong>
+                      {c.reason ? <> — {c.reason}</> : null}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           )}
 
           {task.failure_reason && <div className="error">{task.failure_reason}</div>}
@@ -124,6 +186,42 @@ export function TaskPane({ task, setTask, onChanged }: Props) {
 function Phase({ task }: { task: TaskView }) {
   const p = task.awaiting ?? task.phase;
   return <span className={`phase phase-${p}`}>{p}</span>;
+}
+
+// How OoLu planned the steps: the chosen route as an ordered node list with
+// live statuses; the exact failing node is marked. An LLM-rebuilt route is
+// badged and shows the model's own numbered plan.
+function Plan({ plan }: { plan: PlanView }) {
+  return (
+    <div className="plan">
+      <div className="plan-head">
+        <span className="plan-route">Route: {plan.route}</span>
+        {plan.origin === "llm_rebuild" && (
+          <span className="plan-badge">AI rebuild</span>
+        )}
+      </div>
+      {plan.notes.length > 0 && (
+        <ol className="plan-notes">
+          {plan.notes.map((n, i) => (
+            <li key={i}>{n}</li>
+          ))}
+        </ol>
+      )}
+      <ol className="plan-steps">
+        {plan.steps.map((s) => (
+          <li
+            key={s.id}
+            className={`plan-step plan-step-${s.status}${s.failed ? " plan-step-culprit" : ""}`}
+          >
+            <span className="plan-glyph">{STATUS_GLYPH[s.status] ?? "•"}</span>
+            <span className="plan-label">{s.label}</span>
+            {s.failed && <span className="plan-fail-tag">failed here</span>}
+            {s.error && <span className="plan-error">{s.error}</span>}
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
 }
 
 interface DecisionAction {

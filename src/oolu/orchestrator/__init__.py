@@ -69,6 +69,17 @@ from .proposals import (
     TraceProposalModel,
     parse_weights,
 )
+from .rebuild import (
+    AUTOBUILD_CONSENT_KEY,
+    AUTOBUILD_HINT,
+    AUTOBUILD_SETTING_LABEL,
+    REBUILD_PURPOSE,
+    REBUILD_SYSTEM_PROMPT,
+    LLMRouteRebuilder,
+    RebuildDecision,
+    RouteRebuilder,
+    parse_plan_steps,
+)
 from .scheduler import DagRouteRunner, action_node_key
 from .state import (
     ORCHESTRATOR_SCHEMA_VERSION,
@@ -101,8 +112,17 @@ from .store import (
 )
 
 __all__ = [
+    "AUTOBUILD_CONSENT_KEY",
+    "AUTOBUILD_HINT",
+    "AUTOBUILD_SETTING_LABEL",
+    "LLMRouteRebuilder",
     "ORCHESTRATOR_SCHEMA_VERSION",
+    "REBUILD_PURPOSE",
+    "REBUILD_SYSTEM_PROMPT",
     "RUN_STATE_MIGRATIONS",
+    "RebuildDecision",
+    "RouteRebuilder",
+    "parse_plan_steps",
     "ActionExecutorRouteRunner",
     "AdaptivePlanner",
     "Blueprint",

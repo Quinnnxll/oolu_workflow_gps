@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -281,6 +282,34 @@ def build_intake_model(
     )
 
 
+def build_script_executor(
+    settings: Settings | None = None,
+    *,
+    cache_path: str | Path = ":memory:",
+    synthesizer=None,  # runtime.ScriptSynthesizer, optional
+) -> dict[str, ActionExecutor]:
+    """The script hand: run planner-provided or synthesized code through the
+    configured isolation backend (Docker when configured; the subprocess
+    dev fallback otherwise), memoized per node and always verified by
+    execution before anything is trusted."""
+    settings = settings or Settings()
+    from .cache.store import LocalScriptCache
+    from .config import _build_backend
+    from .runtime.script_node import NodeScriptRunner
+
+    runner = NodeScriptRunner(
+        _build_backend(settings.backend),
+        LocalScriptCache(cache_path),
+        synthesizer=synthesizer,
+        pinned_index_url=settings.backend.pinned_index_url,
+        backend_kind=settings.backend.kind,
+        backend_image=(
+            settings.backend.image if settings.backend.kind == "docker" else None
+        ),
+    )
+    return {runner.name: runner}
+
+
 def build_orchestrator_factory(
     settings: Settings | None = None,
     *,
@@ -290,6 +319,7 @@ def build_orchestrator_factory(
     grounding_map: dict[str, str] | None = None,
     executors: dict[str, ActionExecutor] | None = None,
     route_model=None,  # chat.ChatModel: semantic route choice, optional
+    rebuilder=None,  # orchestrator.RouteRebuilder: the post-retry LLM rebuild
 ) -> OrchestratorFactory:
     from .orchestrator.adapters import ModelRouteOptimizer
 
@@ -322,6 +352,7 @@ def build_orchestrator_factory(
             recovery=BoundedRetryRecovery(),
             feedback=CollectingFeedbackSink(),
             events=audit,  # type: ignore[arg-type]
+            rebuilder=rebuilder,
         )
 
     return factory
@@ -473,14 +504,57 @@ def build_host_runtime(
 
         intake_model = RouterIntakeModel(_planning_router("plan.intake"))
 
+    # Execution retry's last resort: after the user's retries run out the
+    # engine calls the model out to plan the steps and write the code —
+    # gated per tenant on the "Auto-build nodes on my paths" consent — and
+    # runs it through the script hand below, which verifies by execution
+    # before trusting anything. A machine without a script runtime keeps
+    # working; the rebuild then refuses with the reason instead of firing.
+    from .orchestrator.rebuild import (
+        AUTOBUILD_CONSENT_KEY,
+        REBUILD_PURPOSE,
+        LLMRouteRebuilder,
+    )
+
+    def _autobuild_consent(tenant: str) -> bool:
+        return bool(
+            settings_node.effective(tenant or home_tenant).get(
+                AUTOBUILD_CONSENT_KEY, False
+            )
+        )
+
+    rebuilder = LLMRouteRebuilder(
+        _planning_router(REBUILD_PURPOSE), consent=_autobuild_consent
+    )
+    run_executors = dict(executors or {})
+    if "script" not in run_executors:
+        try:
+            from .runtime.script_node import ChatModelSynthesizer
+
+            run_executors.update(
+                build_script_executor(
+                    settings,
+                    cache_path=data / "scripts.db",
+                    synthesizer=ChatModelSynthesizer(
+                        _planning_router("plan.synthesize")
+                    ),
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - hosts without a script
+            # runtime still serve; the rebuild simply refuses with a reason.
+            logging.getLogger(__name__).warning(
+                "script runtime unavailable (%s); LLM rebuild disabled", exc
+            )
+
     factory = build_orchestrator_factory(
         settings,
         intake_model=intake_model,
         skills=skills,
         blueprints=blueprints,
         grounding_map=grounding_map,
-        executors=executors,
+        executors=run_executors,
         route_model=_planning_router("plan.route"),
+        rebuilder=rebuilder,
     )
     durable = DurableWorkflowService(conn, factory)
 

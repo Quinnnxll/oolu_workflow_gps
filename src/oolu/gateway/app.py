@@ -96,6 +96,7 @@ from ..orchestrator import (
     OrchestratorError,
     patch_or_defaults,
 )
+from ..orchestrator.rebuild import AUTOBUILD_CONSENT_KEY, AUTOBUILD_HINT
 from ..orchestrator.state import (
     PauseKind,
     Phase,
@@ -109,7 +110,7 @@ from ..providers.vault import SecretVault
 from ..settings_node import SettingError, SettingsNode
 from ..skills.contract import NodeContract, Slot, SubgraphBody
 from ..skills.inputs import bind_inputs, inputs_manifest
-from ..skills.models import ReusableSkill
+from ..skills.models import ExecutionStatus, ReusableSkill
 from ..skills.ports import ActionExecutor
 from .errors import GatewayError, WebhookError
 from .http import (
@@ -138,6 +139,118 @@ _PAUSE_VALUE = {
     PauseKind.APPROVAL: "approval",
     PauseKind.INCIDENT: "incident",
 }
+
+
+def _event_detail(payload: object) -> str:
+    """One human-readable line for a timeline event, from its audit payload:
+    the status, the exact failing node when one is known, and the reason."""
+    if not isinstance(payload, dict):
+        return ""
+    parts: list[str] = []
+    status = payload.get("status")
+    if status:
+        parts.append(str(status))
+    label = payload.get("failed_action_label")
+    reason = payload.get("reason") or payload.get("error")
+    if label and not (reason and str(label) in str(reason)):
+        parts.append(f"node '{label}' failed")
+    if reason:
+        parts.append(str(reason))
+    return " — ".join(parts)
+
+
+def _plan_view(state: RunState) -> dict | None:
+    """How OoLu planned the steps: the chosen route as an ordered node list,
+    each carrying its live execution status, with the exact failing node
+    marked. ``origin``/``notes`` distinguish an LLM-rebuilt route (and show
+    the model's numbered plan) from an assembled one."""
+    if state.route is None:
+        return None
+    chosen = state.route.chosen
+    execution = state.execution
+    outcome_by_action: dict[str, object] = {}
+    if execution is not None:
+        for outcome in execution.action_outcomes:
+            # Per-action idempotency keys end in the action id (both runners).
+            outcome_by_action[outcome.idempotency_key.rsplit(":", 1)[-1]] = outcome
+    failed_id = execution.failed_action_id if execution else None
+    steps = []
+    for item in chosen.actions:
+        outcome = outcome_by_action.get(item.action.id)
+        failed = item.action.id == failed_id
+        if outcome is not None:
+            status = outcome.status.value
+            error = outcome.error
+        elif failed:
+            # Blocked before an outcome existed (e.g. a capability gate).
+            status = execution.status.value if execution else "blocked"
+            error = execution.error if execution else None
+        else:
+            status = "planned"
+            error = None
+        steps.append(
+            {
+                "id": item.action.id,
+                "label": f"{item.action.adapter}/{item.action.operation}",
+                "status": status,
+                "error": error,
+                "failed": failed,
+            }
+        )
+    return {
+        "route": chosen.name,
+        "origin": chosen.origin,
+        "notes": list(chosen.plan_notes),
+        "steps": steps,
+    }
+
+
+def _no_route_view(state: RunState) -> dict | None:
+    """Why there was no route or node to search from — only for runs that
+    failed before a viable route existed. Shows what grounding resolved,
+    which terms it could not, and every candidate route the optimizer
+    excluded, each with its reason."""
+    if state.phase is not Phase.FAILED:
+        return None
+    if state.route is not None and not state.route.chosen.excluded:
+        return None
+    candidates = []
+    if state.route is not None:
+        for bp in [state.route.chosen, *state.route.alternatives]:
+            candidates.append(
+                {
+                    "name": bp.name,
+                    "excluded": bp.excluded,
+                    "reason": bp.exclusion_reason,
+                }
+            )
+    grounding = state.grounding
+    return {
+        "reason": state.failure_reason or "no route could be planned",
+        "unresolved_terms": list(grounding.unresolved_terms) if grounding else [],
+        "resolved_capabilities": (
+            sorted(grounding.resolved_capabilities) if grounding else []
+        ),
+        "candidates": candidates,
+    }
+
+
+def _failure_view(state: RunState) -> dict | None:
+    """The exact node that caused the most recent execution failure."""
+    execution = state.execution
+    if execution is None or execution.status is ExecutionStatus.SUCCEEDED:
+        return None
+    payload = state.pause.payload if state.pause else {}
+    return {
+        "node_id": execution.failed_action_id,
+        "node_label": execution.failed_action_label,
+        "error": execution.error,
+        "attempt": execution.attempt,
+        "user_retries": state.user_retries,
+        "rebuild_refusal": (
+            payload.get("rebuild_refusal") if isinstance(payload, dict) else None
+        ),
+    }
 
 # The plan applied to /v1/market/quotes when the request names none. A
 # documented money knob (like billing.policy), not a hidden default.
@@ -477,6 +590,7 @@ class GatewayApp:
                 "event_type": r.event_type,
                 "phase": state.phase.value,
                 "at": r.at.isoformat(),
+                "detail": _event_detail(r.payload),
             }
             for r in self._durable.audit.records(run_id=run_id)
             if r.seq > after_seq
@@ -689,6 +803,13 @@ class GatewayApp:
             try:
                 run = self._start_intent_run(session, turn.task)
                 self._metrics["chat_runs"] += 1
+                # The run may have already failed DURING execution (submit
+                # runs synchronously to the first pause or terminal phase).
+                # The auto-build check must fire here too — not only on the
+                # planning-time refusal below — so a failed execution names
+                # the failing node and the consent switch that would let
+                # OoLu plan and write code itself.
+                say = self._describe_run_failure(say, run)
             except GatewayError as exc:
                 if exc.code != "cannot_execute":
                     raise
@@ -699,14 +820,10 @@ class GatewayApp:
                 say = f"I can't run that on this machine yet — {exc.message}."
                 if self._settings is not None and not bool(
                     self._settings.effective(session.tenant_id).get(
-                        "account.autobuild_consent", False
+                        AUTOBUILD_CONSENT_KEY, False
                     )
                 ):
-                    say += (
-                        " If you want me to auto-build what's missing, turn "
-                        "on 'Auto-build nodes on my paths' in Settings and "
-                        "ask me again."
-                    )
+                    say += f" If you want me to auto-build what's missing: {AUTOBUILD_HINT}"
         return json_response(
             200,
             {
@@ -717,6 +834,30 @@ class GatewayApp:
                 "run": run,
             },
         )
+
+    @staticmethod
+    def _describe_run_failure(say: str, run: dict | None) -> str:
+        """Fold an execution failure into the assistant's reply: the exact
+        failing node, then the auto-build hint the run view already carries
+        when consent is off (or the rebuild's own refusal when it ran)."""
+        if not run:
+            return say
+        if run.get("phase") != "failed" and run.get("awaiting") != "incident":
+            return say
+        failure = run.get("failure") or {}
+        if failure.get("node_label"):
+            say += f" The run hit a problem at node '{failure['node_label']}'"
+            if failure.get("error"):
+                say += f": {failure['error']}"
+            say += "."
+        elif run.get("failure_reason"):
+            say += f" The run failed — {run['failure_reason']}."
+        if failure.get("rebuild_refusal"):
+            say += f" {failure['rebuild_refusal']}"
+        autobuild = run.get("autobuild") or {}
+        if autobuild.get("hint"):
+            say += f" {autobuild['hint']}"
+        return say
 
     def _start_intent_run(self, session, intent: str, *, max_recovery: int = 1) -> dict:
         """Submit a plain intent as a run: the non-marketplace core of
@@ -1012,7 +1153,12 @@ class GatewayApp:
                 "run_id": params["run_id"],
                 "verified": bool(history["audit_verified"]),
                 "entries": [
-                    {"seq": r.seq, "event_type": r.event_type, "at": r.at.isoformat()}
+                    {
+                        "seq": r.seq,
+                        "event_type": r.event_type,
+                        "at": r.at.isoformat(),
+                        "detail": _event_detail(r.payload),
+                    }
                     for r in history["audit"]
                 ],
             },
@@ -2999,4 +3145,27 @@ class GatewayApp:
             "prompt": state.pause.prompt if state.pause else None,
             "failure_reason": state.failure_reason,
             "result": state.result,
+            "user_retries": state.user_retries,
+            "plan": _plan_view(state),
+            "no_route": _no_route_view(state),
+            "failure": _failure_view(state),
+            "autobuild": self._autobuild_view(state),
+        }
+
+    def _autobuild_view(self, state: RunState) -> dict | None:
+        """The auto-build consent check, run on EVERY failed/incident run —
+        planning-time refusals and execution failures alike — so the switch
+        that would unblock the run is always named at the moment it matters."""
+        failing = state.phase is Phase.FAILED or (
+            state.pause is not None and state.pause.kind is PauseKind.INCIDENT
+        )
+        if not failing or self._settings is None:
+            return None
+        tenant = str(state.contract.metadata.get("tenant_id", ""))
+        consent = bool(
+            self._settings.effective(tenant).get(AUTOBUILD_CONSENT_KEY, False)
+        )
+        return {
+            "consent": consent,
+            "hint": None if consent else AUTOBUILD_HINT,
         }

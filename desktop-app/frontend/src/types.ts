@@ -5,6 +5,54 @@ export interface QuestionView {
   priority?: number;
 }
 
+// One step of the chosen route, with its live execution status. `failed`
+// marks the EXACT node that caused the failure (never its cascade-cancelled
+// dependents).
+export interface PlanStep {
+  id: string;
+  label: string;
+  status: string; // planned | succeeded | failed | blocked | cancelled
+  error: string | null;
+  failed: boolean;
+}
+
+// How OoLu planned the steps. `origin === "llm_rebuild"` means the model
+// planned this route and wrote its code after retries ran out; `notes` is
+// the model's own numbered plan.
+export interface PlanView {
+  route: string;
+  origin: string;
+  notes: string[];
+  steps: PlanStep[];
+}
+
+// Why there was no route or node to search from (planning failed before a
+// viable route existed): the grounding result plus every candidate route
+// the optimizer excluded, each with its reason.
+export interface NoRouteView {
+  reason: string;
+  unresolved_terms: string[];
+  resolved_capabilities: string[];
+  candidates: { name: string; excluded: boolean; reason: string | null }[];
+}
+
+// The exact node that caused the most recent execution failure, plus the
+// retry state and — when the LLM rebuild ran and refused — its reason.
+export interface FailureView {
+  node_id: string | null;
+  node_label: string | null;
+  error: string | null;
+  attempt: number;
+  user_retries: number;
+  rebuild_refusal: string | null;
+}
+
+// The auto-build consent check, present on every failed/incident run.
+export interface AutobuildView {
+  consent: boolean;
+  hint: string | null;
+}
+
 // The gateway's run view-model (`GET /v1/runs/{id}`). `questions` and
 // `can_cancel` are not part of the wire shape — the api layer derives them
 // (fetching /questions when awaiting clarification, deriving cancel from phase).
@@ -18,6 +66,11 @@ export interface TaskView {
   can_cancel: boolean;
   failure_reason: string | null;
   result: Record<string, unknown> | null;
+  user_retries: number;
+  plan: PlanView | null;
+  no_route: NoRouteView | null;
+  failure: FailureView | null;
+  autobuild: AutobuildView | null;
 }
 
 // Pause kinds surfaced by the gateway (`_PAUSE_VALUE`). Any of these means the

@@ -4,6 +4,62 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Execution retry, diagnosed and escalated — when a run breaks, the user
+sees the plan, the exact broken node, and after two retries the model is
+called out to plan and write the code:
+
+- **The exact failing node is labelled everywhere.** `ExecutionRecord`
+  gains `failed_action_id`/`failed_action_label` (the FIRST action that
+  failed — cascade-cancelled dependents are consequences, not causes),
+  set by both runners (`DagRouteRunner` incl. capability-blocked
+  preflight, `ActionExecutorRouteRunner`). The monitor's summary — and
+  therefore the incident, the pause payload, the abort's terminal
+  `failure_reason`, and the audit events — all name the node.
+- **The plan is visible.** `GET /v1/runs/{id}` now carries `plan` (the
+  chosen route as ordered steps with live per-node statuses, the culprit
+  marked), `failure` (node, error, attempt, retry count), `no_route`
+  (when planning failed before a viable route existed: the reason,
+  unresolved grounding terms, and every excluded candidate with its
+  reason), `autobuild` (the consent check, below) and `user_retries`.
+  Timeline frames and `/audit` entries gain a human-readable `detail`
+  line. The Task pane renders all of it: the step list with per-node
+  glyphs, a "failed here" tag, the no-route explanation, and a retry
+  button that counts down to the AI rebuild.
+- **Retry twice, then the model plans and writes the code.**
+  `RunState.user_retries` counts the operator's incident retries; after
+  two of them fail, `_phase_recovery` calls the new `RouteRebuilder`
+  seam instead of raising a third identical incident.
+  `LLMRouteRebuilder` (metered under `plan.rebuild`) asks the tenant's
+  model for a numbered plan plus one script, builds an honest route
+  (`origin="llm_rebuild"`, the plan in `plan_notes`, `risk="write"` so
+  model-written code re-earns the human's confirmation), and the run
+  re-enters HUMAN_CONTROL. One rebuild per run (`rebuild_attempts`);
+  every failure mode is a refusal carried on the incident
+  (`rebuild_refusal`), never a crash. `NodeScriptRunner` accepts a
+  planner-`provided` script as a proposal — executed and classified
+  before it is trusted or cached, with bounded missing-dependency
+  healing — and `ChatModelSynthesizer` gives the repair ladder a
+  lightweight single-shot synthesizer.
+- **Auto-build now checks on EXECUTION failure, not just planning.**
+  Previously `account.autobuild_consent` was consulted only on the
+  chat's planning-time `cannot_execute` refusal; a run that failed while
+  executing never mentioned it. The consent check now gates the rebuild
+  itself, the run view carries the hint on every failed/incident run,
+  and the chat surface folds an execution failure (failing node +
+  hint/refusal) into its reply. `build_host_runtime` wires the
+  rebuilder plus a script hand (`build_script_executor`: the configured
+  isolation backend, node script cache at `scripts.db`) into every host.
+- Tests: `tests/test_execution_retry.py` (labelling in both runners +
+  blocked + abort, the two-retries→rebuild flow incl. confirmation,
+  consent/no-code/no-runtime/exploding-rebuilder refusals, the
+  one-rebuild cap, provided-script verify-then-cache, the gateway
+  views) and `TaskPane.test.tsx` (plan steps + culprit, retry
+  countdown, autobuild hint, AI-rebuild badge, no-route panel).
+  Verified live end-to-end through `build_host_runtime`: submit → node
+  labelled → two retries → consent-off refusal → settings flip → model
+  consulted → abort keeps the diagnosis; and a provided script executed
+  for real through `SubprocessBackend` (`emit_result` → payload).
+
 Value patching — the mechanical-design scenario: deterministic
 scaffolding (open the app, open the file, select the tool) chains by
 slots, and at the creative step the run pulls the node's declared input

@@ -37,6 +37,7 @@ from .ports import (
     RouteOptimizer,
     WorkflowExecutor,
 )
+from .rebuild import RebuildDecision, RouteRebuilder
 from .state import (
     ConfirmationRecord,
     Incident,
@@ -66,6 +67,7 @@ class WorkflowOrchestrator:
         feedback: FeedbackSink,
         events: EventSink | None = None,
         compiler: RequirementConstraintCompiler | None = None,
+        rebuilder: RouteRebuilder | None = None,
     ):
         self._intaker = intaker
         self._grounder = grounder
@@ -77,6 +79,7 @@ class WorkflowOrchestrator:
         self._feedback = feedback
         self._events = events
         self._compiler = compiler or RequirementConstraintCompiler()
+        self._rebuilder = rebuilder
 
     # ------------------------------------------------------------------ #
     # Public API.                                                         #
@@ -319,6 +322,9 @@ class WorkflowOrchestrator:
                 "run_id": state.run_id,
                 "status": state.execution.status.value,
                 "idempotency_key": key,
+                "error": state.execution.error,
+                "failed_action_id": state.execution.failed_action_id,
+                "failed_action_label": state.execution.failed_action_label,
             },
         )
         return self._advance(state, Phase.MONITORING, f"attempt {attempt}")
@@ -343,6 +349,20 @@ class WorkflowOrchestrator:
             return self._advance(
                 state, Phase.EXECUTION, f"recovering: {decision.reason}"
             )
+
+        # The user hit Retry twice and the route still fails: instead of
+        # raising a third identical incident, call the model out to plan the
+        # steps fresh and write the code for execution. Refusals (consent
+        # off, no model, no code) fall through to the incident, carrying the
+        # reason so the user reads exactly what would unblock the run.
+        rebuild_refusal: str | None = None
+        if state.user_retries >= 2 and state.rebuild_attempts == 0:
+            rebuild = self._attempt_rebuild(state)
+            if rebuild.rebuilt:
+                return self._apply_rebuild(state, rebuild)
+            rebuild_refusal = rebuild.reason
+
+        execution = state.execution
         incident = Incident(
             reason=state.monitoring.summary or "execution unhealthy",
             severity="high",
@@ -350,13 +370,93 @@ class WorkflowOrchestrator:
         )
         state.incidents.append(incident)
         self._emit(
-            "workflow.incident", {"run_id": state.run_id, "incident_id": incident.id}
+            "workflow.incident",
+            {
+                "run_id": state.run_id,
+                "incident_id": incident.id,
+                "reason": incident.reason,
+                "failed_action_id": execution.failed_action_id if execution else None,
+                "failed_action_label": (
+                    execution.failed_action_label if execution else None
+                ),
+                "user_retries": state.user_retries,
+            },
         )
+        payload = {
+            "incident_id": incident.id,
+            "reason": incident.reason,
+            "failed_action_id": execution.failed_action_id if execution else None,
+            "failed_action_label": (
+                execution.failed_action_label if execution else None
+            ),
+            "user_retries": state.user_retries,
+        }
+        if rebuild_refusal:
+            payload["rebuild_refusal"] = rebuild_refusal
         return self._pause(
             state,
             PauseKind.INCIDENT,
             "execution escalated to an incident; operator decision required",
-            {"incident_id": incident.id, "reason": incident.reason},
+            payload,
+        )
+
+    def _attempt_rebuild(self, state: RunState) -> RebuildDecision:
+        """Consult the rebuilder, refusing safely when it cannot help."""
+        if self._rebuilder is None:
+            return RebuildDecision(
+                reason="this deployment has no rebuilder configured"
+            )
+        try:
+            decision = self._rebuilder.rebuild(
+                intent=state.intent,
+                tenant_id=str(state.contract.metadata.get("tenant_id", "")),
+                route=state.route,
+                execution=state.execution,
+            )
+        except Exception as exc:  # noqa: BLE001 - a broken rebuilder must not
+            # kill the run it was trying to save; the incident says why.
+            return RebuildDecision(reason=f"rebuild failed: {exc}")
+        if decision.rebuilt:
+            assert decision.route is not None
+            needed: set[str] = set()
+            for item in decision.route.chosen.actions:
+                needed |= set(item.required_capabilities)
+            missing = needed - set(self._executor.capabilities())
+            if missing:
+                return RebuildDecision(
+                    reason="the model wrote a new plan but this machine has no "
+                    "runtime for it (missing capabilities: "
+                    + ", ".join(sorted(missing))
+                    + ")"
+                )
+        return decision
+
+    def _apply_rebuild(self, state: RunState, rebuild: RebuildDecision) -> RunState:
+        """Swap in the model's route and re-enter human control.
+
+        The rebuilt route is model-written code, so it never inherits the old
+        route's confirmation — the run walks HUMAN_CONTROL -> CONFIRMATION
+        again and the user reads the new plan before it executes.
+        """
+        assert rebuild.route is not None
+        state.rebuild_attempts += 1
+        state.recovery_attempts += 1  # fresh idempotency keys for the new route
+        state.route = rebuild.route
+        state.human_control = None
+        state.confirmation = None
+        self._emit(
+            "workflow.rebuilt",
+            {
+                "run_id": state.run_id,
+                "route": rebuild.route.chosen.name,
+                "plan_notes": rebuild.plan_notes,
+                "reason": rebuild.reason,
+            },
+        )
+        return self._advance(
+            state,
+            Phase.HUMAN_CONTROL,
+            "model rebuilt the route after retries were exhausted",
         )
 
     def _phase_finalization(self, state: RunState) -> RunState:
@@ -376,6 +476,8 @@ class WorkflowOrchestrator:
             "route": state.route.chosen.name,
             "actions": len(state.route.chosen.actions),
         }
+        if state.rebuild_attempts:
+            state.result["rebuilt"] = True
         # What the hands actually brought back (executors keep evidence
         # bounded) — the part of the run the user came for.
         outputs = [
@@ -437,10 +539,13 @@ class WorkflowOrchestrator:
         if decision == "retry":
             state.incidents[-1] = incident.model_copy(update={"resolution": "retried"})
             state.recovery_attempts += 1
+            state.user_retries += 1
             self._advance(state, Phase.EXECUTION, "operator retried after incident")
             return state
         state.incidents[-1] = incident.model_copy(update={"resolution": "aborted"})
-        self._fail(state, "operator aborted after incident")
+        # The terminal reason keeps the incident's diagnosis (which names the
+        # failing node) instead of erasing it behind "operator aborted".
+        self._fail(state, f"operator aborted after incident: {incident.reason}")
         return state
 
     # ------------------------------------------------------------------ #

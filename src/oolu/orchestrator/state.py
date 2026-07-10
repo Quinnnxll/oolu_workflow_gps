@@ -158,6 +158,12 @@ class Blueprint(BaseModel):
     estimated_cost: float = 0.0
     excluded: bool = False
     exclusion_reason: str | None = None
+    # Where this route came from. "planned" routes are assembled from known
+    # nodes; "llm_rebuild" routes were planned and written by a model after
+    # the user's retries were exhausted. ``plan_notes`` carries the planner's
+    # own step narrative (the model's numbered plan) for the user to read.
+    origin: Literal["planned", "llm_rebuild"] = "planned"
+    plan_notes: list[str] = Field(default_factory=list)
 
 
 class RoutePlan(BaseModel):
@@ -205,6 +211,11 @@ class ExecutionRecord(BaseModel):
     status: ExecutionStatus
     action_outcomes: list[ExecutionOutcome] = Field(default_factory=list)
     error: str | None = None
+    # The exact node that caused the failure: the FIRST action that failed
+    # (cascade-cancelled dependents are consequences, not causes). ``label``
+    # is the human-readable ``adapter/operation`` name.
+    failed_action_id: str | None = None
+    failed_action_label: str | None = None
     started_at: datetime = Field(default_factory=_now)
     completed_at: datetime | None = None
 
@@ -305,9 +316,16 @@ class RunState(BaseModel):
     incidents: list[Incident] = Field(default_factory=list)
     feedback: FeedbackRecord | None = None
 
-    # Recovery loop control.
+    # Recovery loop control. ``recovery_attempts`` counts every re-execution
+    # (automatic and operator-driven); ``user_retries`` counts only the
+    # operator's explicit incident "retry" decisions — after two of those
+    # fail, the machine escalates to the LLM rebuild instead of asking a
+    # third time. ``rebuild_attempts`` caps the rebuild at one per run so a
+    # broken synthesis can never loop.
     recovery_attempts: int = 0
     max_recovery_attempts: int = 1
+    user_retries: int = 0
+    rebuild_attempts: int = 0
 
     # Human-in-the-loop + audit.
     pause: PauseToken | None = None

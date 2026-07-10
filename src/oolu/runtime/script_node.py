@@ -39,7 +39,7 @@ from ..cache.signature import (
     make_node_script_cache_key,
 )
 from ..cache.store import ScriptCache
-from ..models import ExecutionResult
+from ..models import ErrorClass, ExecutionResult
 from ..skills.models import ActionEvent, ExecutionOutcome, ExecutionStatus
 from .backend import ExecutionBackend, ExecutionRequest, ResourceLimits
 from .dependency import classify
@@ -106,6 +106,41 @@ class GraphEngineSynthesizer:
         )
 
 
+class ChatModelSynthesizer:
+    """Single-shot synthesis through a chat model (``reply(messages) -> str``).
+
+    The lightweight sibling of ``GraphEngineSynthesizer`` for deployments
+    without the full graph engine: one consultation with the frozen synthesis
+    system prompt, code-block extraction, no navigation loop. The runner
+    still verifies by execution before trusting anything, so a bad answer is
+    just a failed proposal.
+    """
+
+    def __init__(self, model, *, tier: str = "chat"):
+        self._model = model  # chat.ChatModel: reply(messages) -> str
+        self._tier = tier
+
+    def synthesize(self, goal: str, *, session_id: str) -> NodeSynthesis | None:
+        from ..routing.gateway import extract_script
+        from ..routing.prompting import DEFAULT_SYSTEM_PROMPT
+
+        try:
+            raw = self._model.reply(
+                [
+                    {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
+                    {"role": "user", "content": goal},
+                ]
+            )
+        except Exception as exc:  # noqa: BLE001 - no model means no proposal,
+            # never a crashed node.
+            logger.warning("chat-model synthesis failed: %s", exc)
+            return None
+        script = extract_script(raw)
+        if not script:
+            return None
+        return NodeSynthesis(script=script, tier=self._tier, model="chat-router")
+
+
 def render_node_goal(goal: str, bindings: dict[str, Any]) -> str:
     """The exact synthesis prompt for a bound node — deterministic, so the
     same node + bindings always asks the same question."""
@@ -125,7 +160,12 @@ class NodeScriptRunner:
       - ``node_key`` (optional): stable identity for caching — defaults to
         the goal, but a planner should pass its own node key so renames of
         the surrounding workflow do not orphan the cache;
-      - ``bindings`` (optional dict): the node's resolved slot values.
+      - ``bindings`` (optional dict): the node's resolved slot values;
+      - ``script`` (optional): a pre-written script the planner supplies
+        (e.g. the LLM rebuild). It is a PROPOSAL like any synthesis —
+        executed through this backend and classified before it is trusted,
+        reported, or cached; a failing provided script falls through to
+        single-node re-synthesis exactly like a stale cache entry.
     """
 
     name = "script"
@@ -225,6 +265,47 @@ class NodeScriptRunner:
             self._cache.record_failure(key)
             stale_error = f"cached script failed: {record.error_class.value}"
             logger.info("node cache stale for %s (%s)", node_key, stale_error)
+
+        # --- provided path: a planner-supplied script is a proposal ------ #
+        provided = action.parameters.get("script")
+        if provided:
+            # Missing imports heal in-place (bounded): the one recalculable
+            # failure a correct script can legitimately hit on this backend.
+            deps: list[str] = []
+            for _ in range(3):
+                result = self._run_script(str(provided), deps, idempotency_key)
+                record = classify(result)
+                if record is None:
+                    self._cache.store_success(
+                        key,
+                        script=str(provided),
+                        dependencies=deps,
+                        tier="provided",
+                        model=str(action.parameters.get("model", "provided")),
+                    )
+                    return self._outcome(
+                        action,
+                        idempotency_key,
+                        ExecutionStatus.SUCCEEDED,
+                        started,
+                        evidence={
+                            "cache": "provided",
+                            "cache_key": key,
+                            "result": result.contract_payload,
+                        },
+                    )
+                if (
+                    record.error_class is ErrorClass.MISSING_DEPENDENCY
+                    and record.missing_module
+                    and record.missing_module not in deps
+                ):
+                    deps.append(record.missing_module)
+                    continue
+                break
+            stale_error = (
+                f"provided script failed verification: {record.error_class.value}"
+            )
+            logger.info("provided script failed for %s (%s)", node_key, stale_error)
 
         # --- miss / repair path: re-synthesize THIS node only ------------ #
         if self._synthesizer is None:

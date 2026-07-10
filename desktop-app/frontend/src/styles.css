@@ -1141,6 +1141,137 @@ button.ghost {
   font-size: 12px;
 }
 
+/* How OoLu planned the steps — the route's nodes with live statuses. */
+.plan {
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--bg);
+}
+
+.plan-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.plan-route {
+  font-weight: 600;
+}
+
+.plan-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 20px;
+  background: #2a2440;
+  color: #b3a1f7;
+}
+
+.plan-notes {
+  margin: 8px 0 4px;
+  padding-left: 20px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.plan-steps {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+.plan-step {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 3px 0;
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+
+.plan-glyph {
+  min-width: 16px;
+  text-align: center;
+}
+
+.plan-step-succeeded .plan-glyph {
+  color: var(--ok);
+}
+
+.plan-step-failed .plan-glyph,
+.plan-step-blocked .plan-glyph {
+  color: var(--danger);
+}
+
+.plan-step-cancelled,
+.plan-step-planned {
+  color: var(--muted);
+}
+
+.plan-step-culprit {
+  background: #3d1d2233;
+  border-radius: 6px;
+}
+
+.plan-fail-tag {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 20px;
+  background: #3d1d22;
+  color: var(--danger);
+}
+
+.plan-error {
+  color: var(--danger);
+  font-size: 12px;
+}
+
+/* The exact failing node, the retry state, and the auto-build hint. */
+.failure-node {
+  margin-top: 10px;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.retry-count {
+  color: var(--muted);
+}
+
+.hint {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid #3a2f14;
+  border-radius: 8px;
+  background: #3a2f1433;
+  color: #e3b341;
+  font-size: 13px;
+}
+
+/* Why there was no route or node to search from. */
+.no-route {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.no-route-title {
+  font-weight: 600;
+}
+
+.no-route ul {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+}
+
 .timeline {
   list-style: none;
   padding: 0;

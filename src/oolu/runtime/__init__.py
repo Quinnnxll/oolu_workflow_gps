@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .backend import ExecutionBackend, ExecutionRequest, ResourceLimits, StubBackend
 from .script_node import (
+    ChatModelSynthesizer,
     GraphEngineSynthesizer,
     NodeScriptRunner,
     NodeSynthesis,
@@ -12,6 +13,7 @@ from .script_node import (
 )
 
 __all__ = [
+    "ChatModelSynthesizer",
     "ExecutionBackend",
     "ExecutionRequest",
     "GraphEngineSynthesizer",

@@ -328,7 +328,8 @@ class ActionExecutorRouteRunner:
     ) -> ExecutionRecord:
         started = datetime.now(UTC)
         outcomes: list[ExecutionOutcome] = []
-        for index, item in enumerate(route.chosen.actions):
+        for item in route.chosen.actions:
+            label = f"{item.action.adapter}/{item.action.operation}"
             executor = self._executors.get(item.action.adapter)
             if executor is None or item.action.operation not in executor.capabilities():
                 return ExecutionRecord(
@@ -336,15 +337,14 @@ class ActionExecutorRouteRunner:
                     attempt=attempt,
                     status=ExecutionStatus.BLOCKED,
                     action_outcomes=outcomes,
-                    error=(
-                        "missing executor capability: "
-                        f"{item.action.adapter}/{item.action.operation}"
-                    ),
+                    error=f"missing executor capability: {label}",
+                    failed_action_id=item.action.id,
+                    failed_action_label=label,
                     started_at=started,
                     completed_at=datetime.now(UTC),
                 )
             outcome = executor.execute(
-                item.action, idempotency_key=f"{idempotency_key}:{index}"
+                item.action, idempotency_key=f"{idempotency_key}:{item.action.id}"
             )
             outcomes.append(outcome)
             if outcome.status is not ExecutionStatus.SUCCEEDED:
@@ -354,6 +354,8 @@ class ActionExecutorRouteRunner:
                     status=ExecutionStatus.FAILED,
                     action_outcomes=outcomes,
                     error=outcome.error or "action failed",
+                    failed_action_id=item.action.id,
+                    failed_action_label=label,
                     started_at=started,
                     completed_at=datetime.now(UTC),
                 )
@@ -371,17 +373,29 @@ class ActionExecutorRouteRunner:
 # Monitoring, recovery, feedback.                                            #
 # --------------------------------------------------------------------------- #
 class StatusOutcomeMonitor:
-    """Healthy iff the execution succeeded."""
+    """Healthy iff the execution succeeded. An unhealthy summary names the
+    exact node that caused the failure, so every downstream surface (the
+    incident, the failure reason, the UI) points at it."""
 
     def assess(self, execution: ExecutionRecord) -> MonitorReport:
         healthy = execution.status is ExecutionStatus.SUCCEEDED
+        summary = "execution succeeded"
+        if not healthy:
+            reason = execution.error or "unhealthy"
+            if execution.failed_action_label:
+                summary = f"node '{execution.failed_action_label}' failed: {reason}"
+            else:
+                summary = reason
         return MonitorReport(
             healthy=healthy,
             status=execution.status,
-            signals={"attempt": execution.attempt, "error": execution.error},
-            summary="execution succeeded"
-            if healthy
-            else (execution.error or "unhealthy"),
+            signals={
+                "attempt": execution.attempt,
+                "error": execution.error,
+                "failed_action_id": execution.failed_action_id,
+                "failed_action_label": execution.failed_action_label,
+            },
+            summary=summary,
         )
 
 

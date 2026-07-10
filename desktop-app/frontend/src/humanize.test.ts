@@ -13,6 +13,11 @@ function task(overrides: Partial<TaskView>): TaskView {
     can_cancel: true,
     failure_reason: null,
     result: null,
+    user_retries: 0,
+    plan: null,
+    no_route: null,
+    failure: null,
+    autobuild: null,
     ...overrides,
   };
 }

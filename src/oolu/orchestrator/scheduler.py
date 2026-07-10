@@ -46,6 +46,16 @@ def action_node_key(blueprint_name: str, action: ActionEvent) -> str:
     return f"{blueprint_name}:{action.adapter}/{action.operation}"
 
 
+def _action_label(blueprint: Blueprint, action_id: str | None) -> str | None:
+    """The human-readable name of one blueprint action: ``adapter/operation``."""
+    if action_id is None:
+        return None
+    for item in blueprint.actions:
+        if item.action.id == action_id:
+            return f"{item.action.adapter}/{item.action.operation}"
+    return None
+
+
 def _skipped_outcome(action: ActionEvent, key: str, reason: str) -> ExecutionOutcome:
     now = datetime.now(UTC)
     return ExecutionOutcome(
@@ -96,24 +106,32 @@ class DagRouteRunner:
         blueprint = route.chosen
         started = datetime.now(UTC)
 
-        blocked = self._preflight(blueprint)
+        blocked, blocked_action = self._preflight(blueprint)
         if blocked is not None:
             return ExecutionRecord(
                 idempotency_key=idempotency_key,
                 attempt=attempt,
                 status=ExecutionStatus.BLOCKED,
                 error=blocked,
+                failed_action_id=blocked_action,
+                failed_action_label=_action_label(blueprint, blocked_action),
                 started_at=started,
                 completed_at=datetime.now(UTC),
             )
 
-        outcomes, error, succeeded = self._run_dag(blueprint, idempotency_key)
+        outcomes, error, failed_id, succeeded = self._run_dag(
+            blueprint, idempotency_key
+        )
         record = ExecutionRecord(
             idempotency_key=idempotency_key,
             attempt=attempt,
             status=ExecutionStatus.SUCCEEDED if succeeded else ExecutionStatus.FAILED,
             action_outcomes=outcomes,
             error=None if succeeded else error,
+            failed_action_id=None if succeeded else failed_id,
+            failed_action_label=(
+                None if succeeded else _action_label(blueprint, failed_id)
+            ),
             started_at=started,
             completed_at=datetime.now(UTC),
         )
@@ -123,22 +141,28 @@ class DagRouteRunner:
     # ------------------------------------------------------------------ #
     # Graph derivation + validation.                                      #
     # ------------------------------------------------------------------ #
-    def _preflight(self, blueprint: Blueprint) -> str | None:
-        """Capability + graph-shape checks; a reason string means BLOCKED."""
+    def _preflight(self, blueprint: Blueprint) -> tuple[str | None, str | None]:
+        """Capability + graph-shape checks; ``(reason, action_id)`` — a reason
+        string means BLOCKED, and the action id (when one node is to blame)
+        labels the exact node."""
         for item in blueprint.actions:
             executor = self._executors.get(item.action.adapter)
             if executor is None or item.action.operation not in executor.capabilities():
                 return (
                     "missing executor capability: "
-                    f"{item.action.adapter}/{item.action.operation}"
+                    f"{item.action.adapter}/{item.action.operation}",
+                    item.action.id,
                 )
         ids = {item.action.id for item in blueprint.actions}
         for edge in blueprint.edges:
             if edge.source not in ids or edge.target not in ids:
-                return f"edge references unknown action: {edge.source}->{edge.target}"
+                return (
+                    f"edge references unknown action: {edge.source}->{edge.target}",
+                    None,
+                )
         if self._has_cycle(blueprint):
-            return "blueprint dependency graph has a cycle"
-        return None
+            return "blueprint dependency graph has a cycle", None
+        return None, None
 
     @staticmethod
     def _dependencies(blueprint: Blueprint) -> dict[str, set[str]]:
@@ -192,7 +216,7 @@ class DagRouteRunner:
     # ------------------------------------------------------------------ #
     def _run_dag(
         self, blueprint: Blueprint, idempotency_key: str
-    ) -> tuple[list[ExecutionOutcome], str | None, bool]:
+    ) -> tuple[list[ExecutionOutcome], str | None, str | None, bool]:
         actions = {item.action.id: item.action for item in blueprint.actions}
         deps = self._dependencies(blueprint)
         fallback_triggers = self._fallbacks(blueprint)
@@ -207,6 +231,7 @@ class DagRouteRunner:
         dormant: set[str] = set(fallback_ids)
         outcomes: list[ExecutionOutcome] = []
         first_error: str | None = None
+        first_failed: str | None = None
         deadlines: dict[concurrent.futures.Future, float] = {}
         running: dict[concurrent.futures.Future, str] = {}
 
@@ -214,11 +239,12 @@ class DagRouteRunner:
             return f"{idempotency_key}:{action_id}"
 
         def settle(action_id: str, outcome: ExecutionOutcome) -> None:
-            nonlocal first_error
+            nonlocal first_error, first_failed
             status[action_id] = outcome.status
             outcomes.append(outcome)
             if outcome.status is not ExecutionStatus.SUCCEEDED and first_error is None:
                 first_error = outcome.error or f"action {action_id} failed"
+                first_failed = action_id
 
         def activate_fallbacks() -> bool:
             """Resolve dormant fallback targets whose triggers have settled.
@@ -374,7 +400,7 @@ class DagRouteRunner:
             return all(effective_ok(target, seen | {node}) for target in targets)
 
         succeeded = all(effective_ok(node) for node in status)
-        return outcomes, first_error, succeeded
+        return outcomes, first_error, first_failed, succeeded
 
     def _run_action(self, action: ActionEvent, key: str) -> ExecutionOutcome:
         executor = self._executors[action.adapter]

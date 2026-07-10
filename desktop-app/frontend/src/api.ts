@@ -1,7 +1,11 @@
 import type {
+  AutobuildView,
   AwaitingKind,
+  FailureView,
   InboxItem,
   Listing,
+  NoRouteView,
+  PlanView,
   QuestionView,
   TaskView,
   TimelineEvent,
@@ -307,6 +311,11 @@ interface RunDict {
   prompt: string | null;
   failure_reason: string | null;
   result: Record<string, unknown> | null;
+  user_retries?: number;
+  plan?: PlanView | null;
+  no_route?: NoRouteView | null;
+  failure?: FailureView | null;
+  autobuild?: AutobuildView | null;
 }
 
 export const TERMINAL_PHASES = ["completed", "failed", "cancelled"];
@@ -349,6 +358,11 @@ async function composeTask(run: RunDict): Promise<TaskView> {
     can_cancel: !TERMINAL_PHASES.includes(run.phase),
     failure_reason: run.failure_reason,
     result: run.result,
+    user_retries: run.user_retries ?? 0,
+    plan: run.plan ?? null,
+    no_route: run.no_route ?? null,
+    failure: run.failure ?? null,
+    autobuild: run.autobuild ?? null,
   };
 }
 
@@ -538,13 +552,13 @@ export const api = {
   cancel: (id: string) => mutateRun("POST", `/v1/runs/${id}/cancel`, {}),
   timeline: async (id: string) => {
     const audit = await req<{
-      entries: { at: string; event_type: string; seq: number }[];
+      entries: { at: string; event_type: string; seq: number; detail?: string }[];
     }>("GET", `/v1/runs/${id}/audit`);
     return {
       items: (audit.entries ?? []).map<TimelineEvent>((e) => ({
         at: e.at,
         label: e.event_type,
-        detail: "",
+        detail: e.detail ?? "",
       })),
     };
   },
@@ -690,16 +704,17 @@ export function timelineSocket(
   const ws = token ? new WebSocket(url, ["bearer", token]) : new WebSocket(url);
   ws.onmessage = (m) => {
     try {
-      // Frames are audit-derived: { seq, event_type, phase, at }.
+      // Frames are audit-derived: { seq, event_type, phase, at, detail }.
       const f = JSON.parse(m.data) as {
         at?: string;
         event_type?: string;
         phase?: string;
+        detail?: string;
       };
       onEvent({
         at: f.at ?? new Date().toISOString(),
         label: f.event_type ?? "event",
-        detail: f.phase ?? "",
+        detail: f.detail || (f.phase ?? ""),
       });
     } catch {
       /* ignore malformed frame */
