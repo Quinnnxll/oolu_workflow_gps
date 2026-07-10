@@ -13,7 +13,7 @@ from .asgi import GatewayASGI
 from .errors import GatewayError, WebhookError
 from .http import Request, Response, Router
 from .openapi import API_VERSION, build_openapi
-from .webhooks import WebhookSigner, WebhookVerifier
+from .webhooks import StripeWebhookVerifier, WebhookSigner, WebhookVerifier
 
 __all__ = [
     "API_VERSION",
@@ -24,6 +24,7 @@ __all__ = [
     "Request",
     "Response",
     "Router",
+    "StripeWebhookVerifier",
     "WebhookError",
     "WebhookSigner",
     "WebhookVerifier",

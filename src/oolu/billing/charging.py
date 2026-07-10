@@ -88,6 +88,9 @@ class ChargingService:
                 amount_micros=to_micros(event.gross),
                 currency=self._currency,
                 consumer_ref=consumer_ref,
+                # Round-trips through the processor onto webhook events, so
+                # a later refund/dispute can find the event it reverses.
+                metadata={"oolu_event_id": event.event_id},
             )
             result = self._engine.price(
                 gross=event.gross,

@@ -90,6 +90,9 @@ class SettlementService:
                     provider_account_id=account.provider_account_id,
                     amount_micros=available,
                     currency=account.currency,
+                    # Comes back on payout.paid/failed webhooks so the
+                    # event can be matched to the batch it settles.
+                    metadata={"oolu_batch_id": batch.batch_id},
                 )
             except PaymentError as exc:
                 # The batch records the attempt; nothing was debited.

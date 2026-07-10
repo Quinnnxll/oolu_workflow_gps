@@ -398,6 +398,13 @@ def build_parser() -> argparse.ArgumentParser:
         "paying-plan gate) is enforced. Edge installs — this device or a "
         "private-network server — leave it off: no KYC, no subscription",
     )
+    host.add_argument(
+        "--transactions",
+        action="store_true",
+        help="open the launch guard's transaction port so real cards can be "
+        "charged (per-class price settlement and verification still gate). "
+        "Requires OOLU_STRIPE_KEY — the port never opens onto test doubles",
+    )
 
     sub.add_parser("show-config", help="print the effective settings").add_argument(
         "--config", metavar="PATH", help="path to a models.yaml settings file"
@@ -1375,6 +1382,22 @@ def _cmd_host(args, out) -> int:
             " account. Set OOLU_MAIL_URL + OOLU_MAIL_KEY + OOLU_MAIL_FROM"
             " (or OOLU_MAIL=console for a dry run)."
         )
+    stripe_secret_key = os.environ.get("OOLU_STRIPE_KEY", "").strip() or None
+    stripe_webhook_secret = (
+        os.environ.get("OOLU_STRIPE_WEBHOOK_SECRET", "").strip() or None
+    )
+    if args.transactions and stripe_secret_key is None:
+        raise _CliError(
+            "--transactions opens the port real cards are charged through,"
+            " so it refuses to open onto test doubles. Set OOLU_STRIPE_KEY"
+            " (and OOLU_STRIPE_WEBHOOK_SECRET for refund/payout events)."
+        )
+    # The hosted plan's brain: platform keys are the operator's, from the
+    # environment only — never a request, never a file in the repo.
+    platform_model_keys = {
+        "anthropic": os.environ.get("OOLU_PLATFORM_ANTHROPIC_KEY", ""),
+        "openai": os.environ.get("OOLU_PLATFORM_OPENAI_KEY", ""),
+    }
     try:
         runtime = build_host_runtime(
             Settings.load(args.config),
@@ -1387,6 +1410,10 @@ def _cmd_host(args, out) -> int:
             google_default_tenant=args.tenant,
             mail=mail,
             require_isolation=args.global_service,
+            platform_model_keys=platform_model_keys,
+            transactions_enabled=args.transactions,
+            stripe_secret_key=stripe_secret_key,
+            stripe_webhook_secret=stripe_webhook_secret,
         )
     except ValueError as exc:
         raise _CliError(str(exc)) from exc

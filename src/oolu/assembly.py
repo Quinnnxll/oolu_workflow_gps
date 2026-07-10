@@ -442,6 +442,20 @@ def build_host_runtime(
     # require_isolation the script hand is wired only when the backend is
     # real isolation (docker), never the subprocess dev fallback.
     require_isolation: bool = False,
+    # The hosted plan's brain: operator keys per provider (e.g.
+    # {"anthropic": "sk-ant-..."}). Stored encrypted in the keyring under
+    # the reserved platform tenant; tenants on model.source="subscription"
+    # are served through them inside their plan's monthly allowance.
+    platform_model_keys: dict[str, str] | None = None,
+    # The launch guard's first gate: the deliberate operator switch that
+    # lets real cards be charged (prices and verification still gate per
+    # class of work). Off is the pre-launch default.
+    transactions_enabled: bool = False,
+    # Real money adapters: with a Stripe secret key the card vault and the
+    # payout adapter talk to Stripe; without one the test doubles stay in
+    # place. The webhook secret (whsec_...) opens /v1/webhooks/stripe.
+    stripe_secret_key: str | None = None,
+    stripe_webhook_secret: str | None = None,
 ) -> HostRuntime:
     """The multi-user web host: the full multi-tenant gateway over one
     data directory, with LOCAL accounts as the identity provider.
@@ -524,6 +538,30 @@ def build_host_runtime(
         getattr(config, "registration_tenant", None) if config else None
     ) or "main"
 
+    # The hosted plan's brain: platform keys follow the environment on
+    # every boot (set → stored encrypted, unset → removed, so rotation and
+    # revocation are a restart, not a migration). The usage store books
+    # every tenant's consultations durably; the subscription brain serves
+    # model.source="subscription" inside the plan's monthly allowance.
+    from .billing import ModelUsageStore, PLATFORM_TENANT, SubscriptionBrain
+    from .providers.keyring import PROVIDERS
+
+    if platform_model_keys is not None:
+        for provider in PROVIDERS:
+            platform_secret = (platform_model_keys.get(provider) or "").strip()
+            if platform_secret:
+                model_keys.store(PLATFORM_TENANT, provider, platform_secret)
+            else:
+                model_keys.remove(PLATFORM_TENANT, provider)
+    model_usage = ModelUsageStore(conn)
+    subscription_brain = SubscriptionBrain(
+        model_keys,
+        model_usage,
+        plan_for=lambda tenant: str(
+            settings_node.effective(tenant).get("subscription.plan", "free")
+        ),
+    )
+
     def _model_setting(key: str, fallback):
         return settings_node.effective(home_tenant).get(key, fallback)
 
@@ -534,6 +572,7 @@ def build_host_runtime(
             model_keys,
             home_tenant,
             meter=model_meter,
+            subscription=subscription_brain,
             budget=lambda: float(_model_setting("budget.model_cap", 0.0) or 0.0),
             currency=lambda: str(_model_setting("account.currency", "USD")),
             preference=lambda: str(_model_setting("model.provider", "auto")),
@@ -616,15 +655,14 @@ def build_host_runtime(
     identity = IdentityStore(data / "identity.db")
     users = LocalUserStore(data / "users.db")
     signer = Hs256Signer(secret=secret, issuer=LOCAL_ISSUER, audience=LOCAL_AUDIENCE)
-    validator = OidcValidator(
-        [
-            ProviderConfig(
-                issuer=LOCAL_ISSUER,
-                audiences=frozenset({LOCAL_AUDIENCE}),
-                verifier=Hs256Verifier(secret),
-            )
-        ]
-    )
+    identity_providers = [
+        ProviderConfig(
+            issuer=LOCAL_ISSUER,
+            audiences=frozenset({LOCAL_AUDIENCE}),
+            verifier=Hs256Verifier(secret),
+        )
+    ]
+    validator = OidcValidator(identity_providers)
     resolver = AuthorityResolver(identity)
     accounts = LocalAccountService(
         users, identity, signer, token_ttl_seconds=token_ttl_seconds
@@ -703,6 +741,58 @@ def build_host_runtime(
 
     identity_links = IdentityLinkStore(conn)
 
+    # The money stack. Always wired so earnings/payout/dispute surfaces
+    # answer; the ADAPTERS decide test vs live: a Stripe secret key swaps
+    # the fake card vault and payout adapter for the real ones, and the
+    # webhook secret opens the Stripe event door. Real charging is still
+    # triple-gated by the launch guard (operator switch, settled prices,
+    # verified successes) and by require_production_money.
+    from .billing import (
+        BillingService,
+        DisputeService,
+        DisputeStore,
+        EarningsLedger,
+        FakePayoutAdapter,
+        PayoutStore,
+        StripeCardVault,
+        StripeConnectAdapter,
+    )
+    from .providers.vault import SecretVault
+
+    earnings_ledger = EarningsLedger(conn)
+    payout_store = PayoutStore(conn)
+    if stripe_secret_key:
+        from .providers.transport import HttpxTransport
+
+        stripe_vault = SecretVault()
+        stripe_key_ref = stripe_vault.put(stripe_secret_key, kind="stripe")
+        stripe_transport = HttpxTransport()
+        card_vault: Any = StripeCardVault(
+            vault=stripe_vault,
+            transport=stripe_transport,
+            api_key_ref=stripe_key_ref,
+        )
+        payout_adapter: Any = StripeConnectAdapter(
+            vault=stripe_vault,
+            transport=stripe_transport,
+            api_key_ref=stripe_key_ref,
+        )
+    else:
+        card_vault = FakeCardVault()
+        payout_adapter = FakePayoutAdapter()
+    dispute_service = DisputeService(
+        ledger=earnings_ledger,
+        disputes=DisputeStore(conn),
+        durable=conn,
+        providers=identity_providers,
+        idempotency=durable.idempotency,
+    )
+    stripe_webhooks = None
+    if stripe_webhook_secret:
+        from .gateway.webhooks import StripeWebhookVerifier
+
+        stripe_webhooks = StripeWebhookVerifier(stripe_webhook_secret)
+
     # "Continue with Google": only when an OAuth client is configured. The
     # id_token verifier is Google's JWKS (RS256) — requires the oidc extra;
     # the import error below says exactly how to get it.
@@ -756,6 +846,9 @@ def build_host_runtime(
         # metered, and one spending cap covers chat AND planning.
         model_keys=model_keys,
         model_meter=model_meter,
+        # The hosted plan's brain and the per-tenant usage books behind it.
+        subscription=subscription_brain,
+        model_usage=model_usage,
         google_signin=google,
         identity_links=identity_links,
         # The mail door: verification-first registration and password
@@ -763,13 +856,27 @@ def build_host_runtime(
         # always there so verified marks survive sender changes.
         mail=mail,
         mail_codes=_mail_codes,
-        # Pre-launch: the test card vault and a closed launch guard — the
-        # real transaction port stays shut until an operator opens it.
-        payments=PaymentMethodsService(PaymentProfileStore(conn), FakeCardVault()),
-        launch_guard=LaunchGuard(transactions_enabled=False),
+        # The card vault is Stripe when a secret key exists, the test
+        # double otherwise; the launch guard's transaction port opens only
+        # by the operator's explicit switch (prices and verification still
+        # gate per class of work).
+        payments=PaymentMethodsService(PaymentProfileStore(conn), card_vault),
+        launch_guard=LaunchGuard(transactions_enabled=transactions_enabled),
         # The plan lifecycle behind the account console; it mirrors its
-        # state into the (managed, display-only) subscription settings.
-        subscriptions=SubscriptionService(conn, settings=settings_node),
+        # state into the (managed, display-only) subscription settings and
+        # tells the truth about whether choosing a plan actually charges.
+        subscriptions=SubscriptionService(
+            conn,
+            settings=settings_node,
+            charging_open=lambda: transactions_enabled,
+        ),
+        # Earnings/payout/dispute surfaces over the same durable books the
+        # charge and settlement services write.
+        billing=BillingService(earnings_ledger),
+        payout_store=payout_store,
+        payout_adapter=payout_adapter,
+        disputes=dispute_service,
+        stripe_webhooks=stripe_webhooks,
         # The public execution API: machine keys + signed run webhooks.
         api_keys=ApiKeyService(conn),
         webhook_endpoints=(endpoints := WebhookEndpointStore(conn)),

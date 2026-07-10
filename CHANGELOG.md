@@ -4,6 +4,61 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Phase 2 of going public: the subscription brain becomes real, the money
+stack wakes up behind honest walls, and KYC reviews get an inbox:
+
+- **The hosted subscription brain.** `model.source="subscription"` now
+  has something behind it: the host operator sets
+  `OOLU_PLATFORM_ANTHROPIC_KEY` / `OOLU_PLATFORM_OPENAI_KEY` and tenants
+  on that source are answered through the PLATFORM's keys (Claude first,
+  the plan's order) — no pasted key needed. Every consultation lands in
+  durable per-tenant monthly books (`ModelUsageStore`), and the plan's
+  allowance gates it: free includes none (the refusal names the paid
+  plans, own keys, and local models as the ways out), plus/pro/
+  enterprise include $5/$20/$100 a month, and a spent allowance says
+  when it renews. Platform keys follow the environment on every boot
+  (set → stored encrypted under a reserved keyring tenant, unset →
+  removed). New `GET /v1/usage/model` shows a tenant their books and
+  remaining allowance. Hosts without platform keys keep the honest
+  "isn't live yet" message.
+- **The money stack is wired.** `build_host_runtime` now constructs the
+  earnings ledger, payout store, dispute service, and payment adapters
+  it previously left dormant — so `/v1/earnings`, `/v1/payout-accounts`,
+  and `/v1/disputes/{event}` answer on every host. With `OOLU_STRIPE_KEY`
+  the card vault and payout adapter are the real Stripe ones (card
+  numbers never transit our servers — SetupIntent only); without it the
+  test doubles stay. New `POST /v1/webhooks/stripe` verifies Stripe's
+  `Stripe-Signature` over the exact raw payload and matches events back
+  to our books through the `oolu_event_id`/`oolu_batch_id` metadata the
+  adapters now attach to charges and transfers — refunds and disputes
+  claw back the right event, payout confirmations settle the right
+  batch, and replays are idempotent by event id.
+- **The transaction port has a key, and it refuses test doubles.**
+  `oolu host --transactions` opens the launch guard's operator gate —
+  and refuses to start without `OOLU_STRIPE_KEY`, so the port never
+  opens onto fakes. Even open, each class of work still charges only
+  after its prices settle and its function has verified successes, and
+  `require_production_money` still demands PostgreSQL + production
+  identity. The subscription console's `charging_open` now tells this
+  truth instead of a hard-coded `false`.
+- **The KYC reviewer inbox.** Reviewers (the `kyc:review` permission —
+  the bootstrap admin's `*` covers it) get `GET /v1/kyc/reviews`:
+  pending applications, fast-tracked first, oldest first. The Work
+  screen shows the queue with Approve/Reject right on the row (the
+  existing decide route, authority-checked and audited); a verdict
+  clears the row. Everyone else gets a 403 and sees no inbox at all.
+- Tests: the brain's whole ladder in `test_subscription_brain.py`
+  (platform key answers, free-plan refusal, spent-allowance renewal
+  message, Claude-first fallback, own-api isolation, monthly book
+  rollover, the usage surface), the money half in `test_stripe_money.py`
+  (Stripe-Signature round trip and refusals, webhook→books matching,
+  idempotent replays, adapter wire shapes, assembly's test-vs-live
+  choice, the `--transactions` wall, and one full charge → accrue →
+  settle → confirm → claw-back cycle on the fake processor), and the
+  inbox in `test_kyc_inbox.py` + `Work.test.tsx`. 150 vitest and the
+  entire backend suite green; shell rebuilt; the going-online runbook
+  documents the new environment variables and flags.
+
 Phase 1 of going public: proven e-mail addresses, a way back in, and
 walls a public host cannot serve without:
 

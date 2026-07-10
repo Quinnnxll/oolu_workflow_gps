@@ -40,7 +40,15 @@ class _ScriptedPayout:
         self.failing = set(failing)
         self.calls: list[str] = []
 
-    def payout(self, *, idempotency_key, provider_account_id, amount_micros, currency):
+    def payout(
+        self,
+        *,
+        idempotency_key,
+        provider_account_id,
+        amount_micros,
+        currency,
+        metadata=None,
+    ):
         self.calls.append(idempotency_key)
         if provider_account_id in self.failing:
             raise PaymentError("processor unavailable")

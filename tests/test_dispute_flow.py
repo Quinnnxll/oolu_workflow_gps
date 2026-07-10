@@ -39,7 +39,15 @@ CLEARED = NOW - timedelta(days=30)
 
 
 class _PaysEverything:
-    def payout(self, *, idempotency_key, provider_account_id, amount_micros, currency):
+    def payout(
+        self,
+        *,
+        idempotency_key,
+        provider_account_id,
+        amount_micros,
+        currency,
+        metadata=None,
+    ):
         return PayoutReceipt(
             provider_ref=f"po_{idempotency_key}",
             amount_micros=amount_micros,

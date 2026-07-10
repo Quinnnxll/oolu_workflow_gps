@@ -40,6 +40,7 @@ class PayoutAdapter(Protocol):
         amount_micros: int,
         currency: str,
         consumer_ref: str,
+        metadata: dict[str, str] | None = None,
     ) -> ChargeReceipt: ...
 
     def payout(
@@ -49,6 +50,7 @@ class PayoutAdapter(Protocol):
         provider_account_id: str,
         amount_micros: int,
         currency: str,
+        metadata: dict[str, str] | None = None,
     ) -> PayoutReceipt: ...
 
 
@@ -133,16 +135,18 @@ class StripeConnectAdapter:
         amount_micros: int,
         currency: str,
         consumer_ref: str,
+        metadata: dict[str, str] | None = None,
     ) -> ChargeReceipt:
-        data = self._post(
-            "/v1/charges",
-            {
-                "amount": _to_minor(amount_micros),
-                "currency": currency,
-                "customer": consumer_ref,
-            },
-            idempotency_key=idempotency_key,
-        )
+        body = {
+            "amount": _to_minor(amount_micros),
+            "currency": currency,
+            "customer": consumer_ref,
+        }
+        # Metadata rides to Stripe and comes BACK on webhook events — the
+        # only reliable way a refund/dispute finds its metering event.
+        for key, value in (metadata or {}).items():
+            body[f"metadata[{key}]"] = value
+        data = self._post("/v1/charges", body, idempotency_key=idempotency_key)
         status = (
             ChargeStatus.SUCCEEDED
             if data.get("status") in {"succeeded", "paid"}
@@ -162,16 +166,16 @@ class StripeConnectAdapter:
         provider_account_id: str,
         amount_micros: int,
         currency: str,
+        metadata: dict[str, str] | None = None,
     ) -> PayoutReceipt:
-        data = self._post(
-            "/v1/transfers",
-            {
-                "amount": _to_minor(amount_micros),
-                "currency": currency,
-                "destination": provider_account_id,
-            },
-            idempotency_key=idempotency_key,
-        )
+        body = {
+            "amount": _to_minor(amount_micros),
+            "currency": currency,
+            "destination": provider_account_id,
+        }
+        for key, value in (metadata or {}).items():
+            body[f"metadata[{key}]"] = value
+        data = self._post("/v1/transfers", body, idempotency_key=idempotency_key)
         status = (
             PayoutStatus.PAID
             if data.get("status") in {"paid", "pending", None}
@@ -220,6 +224,7 @@ class FakePayoutAdapter:
         amount_micros: int,
         currency: str,
         consumer_ref: str,
+        metadata: dict[str, str] | None = None,
     ) -> ChargeReceipt:
         if idempotency_key in self._charges:
             return self._charges[idempotency_key]
@@ -239,6 +244,7 @@ class FakePayoutAdapter:
         provider_account_id: str,
         amount_micros: int,
         currency: str,
+        metadata: dict[str, str] | None = None,
     ) -> PayoutReceipt:
         if idempotency_key in self._payouts:
             return self._payouts[idempotency_key]

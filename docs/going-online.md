@@ -34,6 +34,10 @@ export OOLU_GOOGLE_CLIENT_SECRET="GOCSPX-..."                    # optional
 export OOLU_MAIL_URL="https://api.resend.com/emails"             # outbound mail
 export OOLU_MAIL_KEY="re_..."                                    #  (Resend-style
 export OOLU_MAIL_FROM="OoLu <hello@oolu.example>"                #   JSON API)
+export OOLU_PLATFORM_ANTHROPIC_KEY="sk-ant-..."   # the hosted subscription
+export OOLU_PLATFORM_OPENAI_KEY="sk-..."          #  brain's keys (optional)
+export OOLU_STRIPE_KEY="sk_live_..."              # real payments (optional)
+export OOLU_STRIPE_WEBHOOK_SECRET="whsec_..."     #  + its webhook endpoint
 
 .venv/bin/oolu host \
   --data /var/lib/oolu \
@@ -59,6 +63,30 @@ Notes:
   verified e-mail. Leave it off for a private host.
 - The gateway already honours `x-forwarded-proto`, so behind TLS the
   Google redirect URI derives as `https://...` automatically.
+- **The hosted subscription brain**: set `OOLU_PLATFORM_ANTHROPIC_KEY`
+  (and/or `OOLU_PLATFORM_OPENAI_KEY`) and tenants whose `model.source`
+  is `subscription` are answered through the platform's keys — Claude
+  first — metered per tenant against their plan's monthly allowance
+  (free: none; plus/pro/enterprise: $5/$20/$100). The keys follow the
+  environment on every boot: set means stored (encrypted), unset means
+  removed, so rotation is a restart. `GET /v1/usage/model` shows a
+  tenant their books and remaining allowance.
+- **Real payments**: set `OOLU_STRIPE_KEY` and the card vault + payout
+  adapter talk to Stripe instead of the test doubles; add
+  `OOLU_STRIPE_WEBHOOK_SECRET` (the endpoint's `whsec_...`) and point a
+  Stripe webhook at `POST /v1/webhooks/stripe` for refunds, disputes,
+  and payout confirmations. Charging real cards additionally needs the
+  `--transactions` flag (which refuses to start without the Stripe key)
+  — and even then each class of work charges only after its prices
+  settle and its function has enough verified successes (the launch
+  guard), on a PostgreSQL durable with production identity
+  (`require_production_money`).
+- **KYC reviews**: reviewers are accounts holding the `kyc:review`
+  permission (the bootstrap admin's `*` covers it; grant a dedicated
+  `kyc-reviewer` role for anyone else). Their inbox is
+  `GET /v1/kyc/reviews`, and the Work screen shows the queue with
+  approve/reject right on the row. `OOLU_KYC_TRUSTED_DOMAINS`
+  fast-tracks applications from domains you've verified out of band.
 
 ## TLS termination
 
@@ -131,8 +159,6 @@ the sign-in screen knows to show it.)
 
 ## What the host unlocks next
 
-- **Stripe webhooks** (`/v1/webhooks/processor` exists) — point Stripe
-  at the public URL when the launch guard opens charging.
 - **Public-API webhook deliveries** — third parties receive signed run
   events at their own URLs; outbound needs nothing, but issuing API keys
   to outsiders only makes sense with a public host.

@@ -113,11 +113,15 @@ class ChatModelRouter:
         local_model: Callable[[], str] | None = None,  # e.g. llama3.2
         max_tokens: int = 1024,
         purpose: str = CHAT_PURPOSE,  # what the meter books this under
+        # billing.SubscriptionBrain: the HOSTED plan's keys + allowance.
+        # None (every self-hosted install) keeps the honest "not live yet".
+        subscription=None,
     ) -> None:
         self._keyring = keyring
         self._tenant = tenant
         self._transport = transport
         self._meter = meter
+        self._subscription = subscription
         self._budget = budget or (lambda: 0.0)
         self._currency = currency or (lambda: "USD")
         self._preference = preference or (lambda: "auto")
@@ -132,12 +136,21 @@ class ChatModelRouter:
     # ------------------------------------------------------------------ #
     def reply(self, messages: list[dict]) -> str:
         self._check_budget()
-        if self._source() == "local":
+        source = self._source()
+        if source == "local":
             # The machine's own brain: no key, no cloud, no fallback into
             # one — choosing local means local, so a dead local server
             # degrades to the model-less path instead of quietly phoning
             # a provider.
             return self._ask_local(messages)
+        if (
+            source == "subscription"
+            and self._subscription is not None
+            and self._subscription.configured()
+        ):
+            # The hosted plan's brain: platform keys, metered per tenant
+            # against the plan's monthly allowance.
+            return self._ask_subscription(messages)
         errors: list[str] = []
         for provider in self._order():
             secret = self._keyring.secret_for(self._tenant, provider)
@@ -150,16 +163,56 @@ class ChatModelRouter:
                 continue
         if errors:
             raise ModelUnavailable("; ".join(errors))
-        if self._source() == "subscription":
-            # Honesty over aspiration: the hosted OoLu brain doesn't exist
-            # yet, so "subscription" with no keys is a dead end — say so
-            # and point at the two doors that do open today.
+        if source == "subscription":
+            # Honesty over aspiration: this host has no platform keys, so
+            # "subscription" with no keys is a dead end — say so and point
+            # at the two doors that do open today.
             raise ModelUnavailable(
                 "the OoLu subscription brain isn't live yet — add your own"
                 " API key in Settings (model.source switches to 'own-api'"
                 " automatically) or point model.source at 'local'"
             )
         raise ModelUnavailable("no model key is configured")
+
+    def _ask_subscription(self, messages: list[dict]) -> str:
+        """Answer through the PLATFORM's keys, inside the plan's allowance.
+
+        The plan gate first (free includes no hosted brain), then the
+        month's spend against the allowance, then the plan's provider
+        order — Claude first, always. Every failure names the way out.
+        """
+        brain = self._subscription
+        allowance = brain.allowance_for(self._tenant)
+        if allowance <= 0:
+            raise ModelUnavailable(
+                "the hosted OoLu brain comes with a paid plan — choose one"
+                " in Settings, add your own API key, or run a local model"
+            )
+        if brain.month_spend(self._tenant) >= allowance:
+            from ..currency import format_amount, from_usd
+
+            code = self._currency() or "USD"
+            raise ModelBudgetExceeded(
+                "this month's included model use "
+                f"({format_amount(from_usd(allowance, code), code)}) is used"
+                " up — it renews with the next month; add your own key in"
+                " Settings to keep going meanwhile"
+            )
+        errors: list[str] = []
+        for provider in PROVIDERS:  # the plan's order, not a preference
+            secret = brain.secret_for(provider)
+            if secret is None:
+                continue
+            try:
+                return self._ask(provider, secret, messages)
+            except ProviderError as exc:
+                errors.append(f"{provider}: {exc}")
+        if errors:
+            raise ModelUnavailable("; ".join(errors))
+        raise ModelUnavailable(
+            "the hosted brain has no live provider right now — try again"
+            " shortly, or add your own key in Settings"
+        )
 
     # ------------------------------------------------------------------ #
     def _check_budget(self) -> None:
@@ -261,7 +314,7 @@ class ChatModelRouter:
         if self._meter is not None:
             # Local turns still enter the books — usage is real telemetry
             # even when the marginal dollar cost is the machine's own.
-            self._meter.record(
+            record = self._meter.record(
                 self._purpose,
                 _Telemetry(
                     model=str(data.get("model") or model_id),
@@ -271,6 +324,7 @@ class ChatModelRouter:
                     duration_s=time.monotonic() - started,
                 ),
             )
+            self._book_usage(record)
         if not text:
             raise ModelUnavailable(f"local ({url}) returned an empty reply")
         return text
@@ -299,7 +353,7 @@ class ChatModelRouter:
             data = adapter.chat(messages, model=model_id)
             text, prompt_tokens, completion_tokens = _parse_openai_shape(data)
         if self._meter is not None:
-            self._meter.record(
+            record = self._meter.record(
                 self._purpose,
                 _Telemetry(
                     model=str(data.get("model") or model_id),
@@ -309,9 +363,17 @@ class ChatModelRouter:
                     duration_s=time.monotonic() - started,
                 ),
             )
+            self._book_usage(record)
         if not text:
             raise ModelUnavailable(f"{provider} returned an empty reply")
         return text
+
+    def _book_usage(self, record) -> None:
+        """Per-tenant durable usage next to the in-memory telemetry: the
+        subscription quota reads these books, so they must survive
+        restarts. Booked under the source that answered."""
+        if self._subscription is not None:
+            self._subscription.record(self._tenant, record, self._source())
 
 
 class RouterIntakeModel:

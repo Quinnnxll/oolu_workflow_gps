@@ -58,10 +58,15 @@ class SubscriptionService:
         conn,
         *,
         settings=None,  # settings_node.SettingsNode: display mirror
+        # Whether the operator opened the real transaction port — the
+        # launch guard's first gate, surfaced here so the console tells
+        # the truth about whether choosing a plan will actually charge.
+        charging_open: Callable[[], bool] | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._conn = conn
         self._settings = settings
+        self._charging_open = charging_open or (lambda: False)
         self._clock = clock or (lambda: datetime.now(UTC))
         with self._conn.transaction() as db:
             db.execute(_SCHEMA)
@@ -84,7 +89,7 @@ class SubscriptionService:
             "prices": PLAN_PRICES_MICROS,
             # Pre-launch: numbers are shown and verified, money never moves
             # until the launch guard opens the transaction port.
-            "charging_open": False,
+            "charging_open": bool(self._charging_open()),
         }
 
     def choose(self, tenant: str, plan: str, cycle: str) -> dict:

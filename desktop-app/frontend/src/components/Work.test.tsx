@@ -142,6 +142,62 @@ describe("Work", () => {
     expect(await screen.findByText(/responsible alice/)).toBeTruthy();
     expect(screen.queryByText(/Do not show its node id publicly/)).toBeNull();
   });
+
+  it("shows a reviewer the KYC queue and clears a row on the verdict", async () => {
+    routes["GET /v1/work/nodes"] = { status: 200, body: { items: [] } };
+    routes["GET /v1/kyc/reviews"] = {
+      status: 200,
+      body: {
+        items: [
+          {
+            node_id: "sn1",
+            legal_name: "Mphepo Ltd",
+            company_email: "quinn@mphepo.io",
+            registration_no: "12345",
+            screen: "fast_track",
+            screen_note: "trusted",
+            status: "pending_review",
+            decision_note: "",
+            multiplier: 1.0,
+          },
+        ],
+      },
+    };
+    render(<Work onLife={vi.fn()} />);
+
+    expect(
+      await screen.findByText(/KYC reviews awaiting your verdict \(1\)/),
+    ).toBeTruthy();
+    expect(screen.getByText(/Mphepo Ltd · quinn@mphepo.io · reg 12345/)).toBeTruthy();
+    expect(screen.getByText(/fast lane — trusted domain/)).toBeTruthy();
+
+    routes["POST /v1/work/nodes/sn1/kyc/decide"] = {
+      status: 200,
+      body: { status: "verified" },
+    };
+    routes["GET /v1/kyc/reviews"] = { status: 200, body: { items: [] } };
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+    await waitFor(() =>
+      expect(screen.queryByText(/KYC reviews awaiting/)).toBeNull(),
+    );
+    const decide = calls.find(
+      (c) => c.path === "/v1/work/nodes/sn1/kyc/decide",
+    );
+    expect(decide?.body).toEqual({ approved: true });
+  });
+
+  it("shows no KYC queue to accounts the host refuses (403)", async () => {
+    routes["GET /v1/work/nodes"] = { status: 200, body: { items: [] } };
+    routes["GET /v1/kyc/reviews"] = {
+      status: 403,
+      body: { error: { message: "forbidden" } },
+    };
+    render(<Work onLife={vi.fn()} />);
+
+    expect(await screen.findByText(/No nodes yet/)).toBeTruthy();
+    expect(screen.queryByText(/KYC reviews awaiting/)).toBeNull();
+  });
 });
 
 describe("AddNode", () => {

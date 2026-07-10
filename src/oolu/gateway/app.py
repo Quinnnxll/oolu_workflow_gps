@@ -394,6 +394,12 @@ class GatewayApp:
         model_keys: ModelKeyring | None = None,  # tenant model API keys
         model_meter=None,  # billing.ModelCallMeter: chat spend enters books
         model_transport=None,  # providers.HttpTransport; None = real httpx
+        subscription=None,  # billing.SubscriptionBrain: the hosted plan's
+        # brain (platform keys + per-tenant monthly allowance); None on
+        # every self-hosted install
+        model_usage=None,  # billing.ModelUsageStore: per-tenant durable books
+        stripe_webhooks=None,  # gateway.StripeWebhookVerifier: real Stripe
+        # events land at /v1/webhooks/stripe only when this is configured
         google_signin: GoogleSignIn | None = None,  # "Continue with Google"
         identity_links: IdentityLinkStore | None = None,  # email/IdP -> account
         mail=None,  # mail.MailSender: verification + reset codes go out here
@@ -468,6 +474,9 @@ class GatewayApp:
         self._model_keys = model_keys
         self._model_meter = model_meter
         self._model_transport = model_transport
+        self._subscription = subscription
+        self._model_usage = model_usage
+        self._stripe_webhooks = stripe_webhooks
         self._model_routers: dict[str, ChatModelRouter] = {}
         self._google = google_signin
         self._identity_links = identity_links
@@ -711,6 +720,9 @@ class GatewayApp:
         r.add("POST", "/v1/keys/model", self._model_keys_add)
         r.add("POST", "/v1/keys/model/test", self._model_keys_test)
         r.add("DELETE", "/v1/keys/model/{provider}", self._model_keys_remove)
+        # This month's model usage for the caller's tenant, plus the plan's
+        # included allowance when a hosted brain exists here.
+        r.add("GET", "/v1/usage/model", self._model_usage_view)
         r.add("GET", "/v1/files", self._files_list)
         r.add("POST", "/v1/files", self._files_create)
         r.add("GET", "/v1/files/{file_id}", self._files_get)
@@ -722,6 +734,15 @@ class GatewayApp:
         r.add("GET", "/v1/work/nodes/{node_id}/kyc", self._kyc_status)
         r.add("POST", "/v1/work/nodes/{node_id}/kyc", self._kyc_apply)
         r.add("POST", "/v1/work/nodes/{node_id}/kyc/decide", self._kyc_decide)
+        # The reviewer's inbox: pending applications, permission-gated (the
+        # bootstrap admin's "*" covers it; a dedicated reviewer role grants
+        # kyc:review without the rest of admin).
+        r.add(
+            "GET",
+            "/v1/kyc/reviews",
+            self._kyc_reviews,
+            requires_permission="kyc:review",
+        )
         r.add("GET", "/v1/work/policy", self._node_policy)
         r.add("GET", "/v1/work/hygiene", self._hygiene_inspect)
         r.add("POST", "/v1/work/hygiene/sweep", self._hygiene_sweep)
@@ -753,6 +774,9 @@ class GatewayApp:
         r.add("POST", "/v1/payout-accounts", self._create_payout_account)
         r.add("GET", "/v1/disputes/{event_id}", self._list_disputes)
         r.add("POST", "/v1/webhooks/processor", self._processor_webhook, public=True)
+        # Real Stripe deliveries (Stripe-Signature over the raw payload);
+        # answers 404 until the operator configures the endpoint secret.
+        r.add("POST", "/v1/webhooks/stripe", self._stripe_webhook, public=True)
         # Local accounts (self-hosted multi-user). Login is public by
         # nature; management requires stored users:manage authority (the
         # bootstrap admin's role holds "*").
@@ -1817,10 +1841,19 @@ class GatewayApp:
             return settings.effective(tenant).get(key, fallback)
 
         # No key normally means no brain — EXCEPT when the default model
-        # is the machine's own local server, which needs no key at all.
+        # is the machine's own local server (needs no key), or when this
+        # host carries the hosted plan's brain (platform keys serve
+        # tenants whose source is "subscription").
+        source_now = str(_effective("model.source", "subscription"))
+        hosted_brain = (
+            source_now == "subscription"
+            and self._subscription is not None
+            and self._subscription.configured()
+        )
         if (
             not self._model_keys.providers(tenant)
-            and str(_effective("model.source", "subscription")) != "local"
+            and source_now != "local"
+            and not hosted_brain
         ):
             return None
         router = self._model_routers.get(tenant)
@@ -1830,6 +1863,7 @@ class GatewayApp:
                 tenant,
                 transport=self._model_transport,
                 meter=self._model_meter,
+                subscription=self._subscription,
                 budget=lambda: float(_effective("budget.model_cap", 0.0) or 0.0),
                 currency=lambda: str(_effective("account.currency", "USD")),
                 preference=lambda: str(_effective("model.provider", "auto")),
@@ -1852,6 +1886,24 @@ class GatewayApp:
         return json_response(
             200, {"items": keyring.providers(session.tenant_id)}
         )
+
+    def _model_usage_view(self, request, session, params) -> Response:
+        """This month's model consultations for the caller's tenant, plus
+        the hosted plan's allowance and remaining balance when this host
+        has a subscription brain."""
+        if self._model_usage is None:
+            raise GatewayError(404, "not_found", "model usage is not tracked here")
+        tenant = session.tenant_id
+        view: dict = {"items": self._model_usage.view(tenant)}
+        if self._subscription is not None and self._subscription.configured():
+            allowance = self._subscription.allowance_for(tenant)
+            spent = self._subscription.month_spend(tenant)
+            view["subscription"] = {
+                "allowance_usd": allowance,
+                "spent_usd": spent,
+                "remaining_usd": max(0.0, allowance - spent),
+            }
+        return json_response(200, view)
 
     def _model_keys_add(self, request, session, params) -> Response:
         """Take a pasted key into the encrypted keyring; answer with only a
@@ -2451,6 +2503,18 @@ class GatewayApp:
             },
         )
         return json_response(200, record.model_dump(mode="json"))
+
+    def _kyc_reviews(self, request, session, params) -> Response:
+        """The reviewer's inbox: applications awaiting a verdict, fast-
+        tracked first, oldest first. Tenant-scoped like the decide route —
+        a reviewer sees their own tenant's queue."""
+        kyc = self._require_kyc()
+        pending = [
+            record.model_dump(mode="json")
+            for record in kyc.pending()
+            if record.tenant == session.tenant_id
+        ]
+        return json_response(200, {"items": pending})
 
     # ------------------------------------------------------------------ #
     # Node hygiene: the policy agreed upfront, and its enforcement.       #
@@ -3354,6 +3418,76 @@ class GatewayApp:
         result = self._idem.run(
             f"webhook:{headers['X-Webhook-Id']}", process, scope="webhooks"
         )
+        return json_response(200, result)
+
+    def _stripe_webhook(self, request, session, params) -> Response:
+        """Real Stripe deliveries: Stripe-Signature over the raw payload.
+
+        The oolu_event_id / oolu_batch_id our adapters attach as charge and
+        transfer metadata come back on these events — that is how a refund
+        finds the metering event it reverses and a payout confirmation
+        finds its batch. Unknown event types are acknowledged (200) so
+        Stripe stops retrying them; only bad signatures are refused."""
+        if self._stripe_webhooks is None or self._disputes is None:
+            raise GatewayError(404, "not_found", "Stripe webhooks are not enabled")
+        body = request.body or {}
+        raw = (
+            request.raw
+            if request.raw is not None
+            else json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+        )
+        try:
+            self._stripe_webhooks.verify(
+                raw,
+                request.header("stripe-signature"),
+                now=request.now or self._clock(),
+            )
+        except WebhookError as exc:
+            raise GatewayError(400, "invalid_webhook", str(exc)) from exc
+        event_id = str(body.get("id") or "")
+        if not event_id:
+            raise GatewayError(400, "invalid_webhook", "event id is required")
+        event_object = (body.get("data") or {}).get("object") or {}
+        metadata = event_object.get("metadata") or {}
+
+        def process() -> dict:
+            event_type = str(body.get("type", ""))
+            result: dict = {"handled": event_type}
+            if event_type in ("charge.refunded", "charge.dispute.created"):
+                oolu_event = metadata.get("oolu_event_id")
+                if oolu_event:
+                    self._disputes.refund(event_id=oolu_event, reason=event_type)
+                    result["clawback_event_id"] = oolu_event
+                else:
+                    result["ignored"] = "no oolu_event_id metadata on charge"
+            elif (
+                event_type in ("transfer.paid", "transfer.failed", "payout.paid",
+                               "payout.failed")
+                and self._payout_store is not None
+            ):
+                batch = self._payout_store.get_batch(
+                    str(metadata.get("oolu_batch_id", ""))
+                )
+                if batch is not None:
+                    status = (
+                        PayoutStatus.PAID
+                        if event_type.endswith(".paid")
+                        else PayoutStatus.FAILED
+                    )
+                    self._payout_store.update_batch(
+                        batch.model_copy(
+                            update={
+                                "status": status,
+                                "provider_ref": event_object.get("id"),
+                            }
+                        )
+                    )
+                    result["batch_id"] = batch.batch_id
+                else:
+                    result["ignored"] = "no matching payout batch"
+            return result
+
+        result = self._idem.run(f"stripe:{event_id}", process, scope="webhooks")
         return json_response(200, result)
 
     # ------------------------------------------------------------------ #

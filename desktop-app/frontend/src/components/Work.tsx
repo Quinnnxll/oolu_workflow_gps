@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api } from "../api";
-import type { HoldItem, KycView, NodeRunSteps, WorkNode } from "../api";
+import type {
+  HoldItem,
+  KycApplication,
+  KycView,
+  NodeRunSteps,
+  WorkNode,
+} from "../api";
 import { identityHue } from "../avatar";
 import { humanizeEvent } from "../humanize";
 import { FilesPane } from "./FilesPane";
@@ -100,6 +106,7 @@ export function Work({ onLife }: { onLife: () => void }) {
         )}
         {!selected && (
           <div className="pane-empty">
+            <KycReviewInbox />
             <p>Pick a node to see what it has been doing.</p>
             <p className="muted">Earnings and health update as runs verify.</p>
           </div>
@@ -649,6 +656,77 @@ function HoldDesk({
         </div>
       )}
       {error ? <div className="error">{error}</div> : null}
+    </div>
+  );
+}
+
+// ---- The platform reviewer's KYC inbox -------------------------------------
+// Visible only to accounts the host granted kyc:review (everyone else gets a
+// 403 and sees nothing): pending applications, fast-tracked first, with the
+// approve/reject verdict right on the row. A verdict clears the row.
+export function KycReviewInbox() {
+  const [items, setItems] = useState<KycApplication[] | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState("");
+
+  const refresh = useCallback(async () => {
+    try {
+      setItems((await api.kycReviews()).items ?? []);
+    } catch {
+      setItems(null); // not a reviewer, or not a reviewing host: no inbox
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  if (items === null || items.length === 0) return null;
+
+  async function decide(nodeId: string, approved: boolean) {
+    setError("");
+    setBusy(nodeId);
+    try {
+      await api.kycDecide(nodeId, approved);
+      await refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  return (
+    <div className="commits kyc-inbox">
+      <div className="convo-group">
+        KYC reviews awaiting your verdict ({items.length})
+      </div>
+      {items.map((app) => (
+        <div key={app.node_id} className="commit-row">
+          <span>
+            {app.legal_name} · {app.company_email}
+            {app.registration_no ? ` · reg ${app.registration_no}` : ""}
+          </span>
+          <span className="muted">
+            {app.screen === "fast_track"
+              ? "fast lane — trusted domain"
+              : "standard queue"}
+          </span>
+          <button
+            disabled={busy === app.node_id}
+            onClick={() => void decide(app.node_id, true)}
+          >
+            Approve
+          </button>
+          <button
+            disabled={busy === app.node_id}
+            onClick={() => void decide(app.node_id, false)}
+          >
+            Reject
+          </button>
+        </div>
+      ))}
+      {error && <div className="error">{error}</div>}
     </div>
   );
 }

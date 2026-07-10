@@ -59,7 +59,15 @@ class _FlakyPayout:
         self._rate = failure_rate
         self.paid_micros: dict[str, int] = {}
 
-    def payout(self, *, idempotency_key, provider_account_id, amount_micros, currency):
+    def payout(
+        self,
+        *,
+        idempotency_key,
+        provider_account_id,
+        amount_micros,
+        currency,
+        metadata=None,
+    ):
         if self._rng.random() < self._rate:
             raise PaymentError("flaky processor")
         noder = provider_account_id.removeprefix("acct_")

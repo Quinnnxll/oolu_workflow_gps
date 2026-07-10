@@ -749,6 +749,15 @@ export const api = {
     nodeId: string,
     body: { legal_name: string; company_email: string; registration_no?: string },
   ) => req<KycApplication>("POST", `/v1/work/nodes/${nodeId}/kyc`, body),
+  // The reviewer's inbox (permission-gated: 403 for everyone else) and
+  // the human verdict on an application.
+  kycReviews: () =>
+    req<{ items: KycApplication[] }>("GET", "/v1/kyc/reviews"),
+  kycDecide: (nodeId: string, approved: boolean, note?: string) =>
+    req<KycApplication>("POST", `/v1/work/nodes/${nodeId}/kyc/decide`, {
+      approved,
+      ...(note ? { note } : {}),
+    }),
   // Manual-commit queue: held contract runs (audit nodes land here).
   holds: () => req<{ items: HoldItem[] }>("GET", "/v1/runs/contract/holds"),
   decideHold: (pendingId: string, approved: boolean, signature?: string) =>

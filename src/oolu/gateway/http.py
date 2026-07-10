@@ -31,6 +31,10 @@ class Request:
     headers: dict[str, str] = field(default_factory=dict)
     query: dict[str, str] = field(default_factory=dict)
     body: dict[str, Any] | None = None
+    # The exact bytes on the wire, for signature schemes (Stripe) that sign
+    # the raw payload rather than a canonical form. None in tests that build
+    # requests from dicts directly — verifiers fall back to canonical JSON.
+    raw: bytes | None = None
     now: datetime | None = None
 
     def __post_init__(self):

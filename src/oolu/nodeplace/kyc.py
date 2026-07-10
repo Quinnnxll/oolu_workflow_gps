@@ -157,6 +157,24 @@ class KycStore:
             return None
         return KycRecord.model_validate_json(row["payload_json"])
 
+    def records(self, *, status: KycStatus | None = None) -> list[KycRecord]:
+        """Every application, optionally narrowed by status — the reviewer
+        inbox's read. Filtered in Python: the payload is one JSON column
+        and the review queue is human-sized by definition."""
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                "SELECT payload_json FROM kyc_records"
+            ).fetchall()
+        records = [
+            KycRecord.model_validate_json(row["payload_json"]) for row in rows
+        ]
+        if status is not None:
+            records = [r for r in records if r.status == status]
+        # Fast-tracked applications first (screened trustworthy), oldest
+        # first within a screen — the queue a reviewer would want.
+        records.sort(key=lambda r: (r.screen != KycScreen.FAST_TRACK, r.created_at))
+        return records
+
 
 class KycService:
     """Apply / decide / look up — and the multiplier ranking reads."""
@@ -183,6 +201,11 @@ class KycService:
     # ------------------------------------------------------------------ #
     def status_for(self, node_id: str) -> KycRecord | None:
         return self._store.get(node_id)
+
+    def pending(self) -> list[KycRecord]:
+        """The reviewer's inbox: applications awaiting a human verdict,
+        fast-tracked first, oldest first."""
+        return self._store.records(status=KycStatus.PENDING_REVIEW)
 
     def apply(
         self,

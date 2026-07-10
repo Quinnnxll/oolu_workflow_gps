@@ -21,6 +21,12 @@ from .model_calls import (
     ModelCallRecord,
     ModelPriceTable,
 )
+from .model_usage import (
+    PLAN_MODEL_ALLOWANCE_USD,
+    PLATFORM_TENANT,
+    ModelUsageStore,
+    SubscriptionBrain,
+)
 from .models import (
     BILLING_SCHEMA_VERSION,
     MICROS_PER_UNIT,
@@ -115,6 +121,10 @@ __all__ = [
     "ModelCallMeter",
     "ModelCallRecord",
     "ModelPriceTable",
+    "ModelUsageStore",
+    "PLAN_MODEL_ALLOWANCE_USD",
+    "PLATFORM_TENANT",
+    "SubscriptionBrain",
     "PricingEngine",
     "PricingResult",
     "SettlementService",

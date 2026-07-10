@@ -250,7 +250,12 @@ class GatewayASGI:
             if isinstance(parsed, dict):
                 body = parsed
         return Request(
-            method=method, path=path, headers=headers, query=query, body=body
+            method=method,
+            path=path,
+            headers=headers,
+            query=query,
+            body=body,
+            raw=raw or None,
         )
 
     @staticmethod
