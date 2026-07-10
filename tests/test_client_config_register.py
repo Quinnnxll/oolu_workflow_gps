@@ -39,7 +39,12 @@ def test_client_config_is_public_and_honest_by_default(tmp_path):
     app, conn, _ = _app(tmp_path)  # bare gateway: nothing configured
     response = app.handle(_req("GET", "/v1/client-config"))
     assert response.status == 200
-    assert response.body == {"server": None, "google": False, "registration": False}
+    assert response.body == {
+        "server": None,
+        "google": False,
+        "registration": False,
+        "verification": False,
+    }
     conn.close()
 
 

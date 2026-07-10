@@ -100,6 +100,17 @@ class IdentityLinkStore:
                 (provider, subject, tenant, username, email, at.isoformat()),
             )
 
+    def email_of(self, username: str) -> str | None:
+        """The registered e-mail behind a username, if any — how the login
+        door knows which address must be verified."""
+        with self._conn.lock:
+            row = self._conn.db.execute(
+                "SELECT email FROM identity_links"
+                " WHERE provider = 'email' AND username = ?",
+                (username,),
+            ).fetchone()
+        return row["email"] if row else None
+
     def lookup(self, provider: str, subject: str) -> dict | None:
         with self._conn.lock:
             row = self._conn.db.execute(

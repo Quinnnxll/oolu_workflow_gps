@@ -1365,6 +1365,16 @@ def _cmd_host(args, out) -> int:
         server_url=os.environ.get("OOLU_SERVER_URL"),
         global_service=args.global_service,
     )
+    from .mail import build_mail_sender
+
+    mail = build_mail_sender(os.environ)
+    if args.global_service and args.open_registration and mail is None:
+        raise _CliError(
+            "--global-service with --open-registration needs a mail sender:"
+            " strangers must prove their e-mail address before they get an"
+            " account. Set OOLU_MAIL_URL + OOLU_MAIL_KEY + OOLU_MAIL_FROM"
+            " (or OOLU_MAIL=console for a dry run)."
+        )
     try:
         runtime = build_host_runtime(
             Settings.load(args.config),
@@ -1375,6 +1385,8 @@ def _cmd_host(args, out) -> int:
             google_client_id=os.environ.get("OOLU_GOOGLE_CLIENT_ID"),
             google_client_secret=os.environ.get("OOLU_GOOGLE_CLIENT_SECRET", ""),
             google_default_tenant=args.tenant,
+            mail=mail,
+            require_isolation=args.global_service,
         )
     except ValueError as exc:
         raise _CliError(str(exc)) from exc

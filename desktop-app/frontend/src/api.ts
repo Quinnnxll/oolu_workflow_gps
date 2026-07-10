@@ -144,14 +144,19 @@ function authBase(server?: string): string {
   return url;
 }
 
-async function authPost(path: string, body: unknown, fallback: string): Promise<LoginResponse> {
+async function authPost(
+  path: string,
+  body: unknown,
+  fallback: string,
+  notOffered = "this server does not offer registration yet",
+): Promise<LoginResponse & { verification_required?: boolean }> {
   const res = await fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   if (res.status === 404 || res.status === 405) {
-    throw new Error("this server does not offer registration yet");
+    throw new Error(notOffered);
   }
   const data = (await res.json().catch(() => ({}))) as
     | LoginResponse
@@ -161,7 +166,7 @@ async function authPost(path: string, body: unknown, fallback: string): Promise<
       (data as { error?: { message?: string } })?.error?.message ?? fallback;
     throw new Error(message);
   }
-  return data as LoginResponse;
+  return data as LoginResponse & { verification_required?: boolean };
 }
 
 export async function login(
@@ -194,13 +199,62 @@ export async function register(
   email: string,
   password: string,
   server?: string,
-): Promise<void> {
+): Promise<{ verificationRequired: boolean }> {
   const ok = await authPost(
     authBase(server) + "/v1/auth/register",
     { email, password },
     "registration failed",
   );
+  // A mail-verifying host answers without a token: the account exists but
+  // stays locked until the e-mailed code comes back through verifyEmail.
+  if (ok.verification_required) return { verificationRequired: true };
   session.set(ok.token, ok.principal, ok.tenant ?? "");
+  return { verificationRequired: false };
+}
+
+// Finish a mail-verified registration: the e-mailed code plus the password
+// chosen at registration turn into a signed-in session.
+export async function verifyEmail(
+  email: string,
+  code: string,
+  password: string,
+  server?: string,
+): Promise<void> {
+  const ok = await authPost(
+    authBase(server) + "/v1/auth/verify",
+    { email, code, password },
+    "verification failed",
+    "this server does not offer e-mail verification yet",
+  );
+  session.set(ok.token, ok.principal, ok.tenant ?? "");
+}
+
+// Ask for a password-reset code. The server answers 202 whether or not the
+// address exists — enumeration stays impossible on this side too.
+export async function requestReset(
+  email: string,
+  server?: string,
+): Promise<void> {
+  await authPost(
+    authBase(server) + "/v1/auth/reset/request",
+    { email },
+    "could not send the reset code",
+    "this server does not offer password reset yet",
+  );
+}
+
+export async function confirmReset(
+  email: string,
+  code: string,
+  password: string,
+  server?: string,
+): Promise<void> {
+  await authPost(
+    authBase(server) + "/v1/auth/reset/confirm",
+    { email, code, password },
+    "password reset failed",
+    "this server does not offer password reset yet",
+  );
 }
 
 // Sign in with Google (RFC 8252): begin on the server, open the consent

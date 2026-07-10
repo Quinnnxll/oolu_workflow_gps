@@ -150,6 +150,15 @@ class ChatModelRouter:
                 continue
         if errors:
             raise ModelUnavailable("; ".join(errors))
+        if self._source() == "subscription":
+            # Honesty over aspiration: the hosted OoLu brain doesn't exist
+            # yet, so "subscription" with no keys is a dead end — say so
+            # and point at the two doors that do open today.
+            raise ModelUnavailable(
+                "the OoLu subscription brain isn't live yet — add your own"
+                " API key in Settings (model.source switches to 'own-api'"
+                " automatically) or point model.source at 'local'"
+            )
         raise ModelUnavailable("no model key is configured")
 
     # ------------------------------------------------------------------ #

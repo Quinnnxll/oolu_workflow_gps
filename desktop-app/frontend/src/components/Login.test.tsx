@@ -91,6 +91,104 @@ describe("Login", () => {
     expect(session.token).toBe("t");
   });
 
+  it("walks the code step when the host verifies e-mail", async () => {
+    fetchMock.mockImplementation(async (input: string | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/auth/register")) {
+        return reply(201, {
+          verification_required: true,
+          email: "bob@example.com",
+        });
+      }
+      if (url.endsWith("/v1/auth/verify")) {
+        return reply(200, { token: "vt", principal: "bob", tenant: "main" });
+      }
+      return reply(404, {});
+    });
+    const onSignedIn = vi.fn();
+    render(<Login onSignedIn={onSignedIn} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Create one" }));
+    fireEvent.change(screen.getByLabelText("E-mail"), {
+      target: { value: "bob@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "long-enough-pw" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create account" }));
+
+    // No session yet — the screen asks for the mailed code instead.
+    expect(await screen.findByLabelText("6-digit code")).toBeTruthy();
+    expect(screen.getByText(/sent a 6-digit code to bob@example.com/)).toBeTruthy();
+    expect(session.signedIn()).toBe(false);
+
+    fireEvent.change(screen.getByLabelText("6-digit code"), {
+      target: { value: "123456" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Verify" }));
+
+    await waitFor(() => expect(onSignedIn).toHaveBeenCalled());
+    const verify = fetchMock.mock.calls.find(([u]) =>
+      String(u).endsWith("/v1/auth/verify"),
+    ) as [string, RequestInit];
+    // The password from registration rides along with the code.
+    expect(JSON.parse(String(verify[1].body))).toEqual({
+      email: "bob@example.com",
+      code: "123456",
+      password: "long-enough-pw",
+    });
+    expect(session.token).toBe("vt");
+  });
+
+  it("forgot password: e-mail, then code + new password, back to sign-in", async () => {
+    fetchMock.mockImplementation(async (input: string | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/auth/reset/request")) {
+        return reply(202, { status: "sent" });
+      }
+      if (url.endsWith("/v1/auth/reset/confirm")) {
+        return reply(200, { status: "password_changed" });
+      }
+      return reply(404, {});
+    });
+    render(<Login onSignedIn={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Forgot password?" }));
+    fireEvent.change(screen.getByLabelText("E-mail"), {
+      target: { value: "bob@example.com" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send reset code" }));
+
+    // The answer never says whether the account exists.
+    expect(
+      await screen.findByText(/If bob@example.com has an account/),
+    ).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("6-digit code"), {
+      target: { value: "654321" },
+    });
+    fireEvent.change(screen.getByLabelText("New password"), {
+      target: { value: "brand-new-password" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Change password" }));
+
+    // Back on sign-in with the good news; no session was minted.
+    expect(
+      await screen.findByText(/Password changed — sign in with the new one/),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeTruthy();
+    expect(session.signedIn()).toBe(false);
+
+    const confirm = fetchMock.mock.calls.find(([u]) =>
+      String(u).endsWith("/v1/auth/reset/confirm"),
+    ) as [string, RequestInit];
+    expect(JSON.parse(String(confirm[1].body))).toEqual({
+      email: "bob@example.com",
+      code: "654321",
+      password: "brand-new-password",
+    });
+  });
+
   it("phone sign-up stays disabled until a provider exists", () => {
     render(<Login onSignedIn={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "Create one" }));

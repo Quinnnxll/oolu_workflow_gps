@@ -2,14 +2,19 @@ import { useEffect, useState, type FormEvent } from "react";
 import {
   DEFAULT_GLOBAL_SERVER,
   clientConfig,
+  confirmReset,
   isRemote,
   login,
   register,
+  requestReset,
   session,
   signInWithGoogle,
+  verifyEmail,
 } from "../api";
 
-type View = "signin" | "register";
+// verify: the code-entry step a mail-verifying host adds after register.
+// reset: forgot-password — an e-mail first, then the code + new password.
+type View = "signin" | "register" | "verify" | "reset";
 type Scope = "edge" | "global";
 type EdgeMode = "device" | "network";
 
@@ -35,6 +40,9 @@ export function Login({
   const [pairedServer, setPairedServer] = useState<string | null>(null);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
+  const [resetSent, setResetSent] = useState(false);
+  const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -63,6 +71,9 @@ export function Login({
   function switchView(next: View) {
     setView(next);
     setError("");
+    setNotice("");
+    setCode("");
+    setResetSent(false);
   }
 
   async function google() {
@@ -87,10 +98,34 @@ export function Login({
     try {
       if (view === "signin") {
         await login(username, password, authTarget());
+        onSignedIn();
+      } else if (view === "register") {
+        const result = await register(username, password, authTarget());
+        if (result.verificationRequired) {
+          setNotice(
+            `We sent a 6-digit code to ${username.trim()} — enter it here to finish.`,
+          );
+          setView("verify");
+        } else {
+          onSignedIn();
+        }
+      } else if (view === "verify") {
+        await verifyEmail(username, code, password, authTarget());
+        onSignedIn();
+      } else if (!resetSent) {
+        await requestReset(username, authTarget());
+        setResetSent(true);
+        setNotice(
+          `If ${username.trim()} has an account, a 6-digit code is on its way.`,
+        );
       } else {
-        await register(username, password, authTarget());
+        await confirmReset(username, code, password, authTarget());
+        setCode("");
+        setPassword("");
+        setResetSent(false);
+        setNotice("Password changed — sign in with the new one.");
+        setView("signin");
       }
-      onSignedIn();
     } catch (err) {
       setError(
         err instanceof Error
@@ -183,59 +218,103 @@ export function Login({
         {showScope && scope === "edge" && edgeMode === "device" ? null : (
           <>
             <p className="muted">
-              {onEdgeNetwork
-                ? view === "signin"
-                  ? "Sign in to your private network server."
-                  : "Create your account on the private network server."
-                : view === "signin"
-                  ? "Sign in to OoLu Global."
-                  : "Create your OoLu Global account."}
+              {view === "verify"
+                ? "Check your inbox — enter the 6-digit code to finish."
+                : view === "reset"
+                  ? resetSent
+                    ? "Enter the e-mailed code and pick a new password."
+                    : "Enter your e-mail and we'll send a reset code."
+                  : onEdgeNetwork
+                    ? view === "signin"
+                      ? "Sign in to your private network server."
+                      : "Create your account on the private network server."
+                    : view === "signin"
+                      ? "Sign in to OoLu Global."
+                      : "Create your OoLu Global account."}
             </p>
 
-            <label htmlFor="username">
-              {view === "signin" ? "Username" : "E-mail"}
-            </label>
-            <input
-              id="username"
-              autoComplete={view === "signin" ? "username" : "email"}
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-            />
-            <label htmlFor="password">Password</label>
-            <input
-              id="password"
-              type="password"
-              autoComplete={
-                view === "signin" ? "current-password" : "new-password"
-              }
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
+            {view === "verify" ? null : (
+              <>
+                <label htmlFor="username">
+                  {view === "signin" ? "Username" : "E-mail"}
+                </label>
+                <input
+                  id="username"
+                  autoComplete={view === "signin" ? "username" : "email"}
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                />
+              </>
+            )}
+            {view === "verify" || (view === "reset" && resetSent) ? (
+              <>
+                <label htmlFor="mail-code">6-digit code</label>
+                <input
+                  id="mail-code"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  placeholder="123456"
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
+                />
+              </>
+            ) : null}
+            {view === "verify" || (view === "reset" && !resetSent) ? null : (
+              <>
+                <label htmlFor="password">
+                  {view === "reset" ? "New password" : "Password"}
+                </label>
+                <input
+                  id="password"
+                  type="password"
+                  autoComplete={
+                    view === "signin" ? "current-password" : "new-password"
+                  }
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
+              </>
+            )}
             <button type="submit" disabled={busy}>
               {view === "signin"
                 ? busy
                   ? "Signing in…"
                   : "Sign in"
-                : busy
-                  ? "Creating account…"
-                  : "Create account"}
+                : view === "register"
+                  ? busy
+                    ? "Creating account…"
+                    : "Create account"
+                  : view === "verify"
+                    ? busy
+                      ? "Verifying…"
+                      : "Verify"
+                    : resetSent
+                      ? busy
+                        ? "Changing password…"
+                        : "Change password"
+                      : busy
+                        ? "Sending code…"
+                        : "Send reset code"}
             </button>
 
-            <div className="alt-auth">
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void google()}
-              >
-                Continue with Google
-              </button>
-              {view === "register" ? (
-                <button type="button" disabled title="Coming soon">
-                  Continue with phone
+            {view === "signin" || view === "register" ? (
+              <div className="alt-auth">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void google()}
+                >
+                  Continue with Google
                 </button>
-              ) : null}
-            </div>
+                {view === "register" ? (
+                  <button type="button" disabled title="Coming soon">
+                    Continue with phone
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
 
+            {notice ? <div className="muted">{notice}</div> : null}
             {error ? <div className="error">{error}</div> : null}
 
             <div className="login-switch">
@@ -248,6 +327,24 @@ export function Login({
                     onClick={() => switchView("register")}
                   >
                     Create one
+                  </button>{" "}
+                  <button
+                    type="button"
+                    className="linklike"
+                    onClick={() => switchView("reset")}
+                  >
+                    Forgot password?
+                  </button>
+                </>
+              ) : view === "verify" ? (
+                <>
+                  Wrong address?{" "}
+                  <button
+                    type="button"
+                    className="linklike"
+                    onClick={() => switchView("register")}
+                  >
+                    Start over
                   </button>
                 </>
               ) : (

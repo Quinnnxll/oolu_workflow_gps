@@ -31,6 +31,9 @@ export OOLU_ADMIN_PASSWORD="<the first admin's password>"
 export OOLU_DATABASE_URL="postgresql://oolu:...@db-host/oolu"   # optional
 export OOLU_GOOGLE_CLIENT_ID="....apps.googleusercontent.com"    # optional
 export OOLU_GOOGLE_CLIENT_SECRET="GOCSPX-..."                    # optional
+export OOLU_MAIL_URL="https://api.resend.com/emails"             # outbound mail
+export OOLU_MAIL_KEY="re_..."                                    #  (Resend-style
+export OOLU_MAIL_FROM="OoLu <hello@oolu.example>"                #   JSON API)
 
 .venv/bin/oolu host \
   --data /var/lib/oolu \
@@ -44,10 +47,16 @@ Notes:
 
 - `OOLU_HOST_SECRET` signs session tokens. Rotating it signs everyone
   out; losing it does too. Keep it in your secret manager.
-- `--open-registration` enables `POST /v1/auth/register`. E-mails are
-  recorded as identity links (one address registers once) but are **not
-  yet verified** — the mail-sender milestone adds verification codes.
-  Leave it off for a private host.
+- `--open-registration` enables `POST /v1/auth/register`. With a mail
+  sender configured (the three `OOLU_MAIL_*` variables, or
+  `OOLU_MAIL=console` to log mail during development) registration is
+  verification-first: the account gets no session until the mailed
+  6-digit code comes back through `POST /v1/auth/verify`, and "Forgot
+  password?" works via `/v1/auth/reset/request` + `/v1/auth/reset/confirm`.
+  Without a mail sender the register route still answers with an
+  immediate token (fine for private testing); a `--global-service` host
+  refuses that combination outright — public registration requires
+  verified e-mail. Leave it off for a private host.
 - The gateway already honours `x-forwarded-proto`, so behind TLS the
   Google redirect URI derives as `https://...` automatically.
 
@@ -109,14 +118,19 @@ account is identity, not a data migration.
 `GET /v1/client-config` answers, for any client that asks:
 
 ```json
-{ "server": "https://app.oolu.example", "google": true, "registration": true }
+{
+  "server": "https://app.oolu.example",
+  "google": true,
+  "registration": true,
+  "verification": true
+}
 ```
+
+(`verification` says registering here ends with a mailed-code step, so
+the sign-in screen knows to show it.)
 
 ## What the host unlocks next
 
-- **E-mail verification codes** — needs an outbound mail sender
-  (SES/Resend/Postmark); the register route already records the address
-  as an identity link, so verification slots in without a schema change.
 - **Stripe webhooks** (`/v1/webhooks/processor` exists) — point Stripe
   at the public URL when the launch guard opens charging.
 - **Public-API webhook deliveries** — third parties receive signed run

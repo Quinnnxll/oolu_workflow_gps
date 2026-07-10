@@ -2,11 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   api,
   captureEngineToken,
+  confirmReset,
   login,
   register,
+  requestReset,
   requiresLogin,
   session,
   signOut,
+  verifyEmail,
 } from "./api";
 
 // A recorded fetch call, so tests can assert the exact route + payload the
@@ -380,6 +383,78 @@ describe("auth", () => {
       "does not offer registration",
     );
     expect(session.signedIn()).toBe(false);
+  });
+
+  it("register on a verifying host reports the code step, no session", async () => {
+    routes["POST /v1/auth/register"] = {
+      status: 201,
+      body: { verification_required: true, email: "bob@example.com" },
+    };
+
+    const result = await register("bob@example.com", "pw");
+
+    expect(result.verificationRequired).toBe(true);
+    expect(session.signedIn()).toBe(false);
+  });
+
+  it("verifyEmail posts the code and stores the session", async () => {
+    routes["POST /v1/auth/verify"] = {
+      status: 200,
+      body: { token: "t9", principal: "bob", tenant: "acme" },
+    };
+
+    await verifyEmail("bob@example.com", "123456", "pw");
+
+    expect(lastCall().path).toBe("https://host.example/v1/auth/verify");
+    expect(lastCall().body).toEqual({
+      email: "bob@example.com",
+      code: "123456",
+      password: "pw",
+    });
+    expect(session.token).toBe("t9");
+    expect(session.principal).toBe("bob");
+  });
+
+  it("verifyEmail surfaces a wrong code as the server's message", async () => {
+    routes["POST /v1/auth/verify"] = {
+      status: 400,
+      body: { error: { message: "that code is wrong or expired" } },
+    };
+    await expect(verifyEmail("bob@example.com", "000000", "pw")).rejects.toThrow(
+      "wrong or expired",
+    );
+    expect(session.signedIn()).toBe(false);
+  });
+
+  it("reset request and confirm ride the auth endpoints", async () => {
+    routes["POST /v1/auth/reset/request"] = {
+      status: 202,
+      body: { status: "sent" },
+    };
+    await requestReset("bob@example.com");
+    expect(lastCall().path).toBe("https://host.example/v1/auth/reset/request");
+    expect(lastCall().body).toEqual({ email: "bob@example.com" });
+
+    routes["POST /v1/auth/reset/confirm"] = {
+      status: 200,
+      body: { status: "password_changed" },
+    };
+    await confirmReset("bob@example.com", "123456", "new-password");
+    expect(lastCall().path).toBe("https://host.example/v1/auth/reset/confirm");
+    expect(lastCall().body).toEqual({
+      email: "bob@example.com",
+      code: "123456",
+      password: "new-password",
+    });
+    // Neither call mints a session — sign-in follows separately.
+    expect(session.signedIn()).toBe(false);
+  });
+
+  it("reset maps a 404 to a friendly 'not offered' message", async () => {
+    routes["POST /v1/auth/reset/request"] = { status: 404, body: {} };
+    await expect(requestReset("bob@example.com")).rejects.toThrow(
+      "does not offer password reset",
+    );
   });
 
   it("local mode signs into the server the user names and remembers it", async () => {

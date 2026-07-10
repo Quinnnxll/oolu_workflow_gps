@@ -396,6 +396,8 @@ class GatewayApp:
         model_transport=None,  # providers.HttpTransport; None = real httpx
         google_signin: GoogleSignIn | None = None,  # "Continue with Google"
         identity_links: IdentityLinkStore | None = None,  # email/IdP -> account
+        mail=None,  # mail.MailSender: verification + reset codes go out here
+        mail_codes=None,  # mail.MailCodeStore: hashed one-time codes
         value_patcher=None,  # orchestrator.ValuePatcher: fills creative inputs
         isolation=None,  # worker.IsolationPolicy: powers /v1/worker-health
         docker_available: bool = True,
@@ -469,6 +471,8 @@ class GatewayApp:
         self._model_routers: dict[str, ChatModelRouter] = {}
         self._google = google_signin
         self._identity_links = identity_links
+        self._mail = mail
+        self._mail_codes = mail_codes
         # What may run where, per trust level — rendered by the shell's
         # health screen from the policy that is actually enforced.
         from ..worker.policy import IsolationPolicy
@@ -756,8 +760,14 @@ class GatewayApp:
         # What a client needs to know about this host before signing in:
         # the paired online server, and which sign-in doors exist.
         r.add("GET", "/v1/client-config", self._client_config, public=True)
-        # Self-serve e-mail registration (hosts opt in).
+        # Self-serve e-mail registration (hosts opt in). With a mail
+        # sender configured, registration is verification-first: the code
+        # proves the address before the first sign-in, and password reset
+        # rides the same codes.
         r.add("POST", "/v1/auth/register", self._auth_register, public=True)
+        r.add("POST", "/v1/auth/verify", self._auth_verify, public=True)
+        r.add("POST", "/v1/auth/reset/request", self._reset_request, public=True)
+        r.add("POST", "/v1/auth/reset/confirm", self._reset_confirm, public=True)
         # Sign in with Google (RFC 8252): the app begins and polls; only
         # the browser's leg touches Google. All three answer 404 when no
         # Google client is configured on this host.
@@ -3376,6 +3386,22 @@ class GatewayApp:
             )
         except AuthenticationError as exc:
             raise GatewayError(401, "unauthorized", str(exc)) from exc
+        # A verification-first host holds the door until the address is
+        # proven. Accounts without an e-mail link (the bootstrap admin,
+        # operator-created users) are exempt — they never registered.
+        if self._mail is not None and self._mail_codes is not None:
+            email = (
+                self._identity_links.email_of(username)
+                if self._identity_links is not None
+                else None
+            )
+            if email and not self._mail_codes.is_verified(email, "verify"):
+                raise GatewayError(
+                    403,
+                    "verification_required",
+                    "verify your e-mail first — we sent a code when you "
+                    "registered (or use 'Forgot password?' to get a new one)",
+                )
         return json_response(
             200,
             {
@@ -3400,6 +3426,10 @@ class GatewayApp:
                 "google": self._google is not None,
                 "registration": bool(
                     self._config.open_registration and self._accounts is not None
+                ),
+                # Whether registering here ends with a code-entry step.
+                "verification": bool(
+                    self._mail is not None and self._mail_codes is not None
                 ),
             },
         )
@@ -3444,6 +3474,20 @@ class GatewayApp:
                 provider="email", subject=email, tenant=tenant,
                 username=username, email=email, at=self._clock(),
             )
+        # Verification-first where a mail sender exists: the account is
+        # created but no token is minted until the code proves the address.
+        if self._mail is not None and self._mail_codes is not None:
+            code = self._mail_codes.issue(email, "verify")
+            self._mail.send(
+                to=email,
+                subject="Your OoLu verification code",
+                body=f"Your OoLu verification code is {code}. It expires in "
+                "30 minutes. If you didn't sign up, ignore this mail.",
+            )
+            self._metrics["registrations"] += 1
+            return json_response(
+                201, {"verification_required": True, "email": email}
+            )
         result = accounts.login(username, password, now=self._clock())
         self._metrics["registrations"] += 1
         return json_response(
@@ -3465,6 +3509,92 @@ class GatewayApp:
                 return candidate
             candidate = f"{base}-{suffix}"
         raise GatewayError(409, "conflict", "could not derive a free username")
+
+    def _auth_verify(self, request, session, params) -> Response:
+        """Prove the registered address: code + password → first token.
+
+        The code alone never signs anyone in — the password rides along so
+        a leaked inbox is not a leaked account.
+        """
+        accounts = self._require_accounts()
+        if self._mail_codes is None:
+            raise GatewayError(404, "not_found", "verification is not enabled")
+        body = request.body or {}
+        email = str(body.get("email", "")).strip().lower()
+        code = str(body.get("code", "")).strip()
+        password = str(body.get("password", ""))
+        link = (
+            self._identity_links.lookup("email", email)
+            if self._identity_links is not None
+            else None
+        )
+        if link is None or not self._mail_codes.redeem(email, "verify", code):
+            raise GatewayError(
+                400, "invalid_request", "that code is wrong or expired"
+            )
+        try:
+            result = accounts.login(link["username"], password, now=self._clock())
+        except AuthenticationError as exc:
+            raise GatewayError(401, "unauthorized", str(exc)) from exc
+        return json_response(
+            200,
+            {
+                "token": result.token,
+                "expires_at": result.expires_at.isoformat(),
+                "tenant": result.tenant_id,
+                "principal": result.principal,
+            },
+        )
+
+    def _reset_request(self, request, session, params) -> Response:
+        """Start a password reset. Always 202 — an unknown address looks
+        exactly like a known one, so nothing enumerates accounts."""
+        if self._mail is None or self._mail_codes is None:
+            raise GatewayError(404, "not_found", "password reset is not enabled")
+        body = request.body or {}
+        email = str(body.get("email", "")).strip().lower()
+        link = (
+            self._identity_links.lookup("email", email)
+            if self._identity_links is not None and _EMAIL_RE.match(email)
+            else None
+        )
+        if link is not None:
+            code = self._mail_codes.issue(email, "reset")
+            self._mail.send(
+                to=email,
+                subject="Your OoLu password reset code",
+                body=f"Your OoLu password reset code is {code}. It expires "
+                "in 30 minutes. If you didn't ask for it, ignore this mail.",
+            )
+        return json_response(202, {"status": "sent"})
+
+    def _reset_confirm(self, request, session, params) -> Response:
+        """Finish a reset: a redeemed code sets the new password — and
+        counts as address verification (control of the inbox was proven)."""
+        accounts = self._require_accounts()
+        if self._mail_codes is None:
+            raise GatewayError(404, "not_found", "password reset is not enabled")
+        body = request.body or {}
+        email = str(body.get("email", "")).strip().lower()
+        code = str(body.get("code", "")).strip()
+        password = str(body.get("password", ""))
+        if len(password) < 8:
+            raise GatewayError(
+                400, "invalid_request", "passwords need at least 8 characters"
+            )
+        link = (
+            self._identity_links.lookup("email", email)
+            if self._identity_links is not None
+            else None
+        )
+        if link is None or not self._mail_codes.redeem(email, "reset", code):
+            raise GatewayError(
+                400, "invalid_request", "that code is wrong or expired"
+            )
+        accounts.change_password(link["username"], password)
+        # Inbox control proven: the address counts as verified too.
+        self._mail_codes.mark_verified(email, "verify")
+        return json_response(200, {"status": "password_changed"})
 
     # ------------------------------------------------------------------ #
     # Sign in with Google.                                                #

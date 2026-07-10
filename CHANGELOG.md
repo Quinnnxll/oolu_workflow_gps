@@ -4,6 +4,50 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Phase 1 of going public: proven e-mail addresses, a way back in, and
+walls a public host cannot serve without:
+
+- **E-mail verification on registration.** A host with a mail sender
+  configured no longer hands out a session at `POST /v1/auth/register`:
+  the account is created, a 6-digit code is mailed (`MailCodeStore` —
+  hashed at rest, 30-minute expiry, 5 attempts, strictly single-use),
+  and the answer is `{"verification_required": true}` with no token.
+  `POST /v1/auth/verify` takes e-mail + code + password and mints the
+  first session — the code alone is never a session, so a leaked inbox
+  is not a leaked account. Sign-in answers 403 `verification_required`
+  for registered-but-unproven addresses (bootstrap/operator accounts,
+  which never registered an e-mail, are exempt). The sign-in screen
+  grows the matching code-entry step, and `/v1/client-config` advertises
+  `verification` so clients know the step is coming.
+- **Password reset.** `POST /v1/auth/reset/request` always answers 202
+  ("sent") whether or not the address exists — nothing enumerates
+  accounts — and mails a reset code to real ones. `POST
+  /v1/auth/reset/confirm` (e-mail + code + new password) changes the
+  password and counts as address verification, since inbox control was
+  just proven. The sign-in screen gets the matching "Forgot password?"
+  flow.
+- **The outbound door.** `oolu.mail`: `HttpMailSender` speaks the
+  Resend-style JSON API (`OOLU_MAIL_URL` + `OOLU_MAIL_KEY` +
+  `OOLU_MAIL_FROM`), `OOLU_MAIL=console` logs mail for development, and
+  an unconfigured host keeps the old immediate-token registration (for
+  private/testing installs that opted in knowingly).
+- **`--global-service` walls.** A public host refuses to start with
+  `--open-registration` and no mail sender (strangers must prove their
+  address), and never wires the script hand unless the backend is real
+  isolation (docker) — synthesized code does not run unsandboxed on a
+  public host (`require_isolation` in `build_host_runtime`).
+- **An honest "subscription" dead-end message.** With `model.source`
+  still "subscription" and no keys, the router now says the hosted OoLu
+  brain isn't live yet and points at own-api keys or a local model,
+  instead of the generic "no model key is configured".
+- Tests: the whole flow in `test_mail_verification.py` (verification-
+  first registration, 403-before-verify, wrong/burned/expired codes,
+  no-enumeration reset, reset-counts-as-verification, the code store's
+  clock/attempt behaviors, the Resend wire shape, both public-host
+  walls) plus the Login code-step and forgot-password flows and the new
+  api adapters in vitest. 148 vitest and the entire backend suite
+  green; shell rebuilt.
+
 The BYO key actually takes over, and OoLu talks like it means it:
 
 - **An added model key becomes THE model — and proves it.** The root of

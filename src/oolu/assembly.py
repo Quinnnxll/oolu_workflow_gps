@@ -437,6 +437,11 @@ def build_host_runtime(
     google_client_secret: str = "",
     google_default_tenant: str = "main",
     seed_handiwork_for: str | None = None,
+    mail=None,  # mail.MailSender: e-mail verification + password reset
+    # A PUBLIC host must never run synthesized code unsandboxed: with
+    # require_isolation the script hand is wired only when the backend is
+    # real isolation (docker), never the subprocess dev fallback.
+    require_isolation: bool = False,
 ) -> HostRuntime:
     """The multi-user web host: the full multi-tenant gateway over one
     data directory, with LOCAL accounts as the identity provider.
@@ -498,6 +503,7 @@ def build_host_runtime(
         RegistryStore,
         WorkDesk,
     )
+    from .mail import MailCodeStore
     from .providers.keyring import ModelKeyring
     from .settings_node import SettingsNode, SettingsStore
 
@@ -513,6 +519,7 @@ def build_host_runtime(
     model_keys = ModelKeyring(conn, key_path=data / "machine.key")
     model_meter = ModelCallMeter()
     settings_node = SettingsNode(SettingsStore(conn))
+    _mail_codes = MailCodeStore(conn)
     home_tenant = (
         getattr(config, "registration_tenant", None) if config else None
     ) or "main"
@@ -568,7 +575,14 @@ def build_host_runtime(
         _planning_router(REBUILD_PURPOSE), consent=_autobuild_consent
     )
     run_executors = dict(executors or {})
-    if "script" not in run_executors:
+    if require_isolation and settings.backend.kind != "docker":
+        logging.getLogger(__name__).warning(
+            "public host without an isolation backend (backend.kind=%s): "
+            "the script hand stays OFF — synthesized code never runs "
+            "unsandboxed on a public host",
+            settings.backend.kind,
+        )
+    elif "script" not in run_executors:
         try:
             from .runtime.script_node import ChatModelSynthesizer
 
@@ -744,6 +758,11 @@ def build_host_runtime(
         model_meter=model_meter,
         google_signin=google,
         identity_links=identity_links,
+        # The mail door: verification-first registration and password
+        # reset switch on the moment a sender exists; the code store is
+        # always there so verified marks survive sender changes.
+        mail=mail,
+        mail_codes=_mail_codes,
         # Pre-launch: the test card vault and a closed launch guard — the
         # real transaction port stays shut until an operator opens it.
         payments=PaymentMethodsService(PaymentProfileStore(conn), FakeCardVault()),
