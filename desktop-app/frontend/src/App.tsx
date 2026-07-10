@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, isRemote, requiresLogin, session, signOut } from "./api";
+import { applyLanguage, applyTheme } from "./ui";
 import type { InboxItem, TaskView } from "./types";
 import { Life } from "./components/Life";
 import { TaskPane } from "./components/TaskPane";
@@ -18,6 +19,21 @@ export function App() {
   // sign-in screen over the running local app when the user asks for it.
   const [showAuth, setShowAuth] = useState(false);
   const [dev, setDev] = useState(false);
+
+  // The settings node owns theme and language; once signed in, its
+  // values replace the locally cached guesses.
+  useEffect(() => {
+    if (!authed) return;
+    void api
+      .settings()
+      .then(({ items }) => {
+        for (const item of items ?? []) {
+          if (item.key === "app.theme") applyTheme(String(item.value));
+          if (item.key === "app.language") applyLanguage(String(item.value));
+        }
+      })
+      .catch(() => {}); // unreachable settings: the cached look stands
+  }, [authed]);
 
   if (!authed) {
     return <Login onSignedIn={() => setAuthed(true)} />;

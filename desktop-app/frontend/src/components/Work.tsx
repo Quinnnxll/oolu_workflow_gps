@@ -9,6 +9,7 @@ import type {
 } from "../api";
 import { identityHue } from "../avatar";
 import { humanizeEvent } from "../humanize";
+import { useT } from "../ui";
 import { FilesPane } from "./FilesPane";
 import { NodeInteract } from "./NodeInteract";
 
@@ -22,6 +23,7 @@ import { NodeInteract } from "./NodeInteract";
 // and Supernodes), the allow / sign / reply desk for held requests.
 
 export function Work({ onLife }: { onLife: () => void }) {
+  const tr = useT();
   const [nodes, setNodes] = useState<WorkNode[]>([]);
   const [selected, setSelected] = useState<string | "add" | null>(null);
 
@@ -45,8 +47,8 @@ export function Work({ onLife }: { onLife: () => void }) {
     <div className="life">
       <aside className="convo-list">
         <div className="mode-tabs">
-          <button onClick={onLife}>Life</button>
-          <button className="on">Work</button>
+          <button onClick={onLife}>{tr("life")}</button>
+          <button className="on">{tr("work")}</button>
         </div>
 
         <div className="work-head">

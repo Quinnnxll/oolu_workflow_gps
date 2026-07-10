@@ -4,6 +4,33 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The settings that lied, and the forward menu that wouldn't behave:
+
+- **The theme actually changes.** The whole stylesheet now reads
+  variables (the status chips included) and carries a complete light
+  palette: choosing "light"/"dark" pins `data-theme` on the root,
+  "system" removes the pin so the OS preference decides, and the choice
+  is cached so the right look paints before settings load. Saving the
+  setting applies it the same instant.
+- **Languages by their formal names, and a UI that follows.** The
+  language dropdown shows English / 中文（简体） / Español / Français —
+  never raw codes (theme values get words too; stored values stay
+  stable codes). A new chrome dictionary (`ui.ts`) translates the
+  navigation, labels, placeholders, and buttons live when
+  `app.language` changes — Life/Work tabs, the conversation list, the
+  chat composer, Settings headings, the forward menu. The assistant's
+  own words follow the model, not this table; per-setting labels still
+  come from the settings node.
+- **The forward menu behaves like a menu.** A click anywhere else — or
+  Escape — closes it (it used to stay open until cancelled), and a
+  search box narrows long friend/node lists as you type, with the
+  save-to-file escape hatch always in reach.
+- Tests: theme pin/unpin + persistence, the language dictionary and
+  its change notifications, formal choice labels, the Settings
+  instant-apply and live chrome switch, and the forward menu's search /
+  outside-click / Escape behaviors. 170 vitest and the entire backend
+  suite green; shell rebuilt.
+
 Phase 4 of going public — ship and operate: the data-subject's rights,
 the legal surface, backups, the operator's numbers, and releases:
 

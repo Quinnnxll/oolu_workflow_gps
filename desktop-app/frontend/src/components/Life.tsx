@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, TERMINAL_PHASES } from "../api";
 import type { FriendConversation, FriendMessage } from "../api";
 import { identityHue, updateAvatarSignals } from "../avatar";
+import { useT } from "../ui";
 import { conciseName } from "../naming";
 import type { RunSummary, TimelineEvent } from "../types";
 import { ForwardMenu } from "./ForwardMenu";
@@ -37,6 +38,7 @@ function loadGroups(): { friends: boolean; noder: boolean } {
 }
 
 export function Life() {
+  const tr = useT(); // the chrome follows app.language live
   const [mode, setMode] = useState<"life" | "work">("life");
   const [selected, setSelected] = useState<Selection>({ kind: "oolu" });
   const [runs, setRuns] = useState<RunSummary[]>([]);
@@ -85,8 +87,8 @@ export function Life() {
     <div className="life">
       <aside className="convo-list">
         <div className="mode-tabs">
-          <button className="on">Life</button>
-          <button onClick={() => setMode("work")}>Work</button>
+          <button className="on">{tr("life")}</button>
+          <button onClick={() => setMode("work")}>{tr("work")}</button>
         </div>
 
         <button
@@ -96,7 +98,7 @@ export function Life() {
           <span className="convo-avatar oolu">O</span>
           <span className="convo-body">
             <span className="convo-name">OoLu</span>
-            <span className="convo-sub">your assistant</span>
+            <span className="convo-sub">{tr("assistantSub")}</span>
           </span>
         </button>
 
@@ -106,8 +108,8 @@ export function Life() {
         >
           <span className="convo-avatar file">≡</span>
           <span className="convo-body">
-            <span className="convo-name">Files</span>
-            <span className="convo-sub">documents & sheets</span>
+            <span className="convo-name">{tr("files")}</span>
+            <span className="convo-sub">{tr("filesSub")}</span>
           </span>
         </button>
 
@@ -119,8 +121,8 @@ export function Life() {
         >
           <span className="convo-avatar file">⚙</span>
           <span className="convo-body">
-            <span className="convo-name">Settings</span>
-            <span className="convo-sub">app, account, model, budget</span>
+            <span className="convo-name">{tr("settings")}</span>
+            <span className="convo-sub">{tr("settingsSub")}</span>
           </span>
         </button>
 
@@ -129,7 +131,7 @@ export function Life() {
           aria-expanded={groups.friends}
           onClick={() => toggleGroup("friends")}
         >
-          {groups.friends ? "▾" : "▸"} Friends
+          {groups.friends ? "▾" : "▸"} {tr("friends")}
           {friends && friends.some((f) => f.unread > 0)
             ? ` (${friends.reduce((n, f) => n + f.unread, 0)})`
             : ""}
@@ -176,10 +178,10 @@ export function Life() {
             <span className="convo-body">
               <span className="convo-sub">
                 {friends === null
-                  ? "Friends need a server"
+                  ? tr("friendsNeedServer")
                   : friends.length === 0
-                    ? "Start a conversation"
-                    : "New conversation"}
+                    ? tr("startConversation")
+                    : tr("newConversation")}
               </span>
             </span>
           </button>
@@ -190,11 +192,11 @@ export function Life() {
           aria-expanded={groups.noder}
           onClick={() => toggleGroup("noder")}
         >
-          {groups.noder ? "▾" : "▸"} Noder
+          {groups.noder ? "▾" : "▸"} {tr("noder")}
           {runs.length > 0 ? ` (${runs.length})` : ""}
         </button>
         {groups.noder && runs.length === 0 && (
-          <div className="convo-empty">Node activity appears here.</div>
+          <div className="convo-empty">{tr("nodeActivityHere")}</div>
         )}
         {groups.noder &&
           runs.map((r) => (

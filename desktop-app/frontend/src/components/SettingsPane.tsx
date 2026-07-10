@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { accountConsoleUrl, api, signOut } from "../api";
+import { applyLanguage, applyTheme, choiceLabel, useT } from "../ui";
 import type {
   ModelKeyView,
   PaymentProfileView,
@@ -12,17 +13,18 @@ import type {
 // exactly when (and within the bounds that) the node declares it. Saving
 // goes back through the node, which is the same door OoLu uses.
 
-const GROUP_LABELS: Record<string, string> = {
-  app: "App",
-  account: "Account",
-  subscription: "Subscription",
-  model: "Model",
-  budget: "Budget",
+const GROUP_KEYS: Record<string, string> = {
+  app: "groupApp",
+  account: "groupAccount",
+  subscription: "groupSubscription",
+  model: "groupModel",
+  budget: "groupBudget",
 };
 
 export function SettingsPane() {
   const [items, setItems] = useState<SettingItem[]>([]);
   const [error, setError] = useState("");
+  const tr = useT(); // re-renders the chrome when the language changes
 
   const refresh = useCallback(async () => {
     try {
@@ -41,6 +43,9 @@ export function SettingsPane() {
     try {
       // The node validates; a refusal is shown, never silently accepted.
       setItems((await api.setSettings({ [key]: value })).items);
+      // Appearance choices take effect the moment the node accepts them.
+      if (key === "app.theme") applyTheme(String(value));
+      if (key === "app.language") applyLanguage(String(value));
     } catch (e) {
       setError((e as Error).message);
       void refresh();
@@ -51,11 +56,11 @@ export function SettingsPane() {
 
   return (
     <div className="settings-pane">
-      <div className="convo-group">Settings</div>
+      <div className="convo-group">{tr("settings")}</div>
       {error && <div className="error">{error}</div>}
       {groups.map((group) => (
         <section key={group} className="settings-group">
-          <h3>{GROUP_LABELS[group] ?? group}</h3>
+          <h3>{tr(GROUP_KEYS[group] ?? group)}</h3>
           {group === "subscription" && (
             <p className="muted">
               Your plan is a commitment, not a preference — it's shown here
@@ -107,6 +112,7 @@ export function SettingsPane() {
 // document, and erasure that spells out what it removes — plus the legal
 // documents every host serves at stable public URLs.
 export function PrivacySection() {
+  const tr = useT();
   const [confirming, setConfirming] = useState(false);
   const [password, setPassword] = useState("");
   const [notice, setNotice] = useState("");
@@ -151,7 +157,7 @@ export function PrivacySection() {
 
   return (
     <section className="settings-group privacy">
-      <h3>Privacy & data</h3>
+      <h3>{tr("privacyData")}</h3>
       <div className="setting-row">
         <div className="setting-label">
           <span>Download my data</span>
@@ -611,7 +617,7 @@ function SettingControl({
       >
         {(item.choices ?? []).map((c) => (
           <option key={c} value={c}>
-            {c}
+            {choiceLabel(c)}
           </option>
         ))}
       </select>

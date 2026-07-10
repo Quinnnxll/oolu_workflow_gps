@@ -3,6 +3,7 @@ import { api, TERMINAL_PHASES } from "../api";
 import type { ChatAction, ChatHistoryTurn } from "../api";
 import { humanizeEvent, statusSentence } from "../humanize";
 import { conciseName } from "../naming";
+import { useT } from "../ui";
 import type { TaskView, TimelineEvent } from "../types";
 import {
   currentAvatarSignals,
@@ -90,6 +91,7 @@ function fromServer(items: ChatHistoryTurn[]): Msg[] {
 }
 
 export function Chat() {
+  const tr = useT();
   const [thread, setThread] = useState<Msg[]>(loadThread);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
@@ -368,7 +370,7 @@ export function Chat() {
       </div>
       <div className="chat-composer">
         <textarea
-          placeholder={listening ? "Listening…" : "Message OoLu…"}
+          placeholder={listening ? "Listening…" : tr("messageOoLu")}
           value={draft}
           rows={2}
           onChange={(e) => setDraft(e.target.value)}
@@ -395,7 +397,7 @@ export function Chat() {
           onPointerLeave={pressCancel}
           onClick={pressFinish}
         >
-          {listening ? "◉" : busy ? "…" : "Send"}
+          {listening ? "◉" : busy ? "…" : tr("send")}
         </button>
       </div>
     </div>

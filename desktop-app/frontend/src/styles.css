@@ -1,3 +1,7 @@
+/* The dark palette is the default; the light palette answers when the
+   user chose "light" (data-theme on the root) or chose "system" and the
+   OS prefers light. Every themed surface reads variables — including the
+   status chips — so both palettes stay complete. */
 :root {
   --bg: #0e1116;
   --panel: #161b22;
@@ -6,8 +10,62 @@
   --muted: #8b949e;
   --accent: #4c8dff;
   --danger: #f0616d;
+  --danger-strong: #ff8484;
   --ok: #3fb950;
+  --chip-red-bg: #3d1d22;
+  --chip-red-soft: #3d1d2233;
+  --chip-green-bg: #14331f;
+  --chip-amber-bg: #3a2f14;
+  --chip-amber-soft: #3a2f1433;
+  --chip-amber-fg: #e3b341;
+  --chip-purple-bg: #2a2440;
+  --chip-purple-fg: #b3a1f7;
+  --on-avatar: #fff;
   color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --bg: #f6f8fa;
+  --panel: #ffffff;
+  --line: #d8dee6;
+  --fg: #1f2328;
+  --muted: #59636e;
+  --accent: #0b62d6;
+  --danger: #c4303c;
+  --danger-strong: #b62330;
+  --ok: #1a7f37;
+  --chip-red-bg: #ffe2e5;
+  --chip-red-soft: #ffe2e580;
+  --chip-green-bg: #dcf5e3;
+  --chip-amber-bg: #fbe9c0;
+  --chip-amber-soft: #fbe9c080;
+  --chip-amber-fg: #7a5901;
+  --chip-purple-bg: #e8e2fb;
+  --chip-purple-fg: #4f3ba5;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]):not([data-theme="light"]) {
+    --bg: #f6f8fa;
+    --panel: #ffffff;
+    --line: #d8dee6;
+    --fg: #1f2328;
+    --muted: #59636e;
+    --accent: #0b62d6;
+    --danger: #c4303c;
+    --danger-strong: #b62330;
+    --ok: #1a7f37;
+    --chip-red-bg: #ffe2e5;
+    --chip-red-soft: #ffe2e580;
+    --chip-green-bg: #dcf5e3;
+    --chip-amber-bg: #fbe9c0;
+    --chip-amber-soft: #fbe9c080;
+    --chip-amber-fg: #7a5901;
+    --chip-purple-bg: #e8e2fb;
+    --chip-purple-fg: #4f3ba5;
+    color-scheme: light;
+  }
 }
 
 * {
@@ -71,7 +129,7 @@ header nav button.on {
 .badge {
   margin-left: 6px;
   background: var(--accent);
-  color: #fff;
+  color: var(--on-avatar);
   border-radius: 10px;
   padding: 0 6px;
   font-size: 11px;
@@ -170,8 +228,8 @@ main {
 
 /* A node restricted under the Node Policy (clone / fraud / zombie). */
 .phase-restricted {
-  color: #ff8484;
-  border-color: #ff8484;
+  color: var(--danger-strong);
+  border-color: var(--danger-strong);
 }
 
 .convo-avatar {
@@ -189,7 +247,7 @@ main {
 
 .convo-avatar.oolu {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-avatar);
 }
 
 .convo-avatar.node {
@@ -579,6 +637,21 @@ main.chat-main {
   padding: 4px 8px;
 }
 
+/* The picker's search: long friend/node lists narrow as you type. */
+.forward-menu .forward-search {
+  font-size: 12px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.forward-menu {
+  max-height: 260px;
+  overflow-y: auto;
+}
+
 .forward-done {
   margin-left: 6px;
   font-size: 11px;
@@ -606,7 +679,7 @@ main.chat-main {
 .bubble.user {
   align-self: flex-end;
   background: var(--accent);
-  color: #fff;
+  color: var(--on-avatar);
   border-bottom-right-radius: 4px;
 }
 
@@ -1133,7 +1206,7 @@ input {
 
 button {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-avatar);
   border: none;
   border-radius: 8px;
   padding: 8px 14px;
@@ -1201,21 +1274,21 @@ button.ghost {
 }
 
 .phase-failed {
-  background: #3d1d22;
+  background: var(--chip-red-bg);
   color: var(--danger);
 }
 
 .phase-completed,
 .phase-succeeded {
-  background: #14331f;
+  background: var(--chip-green-bg);
   color: var(--ok);
 }
 
 .phase-clarification,
 .phase-confirmation,
 .phase-incident {
-  background: #3a2f14;
-  color: #e3b341;
+  background: var(--chip-amber-bg);
+  color: var(--chip-amber-fg);
 }
 
 .clarify,
@@ -1276,8 +1349,8 @@ button.ghost {
   font-size: 11px;
   padding: 2px 8px;
   border-radius: 20px;
-  background: #2a2440;
-  color: #b3a1f7;
+  background: var(--chip-purple-bg);
+  color: var(--chip-purple-fg);
 }
 
 .plan-notes {
@@ -1322,7 +1395,7 @@ button.ghost {
 }
 
 .plan-step-culprit {
-  background: #3d1d2233;
+  background: var(--chip-red-soft);
   border-radius: 6px;
 }
 
@@ -1330,7 +1403,7 @@ button.ghost {
   font-size: 11px;
   padding: 1px 7px;
   border-radius: 20px;
-  background: #3d1d22;
+  background: var(--chip-red-bg);
   color: var(--danger);
 }
 
@@ -1379,10 +1452,10 @@ button.ghost {
 .hint {
   margin-top: 8px;
   padding: 8px 10px;
-  border: 1px solid #3a2f14;
+  border: 1px solid var(--chip-amber-bg);
   border-radius: 8px;
-  background: #3a2f1433;
-  color: #e3b341;
+  background: var(--chip-amber-soft);
+  color: var(--chip-amber-fg);
   font-size: 13px;
 }
 
@@ -1506,7 +1579,7 @@ button.ghost {
 }
 
 .kind-approval {
-  color: #e3b341;
+  color: var(--chip-amber-fg);
 }
 
 .kind-incident {
@@ -1619,7 +1692,7 @@ button.ghost {
   border: 0;
   border-radius: 8px;
   background: var(--accent);
-  color: #fff;
+  color: var(--on-avatar);
   cursor: pointer;
 }
 

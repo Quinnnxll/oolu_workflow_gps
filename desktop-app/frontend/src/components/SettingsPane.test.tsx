@@ -377,6 +377,80 @@ describe("SettingsPane", () => {
   });
 });
 
+describe("appearance settings", () => {
+  const APPEARANCE = {
+    items: [
+      {
+        key: "app.theme",
+        group: "app",
+        label: "Theme",
+        kind: "choice",
+        value: "system",
+        choices: ["system", "light", "dark"],
+        description: "",
+        managed: false,
+      },
+      {
+        key: "app.language",
+        group: "app",
+        label: "Language",
+        kind: "choice",
+        value: "en",
+        choices: ["en", "zh", "es", "fr"],
+        description: "",
+        managed: false,
+      },
+    ],
+  };
+
+  it("offers languages by their formal names, never raw codes", async () => {
+    routes["GET /v1/settings"] = { status: 200, body: APPEARANCE };
+    render(<SettingsPane />);
+
+    const language = (await screen.findByLabelText(
+      "Language",
+    )) as HTMLSelectElement;
+    const labels = Array.from(language.options).map((o) => o.text);
+    expect(labels).toEqual(["English", "中文（简体）", "Español", "Français"]);
+    // ...while the stored values stay stable codes.
+    expect(Array.from(language.options).map((o) => o.value)).toEqual([
+      "en",
+      "zh",
+      "es",
+      "fr",
+    ]);
+  });
+
+  it("applies a theme change to the running app the moment it saves", async () => {
+    routes["GET /v1/settings"] = { status: 200, body: APPEARANCE };
+    routes["PUT /v1/settings"] = { status: 200, body: APPEARANCE };
+    render(<SettingsPane />);
+
+    fireEvent.change(await screen.findByLabelText("Theme"), {
+      target: { value: "light" },
+    });
+    await waitFor(() =>
+      expect(document.documentElement.dataset.theme).toBe("light"),
+    );
+    delete document.documentElement.dataset.theme;
+  });
+
+  it("switches the visible chrome when the language saves", async () => {
+    routes["GET /v1/settings"] = { status: 200, body: APPEARANCE };
+    routes["PUT /v1/settings"] = { status: 200, body: APPEARANCE };
+    render(<SettingsPane />);
+
+    expect(await screen.findByText("App")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Language"), {
+      target: { value: "zh" },
+    });
+    // The group heading re-renders in the chosen language.
+    expect(await screen.findByText("应用")).toBeTruthy();
+    const { applyLanguage } = await import("../ui");
+    applyLanguage("en"); // leave the world as we found it
+  });
+});
+
 describe("PrivacySection", () => {
   it("deleting takes the password, then signs out on success", async () => {
     routes["GET /v1/settings"] = { status: 200, body: CATALOG };
