@@ -4,6 +4,48 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Forwarding without friction, real hands on the local device, and the
+creative-app lesson learned from the source file:
+
+- **Forward messages and files anywhere.** Every chat bubble (the OoLu
+  conversation and a node's interact window) carries a hover ↪: pick a
+  destination — OoLu, any node on your desk, or "New file in Files" —
+  and the message lands in that thread's history marked "↪ forwarded
+  from <who>" (or becomes a document under the Life drawer's
+  `forwarded/` folder). Files forward too: FileView's "forward" copies
+  the file into the picked drawer's `forwarded/` folder — a COPY, so
+  originals never move. `forward.ts` owns the logic; `ForwardMenu` is
+  the picker.
+- **The execution-access review, answered honestly, then fixed.** The
+  desktop wired ONLY the GET-only HTTP hand: OoLu could not command the
+  local device's CLI at all (the CLI executor existed but nothing
+  passed it in); scripts ran only through the script-node path added by
+  the retry work. Now `wfgps desktop` gives the engine
+  `build_desktop_hands`: HTTP + the LOCAL DEVICE's command line — the
+  discovered tools (ffmpeg, pandoc, …), workspace-confined under the
+  data directory, on by default (commanding this machine is what the
+  desktop engine is for), `OOLU_CLI_TOOLS=off` to disable and
+  `OOLU_CLI_ALLOWLIST` to widen.
+- **Creative apps: the source file is the lesson.** New
+  `skills/creative.py`: a registry of creative applications (Photoshop,
+  Illustrator, GIMP, SolidWorks, Fusion, AutoCAD, Blender, Figma,
+  Premiere, After Effects) with their source extensions;
+  `plan_creative_capture` sorts a session's artifacts with SOURCE FILES
+  FIRST (.psd/.sldprt/.blend — the model-training payload) and the
+  screenshot/mouse/keyboard trace as ADVISORY path context
+  (`replayable` is a constant False — no flag can promote a pixel trace
+  into execution). The learner refuses to compile a creative-app
+  demonstration into a replayable skill (`creative_source_needed`, with
+  the reason in words: the trace explains the user's path but "will
+  never execute the work reliably"); ordinary applications learn
+  exactly as before.
+- Tests: `forward.test.ts` (marked thread insertion, message→file,
+  file copy with drawer/folder, target list) and
+  `tests/test_creative_learning.py` (app recognition, capture
+  priority, the learner's refusal, desktop hands incl. CLI + the off
+  switch). 139 vitest and the entire backend suite green; shell
+  rebuilt.
+
 A node IS its function; the record is a file; the feed reads like words:
 
 - **No more empty nodes.** Building a node through OoLu now takes two

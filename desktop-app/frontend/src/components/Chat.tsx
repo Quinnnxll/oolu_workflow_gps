@@ -22,6 +22,7 @@ import {
   reminderText,
 } from "../reminders";
 import { Clarification } from "./Clarification";
+import { ForwardMenu } from "./ForwardMenu";
 
 // The whole product face: one conversation with OoLu. Work the assistant
 // starts appears inline as a live run card — status, questions, decisions,
@@ -278,6 +279,10 @@ export function Chat() {
                   ))}
                 </div>
               )}
+              <ForwardMenu
+                text={m.text}
+                from={m.kind === "user" ? "me" : "OoLu"}
+              />
             </div>
           ),
         )}

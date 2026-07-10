@@ -1262,7 +1262,7 @@ def _cmd_desktop(args, out) -> int:
             skills = [entry.skill for entry in registry.list()] or None
         finally:
             registry.close()
-    from .assembly import build_http_executor
+    from .assembly import build_desktop_hands
     from .gateway import GatewayConfig
 
     runtime = build_host_runtime(
@@ -1271,15 +1271,12 @@ def _cmd_desktop(args, out) -> int:
         secret=secrets_module.token_urlsafe(32),
         skills=skills,
         # The engine's hands on this machine: GET-only HTTP behind the
-        # always-on SSRF guard. OOLU_HTTP_ALLOWLIST (comma-separated
-        # hosts) narrows it; OOLU_HTTP_ALLOW_PRIVATE=1 is for offline
-        # demos against local test servers only.
-        executors=build_http_executor(
-            allow_hosts=tuple(
-                h for h in os.environ.get("OOLU_HTTP_ALLOWLIST", "").split(",") if h
-            ),
-            allow_private=os.environ.get("OOLU_HTTP_ALLOW_PRIVATE") == "1",
-        ),
+        # always-on SSRF guard, plus the LOCAL DEVICE's own command line —
+        # the discovered tools (ffmpeg, pandoc, …), workspace-confined.
+        # OOLU_CLI_TOOLS=off disables the CLI hand; OOLU_CLI_ALLOWLIST
+        # widens it; OOLU_HTTP_ALLOWLIST / OOLU_HTTP_ALLOW_PRIVATE keep
+        # their meaning for the HTTP hand.
+        executors=build_desktop_hands(data_dir=data_dir),
         # A desktop session should outlive a workday without re-auth.
         token_ttl_seconds=7 * 24 * 3600,
         # The product face: the OoLu messenger (built React shell), not

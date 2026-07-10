@@ -282,6 +282,46 @@ def build_intake_model(
     )
 
 
+def build_desktop_hands(
+    *,
+    data_dir: str | Path,
+    environ: dict | None = None,
+) -> dict[str, ActionExecutor]:
+    """Every hand `wfgps desktop` gives the engine on THIS machine.
+
+    - HTTP (GET-only, SSRF-guarded) — always on.
+    - CLI: the discovered local tools (ffmpeg, pandoc, …), workspace-
+      confined under the data directory — on by default because commanding
+      the local device is what the desktop engine is FOR; disable with
+      OOLU_CLI_TOOLS=off, widen with OOLU_CLI_ALLOWLIST (comma-separated
+      executable paths).
+    (The script hand is added by ``build_host_runtime``.)
+    """
+    import os as _os
+
+    env = environ if environ is not None else _os.environ
+    hands = build_http_executor(
+        allow_hosts=tuple(
+            h for h in env.get("OOLU_HTTP_ALLOWLIST", "").split(",") if h
+        ),
+        allow_private=env.get("OOLU_HTTP_ALLOW_PRIVATE") == "1",
+    )
+    if env.get("OOLU_CLI_TOOLS", "").strip().lower() not in {"off", "0", "false"}:
+        workspace = Path(data_dir) / "workspace"
+        workspace.mkdir(parents=True, exist_ok=True)
+        hands.update(
+            build_discovered_cli_executor(
+                workspace=workspace,
+                extra_allow=[
+                    p
+                    for p in env.get("OOLU_CLI_ALLOWLIST", "").split(",")
+                    if p.strip()
+                ],
+            )
+        )
+    return hands
+
+
 def build_script_executor(
     settings: Settings | None = None,
     *,

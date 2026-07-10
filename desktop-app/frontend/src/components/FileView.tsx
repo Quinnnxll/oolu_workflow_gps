@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import type { FileDoc } from "../api";
 import { parseCsv, serializeCsv } from "../csv";
+import { forwardFile, forwardTargets } from "../forward";
+import type { ForwardTarget } from "../forward";
 
 // Files live in the same conversation surface as everything else: a
 // document reads like a message thread page, a sheet is a themed grid —
@@ -78,6 +80,7 @@ export function FileView({
           onChange={(e) => setName(e.target.value)}
           onBlur={() => void saveName()}
         />
+        <ForwardFileMenu fileId={file.file_id} />
         <button
           className="linklike"
           onClick={async () => {
@@ -94,6 +97,61 @@ export function FileView({
         <Document key={file.updated_at} file={file} onSave={saveContent} />
       )}
     </div>
+  );
+}
+
+// Forward a file: a COPY lands in the picked drawer (a node's, or the
+// Life drawer) under its "forwarded" folder — originals never move.
+function ForwardFileMenu({ fileId }: { fileId: string }) {
+  const [open, setOpen] = useState(false);
+  const [targets, setTargets] = useState<ForwardTarget[] | null>(null);
+  const [done, setDone] = useState("");
+
+  if (done) return <span className="forward-done">{done}</span>;
+  return (
+    <span className="forward">
+      <button
+        type="button"
+        className="linklike"
+        onClick={async () => {
+          setOpen(true);
+          if (targets === null) setTargets(await forwardTargets());
+        }}
+      >
+        forward
+      </button>
+      {open && (
+        <span className="forward-menu">
+          {(targets ?? []).map((t) => (
+            <button
+              key={`${t.kind}:${t.id ?? ""}`}
+              type="button"
+              onClick={async () => {
+                try {
+                  await forwardFile(
+                    fileId,
+                    t.kind === "node" ? t.id : undefined,
+                  );
+                  setDone(`copied to ${t.title}`);
+                } catch (e) {
+                  setDone(`couldn't forward (${(e as Error).message})`);
+                }
+                setOpen(false);
+              }}
+            >
+              {t.kind === "oolu" ? "Your files (Life)" : t.title}
+            </button>
+          ))}
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => setOpen(false)}
+          >
+            cancel
+          </button>
+        </span>
+      )}
+    </span>
   );
 }
 

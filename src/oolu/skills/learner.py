@@ -61,7 +61,7 @@ class VerificationResult(BaseModel):
 class LearnedSkill(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    status: str  # registered | unverified | compile_failed
+    status: str  # registered | unverified | compile_failed | creative_source_needed
     skill: ReusableSkill | None = None
     registered: RegisteredSkill | None = None
     verification: VerificationResult = Field(default_factory=VerificationResult)
@@ -105,6 +105,16 @@ class SkillLearner:
         register_unverified: bool = False,
     ) -> LearnedSkill:
         demo = scrub_demonstration(demonstration) if self._scrub else demonstration
+        # Creative applications never compile into replayable actions: the
+        # source file is the lesson; the pixel/click trace is only the map
+        # of the user's path (see skills/creative.py).
+        from .creative import refuse_replay_reason
+
+        creative_refusal = refuse_replay_reason(demo.application)
+        if creative_refusal is not None:
+            return LearnedSkill(
+                status="creative_source_needed", reason=creative_refusal
+            )
         signature = SkillSignature(
             application=demo.application or self._application, adapter=adapter
         )

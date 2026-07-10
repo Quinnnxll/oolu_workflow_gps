@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { ChatAction, WorkNode } from "../api";
 import { actionLabel } from "./Chat";
+import { ForwardMenu } from "./ForwardMenu";
 
 // The node's interaction window: call OoLu out to act ON THIS NODE —
 // accelerate its pending work, reply to requesters, sign final results
@@ -122,6 +123,10 @@ export function NodeInteract({ node }: { node: WorkNode }) {
                 ))}
               </div>
             )}
+            <ForwardMenu
+              text={m.text}
+              from={m.kind === "user" ? "me" : node.title}
+            />
           </div>
         ))}
         <div ref={endRef} />
