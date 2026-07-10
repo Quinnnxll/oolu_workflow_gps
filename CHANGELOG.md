@@ -4,6 +4,41 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The BYO key actually takes over, and OoLu talks like it means it:
+
+- **An added model key becomes THE model — and proves it.** The root of
+  "I set my OpenAI key, it's billed, but nothing works": the default
+  `model.source` is "subscription" (the OoLu plan's hosted brain, which
+  a self-hosted/desktop install does not have), so a key added while
+  still on that default was only ever a silent fallback behind a
+  provider that will never answer. Now `POST /v1/keys/model` flips
+  `model.source` subscription→own-api and points `model.provider` at the
+  key just added (a deliberate "local" choice is left alone), so the key
+  the user pasted is the model the user gets. New `POST
+  /v1/keys/model/test` makes one real call through the live router and
+  reports the model that answered — or the exact reason it could not —
+  turning "billed but is it working?" into a definitive yes/no; the
+  Settings "Add" now auto-tests and a "Test connection" button re-checks
+  any time.
+- **Energetic, mood-aware voice and tone.** OoLu's persona is rewritten
+  upbeat and lively (the system prompt, the greetings, the acks, the
+  presence lines), and it now speaks in its current MOOD: the chat turn
+  carries the avatar's mood so the model's words match its face
+  (`mood_directive`), and speech synthesis varies rate and pitch by mood
+  (`toneForMood` — brighter and quicker when excited, steady when
+  worried; the default is livelier than the old flat 1.05). The system
+  prompt is also more conservative about turning chat into work — when
+  in doubt it TALKS and offers, instead of silently kicking off a task
+  that fails on a fresh machine.
+- Tests: the source-switch + `/keys/model/test` pass/fail
+  (`test_gateway_model_keys.py`), the Settings add-then-auto-test and
+  Test-connection button (`SettingsPane.test.tsx`), the mood-driven
+  speech tone (`voice.test.ts`), and updated Chat presence lines.
+  Verified live through `build_host_runtime`: add key → source flips to
+  own-api → test route answers → a chat turn uses the model with mood
+  threaded. 141 vitest and the entire backend suite green; shell
+  rebuilt.
+
 Forwarding without friction, real hands on the local device, and the
 creative-app lesson learned from the source file:
 

@@ -76,9 +76,30 @@ export function speechOutputSupported(): boolean {
   return "speechSynthesis" in window;
 }
 
+// OoLu's spoken delivery follows its mood — brighter and quicker when
+// excited, calmer and lower when steady. The same energetic core, tuned
+// to the moment (matching the mood the text itself carries).
+export interface SpeechTone {
+  rate: number;
+  pitch: number;
+}
+
+const MOOD_TONE: Record<string, SpeechTone> = {
+  excited: { rate: 1.18, pitch: 1.25 },
+  happy: { rate: 1.1, pitch: 1.15 },
+  thinking: { rate: 1.02, pitch: 1.02 },
+  worried: { rate: 1.0, pitch: 0.95 },
+  calm: { rate: 1.04, pitch: 1.05 },
+};
+
+export function toneForMood(mood?: string): SpeechTone {
+  // The energetic default: livelier than the old flat 1.05, never robotic.
+  return (mood && MOOD_TONE[mood]) || { rate: 1.1, pitch: 1.12 };
+}
+
 // One voice at a time: a new reply always interrupts the previous one —
 // an assistant that talks over itself is worse than a silent one.
-export function speak(text: string): void {
+export function speak(text: string, mood?: string): void {
   if (!speechOutputSupported() || !text.trim()) return;
   const w = window as unknown as {
     speechSynthesis: SpeechSynthesis;
@@ -87,6 +108,8 @@ export function speak(text: string): void {
   if (!w.SpeechSynthesisUtterance) return;
   w.speechSynthesis.cancel();
   const utterance = new w.SpeechSynthesisUtterance(text);
-  utterance.rate = 1.05;
+  const tone = toneForMood(mood);
+  utterance.rate = tone.rate;
+  utterance.pitch = tone.pitch;
   w.speechSynthesis.speak(utterance);
 }

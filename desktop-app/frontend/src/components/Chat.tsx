@@ -37,18 +37,19 @@ type Msg =
   | { kind: "run"; runId: string };
 
 const CHAT_KEY = "oolu_chat";
-const WELCOME = "Hi! I'm OoLu. Tell me what you need done.";
+const WELCOME =
+  "Hey! ⚡ I'm OoLu, your get-it-done sidekick. What are we tackling first?";
 // Holding Send this long starts a voice conversation instead of sending.
 const LONG_PRESS_MS = 550;
 
 // The presence line under the name — what the companion is up to,
 // phrased like a friend's status, not a system state.
 const MOOD_LINE: Record<Mood, string> = {
-  calm: "with you",
-  happy: "pleased with how that went",
-  thinking: "busy with your tasks",
-  worried: "sorting out a problem",
-  excited: "all ears",
+  calm: "here with you",
+  happy: "loving how that went ✨",
+  thinking: "heads-down on your tasks",
+  worried: "on it — sorting a problem",
+  excited: "fired up and all ears! ⚡",
 };
 
 // Quick starts: one tap into the real command surface — each maps to a
@@ -147,10 +148,10 @@ export function Chat() {
           role: m.kind === "user" ? ("user" as const) : ("assistant" as const),
           content: m.text,
         }));
-      const turn = await api.chat(text, history);
+      const turn = await api.chat(text, history, undefined, mood);
       updateAvatarSignals({ tone: deriveTone(turn.reply) });
       if (speakRef.current) {
-        speak(turn.reply);
+        speak(turn.reply, moodOf(currentAvatarSignals()).mood);
         // The face mouths along for roughly as long as the reply lasts.
         updateAvatarSignals({ speaking: true });
         const ms = Math.min(8000, Math.max(1200, turn.reply.length * 55));

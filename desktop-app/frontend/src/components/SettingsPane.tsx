@@ -110,6 +110,25 @@ function ModelKeysSection() {
   const [provider, setProvider] = useState("anthropic");
   const [draft, setDraft] = useState("");
   const [error, setError] = useState("");
+  const [test, setTest] = useState("");
+  const [testing, setTesting] = useState(false);
+
+  async function runTest() {
+    setTest("");
+    setTesting(true);
+    try {
+      const r = await api.testModelKey();
+      setTest(
+        r.ok
+          ? `✓ working — the model answered (${r.source ?? "model"}).`
+          : `✗ ${r.error ?? "the model did not answer"}`,
+      );
+    } catch (e) {
+      setTest(`✗ ${(e as Error).message}`);
+    } finally {
+      setTesting(false);
+    }
+  }
 
   const refresh = useCallback(async () => {
     try {
@@ -191,10 +210,20 @@ function ModelKeysSection() {
             disabled={draft.trim().length < 8}
             onClick={async () => {
               setError("");
+              setTest("");
               try {
-                await api.addModelKey(provider, draft.trim());
+                const r = await api.addModelKey(provider, draft.trim());
                 setDraft("");
-                void refresh();
+                await refresh();
+                // Confirm it actually answers, right away — no more
+                // "billed but is it working?" mystery.
+                await runTest();
+                if (r.source_switched) {
+                  setTest(
+                    (t) =>
+                      `${t} Your ${provider} key is now the default model.`,
+                  );
+                }
               } catch (e) {
                 setError((e as Error).message);
               }
@@ -204,6 +233,24 @@ function ModelKeysSection() {
           </button>
         </div>
       </div>
+
+      {keys.length > 0 && (
+        <div className="setting-row">
+          <div className="setting-label">
+            <span>Test the model</span>
+            <span className="setting-desc">
+              Make one real call and confirm the model answers — the sure
+              way to tell a working key from a silent one.
+            </span>
+            {test && <span className="setting-desc">{test}</span>}
+          </div>
+          <div className="setting-control">
+            <button disabled={testing} onClick={() => void runTest()}>
+              {testing ? "Testing…" : "Test connection"}
+            </button>
+          </div>
+        </div>
+      )}
     </>
   );
 }

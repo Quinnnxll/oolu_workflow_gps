@@ -564,11 +564,13 @@ export const api = {
     message: string,
     history: { role: "user" | "assistant"; content: string }[],
     nodeId?: string,
+    mood?: string,
   ) =>
     req<ChatTurnReply>("POST", "/v1/chat", {
       message,
       history,
       ...(nodeId ? { node_id: nodeId } : {}),
+      ...(mood ? { mood } : {}),
     }),
   submitTask: (intent: string) => mutateRun("POST", "/v1/runs", { intent }),
   task: async (id: string) =>
@@ -639,10 +641,18 @@ export const api = {
   // fingerprint ever comes back.
   modelKeys: () => req<{ items: ModelKeyView[] }>("GET", "/v1/keys/model"),
   addModelKey: (provider: string, key: string) =>
-    req<{ provider: string; fingerprint: string }>("POST", "/v1/keys/model", {
-      provider,
-      key,
-    }),
+    req<{ provider: string; fingerprint: string; source_switched?: boolean }>(
+      "POST",
+      "/v1/keys/model",
+      { provider, key },
+    ),
+  // The definitive "is my key working?" check: one real model call.
+  testModelKey: () =>
+    req<{ ok: boolean; reply?: string; source?: string; error?: string }>(
+      "POST",
+      "/v1/keys/model/test",
+      {},
+    ),
   removeModelKey: (provider: string) =>
     req<{ removed: string }>("DELETE", `/v1/keys/model/${provider}`),
   // ---- user files: documents and sheets in the durable database --------

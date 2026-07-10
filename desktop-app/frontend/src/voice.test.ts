@@ -4,6 +4,7 @@ import {
   speak,
   speechInputSupported,
   speechOutputSupported,
+  toneForMood,
 } from "./voice";
 
 afterEach(() => {
@@ -69,6 +70,7 @@ describe("voice", () => {
       "SpeechSynthesisUtterance",
       class {
         rate = 1;
+        pitch = 1;
         constructor(public text: string) {}
       },
     );
@@ -82,5 +84,35 @@ describe("voice", () => {
     expect(
       (speakSpy.mock.calls[1][0] as { text: string }).text,
     ).toBe("second");
+  });
+
+  it("the spoken delivery is energetic and follows the mood", () => {
+    // The default is lively — never the old flat 1.05.
+    const base = toneForMood();
+    expect(base.rate).toBeGreaterThan(1.05);
+    expect(base.pitch).toBeGreaterThan(1);
+    // Excited speaks faster and brighter than steady/worried.
+    expect(toneForMood("excited").rate).toBeGreaterThan(
+      toneForMood("worried").rate,
+    );
+    expect(toneForMood("excited").pitch).toBeGreaterThan(
+      toneForMood("worried").pitch,
+    );
+
+    // speak() applies the mood tone to the utterance.
+    const speakSpy = vi.fn();
+    vi.stubGlobal("speechSynthesis", { cancel: vi.fn(), speak: speakSpy });
+    vi.stubGlobal(
+      "SpeechSynthesisUtterance",
+      class {
+        rate = 1;
+        pitch = 1;
+        constructor(public text: string) {}
+      },
+    );
+    speak("let's go", "excited");
+    const utt = speakSpy.mock.calls[0][0] as { rate: number; pitch: number };
+    expect(utt.rate).toBe(toneForMood("excited").rate);
+    expect(utt.pitch).toBe(toneForMood("excited").pitch);
   });
 });

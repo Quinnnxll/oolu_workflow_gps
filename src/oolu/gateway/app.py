@@ -38,8 +38,11 @@ from ..billing.subscription import SubscriptionError, SubscriptionService
 from ..chat import (
     ChatAssistant,
     GatewayChatTools,
+    ModelBudgetExceeded,
+    ModelUnavailable,
     NodeChatTools,
     author_node_function,
+    mood_directive,
     obviously_chat,
 )
 from ..durable.files import (
@@ -702,6 +705,7 @@ class GatewayApp:
         # catalog is visible data.
         r.add("GET", "/v1/keys/model", self._model_keys_list)
         r.add("POST", "/v1/keys/model", self._model_keys_add)
+        r.add("POST", "/v1/keys/model/test", self._model_keys_test)
         r.add("DELETE", "/v1/keys/model/{provider}", self._model_keys_remove)
         r.add("GET", "/v1/files", self._files_list)
         r.add("POST", "/v1/files", self._files_create)
@@ -825,6 +829,10 @@ class GatewayApp:
                     desk=self._desk,
                     settings=self._settings,
                 )
+        # OoLu's voice follows its mood: the client sends the avatar's
+        # current mood, and the turn is coloured to match the face.
+        mood_note = mood_directive(body.get("mood"))
+        context_note = "\n".join(n for n in (context_note, mood_note) if n) or None
         turn = self._chat.respond(
             message,
             history=[h for h in history if isinstance(h, dict)][-20:],
@@ -1856,7 +1864,85 @@ class GatewayApp:
         # The next chat turn must see the new key, not a cached adapter.
         self._model_routers.pop(session.tenant_id, None)
         self._metrics["model_keys_added"] += 1
-        return json_response(201, {"provider": provider, "fingerprint": mark})
+        # Make the added key ACTUALLY the model. The default source
+        # ("subscription") is built for the OoLu plan's hosted brain,
+        # which no self-hosted/desktop install has — so a key added while
+        # still on that default would only ever be a silent fallback,
+        # never the user's chosen provider. Flip to "own-api" (and point
+        # the provider preference at the key just added) so the key the
+        # user pasted is the model the user gets. A deliberate "local"
+        # choice is left untouched.
+        source_switched = False
+        if self._settings is not None:
+            current = str(
+                self._settings.effective(session.tenant_id).get(
+                    "model.source", "subscription"
+                )
+            )
+            if current == "subscription":
+                self._settings.set(session.tenant_id, "model.source", "own-api")
+                self._settings.set(
+                    session.tenant_id, "model.provider", provider
+                )
+                source_switched = True
+        return json_response(
+            201,
+            {
+                "provider": provider,
+                "fingerprint": mark,
+                "source_switched": source_switched,
+            },
+        )
+
+    def _model_keys_test(self, request, session, params) -> Response:
+        """Prove the configured model actually answers — one real call.
+
+        The definitive answer to "is my key working?": builds the tenant's
+        live router (the same one chat uses, honoring model.source and the
+        provider/tier settings), makes one tiny completion, and reports
+        the model that answered — or the exact reason it could not, so a
+        billed-but-silent misconfiguration surfaces as words, not a
+        mystery.
+        """
+        self._require_model_keys()
+        router = self._tenant_model(session.tenant_id)
+        if router is None:
+            return json_response(
+                200,
+                {
+                    "ok": False,
+                    "error": "no model is configured — add a key above, or "
+                    "set the default model to a local server in Settings",
+                },
+            )
+        try:
+            reply = router.reply(
+                [
+                    {
+                        "role": "system",
+                        "content": "Reply with exactly the word: pong.",
+                    },
+                    {"role": "user", "content": "ping"},
+                ]
+            )
+        except ModelBudgetExceeded as exc:
+            return json_response(200, {"ok": False, "error": str(exc)})
+        except ModelUnavailable as exc:
+            return json_response(200, {"ok": False, "error": str(exc)})
+        return json_response(
+            200,
+            {
+                "ok": True,
+                "reply": reply.strip()[:200],
+                "source": str(
+                    self._settings.effective(session.tenant_id).get(
+                        "model.source", "subscription"
+                    )
+                )
+                if self._settings is not None
+                else "subscription",
+            },
+        )
 
     def _model_keys_remove(self, request, session, params) -> Response:
         keyring = self._require_model_keys()

@@ -152,7 +152,15 @@ describe("ModelKeysSection", () => {
     routes["GET /v1/keys/model"] = { status: 200, body: { items: [] } };
     routes["POST /v1/keys/model"] = {
       status: 201,
-      body: { provider: "anthropic", fingerprint: "ab12cd34ef56" },
+      body: {
+        provider: "anthropic",
+        fingerprint: "ab12cd34ef56",
+        source_switched: true,
+      },
+    };
+    routes["POST /v1/keys/model/test"] = {
+      status: 200,
+      body: { ok: true, reply: "pong", source: "own-api" },
     };
     render(<SettingsPane />);
 
@@ -190,6 +198,38 @@ describe("ModelKeysSection", () => {
     });
     expect(await screen.findByText(/fingerprint ab12cd34ef56/)).toBeTruthy();
     expect(input.value).toBe("");
+    // Adding a key immediately proves it works, and says it's now the
+    // default model — no more "billed but is it working?" mystery.
+    expect(await screen.findByText(/✓ working/)).toBeTruthy();
+    expect(
+      screen.getByText(/anthropic key is now the default model/),
+    ).toBeTruthy();
+  });
+
+  it("tests a stored key and reports a clear pass or fail", async () => {
+    routes["GET /v1/settings"] = { status: 200, body: MODEL_CATALOG };
+    routes["GET /v1/keys/model"] = {
+      status: 200,
+      body: {
+        items: [
+          {
+            provider: "openai",
+            fingerprint: "99ff00aa11bb",
+            added_at: "2026-07-07T10:00:00Z",
+          },
+        ],
+      },
+    };
+    routes["POST /v1/keys/model/test"] = {
+      status: 200,
+      body: { ok: false, error: "openai: status 401" },
+    };
+    render(<SettingsPane />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Test connection" }),
+    );
+    expect(await screen.findByText(/✗ openai: status 401/)).toBeTruthy();
   });
 
   it("removes a stored key", async () => {

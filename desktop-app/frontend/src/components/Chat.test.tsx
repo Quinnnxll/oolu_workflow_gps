@@ -74,7 +74,7 @@ describe("Chat", () => {
     // The companion and its presence line live in the chat window.
     const head = container.querySelector(".chat-head")!;
     expect(head.querySelector("svg.oolu-avatar")).toBeTruthy();
-    expect(screen.getByText("with you")).toBeTruthy();
+    expect(screen.getByText("here with you")).toBeTruthy();
 
     // A bad turn shows on its face — and in the presence line.
     fireEvent.change(screen.getByPlaceholderText("Message OoLu…"), {
@@ -82,7 +82,7 @@ describe("Chat", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
-    expect(await screen.findByText("sorting out a problem")).toBeTruthy();
+    expect(await screen.findByText("on it — sorting a problem")).toBeTruthy();
     expect(
       head.querySelector("svg.oolu-avatar")!.getAttribute("data-mood"),
     ).toBe("worried");
@@ -255,7 +255,9 @@ describe("Chat", () => {
     expect(await screen.findByText("Anytime.")).toBeTruthy();
     expect(screen.getByText("thanks")).toBeTruthy();
     const chat = calls.find((c) => c.path === "/v1/chat");
-    expect(chat?.body).toEqual({ message: "thanks", history: [] });
+    // The turn carries the message, history, and the avatar's mood (so
+    // OoLu's voice can follow its face).
+    expect(chat?.body).toMatchObject({ message: "thanks", history: [] });
   });
 
   it("shows what the assistant touched as tool chips", async () => {

@@ -10,7 +10,11 @@ from __future__ import annotations
 
 import json
 
-from test_chat_model_router import FakeTransport, _anthropic_reply
+from test_chat_model_router import (
+    FakeTransport,
+    _anthropic_reply,
+    _openai_reply,
+)
 from test_http_gateway import _app, _req
 
 from oolu.billing import ModelCallMeter
@@ -59,7 +63,12 @@ def test_a_pasted_key_becomes_a_fingerprint_and_a_working_brain(tmp_path):
         )
     )
     assert added.status == 201
-    assert added.body == {"provider": "anthropic", "fingerprint": fingerprint(KEY)}
+    assert added.body["provider"] == "anthropic"
+    assert added.body["fingerprint"] == fingerprint(KEY)
+    # A key added while still on the default "subscription" source makes
+    # itself the model — otherwise a self-hosted install's BYO key would
+    # only ever be a silent fallback.
+    assert added.body["source_switched"] is True
 
     listing = gateway.handle(_req("GET", "/v1/keys/model", token=token))
     assert listing.status == 200
@@ -75,6 +84,75 @@ def test_a_pasted_key_becomes_a_fingerprint_and_a_working_brain(tmp_path):
     assert turn.body["run_id"] is None
     # The consultation entered the books.
     assert meter.total_cost("chat.turn") > 0
+
+    for conn in conns:
+        conn.close()
+
+
+def test_the_model_test_route_proves_a_key_answers(tmp_path):
+    gateway, transport, meter, conns, ident = _wired(tmp_path)
+    token = ident.token("user-1")
+
+    # No key yet: the test says so plainly, never a mystery.
+    empty = gateway.handle(_req("POST", "/v1/keys/model/test", token=token))
+    assert empty.status == 200
+    assert empty.body["ok"] is False
+    assert "no model" in empty.body["error"]
+
+    gateway.handle(
+        _req(
+            "POST",
+            "/v1/keys/model",
+            token=token,
+            body={"provider": "openai", "key": KEY},
+        )
+    )
+    transport.script("openai.com", 200, _openai_reply("pong"))
+    tested = gateway.handle(_req("POST", "/v1/keys/model/test", token=token))
+    assert tested.status == 200, tested.body
+    assert tested.body["ok"] is True
+    assert tested.body["reply"] == "pong"
+    # Adding the key flipped the source to own-api, so the test reports it.
+    assert tested.body["source"] == "own-api"
+
+    # A dead provider surfaces as a clear failure, not silence.
+    transport.script("openai.com", 500, {"error": "down"})
+    failed = gateway.handle(_req("POST", "/v1/keys/model/test", token=token))
+    assert failed.body["ok"] is False and failed.body["error"]
+
+    for conn in conns:
+        conn.close()
+
+
+def test_adding_a_second_key_leaves_a_deliberate_source_alone(tmp_path):
+    gateway, transport, meter, conns, ident = _wired(tmp_path)
+    token = ident.token("user-1")
+    from oolu.settings_node import SettingsNode
+
+    # First key flips subscription -> own-api.
+    first = gateway.handle(
+        _req(
+            "POST",
+            "/v1/keys/model",
+            token=token,
+            body={"provider": "openai", "key": KEY},
+        )
+    )
+    assert first.body["source_switched"] is True
+    # The user then deliberately chooses local; a second key must NOT
+    # override that choice.
+    settings: SettingsNode = gateway._settings
+    settings.set("main", "model.source", "local")
+    second = gateway.handle(
+        _req(
+            "POST",
+            "/v1/keys/model",
+            token=token,
+            body={"provider": "anthropic", "key": KEY},
+        )
+    )
+    assert second.body["source_switched"] is False
+    assert settings.effective("main")["model.source"] == "local"
 
     for conn in conns:
         conn.close()
