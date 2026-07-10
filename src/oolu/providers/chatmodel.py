@@ -102,7 +102,10 @@ class ChatModelRouter:
         *,
         transport: HttpTransport | None = None,
         meter=None,  # billing.ModelCallMeter
-        budget: Callable[[], float] | None = None,  # USD cap; 0/None = no cap
+        # The cap in the USER'S spending currency; 0/None = no cap. The
+        # router converts it through `currency` to the meter's USD unit.
+        budget: Callable[[], float] | None = None,
+        currency: Callable[[], str] | None = None,  # regional code, e.g. EUR
         preference: Callable[[], str] | None = None,  # auto|anthropic|openai
         tier: Callable[[], str] | None = None,  # fast|reasoning
         source: Callable[[], str] | None = None,  # see MODEL_SOURCES
@@ -116,6 +119,7 @@ class ChatModelRouter:
         self._transport = transport
         self._meter = meter
         self._budget = budget or (lambda: 0.0)
+        self._currency = currency or (lambda: "USD")
         self._preference = preference or (lambda: "auto")
         self._tier = tier or (lambda: "fast")
         self._source = source or (lambda: "subscription")
@@ -153,16 +157,22 @@ class ChatModelRouter:
         cap = float(self._budget() or 0.0)
         if cap <= 0 or self._meter is None:
             return
+        from ..currency import format_amount, from_usd, to_usd
+
         # The cap covers ALL model spend on this install — chat turns and
         # planning consultations share one pool, so the number the user set
-        # is the number that holds.
+        # is the number that holds. The user set it in THEIR regional
+        # currency; the meter counts USD, so the comparison converts the
+        # cap in and the words convert the spend back out.
+        code = self._currency() or "USD"
         spent = self._meter.total_cost()
-        if spent >= cap:
+        if spent >= to_usd(cap, code):
             raise ModelBudgetExceeded(
                 f"I've reached the model spending cap you set "
-                f"(${spent:.2f} of ${cap:.2f}). Raise budget.model_cap in "
-                f"Settings to keep the model on — meanwhile I'll still run "
-                f"your tasks the direct way."
+                f"({format_amount(from_usd(spent, code), code)} of "
+                f"{format_amount(cap, code)}). Raise the cap in Settings "
+                f"to keep the model on — meanwhile I'll still run your "
+                f"tasks the direct way."
             )
 
     def _order(self) -> tuple[str, ...]:

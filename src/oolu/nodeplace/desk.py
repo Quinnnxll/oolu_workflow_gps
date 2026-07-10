@@ -212,9 +212,16 @@ class WorkDesk:
                 raise OwnershipError(
                     "you must own the Supernode to create nodes under it"
                 )
+        # A node created under a Supernode gets NO responsible account at
+        # creation: its regime is fixed here, but who answers for it is
+        # decided by whoever onboards with their user account. Until then
+        # the node id is the claim ticket — callers must keep it private.
+        # A Supernode itself always keeps its creator responsible (humans
+        # in full control cannot mean nobody).
+        unclaimed = bool(supernode_id) and not is_supernode
         account = NodeAccount(
             node_id=node_id,
-            responsible=principal,
+            responsible="" if unclaimed else principal,
             admin=admin or None,
             is_supernode=is_supernode,
             supernode_id=supernode_id or None,
@@ -247,6 +254,16 @@ class WorkDesk:
         current = self._accounts.get(node_id)
         if current is None:
             account = NodeAccount(node_id=node_id, responsible=principal)
+            self._accounts.upsert(account)
+            return account
+        if not current.responsible:
+            # The node was created under a Supernode with no responsible:
+            # onboarding is the claim. The user account that presents the
+            # node id becomes the answering principal — which is why the
+            # id must stay private until the intended person has onboarded.
+            account = current.model_copy(
+                update={"responsible": principal, "updated_at": datetime.now(UTC)}
+            )
             self._accounts.upsert(account)
             return account
         if principal in {current.responsible, current.admin, node.noder_principal}:

@@ -87,7 +87,7 @@ def test_out_of_bounds_budget_from_chat_is_refused(tmp_path):
     tools, node, conn = _tools(tmp_path)
     try:
         turn = ChatAssistant().respond(
-            "set my hard spending cap to 9999999", tools=tools
+            "set my hard spending cap to 999999999", tools=tools
         )
         assert "couldn't" in turn.say.lower()
         assert node.effective("t1")["budget.hard_cap"] == 0.0

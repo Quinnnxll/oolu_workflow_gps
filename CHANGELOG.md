@@ -4,6 +4,58 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The messenger straightened out — the list, the Edge doors, who answers
+for a node, and money in the user's own currency:
+
+- **Independent scrolls, Settings under Files.** The app frame is pinned
+  to the viewport (`height: 100vh`; the page itself never scrolls): the
+  conversation list and the open pane each own their overflow, so
+  scrolling one never moves the other. The Settings entry moved from the
+  pinned bottom of the sidebar to directly below Files — a long Friends
+  or Noder list can no longer hide it below the fold (`convo-bottom` is
+  gone).
+- **Edge is two doors: this device, or a private network.** The sign-in
+  screen's Edge tab now offers "This device" (the old passthrough to the
+  loopback engine) and "Private network" — a private server a group runs
+  on its own network (a static address), entered once and remembered
+  separately from the Global server (`oolu_edge_server`). The private
+  network still uses real accounts: the same username/password sign-in
+  and registration form, pointed at the private host (`oolu host
+  --open-registration`), because onboarding a node created under a
+  Supernode has to name an actual person.
+- **A node created under a Supernode starts with NO responsible.**
+  `create_account` leaves `responsible` empty for non-Supernode children
+  (the regime stays fixed as before; a Supernode itself always keeps its
+  creator — humans in full control cannot mean nobody). Onboarding is
+  the claim: the first user account that presents the node id becomes
+  the responsible, shown on the node thread as their user ID; after
+  that, takeovers are refused as before. The Work UI shows "not
+  onboarded yet" instead of an empty responsible, and warns — on the
+  thread, in the member list, and in the create-under-Supernode form —
+  not to show the node id publicly before onboarding, because the id is
+  the claim ticket.
+- **Caps in the user's regional legal currency.** New `oolu.currency`
+  module: a closed catalog of 18 currencies with symbols, decimals, and
+  FIXED reference rates (a cap is a safety rail, not an FX position;
+  unknown codes read as USD, which errs toward stopping earlier). New
+  `account.currency` setting (choice, default USD); all money settings
+  (`budget.model_cap`, `hard_cap`, `review_threshold`, `monthly_limit`)
+  carry `unit="currency"`, resolved by `describe()` to the tenant's
+  code and shown next to the input; bounds widened to give high-rate
+  currencies (JPY, KRW, MWK) headroom. `ChatModelRouter` converts the
+  cap into the meter's USD unit at the comparison and speaks the
+  budget-exceeded message in the user's currency. The Settings pane
+  suggests the region's currency from the browser locale ("Your region
+  suggests MWK — Use MWK"), one click, never automatic.
+- Tests: `test_currency.py` (conversion round-trips, unknown-code
+  safety, unit stamping/resolution, the router refusing in yen), the
+  unclaimed→claim desk flow in `test_work_desk.py`, private-network
+  sign-in + no-address refusal in `Login.test.tsx`, unclaimed/onboarded
+  node threads in `Work.test.tsx`, and the Settings-below-Files order in
+  `Life.test.tsx`. Verified live through `build_host_runtime`: currency
+  switch re-labels every money field and refuses bogus codes. Shell
+  rebuilt.
+
 Execution retry, diagnosed and escalated — when a run breaks, the user
 sees the plan, the exact broken node, and after two retries the model is
 called out to plan and write the code:

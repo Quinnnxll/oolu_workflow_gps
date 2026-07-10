@@ -328,6 +328,27 @@ function PaymentSection() {
   );
 }
 
+// The legal currency this device's region suggests, from the browser
+// locale — a suggestion the user can take with one click, never an
+// automatic change.
+const REGION_CURRENCY: Record<string, string> = {
+  US: "USD", GB: "GBP", JP: "JPY", CN: "CNY", HK: "HKD", SG: "SGD",
+  IN: "INR", KR: "KRW", CA: "CAD", AU: "AUD", CH: "CHF", BR: "BRL",
+  MX: "MXN", NG: "NGN", KE: "KES", ZA: "ZAR", MW: "MWK",
+  AT: "EUR", BE: "EUR", DE: "EUR", ES: "EUR", FI: "EUR", FR: "EUR",
+  GR: "EUR", IE: "EUR", IT: "EUR", NL: "EUR", PT: "EUR",
+};
+
+export function regionCurrency(locale?: string): string | null {
+  try {
+    const region = new Intl.Locale(locale ?? navigator.language).maximize()
+      .region;
+    return region ? (REGION_CURRENCY[region] ?? null) : null;
+  } catch {
+    return null;
+  }
+}
+
 function SettingRow({
   item,
   onSave,
@@ -335,6 +356,13 @@ function SettingRow({
   item: SettingItem;
   onSave: (key: string, value: unknown) => Promise<void>;
 }) {
+  // The currency row suggests the region's legal currency when it differs.
+  const suggested =
+    item.key === "account.currency" ? regionCurrency() : null;
+  const showSuggestion =
+    suggested !== null &&
+    suggested !== String(item.value ?? "") &&
+    (item.choices ?? []).includes(suggested);
   return (
     <div className="setting-row">
       <div className="setting-label">
@@ -342,9 +370,24 @@ function SettingRow({
         {item.description && (
           <span className="setting-desc">{item.description}</span>
         )}
+        {showSuggestion && (
+          <span className="setting-desc">
+            Your region suggests {suggested}.{" "}
+            <button
+              type="button"
+              className="linklike"
+              onClick={() => void onSave(item.key, suggested)}
+            >
+              Use {suggested}
+            </button>
+          </span>
+        )}
       </div>
       <div className="setting-control">
         <SettingControl item={item} onSave={onSave} />
+        {item.kind === "number" && item.unit && (
+          <span className="setting-unit">{item.unit}</span>
+        )}
       </div>
     </div>
   );

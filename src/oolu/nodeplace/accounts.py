@@ -35,8 +35,13 @@ class NodeAccount(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     node_id: str
-    # The principal answering for this node's behavior.
-    responsible: str
+    # The principal answering for this node's behavior. EMPTY means the
+    # node is not onboarded yet: a node created under a Supernode starts
+    # with no responsible account — the regime is fixed, but who answers
+    # for it is decided by whoever onboards with their user account (the
+    # node id is that claim ticket, so it must not be shared publicly
+    # until the intended person has onboarded).
+    responsible: str = ""
     # Optional management group above the responsible — organizations and
     # government deployments; personal nodes leave it unset.
     admin: str | None = None

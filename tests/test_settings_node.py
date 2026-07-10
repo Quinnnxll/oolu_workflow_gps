@@ -67,7 +67,7 @@ def test_out_of_bounds_number_is_refused(tmp_path):
     node, conn = _node(tmp_path)
     try:
         with pytest.raises(SettingError, match="at most"):
-            node.set("t1", "budget.hard_cap", 10_000_000)
+            node.set("t1", "budget.hard_cap", 1_000_000_000)
         with pytest.raises(SettingError, match="at least"):
             node.set("t1", "budget.hard_cap", -5)
         # The refused writes left the default intact.
@@ -125,7 +125,10 @@ def test_catalog_describes_bounds_for_the_assistant(tmp_path):
         assert plan["choices"] == ["free", "plus", "pro", "enterprise"]
         assert plan["value"] == "free"
         cap = described["budget.hard_cap"]
-        assert cap["maximum"] == 100_000.0
+        # High-rate currencies (JPY, KRW, MWK) need headroom: the bound is
+        # wide because the unit is the user's regional currency, not USD.
+        assert cap["maximum"] == 100_000_000.0
+        assert cap["unit"] == "USD"  # resolved from account.currency
     finally:
         conn.close()
 

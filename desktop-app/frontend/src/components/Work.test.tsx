@@ -96,6 +96,52 @@ describe("Work", () => {
     expect(screen.queryByRole("checkbox")).toBeNull();
     expect(screen.queryByText(/auto-build/i)).toBeNull();
   });
+
+  it("marks an un-onboarded node and warns to keep its id private", async () => {
+    const unclaimed = workNode({
+      account: {
+        ...workNode().account,
+        responsible: "",
+        admin: null,
+        supernode_id: "sn1",
+        authority_level: 4,
+      },
+    });
+    routes["GET /v1/work/nodes"] = {
+      status: 200,
+      body: { items: [unclaimed] },
+    };
+    routes["GET /v1/work/nodes/n1/activity"] = {
+      status: 200,
+      body: { items: [] },
+    };
+    render(<Work onLife={vi.fn()} />);
+
+    fireEvent.click(await screen.findByText("Invoice Cleaner"));
+    // The thread says no one answers yet — never an empty "responsible".
+    expect(await screen.findByText(/not onboarded yet/)).toBeTruthy();
+    // ...and warns that the node id is the claim ticket.
+    expect(
+      screen.getByText(/Do not show its node id publicly/),
+    ).toBeTruthy();
+    expect(screen.getByText(/No one answers for this node yet/)).toBeTruthy();
+  });
+
+  it("shows the responsible user ID once the node is onboarded", async () => {
+    routes["GET /v1/work/nodes"] = {
+      status: 200,
+      body: { items: [workNode()] },
+    };
+    routes["GET /v1/work/nodes/n1/activity"] = {
+      status: 200,
+      body: { items: [] },
+    };
+    render(<Work onLife={vi.fn()} />);
+
+    fireEvent.click(await screen.findByText("Invoice Cleaner"));
+    expect(await screen.findByText(/responsible alice/)).toBeTruthy();
+    expect(screen.queryByText(/Do not show its node id publicly/)).toBeNull();
+  });
 });
 
 describe("AddNode", () => {

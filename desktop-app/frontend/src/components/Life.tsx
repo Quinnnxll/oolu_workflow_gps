@@ -78,6 +78,19 @@ export function Life() {
           </span>
         </button>
 
+        {/* Settings sits right below Files, above the conversations — a
+            long Friends/Noder list must never hide it below the fold. */}
+        <button
+          className={`convo ${selected.kind === "settings" ? "on" : ""}`}
+          onClick={() => setSelected({ kind: "settings" })}
+        >
+          <span className="convo-avatar file">⚙</span>
+          <span className="convo-body">
+            <span className="convo-name">Settings</span>
+            <span className="convo-sub">app, account, model, budget</span>
+          </span>
+        </button>
+
         <div className="convo-group">Friends</div>
         <button
           className={`convo ${selected.kind === "friends" ? "on" : ""}`}
@@ -120,19 +133,6 @@ export function Life() {
           </button>
         ))}
 
-        {/* Settings lives at the bottom-left, out of the conversations. */}
-        <button
-          className={`convo convo-bottom ${
-            selected.kind === "settings" ? "on" : ""
-          }`}
-          onClick={() => setSelected({ kind: "settings" })}
-        >
-          <span className="convo-avatar file">⚙</span>
-          <span className="convo-body">
-            <span className="convo-name">Settings</span>
-            <span className="convo-sub">app, account, model, budget</span>
-          </span>
-        </button>
       </aside>
 
       <section className="convo-pane">
@@ -140,7 +140,10 @@ export function Life() {
         {selected.kind === "friends" && (
           <div className="pane-empty">
             <p>Conversations with people and businesses will live here.</p>
-            <p className="muted">Friends arrive with the online server.</p>
+            <p className="muted">
+              Friends arrive with a server — OoLu Global, or your own private
+              network server signed in from Edge.
+            </p>
           </div>
         )}
         {selected.kind === "noder" && (

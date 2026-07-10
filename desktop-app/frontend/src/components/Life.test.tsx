@@ -85,14 +85,18 @@ describe("Life", () => {
     ).toBeTruthy();
   });
 
-  it("keeps Settings on the bottom-left row and opens the pane", async () => {
+  it("keeps Settings right below Files, above the conversations", async () => {
     routes["GET /v1/settings"] = { status: 200, body: { items: [] } };
+    routes["GET /v1/runs"] = { status: 200, body: { items: [RUN] } };
     const { container } = render(<Life />);
     const entry = screen.getByText("Settings").closest("button");
-    // Pinned at the bottom of the left column, after every conversation.
-    expect(entry?.className).toContain("convo-bottom");
-    const rows = container.querySelectorAll("aside .convo");
-    expect(rows[rows.length - 1]).toBe(entry);
+    // Directly after Files (OoLu, Files, Settings), so a long Friends or
+    // Noder list can never push it below the fold.
+    const rows = Array.from(container.querySelectorAll("aside .convo"));
+    const names = rows.map(
+      (r) => r.querySelector(".convo-name")?.textContent ?? "",
+    );
+    expect(names.indexOf("Settings")).toBe(names.indexOf("Files") + 1);
 
     fireEvent.click(entry as HTMLElement);
     expect(await screen.findByText("Settings", { selector: "div" })).toBeTruthy();

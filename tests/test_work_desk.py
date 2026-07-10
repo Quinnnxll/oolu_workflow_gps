@@ -197,6 +197,53 @@ def test_onboarding_claims_responsibility_and_strangers_cannot_rewrite(tmp_path)
         conn.close()
 
 
+def test_node_created_under_a_supernode_starts_unclaimed_until_onboarded(
+    tmp_path,
+):
+    app, conn, ident, registry, *_rest, desk, _ = _desk_build(tmp_path)
+    try:
+        exporter, cleaner = _seed_chain(app, ident, registry)
+        super_id = registry.get_version(exporter).node_id
+        member_id = registry.get_version(cleaner).node_id
+        desk.create_account(
+            super_id, principal="noder-export", tenant="t1", is_supernode=True
+        )
+
+        # Created under the Supernode: the regime is fixed, but NO
+        # responsible account is assigned — the node id is the claim
+        # ticket for whoever should answer for it.
+        member = desk.create_account(
+            member_id,
+            principal="noder-export",
+            tenant="t1",
+            supernode_id=super_id,
+            authority_level=3,
+        )
+        assert member.responsible == ""
+        assert member.supernode_id == super_id
+        assert member.authority_level == 3
+
+        # Onboarding with a user account is the claim: the node now shows
+        # that user's ID — and the fixed regime is untouched.
+        claimed = desk.onboard_account(member_id, principal="tax-clerk", tenant="t1")
+        assert claimed.responsible == "tax-clerk"
+        assert claimed.supernode_id == super_id
+        assert claimed.authority_level == 3
+
+        # From here the account is live: nobody else can claim it.
+        with pytest.raises(OwnershipError):
+            desk.onboard_account(member_id, principal="stranger", tenant="t1")
+        # ...and the claimer's own onboarding stays idempotent.
+        again = desk.onboard_account(member_id, principal="tax-clerk", tenant="t1")
+        assert again.responsible == "tax-clerk"
+
+        # A Supernode itself always keeps its creator responsible: humans
+        # in full control cannot mean nobody.
+        assert desk.account_for(super_id).responsible == "noder-export"
+    finally:
+        conn.close()
+
+
 # --------------------------------------------------------------------------- #
 # The /v1/work routes.                                                         #
 # --------------------------------------------------------------------------- #

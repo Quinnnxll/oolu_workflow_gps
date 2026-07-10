@@ -18,6 +18,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from .currency import CURRENCY_CODES
+
 
 class SettingKind(str, Enum):
     BOOL = "bool"
@@ -42,6 +44,10 @@ class SettingField(BaseModel):
     # lifecycle) and set() refuses it for every caller — the UI, the
     # API, and OoLu alike. Changing it takes the owning flow, not a knob.
     managed: bool = False
+    # What the number MEANS. The sentinel "currency" is resolved by
+    # describe() to the tenant's chosen regional currency code, so money
+    # fields always display in the unit the user actually pays in.
+    unit: str | None = None
     # NUMBER: inclusive bounds. CHOICE: the closed admissible set. TEXT:
     # a max length. All optional; absent means unconstrained within type.
     minimum: float | None = None
@@ -152,6 +158,17 @@ SETTINGS_CATALOG: tuple[SettingField, ...] = (
         description="The name shown on your account.",
     ),
     SettingField(
+        key="account.currency",
+        group="account",
+        label="Spending currency",
+        kind=SettingKind.CHOICE,
+        default="USD",
+        choices=CURRENCY_CODES,
+        description="The legal currency of your region — every cap and "
+        "spending amount is entered and shown in it. Conversion to the "
+        "meter's internal unit uses fixed reference rates.",
+    ),
+    SettingField(
         key="account.autobuild_consent",
         group="account",
         label="Auto-build nodes on my paths",
@@ -249,9 +266,11 @@ SETTINGS_CATALOG: tuple[SettingField, ...] = (
         kind=SettingKind.NUMBER,
         default=0.0,
         minimum=0.0,
-        maximum=10_000.0,
+        maximum=10_000_000.0,
+        unit="currency",
         description="Stop calling the model once metered chat spending "
-        "reaches this many dollars (0 = no cap). Tasks still run.",
+        "reaches this amount in your spending currency (0 = no cap). "
+        "Tasks still run.",
     ),
     # --- budget ----------------------------------------------------------
     SettingField(
@@ -261,8 +280,10 @@ SETTINGS_CATALOG: tuple[SettingField, ...] = (
         kind=SettingKind.NUMBER,
         default=0.0,
         minimum=0.0,
-        maximum=100_000.0,
-        description="Refuse any task estimated above this (0 = no cap).",
+        maximum=100_000_000.0,
+        unit="currency",
+        description="Refuse any task estimated above this amount in your "
+        "spending currency (0 = no cap).",
     ),
     SettingField(
         key="budget.review_threshold",
@@ -271,8 +292,10 @@ SETTINGS_CATALOG: tuple[SettingField, ...] = (
         kind=SettingKind.NUMBER,
         default=0.0,
         minimum=0.0,
-        maximum=100_000.0,
-        description="Ask me to confirm tasks estimated above this (0 = off).",
+        maximum=100_000_000.0,
+        unit="currency",
+        description="Ask me to confirm tasks estimated above this amount "
+        "in your spending currency (0 = off).",
     ),
     SettingField(
         key="budget.monthly_limit",
@@ -281,8 +304,10 @@ SETTINGS_CATALOG: tuple[SettingField, ...] = (
         kind=SettingKind.NUMBER,
         default=0.0,
         minimum=0.0,
-        maximum=100_000.0,
-        description="A soft monthly spending target (0 = none).",
+        maximum=100_000_000.0,
+        unit="currency",
+        description="A soft monthly spending target in your spending "
+        "currency (0 = none).",
     ),
 )
 
@@ -348,10 +373,15 @@ class SettingsNode:
         """The catalog joined with current values — what a UI or the
         assistant reads to know what CAN be set and to what."""
         values = self.effective(tenant)
+        # Money fields display in the tenant's own regional currency: the
+        # "currency" unit sentinel resolves to their chosen code.
+        code = str(values.get("account.currency", "USD") or "USD")
         out = []
         for field in SETTINGS_CATALOG:
             item = field.model_dump(mode="json")
             item["value"] = values[field.key]
+            if item.get("unit") == "currency":
+                item["unit"] = code
             out.append(item)
         return out
 

@@ -1576,6 +1576,7 @@ class GatewayApp:
                 transport=self._model_transport,
                 meter=self._model_meter,
                 budget=lambda: float(_effective("budget.model_cap", 0.0) or 0.0),
+                currency=lambda: str(_effective("account.currency", "USD")),
                 preference=lambda: str(_effective("model.provider", "auto")),
                 tier=lambda: str(_effective("model.tier", "fast")),
                 source=lambda: str(_effective("model.source", "subscription")),

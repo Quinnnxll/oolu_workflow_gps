@@ -56,6 +56,12 @@ const TOKEN_KEY = "oolu_token";
 const PRINCIPAL_KEY = "oolu_principal";
 const TENANT_KEY = "oolu_tenant";
 const SERVER_KEY = "oolu_server";
+// The private-network server a user signed into on Edge (a static address
+// on their own network, e.g. http://192.168.1.20:8787) — remembered so the
+// field comes prefilled next time. Separate from SERVER_KEY: Global and
+// Edge-network are different doors and must not overwrite each other's
+// remembered address.
+const EDGE_SERVER_KEY = "oolu_edge_server";
 
 // localStorage (not sessionStorage) so a signed-in host survives app restarts.
 export const session = {
@@ -70,6 +76,12 @@ export const session = {
   // comes prefilled next time.
   get server(): string | null {
     return localStorage.getItem(SERVER_KEY);
+  },
+  get edgeServer(): string | null {
+    return localStorage.getItem(EDGE_SERVER_KEY);
+  },
+  setEdgeServer(url: string): void {
+    localStorage.setItem(EDGE_SERVER_KEY, url);
   },
   signedIn(): boolean {
     return localStorage.getItem(TOKEN_KEY) !== null;
@@ -425,6 +437,9 @@ export interface SettingItem {
   max_length?: number | null;
   // Display-only here: owned by a dedicated flow (the account console).
   managed?: boolean;
+  // What a number means; for money fields the gateway resolves this to
+  // the tenant's regional currency code (e.g. "EUR").
+  unit?: string | null;
 }
 
 // ---- model key wire shape (GET /v1/keys/model) -----------------------------

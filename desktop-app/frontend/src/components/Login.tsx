@@ -5,15 +5,20 @@ import {
   isRemote,
   login,
   register,
+  session,
   signInWithGoogle,
 } from "../api";
 
 type View = "signin" | "register";
 type Scope = "edge" | "global";
+type EdgeMode = "device" | "network";
 
-// The sign-in screen never shows a raw host:port. The choice is Edge —
-// this device: account, engine, and data stay here — or Global, the OoLu
-// online service (a paired OOLU_SERVER_URL overrides its address quietly).
+// The sign-in screen's choice is Edge or Global. Edge keeps everything on
+// the user's side — this device, or a private server on their own network
+// (a static address a group shares); Global is the OoLu online service (a
+// paired OOLU_SERVER_URL overrides its address quietly). An Edge private
+// network still uses real accounts — a username and password — so that
+// onboarding a node created under a Supernode names an actual person.
 export function Login({
   onSignedIn,
   onStayLocal,
@@ -25,6 +30,8 @@ export function Login({
 }) {
   const [view, setView] = useState<View>("signin");
   const [scope, setScope] = useState<Scope>("global");
+  const [edgeMode, setEdgeMode] = useState<EdgeMode>("device");
+  const [edgeServer, setEdgeServer] = useState(session.edgeServer ?? "");
   const [pairedServer, setPairedServer] = useState<string | null>(null);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -41,8 +48,16 @@ export function Login({
   }, []);
 
   const globalServer = pairedServer ?? DEFAULT_GLOBAL_SERVER;
-  const authTarget = (): string | undefined =>
-    isRemote() ? undefined : globalServer;
+  const onEdgeNetwork = scope === "edge" && edgeMode === "network";
+  const authTarget = (): string | undefined => {
+    if (onEdgeNetwork) {
+      const url = edgeServer.trim().replace(/\/+$/, "");
+      if (!url) throw new Error("enter your private server's address");
+      session.setEdgeServer(url);
+      return url;
+    }
+    return isRemote() ? undefined : globalServer;
+  };
   const showScope = !isRemote() && Boolean(onStayLocal);
 
   function switchView(next: View) {
@@ -116,19 +131,65 @@ export function Login({
         {showScope && scope === "edge" ? (
           <>
             <p className="muted">
-              Edge is this device: your account, your engine, and everything
-              you teach OoLu stay here.
+              Edge keeps everything on your side: this device, or a private
+              server on your own network.
             </p>
-            <button type="button" onClick={onStayLocal}>
-              Continue on Edge
-            </button>
+            <div className="mode-tabs scope-tabs">
+              <button
+                type="button"
+                className={edgeMode === "device" ? "on" : ""}
+                onClick={() => setEdgeMode("device")}
+              >
+                This device
+              </button>
+              <button
+                type="button"
+                className={edgeMode === "network" ? "on" : ""}
+                onClick={() => setEdgeMode("network")}
+              >
+                Private network
+              </button>
+            </div>
+            {edgeMode === "device" ? (
+              <>
+                <p className="muted">
+                  Your account, your engine, and everything you teach OoLu
+                  stay on this machine.
+                </p>
+                <button type="button" onClick={onStayLocal}>
+                  Continue on Edge
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="muted">
+                  A private server your group runs on its own network (a
+                  static address everyone can reach). You still sign in with
+                  a username and password — onboarding a node created under
+                  a Supernode has to name an actual person.
+                </p>
+                <label htmlFor="edge-server">Private server address</label>
+                <input
+                  id="edge-server"
+                  placeholder="http://192.168.1.20:8787"
+                  value={edgeServer}
+                  onChange={(e) => setEdgeServer(e.target.value)}
+                />
+              </>
+            )}
           </>
-        ) : (
+        ) : null}
+
+        {showScope && scope === "edge" && edgeMode === "device" ? null : (
           <>
             <p className="muted">
-              {view === "signin"
-                ? "Sign in to OoLu Global."
-                : "Create your OoLu Global account."}
+              {onEdgeNetwork
+                ? view === "signin"
+                  ? "Sign in to your private network server."
+                  : "Create your account on the private network server."
+                : view === "signin"
+                  ? "Sign in to OoLu Global."
+                  : "Create your OoLu Global account."}
             </p>
 
             <label htmlFor="username">

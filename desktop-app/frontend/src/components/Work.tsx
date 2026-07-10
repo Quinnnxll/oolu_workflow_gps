@@ -268,6 +268,16 @@ export function AddNode({
             </label>
           )}
 
+          {under && !isSupernode && (
+            <p className="muted fixed-note">
+              A node created under a Supernode starts with NO responsible
+              account. Its node id is the claim ticket: give it only to the
+              person who should onboard, and never post it publicly — the
+              user account that onboards becomes the responsible shown on
+              the node.
+            </p>
+          )}
+
           <label className="checkline">
             <input
               type="checkbox"
@@ -302,6 +312,8 @@ export function AddNode({
             Take responsibility for a node that already exists. Audit,
             auto-growing, and any Supernode membership or authority were
             fixed when it was created — onboarding offers no choices.
+            Onboarding names YOU: your user ID appears on the node as its
+            responsible.
           </p>
           <label htmlFor="node-id">Node id</label>
           <input
@@ -377,7 +389,10 @@ export function NodeThread({
             {node.title}
           </div>
           <div className="muted">
-            {node.node_id} · responsible {account.responsible}
+            {node.node_id} ·{" "}
+            {account.responsible
+              ? `responsible ${account.responsible}`
+              : "not onboarded yet"}
             {account.admin ? ` · admin ${account.admin}` : ""}
           </div>
         </div>
@@ -385,6 +400,15 @@ export function NodeThread({
           {account.status.replace("_", " ")}
         </span>
       </div>
+
+      {!account.responsible && (
+        <p className="muted fixed-note">
+          This node has no responsible account yet. Do not show its node id
+          publicly — whoever onboards with it becomes the responsible. Share
+          it only with the person meant to take responsibility; once they
+          onboard, their user ID appears here.
+        </p>
+      )}
 
       {/* The regime, fixed at creation: one concise tag, never knobs. */}
       <div className="account-row regime">
@@ -406,7 +430,8 @@ export function NodeThread({
           {members.map((m) => (
             <div key={m.node_id} className="commit-row">
               <span>
-                {m.title} · {m.account.responsible}
+                {m.title} ·{" "}
+                {m.account.responsible || "not onboarded — keep its id private"}
               </span>
               {/* Fixed at creation, authority included: display only. */}
               <span className="muted">{regimeTag(m.account)}</span>
@@ -472,8 +497,11 @@ export function NodeThread({
       )}
 
       <p className="muted noder-hint">
-        You are responsible for this node — every step above is yours to
-        answer for.
+        {account.responsible
+          ? "You are responsible for this node — every step above is yours " +
+            "to answer for."
+          : "No one answers for this node yet — it gets its responsible " +
+            "when the right person onboards with the node id."}
       </p>
     </div>
   );

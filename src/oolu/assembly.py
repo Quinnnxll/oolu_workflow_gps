@@ -488,6 +488,7 @@ def build_host_runtime(
             home_tenant,
             meter=model_meter,
             budget=lambda: float(_model_setting("budget.model_cap", 0.0) or 0.0),
+            currency=lambda: str(_model_setting("account.currency", "USD")),
             preference=lambda: str(_model_setting("model.provider", "auto")),
             tier=lambda: str(_model_setting("model.tier", "fast")),
             source=lambda: str(_model_setting("model.source", "subscription")),

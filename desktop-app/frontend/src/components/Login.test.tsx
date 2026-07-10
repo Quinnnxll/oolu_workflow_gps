@@ -258,5 +258,55 @@ describe("Login", () => {
       );
       expect(authCalls).toEqual([]);
     });
+
+    it("Edge on a private network still signs in with username and password", async () => {
+      fetchMock.mockImplementation(async (input: string | URL) => {
+        const url = String(input);
+        if (url.endsWith("/v1/client-config")) return reply(200, {});
+        return reply(200, { token: "t", principal: "alice", tenant: "main" });
+      });
+      const onSignedIn = vi.fn();
+      render(<Login onSignedIn={onSignedIn} onStayLocal={vi.fn()} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Edge" }));
+      fireEvent.click(screen.getByRole("button", { name: "Private network" }));
+      // Accounts still matter on a private network: onboarding a node
+      // created under a Supernode must name an actual person.
+      expect(screen.getByText(/name an actual person/)).toBeTruthy();
+
+      fireEvent.change(screen.getByLabelText("Private server address"), {
+        target: { value: "http://192.168.1.20:8787/" },
+      });
+      fireEvent.change(screen.getByLabelText("Username"), {
+        target: { value: "alice" },
+      });
+      fireEvent.change(screen.getByLabelText("Password"), {
+        target: { value: "pw" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+      await waitFor(() => expect(onSignedIn).toHaveBeenCalled());
+      const [url] = fetchMock.mock.calls.find(([u]) =>
+        String(u).includes("/v1/auth/login"),
+      ) as [string];
+      expect(url).toBe("http://192.168.1.20:8787/v1/auth/login");
+      // The private address is remembered for next time, separately from
+      // the Global server.
+      expect(session.edgeServer).toBe("http://192.168.1.20:8787");
+      expect(session.token).toBe("t");
+    });
+
+    it("Edge private network refuses to sign in without a server address", async () => {
+      fetchMock.mockResolvedValue(reply(200, {}));
+      render(<Login onSignedIn={vi.fn()} onStayLocal={vi.fn()} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Edge" }));
+      fireEvent.click(screen.getByRole("button", { name: "Private network" }));
+      fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+      expect(
+        await screen.findByText(/enter your private server's address/),
+      ).toBeTruthy();
+    });
   });
 });
