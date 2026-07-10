@@ -15,6 +15,15 @@ function isSheet(file: FileDoc): boolean {
   );
 }
 
+// A camera shot (or any image saved to the drawer) is a picture, not a
+// text document: shown as one, read-only.
+function isImage(file: FileDoc): boolean {
+  return (
+    file.media_type.startsWith("image/") ||
+    file.content.startsWith("data:image/")
+  );
+}
+
 export function FileView({
   fileId,
   onChanged,
@@ -91,7 +100,9 @@ export function FileView({
           delete
         </button>
       </div>
-      {isSheet(file) ? (
+      {isImage(file) ? (
+        <img className="file-image" src={file.content} alt={file.name} />
+      ) : isSheet(file) ? (
         <Sheet key={file.updated_at} file={file} onSave={saveContent} />
       ) : (
         <Document key={file.updated_at} file={file} onSave={saveContent} />

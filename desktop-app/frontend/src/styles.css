@@ -652,10 +652,43 @@ main.chat-main {
   overflow-y: auto;
 }
 
-/* The interact window's waiting-task chips: tap one to sign it onward. */
-.hold-chips {
-  align-items: center;
-  gap: 6px;
+/* The reminder's arrows: each one jumps to a task's action window. */
+.reminder-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.run-anchor.flash .run-card {
+  outline: 2px solid var(--accent);
+}
+
+/* The composer's device door: location and camera, asked for on tap. */
+.composer-plus {
+  position: relative;
+  align-self: flex-end;
+}
+
+.plus-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: none;
+  color: var(--muted);
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.plus-btn:hover {
+  color: var(--fg);
+  background: var(--panel);
+}
+
+.plus-menu {
+  bottom: 110%;
+  left: 0;
 }
 
 

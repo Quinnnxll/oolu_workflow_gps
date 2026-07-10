@@ -15,11 +15,13 @@ import {
 } from "../avatar";
 import type { Mood } from "../avatar";
 import { OoLuAvatar } from "./OoLuAvatar";
+import { capturePhoto, currentPosition, photoName, photoToDataUrl } from "../device";
 import { createRecognizer, speak, speechInputSupported } from "../voice";
 import type { Recognizer } from "../voice";
 import {
   REMIND_CHECK_MS,
   reminderDue,
+  reminderRuns,
   reminderText,
 } from "../reminders";
 import { Clarification } from "./Clarification";
@@ -33,8 +35,9 @@ type Msg =
   | { kind: "user"; text: string }
   | { kind: "assistant"; text: string; actions?: ChatAction[] }
   // The chat's own nudge about unfinished work — not a model turn, so it
-  // never enters the history sent to the assistant.
-  | { kind: "reminder"; text: string }
+  // never enters the history sent to the assistant. Each mentioned task
+  // rides along as an arrow pointing back to its action window.
+  | { kind: "reminder"; text: string; runs?: { runId: string; label: string }[] }
   | { kind: "run"; runId: string };
 
 const CHAT_KEY = "oolu_chat";
@@ -157,16 +160,84 @@ export function Chat() {
       const now = Date.now();
       if (!reminderDue(clockRef.current, now)) return;
       try {
-        const text = reminderText((await api.runs()).items);
+        const items = (await api.runs()).items;
+        const text = reminderText(items);
         if (!text) return;
         clockRef.current.lastReminderAt = now;
-        setThread((thread_) => [...thread_, { kind: "reminder", text }]);
+        setThread((thread_) => [
+          ...thread_,
+          { kind: "reminder", text, runs: reminderRuns(items) },
+        ]);
       } catch {
         /* the run list being unreachable is never worth a chat error */
       }
     }, REMIND_CHECK_MS);
     return () => clearInterval(t);
   }, []);
+
+  // The device menu: the senses are asked for exactly when tapped —
+  // the browser/app permission prompt appears then, never at startup.
+  const [plusOpen, setPlusOpen] = useState(false);
+  const plusRef = useRef<HTMLSpanElement | null>(null);
+  useEffect(() => {
+    if (!plusOpen) return;
+    function onPointerDown(event: MouseEvent | TouchEvent) {
+      const target = event.target as Node | null;
+      if (target && plusRef.current && !plusRef.current.contains(target)) {
+        setPlusOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("touchstart", onPointerDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("touchstart", onPointerDown);
+    };
+  }, [plusOpen]);
+
+  async function shareLocation() {
+    setPlusOpen(false);
+    try {
+      const here = await currentPosition();
+      void send(
+        `my location right now: ${here.lat.toFixed(5)}, ${here.lon.toFixed(5)}` +
+          ` (±${here.accuracy_m} m)`,
+      );
+    } catch (e) {
+      setThread((t) => [...t, { kind: "assistant", text: (e as Error).message }]);
+    }
+  }
+
+  async function takePhoto() {
+    setPlusOpen(false);
+    try {
+      const shot = await capturePhoto();
+      if (!shot) return; // a cancelled camera is not an event
+      const dataUrl = await photoToDataUrl(shot);
+      const name = photoName();
+      await api.createFile(name, dataUrl, undefined, "camera", "image/jpeg");
+      void send(
+        `I just took a photo on this device — it is in Files as “${name}”` +
+          " (folder: camera).",
+      );
+    } catch (e) {
+      setThread((t) => [...t, { kind: "assistant", text: (e as Error).message }]);
+    }
+  }
+
+  // The reminder's arrow: straight back to the task's action window. If
+  // its run card is in this thread, scroll to it and flash it; if not,
+  // bring the card here — the card IS the action window.
+  function jumpToRun(runId: string) {
+    const existing = document.getElementById(`run-${runId}`);
+    if (existing) {
+      existing.scrollIntoView?.({ block: "center", behavior: "smooth" });
+      existing.classList.add("flash");
+      window.setTimeout(() => existing.classList.remove("flash"), 1600);
+      return;
+    }
+    setThread((t) => [...t, { kind: "run", runId }]);
+  }
 
   async function send(message?: string) {
     const text = (message ?? draft).trim();
@@ -341,11 +412,27 @@ export function Chat() {
         )}
         {thread.map((m, i) =>
           m.kind === "run" ? (
-            <RunCard key={m.runId} runId={m.runId} />
+            <div key={`${m.runId}-${i}`} id={`run-${m.runId}`} className="run-anchor">
+              <RunCard runId={m.runId} />
+            </div>
           ) : m.kind === "reminder" ? (
             <div key={i} className="bubble assistant reminder">
               <span className="reminder-chip">reminder</span>
               {m.text}
+              {m.runs && m.runs.length > 0 && (
+                <div className="reminder-links">
+                  {m.runs.map((r) => (
+                    <button
+                      key={r.runId}
+                      className="linklike"
+                      title="open this task's action window"
+                      onClick={() => jumpToRun(r.runId)}
+                    >
+                      ↦ {r.label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           ) : (
             <div key={i} className={`bubble ${m.kind}`}>
@@ -369,6 +456,28 @@ export function Chat() {
         <div ref={endRef} />
       </div>
       <div className="chat-composer">
+        <span className="composer-plus" ref={plusRef}>
+          <button
+            type="button"
+            className="plus-btn"
+            title="Use this device — share my location, take a photo"
+            aria-label="Use this device"
+            disabled={busy}
+            onClick={() => setPlusOpen((open) => !open)}
+          >
+            ＋
+          </button>
+          {plusOpen && (
+            <span className="forward-menu plus-menu">
+              <button type="button" onClick={() => void shareLocation()}>
+                Share my location
+              </button>
+              <button type="button" onClick={() => void takePhoto()}>
+                Take a photo
+              </button>
+            </span>
+          )}
+        </span>
         <textarea
           placeholder={listening ? "Listening…" : tr("messageOoLu")}
           value={draft}

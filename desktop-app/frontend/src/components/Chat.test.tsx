@@ -403,6 +403,92 @@ describe("Chat", () => {
     }
   });
 
+  it("a reminder's arrow points straight back to the action window", async () => {
+    routes["GET /v1/runs"] = {
+      status: 200,
+      body: {
+        items: [baseRun({ awaiting: "incident", phase: "recovery" })],
+      },
+    };
+    routes["GET /v1/runs/r1"] = {
+      status: 200,
+      body: baseRun({
+        awaiting: "incident",
+        phase: "recovery",
+        prompt: "node X failed — retry?",
+      }),
+    };
+    vi.useFakeTimers();
+    render(<Chat />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2 * 60_000 + 30_000);
+    });
+    // The snagged task rides the reminder as an arrow. Leave the fake
+    // clock BEFORE awaiting anything — a timed-out await under fake
+    // timers would leak them into every later test.
+    const arrow = screen.getByRole("button", { name: "↦ Email Bob Numbers" });
+    vi.useRealTimers();
+
+    fireEvent.click(arrow);
+    // The click brings the ACTION WINDOW into the thread: the run card
+    // with the live Retry, not just words about it.
+    expect(await screen.findByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  it("the device menu shares the location as a message when allowed", async () => {
+    routes["POST /v1/chat"] = {
+      status: 200,
+      body: { reply: "Got it — you're in Berlin.", source: "model", run_id: null },
+    };
+    vi.stubGlobal("navigator", {
+      geolocation: {
+        getCurrentPosition: (
+          ok: (p: {
+            coords: { latitude: number; longitude: number; accuracy: number };
+          }) => void,
+        ) =>
+          ok({ coords: { latitude: 52.52, longitude: 13.405, accuracy: 9 } }),
+      },
+    });
+    render(<Chat />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Use this device" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Share my location" }),
+    );
+
+    await waitFor(() => {
+      const chat = calls.find((c) => c.path === "/v1/chat");
+      expect(
+        (chat?.body as { message: string })?.message,
+      ).toContain("my location right now: 52.52000, 13.40500 (±9 m)");
+    });
+    expect(await screen.findByText(/you're in Berlin/)).toBeTruthy();
+  });
+
+  it("a refused location lands as words, not a dead button", async () => {
+    vi.stubGlobal("navigator", {
+      geolocation: {
+        getCurrentPosition: (
+          _ok: unknown,
+          fail: (e: { code: number; PERMISSION_DENIED: number }) => void,
+        ) => fail({ code: 1, PERMISSION_DENIED: 1 }),
+      },
+    });
+    render(<Chat />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Use this device" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Share my location" }),
+    );
+
+    expect(
+      await screen.findByText(/location permission was refused/),
+    ).toBeTruthy();
+    // Nothing was sent to the assistant — there was nothing to send.
+    expect(calls.some((c) => c.path === "/v1/chat")).toBe(false);
+  });
+
   it("turns a transport failure into an apology, not a crash", async () => {
     routes["POST /v1/chat"] = {
       status: 500,

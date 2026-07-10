@@ -61,6 +61,27 @@ export function reminderText(runs: RunSummary[]): string | null {
   return `A quick reminder — ${parts.join("; ")}.`;
 }
 
+// The reminder's arrows: the same runs as the words, as jump targets —
+// what waits on the user first, then what is still moving. Each arrow
+// points straight back to the task's action window (its run card).
+export interface ReminderRun {
+  runId: string;
+  label: string;
+  awaiting: string | null;
+}
+
+export function reminderRuns(runs: RunSummary[]): ReminderRun[] {
+  const pending = runs.filter((r) => r.awaiting !== null);
+  const ongoing = runs.filter(
+    (r) => r.awaiting === null && !TERMINAL_PHASES.includes(r.phase),
+  );
+  return [...pending, ...ongoing].slice(0, 6).map((r) => ({
+    runId: r.run_id,
+    label: conciseName(r.intent),
+    awaiting: r.awaiting,
+  }));
+}
+
 function awaitingWords(awaiting: string | null): string {
   if (awaiting === "clarification") return "needs an answer";
   if (awaiting === "confirmation") return "needs a decision";

@@ -4,6 +4,28 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The device's senses on demand, and reminders that point back:
+
+- **Microphone, camera, location — asked for exactly when needed.** A
+  new ＋ button on the chat composer opens the device door: "Share my
+  location" reads the device's position (the browser/app permission
+  prompt appears at that tap, never at startup) and sends it into the
+  conversation; "Take a photo" opens the native camera on a phone or
+  tablet (file picker on a computer), downscales the shot to fit the
+  drawer, saves it to Files (folder: camera), and tells OoLu. A refused
+  permission lands as honest words in the thread. The microphone was
+  already live (hold Send to talk). Images in Files now display as
+  pictures, read-only, instead of opening in the text editor.
+- **The reminder's arrow.** When the idle reminder lists ongoing or
+  snagged tasks, each task now carries an arrow (↦ task name) pointing
+  straight back to its ACTION window: the click scrolls to the task's
+  run card if it is in the thread — flashing it — or brings the card
+  into the conversation, Retry buttons and all.
+- Tests: location success/refusal/absence, shot naming, the composer
+  device menu sharing coordinates and surfacing refusals, and the
+  reminder arrow summoning the live run card. 180 vitest and the entire
+  backend suite green; shell rebuilt.
+
 The interact window becomes what it is — a conversation:
 
 - **Nothing but the thread and the composer.** The interact tab's
