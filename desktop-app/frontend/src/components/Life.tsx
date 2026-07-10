@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, TERMINAL_PHASES } from "../api";
+import type { FriendConversation, FriendMessage } from "../api";
 import { identityHue, updateAvatarSignals } from "../avatar";
 import { conciseName } from "../naming";
 import type { RunSummary, TimelineEvent } from "../types";
+import { ForwardMenu } from "./ForwardMenu";
 import { Chat } from "./Chat";
 import { FilesPane } from "./FilesPane";
 import { SettingsPane } from "./SettingsPane";
@@ -18,7 +20,8 @@ type Selection =
   | { kind: "oolu" }
   | { kind: "files" }
   | { kind: "settings" }
-  | { kind: "friends" }
+  | { kind: "friends" } // the start-a-conversation pane
+  | { kind: "friend"; peer: string }
   | { kind: "noder"; run: RunSummary };
 
 const GROUPS_KEY = "oolu_groups_open";
@@ -37,6 +40,8 @@ export function Life() {
   const [mode, setMode] = useState<"life" | "work">("life");
   const [selected, setSelected] = useState<Selection>({ kind: "oolu" });
   const [runs, setRuns] = useState<RunSummary[]>([]);
+  // null = this host has no friends door (no server); [] = nobody yet.
+  const [friends, setFriends] = useState<FriendConversation[] | null>(null);
   // Long lists fold away for a clear view; the choice survives restarts.
   const [groups, setGroups] = useState(loadGroups);
 
@@ -58,6 +63,11 @@ export function Life() {
       });
     } catch {
       setRuns([]);
+    }
+    try {
+      setFriends((await api.friends()).items ?? []);
+    } catch {
+      setFriends(null); // no server door here: the group says so instead
     }
   }, []);
 
@@ -120,7 +130,43 @@ export function Life() {
           onClick={() => toggleGroup("friends")}
         >
           {groups.friends ? "▾" : "▸"} Friends
+          {friends && friends.some((f) => f.unread > 0)
+            ? ` (${friends.reduce((n, f) => n + f.unread, 0)})`
+            : ""}
         </button>
+        {groups.friends &&
+          (friends ?? []).map((f) => (
+            <button
+              key={f.peer}
+              className={`convo ${
+                selected.kind === "friend" && selected.peer === f.peer
+                  ? "on"
+                  : ""
+              }`}
+              onClick={() => setSelected({ kind: "friend", peer: f.peer })}
+            >
+              <span
+                className="convo-avatar"
+                style={{
+                  background: `hsl(${identityHue(f.peer)} 45% 34%)`,
+                  color: "#fff",
+                  borderColor: "transparent",
+                }}
+              >
+                {f.peer.slice(0, 1).toUpperCase()}
+              </span>
+              <span className="convo-body">
+                <span className="convo-name">
+                  {f.peer}
+                  {f.unread > 0 ? ` · ${f.unread} new` : ""}
+                </span>
+                <span className="convo-sub">
+                  {f.last_from === f.peer ? "" : "you: "}
+                  {f.last_text.slice(0, 40)}
+                </span>
+              </span>
+            </button>
+          ))}
         {groups.friends && (
           <button
             className={`convo ${selected.kind === "friends" ? "on" : ""}`}
@@ -128,7 +174,13 @@ export function Life() {
           >
             <span className="convo-avatar">+</span>
             <span className="convo-body">
-              <span className="convo-sub">No conversations yet</span>
+              <span className="convo-sub">
+                {friends === null
+                  ? "Friends need a server"
+                  : friends.length === 0
+                    ? "Start a conversation"
+                    : "New conversation"}
+              </span>
             </span>
           </button>
         )}
@@ -180,14 +232,29 @@ export function Life() {
 
       <section className="convo-pane">
         {selected.kind === "oolu" && <Chat />}
-        {selected.kind === "friends" && (
-          <div className="pane-empty">
-            <p>Conversations with people and businesses will live here.</p>
-            <p className="muted">
-              Friends arrive with a server — OoLu Global, or your own private
-              network server signed in from Edge.
-            </p>
-          </div>
+        {selected.kind === "friends" &&
+          (friends === null ? (
+            <div className="pane-empty">
+              <p>Conversations with people and businesses will live here.</p>
+              <p className="muted">
+                Friends arrive with a server — OoLu Global, or your own private
+                network server signed in from Edge.
+              </p>
+            </div>
+          ) : (
+            <StartConversation
+              onOpen={(peer) => {
+                setSelected({ kind: "friend", peer });
+                void refreshRuns();
+              }}
+            />
+          ))}
+        {selected.kind === "friend" && (
+          <FriendThread
+            key={selected.peer}
+            peer={selected.peer}
+            onActivity={refreshRuns}
+          />
         )}
         {selected.kind === "noder" && (
           <NoderThread
@@ -280,6 +347,157 @@ export function NoderThread({
       <p className="muted noder-hint">
         Raw node log — ask OoLu to review it or dig into it for you.
       </p>
+    </div>
+  );
+}
+
+// Start a conversation: you address a person by their EXACT username or
+// e-mail — there is no directory to browse (a public host holds strangers).
+export function StartConversation({
+  onOpen,
+}: {
+  onOpen: (peer: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function find() {
+    setError("");
+    setBusy(true);
+    try {
+      const { username } = await api.friendLookup(query.trim());
+      onOpen(username);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="pane-empty start-conversation">
+      <p>Who do you want to talk to?</p>
+      <p className="muted">
+        Enter their exact username or e-mail — there is no directory to
+        browse, so nobody finds you unless you gave them your name.
+      </p>
+      <form
+        className="setting-control row"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void find();
+        }}
+      >
+        <input
+          aria-label="Username or e-mail"
+          placeholder="username or e-mail"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <button type="submit" disabled={busy || !query.trim()}>
+          {busy ? "Looking…" : "Find"}
+        </button>
+      </form>
+      {error && <div className="error">{error}</div>}
+    </div>
+  );
+}
+
+// One person's thread. Opening it marks their messages read (the server
+// does that on GET); a short poll keeps both sides fresh — same rhythm as
+// the run list.
+export function FriendThread({
+  peer,
+  onActivity,
+}: {
+  peer: string;
+  onActivity: () => void;
+}) {
+  const [messages, setMessages] = useState<FriendMessage[] | null>(null);
+  const [draft, setDraft] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const endRef = useRef<HTMLDivElement | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      setMessages((await api.friendMessages(peer)).items);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [peer]);
+
+  useEffect(() => {
+    void refresh();
+    const t = setInterval(refresh, 4000);
+    return () => clearInterval(t);
+  }, [refresh]);
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView?.({ block: "end" });
+  }, [messages?.length]);
+
+  async function send() {
+    const text = draft.trim();
+    if (!text) return;
+    setError("");
+    setBusy(true);
+    try {
+      const sent = await api.sendFriendMessage(peer, text);
+      setMessages((m) => [...(m ?? []), sent]);
+      setDraft("");
+      onActivity();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="chat friend-thread">
+      <div className="chat-thread">
+        {messages === null && <div className="muted">Loading…</div>}
+        {messages !== null && messages.length === 0 && (
+          <div className="pane-empty">
+            <p>
+              Say hello — this is the start of your conversation with {peer}.
+            </p>
+          </div>
+        )}
+        {messages?.map((m) => (
+          <div key={m.message_id} className={`bubble ${m.mine ? "user" : "assistant"}`}>
+            {m.text}
+            {m.file_id && (
+              <span className="badge" title="attached file">
+                📄 file
+              </span>
+            )}
+            <ForwardMenu text={m.text} from={m.mine ? "me" : peer} />
+          </div>
+        ))}
+        <div ref={endRef} />
+      </div>
+      {error && <div className="error">{error}</div>}
+      <div className="chat-composer">
+        <textarea
+          aria-label={`Message ${peer}`}
+          placeholder={`Message ${peer}…`}
+          value={draft}
+          rows={2}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              void send();
+            }
+          }}
+        />
+        <button disabled={busy || !draft.trim()} onClick={() => void send()}>
+          {busy ? "…" : "Send"}
+        </button>
+      </div>
     </div>
   );
 }

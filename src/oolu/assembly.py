@@ -520,6 +520,7 @@ def build_host_runtime(
     from .mail import MailCodeStore
     from .providers.keyring import ModelKeyring
     from .settings_node import SettingsNode, SettingsStore
+    from .social import AssistantHistoryStore, DirectMessageStore
 
     if database_url:
         from .durable.postgres import PostgresDurableConnection
@@ -856,6 +857,10 @@ def build_host_runtime(
         # always there so verified marks survive sender changes.
         mail=mail,
         mail_codes=_mail_codes,
+        # People talking to people, and one OoLu thread per account that
+        # every signed-in device shares.
+        direct_messages=DirectMessageStore(conn),
+        assistant_history=AssistantHistoryStore(conn),
         # The card vault is Stripe when a secret key exists, the test
         # double otherwise; the launch guard's transaction port opens only
         # by the operator's explicit switch (prices and verification still

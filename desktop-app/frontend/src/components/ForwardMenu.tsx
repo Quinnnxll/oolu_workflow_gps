@@ -2,6 +2,7 @@ import { useState } from "react";
 import {
   forwardMessage,
   forwardMessageToFile,
+  forwardMessageToFriend,
   forwardTargets,
 } from "../forward";
 import type { ForwardTarget } from "../forward";
@@ -25,6 +26,11 @@ export function ForwardMenu({ text, from }: { text: string; from: string }) {
       if (target === "file") {
         const name = await forwardMessageToFile(text, from);
         setDone(`saved to ${name}`);
+      } else if (target.kind === "friend") {
+        // A person is a real delivery through the server, not a local
+        // thread append — it lands in their conversation, marked.
+        await forwardMessageToFriend(text, from, target.id ?? target.title);
+        setDone(`sent to ${target.title}`);
       } else {
         forwardMessage(text, from, target);
         setDone(`forwarded to ${target.title}`);

@@ -404,6 +404,9 @@ class GatewayApp:
         identity_links: IdentityLinkStore | None = None,  # email/IdP -> account
         mail=None,  # mail.MailSender: verification + reset codes go out here
         mail_codes=None,  # mail.MailCodeStore: hashed one-time codes
+        direct_messages=None,  # social.DirectMessageStore: friends talking
+        assistant_history=None,  # social.AssistantHistoryStore: one OoLu
+        # thread per account, shared by every signed-in device
         value_patcher=None,  # orchestrator.ValuePatcher: fills creative inputs
         isolation=None,  # worker.IsolationPolicy: powers /v1/worker-health
         docker_available: bool = True,
@@ -482,6 +485,8 @@ class GatewayApp:
         self._identity_links = identity_links
         self._mail = mail
         self._mail_codes = mail_codes
+        self._direct_messages = direct_messages
+        self._assistant_history = assistant_history
         # What may run where, per trust level — rendered by the shell's
         # health screen from the policy that is actually enforced.
         from ..worker.policy import IsolationPolicy
@@ -659,6 +664,14 @@ class GatewayApp:
         r.add("GET", "/v1/openapi.json", self._openapi, public=True)
         r.add("GET", "/v1/health", self._health, public=True)
         r.add("POST", "/v1/chat", self._chat_turn)
+        # The account's own OoLu thread — what a fresh device loads.
+        r.add("GET", "/v1/chat/history", self._chat_history)
+        # Friends: person-to-person messages between accounts on this
+        # host. Lookup is exact (username or e-mail) — never a directory.
+        r.add("GET", "/v1/friends", self._friends_list)
+        r.add("POST", "/v1/friends/lookup", self._friends_lookup)
+        r.add("GET", "/v1/friends/{peer}/messages", self._friend_messages)
+        r.add("POST", "/v1/friends/{peer}/messages", self._friend_send)
         r.add("POST", "/v1/runs", self._submit_run)
         r.add("GET", "/v1/runs", self._list_runs)
         r.add("GET", "/v1/runs/{run_id}", self._get_run)
@@ -902,6 +915,30 @@ class GatewayApp:
                     )
                 ):
                     say += f" If you want me to auto-build what's missing: {AUTOBUILD_HINT}"
+        # The conversation survives the device: turns land in the per-
+        # account history so every signed-in client sees one thread. The
+        # node-interact window is that node's context, not this thread —
+        # only the main conversation is recorded.
+        if self._assistant_history is not None and not body.get("node_id"):
+            self._assistant_history.append(
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+                kind="user",
+                body=message,
+            )
+            self._assistant_history.append(
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+                kind="assistant",
+                body=say,
+            )
+            if run:
+                self._assistant_history.append(
+                    tenant=session.tenant_id,
+                    principal=session.principal_id,
+                    kind="run",
+                    body=str(run["run_id"]),
+                )
         return json_response(
             200,
             {
@@ -910,6 +947,137 @@ class GatewayApp:
                 "actions": turn.actions,
                 "run_id": run["run_id"] if run else None,
                 "run": run,
+            },
+        )
+
+    def _chat_history(self, request, session, params) -> Response:
+        """The account's OoLu thread, oldest first — what a fresh device
+        loads so every client shows the same conversation."""
+        if self._assistant_history is None:
+            raise GatewayError(404, "not_found", "chat history is not kept here")
+        return json_response(
+            200,
+            {
+                "items": self._assistant_history.history(
+                    tenant=session.tenant_id, principal=session.principal_id
+                )
+            },
+        )
+
+    # ------------------------------------------------------------------ #
+    # Friends: people talking to people on the same host.                 #
+    # ------------------------------------------------------------------ #
+    def _require_direct_messages(self):
+        if self._direct_messages is None:
+            raise GatewayError(
+                404,
+                "not_found",
+                "friends live on a server — OoLu Global, or your own"
+                " private network server",
+            )
+        return self._direct_messages
+
+    def _friend_or_404(self, session, username: str) -> str:
+        """The peer must be a real, enabled account in the caller's own
+        tenant. You address people by exact name — there is no browsing."""
+        username = str(username or "").strip()
+        account = (
+            self._accounts.user(username) if self._accounts is not None else None
+        )
+        if (
+            account is None
+            or account.tenant_id != session.tenant_id
+            or account.disabled
+        ):
+            raise GatewayError(404, "not_found", "no one by that name here")
+        if username == session.principal_id:
+            raise GatewayError(
+                400, "invalid_request", "that's you — notes to self live in Files"
+            )
+        return username
+
+    def _friends_list(self, request, session, params) -> Response:
+        store = self._require_direct_messages()
+        return json_response(
+            200,
+            {
+                "items": store.conversations(
+                    tenant=session.tenant_id, principal=session.principal_id
+                )
+            },
+        )
+
+    def _friends_lookup(self, request, session, params) -> Response:
+        """Find a person by EXACT username or e-mail — never a directory.
+        A public host holds strangers; browsing the roster is not a thing."""
+        self._require_direct_messages()
+        query = str((request.body or {}).get("query", "")).strip()
+        if not query:
+            raise GatewayError(400, "invalid_request", "who are you looking for?")
+        username = query
+        if "@" in query and self._identity_links is not None:
+            link = self._identity_links.lookup("email", query.lower())
+            if link is None:
+                raise GatewayError(404, "not_found", "no one by that address here")
+            username = link["username"]
+        username = self._friend_or_404(session, username)
+        return json_response(200, {"username": username})
+
+    def _friend_messages(self, request, session, params) -> Response:
+        """The thread with one person — and opening it reads it."""
+        store = self._require_direct_messages()
+        peer = self._friend_or_404(session, params["peer"])
+        store.mark_read(
+            tenant=session.tenant_id, reader=session.principal_id, peer=peer
+        )
+        items = [
+            {
+                "message_id": m.message_id,
+                "from": m.sender,
+                "text": m.body,
+                "file_id": m.file_id,
+                "at": m.sent_at.isoformat(),
+                "mine": m.sender == session.principal_id,
+                "read": m.read_at is not None,
+            }
+            for m in store.between(
+                tenant=session.tenant_id, me=session.principal_id, peer=peer
+            )
+        ]
+        return json_response(200, {"peer": peer, "items": items})
+
+    def _friend_send(self, request, session, params) -> Response:
+        store = self._require_direct_messages()
+        peer = self._friend_or_404(session, params["peer"])
+        body = request.body or {}
+        file_id = body.get("file_id")
+        if file_id is not None:
+            # The reference must be a real file the sender can see — the
+            # recipient opens it through the same tenant-guarded store.
+            if self._files is None or self._files.get(
+                str(file_id), tenant=session.tenant_id
+            ) is None:
+                raise GatewayError(404, "not_found", "no such file to attach")
+        try:
+            message = store.send(
+                tenant=session.tenant_id,
+                sender=session.principal_id,
+                recipient=peer,
+                body=str(body.get("text", "")),
+                file_id=str(file_id) if file_id else None,
+            )
+        except ValueError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(
+            201,
+            {
+                "message_id": message.message_id,
+                "from": message.sender,
+                "text": message.body,
+                "file_id": message.file_id,
+                "at": message.sent_at.isoformat(),
+                "mine": True,
+                "read": False,
             },
         )
 

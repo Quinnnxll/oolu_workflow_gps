@@ -4,6 +4,7 @@ import {
   forwardFile,
   forwardMessage,
   forwardMessageToFile,
+  forwardMessageToFriend,
   forwardTargets,
 } from "./forward";
 
@@ -105,7 +106,21 @@ describe("forwarding", () => {
     expect(body.folder).toBe("forwarded");
   });
 
-  it("offers OoLu plus every node on the desk as destinations", async () => {
+  it("offers OoLu, friends, and every node on the desk as destinations", async () => {
+    routes["GET /v1/friends"] = {
+      status: 200,
+      body: {
+        items: [
+          {
+            peer: "bob",
+            last_text: "hi",
+            last_from: "bob",
+            last_at: "2026-07-10T10:00:00Z",
+            unread: 0,
+          },
+        ],
+      },
+    };
     routes["GET /v1/work/nodes"] = {
       status: 200,
       body: {
@@ -118,8 +133,27 @@ describe("forwarding", () => {
     const targets = await forwardTargets();
     expect(targets.map((t) => t.title)).toEqual([
       "OoLu",
+      "bob",
       "Invoice Cleaner",
       "Tax Filer",
     ]);
+    expect(targets[1]).toMatchObject({ kind: "friend", id: "bob" });
+  });
+
+  it("delivers a forwarded message to a friend through the server", async () => {
+    routes["POST /v1/friends/bob/messages"] = {
+      status: 201,
+      body: { message_id: "m1" },
+    };
+    await forwardMessageToFriend("the numbers are ready", "OoLu", "bob");
+
+    const post = calls.find(
+      (c) => c.method === "POST" && c.path === "/v1/friends/bob/messages",
+    );
+    expect(post?.body).toEqual({
+      text: `${FORWARDED_MARK} from OoLu:\nthe numbers are ready`,
+    });
+    // Nothing landed in any local thread — a person is a real delivery.
+    expect(localStorage.getItem("oolu_chat")).toBeNull();
   });
 });

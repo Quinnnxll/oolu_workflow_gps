@@ -83,12 +83,105 @@ describe("Life", () => {
     expect(screen.getByText(/ask OoLu/i)).toBeTruthy();
   });
 
-  it("shows the Friends placeholder pane", async () => {
+  it("keeps the honest placeholder on hosts without a friends door", async () => {
+    routes["GET /v1/friends"] = {
+      status: 404,
+      body: { error: { message: "friends live on a server" } },
+    };
     render(<Life />);
-    fireEvent.click(screen.getByText("No conversations yet"));
+    fireEvent.click(await screen.findByText("Friends need a server"));
     expect(
       await screen.findByText(/people and businesses will live here/i),
     ).toBeTruthy();
+  });
+
+  it("lists friend conversations with unread counts and opens the thread", async () => {
+    routes["GET /v1/friends"] = {
+      status: 200,
+      body: {
+        items: [
+          {
+            peer: "bob",
+            last_text: "you there?",
+            last_from: "bob",
+            last_at: "2026-07-10T10:00:00Z",
+            unread: 2,
+          },
+        ],
+      },
+    };
+    routes["GET /v1/friends/bob/messages"] = {
+      status: 200,
+      body: {
+        peer: "bob",
+        items: [
+          {
+            message_id: "m1",
+            from: "bob",
+            text: "you there?",
+            file_id: null,
+            at: "2026-07-10T10:00:00Z",
+            mine: false,
+            read: true,
+          },
+        ],
+      },
+    };
+    routes["POST /v1/friends/bob/messages"] = {
+      status: 201,
+      body: {
+        message_id: "m2",
+        from: "me",
+        text: "here now!",
+        file_id: null,
+        at: "2026-07-10T10:01:00Z",
+        mine: true,
+        read: false,
+      },
+    };
+    render(<Life />);
+
+    // The peer list carries the unread count on the name.
+    fireEvent.click(await screen.findByText("bob · 2 new"));
+    // Opening the thread fetched (and thereby read) the messages.
+    expect(await screen.findByText("you there?")).toBeTruthy();
+
+    fireEvent.change(screen.getByPlaceholderText("Message bob…"), {
+      target: { value: "here now!" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByText("here now!")).toBeTruthy();
+    const post = calls.find(
+      (c) => c.method === "POST" && c.path === "/v1/friends/bob/messages",
+    );
+    expect(post?.body).toEqual({ text: "here now!" });
+  });
+
+  it("starts a conversation by exact name — no directory to browse", async () => {
+    routes["GET /v1/friends"] = { status: 200, body: { items: [] } };
+    routes["POST /v1/friends/lookup"] = {
+      status: 200,
+      body: { username: "carol" },
+    };
+    routes["GET /v1/friends/carol/messages"] = {
+      status: 200,
+      body: { peer: "carol", items: [] },
+    };
+    render(<Life />);
+
+    fireEvent.click(await screen.findByText("Start a conversation"));
+    expect(await screen.findByText(/no directory to browse/i)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Username or e-mail"), {
+      target: { value: "carol@mphepo.io" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Find" }));
+
+    // The thread opens on the found account.
+    expect(
+      await screen.findByPlaceholderText("Message carol…"),
+    ).toBeTruthy();
+    const lookup = calls.find((c) => c.path === "/v1/friends/lookup");
+    expect(lookup?.body).toEqual({ query: "carol@mphepo.io" });
   });
 
   it("Friends and Noder fold away for a clear view, and stay folded", async () => {
@@ -102,21 +195,23 @@ describe("Life", () => {
     fireEvent.click(noder);
     expect(screen.queryByText("Convert Report Pdf")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /Friends/ }));
-    expect(screen.queryByText("No conversations yet")).toBeNull();
+    expect(screen.queryByText("Start a conversation")).toBeNull();
 
     // The folded state survives a remount (it lives in localStorage).
     unmount();
     render(<Life />);
-    expect(screen.queryByText("No conversations yet")).toBeNull();
+    expect(screen.queryByText("Start a conversation")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /Friends/ }));
-    expect(screen.getByText("No conversations yet")).toBeTruthy();
+    expect(await screen.findByText("Start a conversation")).toBeTruthy();
   });
 
   it("keeps Settings right below Files, above the conversations", async () => {
     routes["GET /v1/settings"] = { status: 200, body: { items: [] } };
     routes["GET /v1/runs"] = { status: 200, body: { items: [RUN] } };
     const { container } = render(<Life />);
-    const entry = screen.getByText("Settings").closest("button");
+    const entry = screen
+      .getByText("Settings", { selector: ".convo-name" })
+      .closest("button");
     // Directly after Files (OoLu, Files, Settings), so a long Friends or
     // Noder list can never push it below the fold.
     const rows = Array.from(container.querySelectorAll("aside .convo"));

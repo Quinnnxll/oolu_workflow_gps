@@ -455,6 +455,35 @@ export interface ChatTurnReply {
   run_id: string | null;
 }
 
+// A turn of the account's own OoLu thread, as the server remembers it —
+// what a fresh device loads so every client shows the same conversation.
+export interface ChatHistoryTurn {
+  seq: number;
+  kind: "user" | "assistant" | "run";
+  body: string;
+  at: string;
+}
+
+// ---- friends wire shapes ----------------------------------------------------
+// A conversation in the peer list: who, what was said last, what waits.
+export interface FriendConversation {
+  peer: string;
+  last_text: string;
+  last_from: string;
+  last_at: string;
+  unread: number;
+}
+
+export interface FriendMessage {
+  message_id: string;
+  from: string;
+  text: string;
+  file_id: string | null;
+  at: string;
+  mine: boolean;
+  read: boolean;
+}
+
 // ---- payments wire shapes --------------------------------------------------
 export interface SavedCard {
   pm_ref: string;
@@ -626,6 +655,26 @@ export const api = {
       ...(nodeId ? { node_id: nodeId } : {}),
       ...(mood ? { mood } : {}),
     }),
+  // The server-side OoLu thread: what a fresh device loads. Hosts that
+  // don't keep history answer 404 — callers fall back to local storage.
+  chatHistory: () =>
+    req<{ items: ChatHistoryTurn[] }>("GET", "/v1/chat/history"),
+  // Friends: the peer list, exact-lookup (username or e-mail — never a
+  // directory), one thread per person (opening it marks it read), send.
+  friends: () => req<{ items: FriendConversation[] }>("GET", "/v1/friends"),
+  friendLookup: (query: string) =>
+    req<{ username: string }>("POST", "/v1/friends/lookup", { query }),
+  friendMessages: (peer: string) =>
+    req<{ peer: string; items: FriendMessage[] }>(
+      "GET",
+      `/v1/friends/${encodeURIComponent(peer)}/messages`,
+    ),
+  sendFriendMessage: (peer: string, text: string, fileId?: string) =>
+    req<FriendMessage>(
+      "POST",
+      `/v1/friends/${encodeURIComponent(peer)}/messages`,
+      { text, ...(fileId ? { file_id: fileId } : {}) },
+    ),
   submitTask: (intent: string) => mutateRun("POST", "/v1/runs", { intent }),
   task: async (id: string) =>
     composeTask(await req<RunDict>("GET", `/v1/runs/${id}`)),

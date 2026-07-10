@@ -157,10 +157,18 @@ account is identity, not a data migration.
 (`verification` says registering here ends with a mailed-code step, so
 the sign-in screen knows to show it.)
 
+## What the host provides out of the box
+
+- **Friends** — person-to-person conversations between accounts on this
+  host, with unread counts and read state. Discovery is exact username
+  or e-mail only (`POST /v1/friends/lookup`) — there is no directory to
+  browse, so nobody is findable unless they shared their name.
+- **One OoLu thread per account** — `/v1/chat` records turns and
+  `GET /v1/chat/history` is what a fresh device loads, so the desktop,
+  the browser, and the phone all show the same conversation.
+
 ## What the host unlocks next
 
 - **Public-API webhook deliveries** — third parties receive signed run
   events at their own URLs; outbound needs nothing, but issuing API keys
   to outsiders only makes sense with a public host.
-- **The Friends pane** — person-to-person conversations ride the same
-  host accounts.

@@ -4,6 +4,44 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Phase 3 of going public: people talking to people, one conversation
+across devices, and a first minute that lands:
+
+- **Friends for real.** Person-to-person messages between accounts on
+  the same host, in a new durable store (`DirectMessageStore`): ordered
+  threads, read state (opening a thread reads it), unread counts on the
+  peer list. Discovery is EXACT — `POST /v1/friends/lookup` resolves a
+  full username or e-mail (through the identity links) and nothing else;
+  there is no directory to browse, so on a public host nobody is
+  findable unless they shared their name. The peer must be a real,
+  enabled account in the caller's own tenant. The Life screen's Friends
+  group goes live: conversations with unread badges, a start-a-
+  conversation pane, a per-person thread with the same composer as the
+  OoLu chat — and the forward menu now offers friends as destinations
+  (a real server delivery, marked with where it came from, never a
+  local-storage append). Hosts without a server keep the honest
+  placeholder.
+- **One conversation across devices.** The OoLu thread now lives server-
+  side per account (`AssistantHistoryStore`, capped at 500 turns like a
+  messenger): `/v1/chat` records each user turn, assistant reply, and
+  run marker, and `GET /v1/chat/history` is what a fresh device loads —
+  the desktop, the browser, and the phone show the SAME thread. The
+  local cache stays as the offline story and hosts that keep no history
+  (404) keep working exactly as before. Idle-reminder bubbles remain
+  client-side by design — presence, not conversation. The node-interact
+  window stays its own context and is not recorded into the main thread.
+- **A first minute that lands.** A one-time first-run guide inside the
+  chat's welcome state: say hi (one tap), try a first task (drops a
+  ready-to-send task into the box — nothing fires unseen), and where to
+  add a model key. Used once or dismissed, it never returns.
+- Tests: the store and every wall in `test_friends.py` (order + read
+  state, tenant scoping, exact-lookup-only discovery, disabled accounts
+  stop receiving, 404 on storeless hosts, chat turns landing per
+  account, the messenger cap), plus the Life friends list/thread/start
+  flows, Chat's server-history sync and cache fallback, the first-run
+  guide's once-only walk, and friend forwarding in vitest. 156 vitest
+  and the entire backend suite green; shell rebuilt.
+
 Phase 2 of going public: the subscription brain becomes real, the money
 stack wakes up behind honest walls, and KYC reviews get an inbox:
 

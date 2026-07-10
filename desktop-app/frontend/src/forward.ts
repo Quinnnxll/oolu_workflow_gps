@@ -9,8 +9,8 @@ import { conciseName } from "./naming";
 // drawer keeps its own independent record).
 
 export interface ForwardTarget {
-  kind: "oolu" | "node" | "file";
-  id?: string; // node id for "node"
+  kind: "oolu" | "node" | "file" | "friend";
+  id?: string; // node id for "node"; the peer's username for "friend"
   title: string; // what the picker shows
 }
 
@@ -34,6 +34,9 @@ export function forwardMessage(
   if (target.kind === "file") {
     throw new Error("use forwardMessageToFile for file targets");
   }
+  if (target.kind === "friend") {
+    throw new Error("use forwardMessageToFriend for friend targets");
+  }
   const key = threadKey(target);
   let thread: unknown[] = [];
   try {
@@ -48,6 +51,16 @@ export function forwardMessage(
     text: `${FORWARDED_MARK} from ${from}:\n${text}`,
   });
   localStorage.setItem(key, JSON.stringify(thread));
+}
+
+// Forwarding to a person is a real delivery: the marked line goes through
+// the server into their thread, not into any local storage.
+export async function forwardMessageToFriend(
+  text: string,
+  from: string,
+  peer: string,
+): Promise<void> {
+  await api.sendFriendMessage(peer, `${FORWARDED_MARK} from ${from}:\n${text}`);
 }
 
 // A forwarded message can also become a document in the Life drawer.
@@ -86,6 +99,14 @@ export async function forwardFile(
 // on the caller's desk (best-effort — no desk means just OoLu).
 export async function forwardTargets(): Promise<ForwardTarget[]> {
   const targets: ForwardTarget[] = [{ kind: "oolu", title: "OoLu" }];
+  try {
+    const { items } = await api.friends();
+    for (const f of items ?? []) {
+      targets.push({ kind: "friend", id: f.peer, title: f.peer });
+    }
+  } catch {
+    /* no server here: friends are not destinations */
+  }
   try {
     const { items } = await api.workNodes();
     for (const n of items) {

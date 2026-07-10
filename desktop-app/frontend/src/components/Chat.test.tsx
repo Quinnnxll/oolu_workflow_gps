@@ -318,6 +318,58 @@ describe("Chat", () => {
     expect(screen.getByText("Anytime.")).toBeTruthy();
   });
 
+  it("loads the account's thread from the server — one thread across devices", async () => {
+    // Another device talked earlier; this device's cache has older words.
+    localStorage.setItem(
+      "oolu_chat",
+      JSON.stringify([{ kind: "assistant", text: "stale cache line" }]),
+    );
+    routes["GET /v1/chat/history"] = {
+      status: 200,
+      body: {
+        items: [
+          { seq: 1, kind: "user", body: "hello from my laptop", at: "t1" },
+          { seq: 2, kind: "assistant", body: "Hey! On it.", at: "t2" },
+        ],
+      },
+    };
+    render(<Chat />);
+
+    expect(await screen.findByText("hello from my laptop")).toBeTruthy();
+    expect(screen.getByText("Hey! On it.")).toBeTruthy();
+    // The server's thread replaced the stale cache, not merged into it.
+    expect(screen.queryByText("stale cache line")).toBeNull();
+  });
+
+  it("keeps the local thread on hosts that keep no history", async () => {
+    localStorage.setItem(
+      "oolu_chat",
+      JSON.stringify([{ kind: "assistant", text: "the local story" }]),
+    );
+    routes["GET /v1/chat/history"] = { status: 404, body: {} };
+    render(<Chat />);
+
+    expect(await screen.findByText("the local story")).toBeTruthy();
+  });
+
+  it("walks a newcomer to a first task, exactly once", async () => {
+    const first = render(<Chat />);
+    expect(screen.getByText(/First time here/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Try a first task" }));
+    // The task lands in the box ready to send — nothing fires unseen.
+    const box = screen.getByPlaceholderText(
+      "Message OoLu…",
+    ) as HTMLTextAreaElement;
+    expect(box.value).toContain("fetch https://example.com");
+
+    // Used once, gone forever — even on a fresh empty thread.
+    first.unmount();
+    localStorage.removeItem("oolu_chat");
+    render(<Chat />);
+    expect(screen.queryByText(/First time here/)).toBeNull();
+  });
+
   it("reminds an idle user of pending work — once, at a bounded cadence", async () => {
     vi.useFakeTimers();
     try {

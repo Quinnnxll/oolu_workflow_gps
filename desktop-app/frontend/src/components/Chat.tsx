@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, TERMINAL_PHASES } from "../api";
-import type { ChatAction } from "../api";
+import type { ChatAction, ChatHistoryTurn } from "../api";
 import { humanizeEvent, statusSentence } from "../humanize";
 import { conciseName } from "../naming";
 import type { TaskView, TimelineEvent } from "../types";
@@ -37,6 +37,11 @@ type Msg =
   | { kind: "run"; runId: string };
 
 const CHAT_KEY = "oolu_chat";
+// Shown once, before the first conversation: three concrete steps from
+// zero to a first real task. Dismissed forever the moment it's used.
+const FIRST_RUN_KEY = "oolu_first_run_done";
+const FIRST_TASK =
+  "fetch https://example.com and keep what it says as a note";
 const WELCOME =
   "Hey! ⚡ I'm OoLu, your get-it-done sidekick. What are we tackling first?";
 // Holding Send this long starts a voice conversation instead of sending.
@@ -72,10 +77,30 @@ function loadThread(): Msg[] {
   }
 }
 
+// One thread across devices: a host that keeps history is the source of
+// truth (this phone shows what that laptop said); localStorage remains the
+// warm cache and the whole story on hosts without a history store.
+// Reminder bubbles are presence, not conversation — they stay client-side.
+function fromServer(items: ChatHistoryTurn[]): Msg[] {
+  return items.map((turn): Msg => {
+    if (turn.kind === "run") return { kind: "run", runId: turn.body };
+    if (turn.kind === "assistant") return { kind: "assistant", text: turn.body };
+    return { kind: "user", text: turn.body };
+  });
+}
+
 export function Chat() {
   const [thread, setThread] = useState<Msg[]>(loadThread);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  // The one-time first-run guide: gone the moment it's used or dismissed.
+  const [firstRun, setFirstRun] = useState(
+    () => localStorage.getItem(FIRST_RUN_KEY) === null,
+  );
+  function finishFirstRun() {
+    localStorage.setItem(FIRST_RUN_KEY, "1");
+    setFirstRun(false);
+  }
   const [listening, setListening] = useState(false);
   // Replies are spoken along with the message BY DEFAULT; the switch to
   // silence lives in Settings (app.voice_replies), not in the chat.
@@ -108,6 +133,18 @@ export function Chat() {
     localStorage.setItem(CHAT_KEY, JSON.stringify(thread));
     endRef.current?.scrollIntoView?.({ block: "end" });
   }, [thread]);
+
+  // On mount, ask the host for the account's thread. Present and
+  // non-empty → it replaces the local cache (another device may have
+  // talked since); absent (404 on history-less hosts) → local stands.
+  useEffect(() => {
+    void api
+      .chatHistory()
+      .then(({ items }) => {
+        if (items && items.length > 0) setThread(fromServer(items));
+      })
+      .catch(() => {}); // no server history here: the cache is the thread
+  }, []);
 
   // The conversation is endless, so unfinished work surfaces ITSELF: once
   // the user has been idle a while, a reminder bubble lists what is still
@@ -258,6 +295,46 @@ export function Chat() {
                 </button>
               ))}
             </div>
+            {firstRun && (
+              <div className="bubble assistant first-run">
+                <div>First time here? A minute to your first task:</div>
+                <ol>
+                  <li>
+                    <button
+                      className="linklike"
+                      onClick={() => {
+                        finishFirstRun();
+                        void send("hi");
+                      }}
+                    >
+                      Say hi
+                    </button>{" "}
+                    — hear how I talk.
+                  </li>
+                  <li>
+                    <button
+                      className="linklike"
+                      onClick={() => {
+                        finishFirstRun();
+                        setDraft(FIRST_TASK);
+                      }}
+                    >
+                      Try a first task
+                    </button>{" "}
+                    — I'll put it in the box; press Send and watch it run
+                    in Noder.
+                  </li>
+                  <li>
+                    Give me a brain: open <b>Settings</b> in the list to add
+                    a model key or point me at a local model — tasks run
+                    without one, conversation gets smarter with one.
+                  </li>
+                </ol>
+                <button className="linklike" onClick={finishFirstRun}>
+                  Got it — hide this
+                </button>
+              </div>
+            )}
           </>
         )}
         {thread.map((m, i) =>
