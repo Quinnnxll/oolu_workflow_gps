@@ -664,6 +664,26 @@ main.chat-main {
   outline: 2px solid var(--accent);
 }
 
+/* Select mode in Files: highlighted tiles and the bulk-action bar. */
+.file-tile.on {
+  outline: 2px solid var(--accent);
+}
+
+.files-actions {
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+}
+
+.files-actions .danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.files-notice {
+  padding: 2px 0 6px;
+}
+
 /* The composer's device door: location and camera, asked for on tap. */
 .composer-plus {
   position: relative;

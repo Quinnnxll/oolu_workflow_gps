@@ -82,6 +82,55 @@ export async function photoToDataUrl(
   throw new Error("that photo is too large even after downscaling");
 }
 
+// Pick any files from the local device (documents, images, anything) —
+// the same native picker on phone, tablet, and computer. Resolves []
+// when the user cancels: a cancel is not an error.
+export function pickLocalFiles(): Promise<File[]> {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.multiple = true;
+    input.onchange = () => resolve(Array.from(input.files ?? []));
+    input.oncancel = () => resolve([]);
+    input.click();
+  });
+}
+
+// Turn a picked file into drawer content within the 1 MB budget: images
+// are downscaled to JPEG, text stays text, anything else rides as a
+// data URL (base64 inflates ~4/3, so the raw cap is lower). Refusals are
+// honest errors naming the file.
+export async function fileToDrawerContent(
+  file: File,
+  maxBytes = 900_000,
+): Promise<{ content: string; mediaType: string }> {
+  const type = file.type || "";
+  if (type.startsWith("image/")) {
+    return { content: await photoToDataUrl(file), mediaType: "image/jpeg" };
+  }
+  const textLike =
+    type.startsWith("text/") ||
+    type === "application/json" ||
+    /\.(md|txt|csv|tsv|json|log)$/i.test(file.name);
+  if (textLike) {
+    const text = await file.text();
+    if (text.length > maxBytes) {
+      throw new Error(`${file.name} is too large for the drawer (1 MB cap)`);
+    }
+    return { content: text, mediaType: type || "text/markdown" };
+  }
+  if (file.size > Math.floor(maxBytes * 0.74)) {
+    throw new Error(`${file.name} is too large for the drawer (1 MB cap)`);
+  }
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error(`could not read ${file.name}`));
+    reader.readAsDataURL(file);
+  });
+  return { content: dataUrl, mediaType: type || "application/octet-stream" };
+}
+
 export function photoName(now = new Date()): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return (

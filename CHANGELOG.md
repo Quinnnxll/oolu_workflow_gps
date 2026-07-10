@@ -4,6 +4,25 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Files that arrive from the device, and act as a group:
+
+- **Upload from the device.** The Files drawer's new Upload button opens
+  the native picker (multi-select, same on phone/tablet/computer) and
+  lands the picked files in the OPEN folder: text stays text, images are
+  downscaled to fit the drawer's 1 MB budget, other binaries ride as
+  data URLs — and anything too large is refused in words naming the
+  file, next to the count of what did land. "New document" still exists
+  for starting from nothing.
+- **Select many, act once.** A Select mode turns the tiles into
+  checkboxes; the action bar forwards the whole selection to one picked
+  destination — a node's drawer, the Life drawer, or a friend (a real
+  server delivery carrying the file) — or deletes it in one two-tap
+  move (first tap arms, "Really delete N?" fires) — never a silent mass
+  delete.
+- Tests: the upload write with its media type, the refused-file notice,
+  the two-tap bulk delete, and a two-file forward to one node. 184
+  vitest and the entire backend suite green; shell rebuilt.
+
 The web through the model's own hands, and the desktop's own disk:
 
 - **Model web search.** The Anthropic adapter can now carry the

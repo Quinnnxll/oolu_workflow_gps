@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import type { FileMeta } from "../api";
+import { fileToDrawerContent, pickLocalFiles } from "../device";
+import { forwardFile, forwardTargets } from "../forward";
+import type { ForwardTarget } from "../forward";
 import { FileView } from "./FileView";
 
 // One drawer of files — the Life account's shared drawer (no nodeId) or a
@@ -36,6 +39,14 @@ export function FilesPane({ nodeId }: { nodeId?: string }) {
   const [drafts, setDrafts] = useState<string[]>([]);
   const [naming, setNaming] = useState(false);
   const [folderDraft, setFolderDraft] = useState("");
+  // Select mode: tiles toggle instead of opening, and the bar below acts
+  // on everything selected at once — forward or delete, one move.
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [targets, setTargets] = useState<ForwardTarget[] | null>(null);
+  const [forwarding, setForwarding] = useState(false);
+  const [notice, setNotice] = useState("");
 
   const refresh = useCallback(async () => {
     try {
@@ -79,6 +90,97 @@ export function FilesPane({ nodeId }: { nodeId?: string }) {
     ]),
   ).sort();
 
+  function leaveSelectMode() {
+    setSelecting(false);
+    setSelected(new Set());
+    setConfirmDelete(false);
+    setForwarding(false);
+  }
+
+  function toggle(fileId: string) {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(fileId)) next.delete(fileId);
+      else next.add(fileId);
+      return next;
+    });
+    setConfirmDelete(false);
+  }
+
+  async function upload() {
+    setNotice("");
+    const picked = await pickLocalFiles();
+    if (picked.length === 0) return;
+    let saved = 0;
+    const refused: string[] = [];
+    for (const file of picked) {
+      try {
+        const { content, mediaType } = await fileToDrawerContent(file);
+        await api.createFile(file.name, content, nodeId, cwd, mediaType);
+        saved++;
+      } catch (e) {
+        refused.push((e as Error).message);
+      }
+    }
+    setNotice(
+      [
+        saved > 0 ? `uploaded ${saved} file${saved === 1 ? "" : "s"}` : "",
+        ...refused,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    );
+    await refresh();
+  }
+
+  async function deleteSelected() {
+    const ids = Array.from(selected);
+    let gone = 0;
+    for (const id of ids) {
+      try {
+        await api.deleteFile(id);
+        gone++;
+      } catch {
+        /* one refusal must not stop the rest */
+      }
+    }
+    setNotice(`deleted ${gone} file${gone === 1 ? "" : "s"}`);
+    leaveSelectMode();
+    await refresh();
+  }
+
+  async function forwardSelectedTo(target: ForwardTarget) {
+    const chosen = files.filter((f) => selected.has(f.file_id));
+    let sent = 0;
+    const failed: string[] = [];
+    for (const f of chosen) {
+      try {
+        if (target.kind === "friend") {
+          // A person gets a real delivery: the message carries the file.
+          await api.sendFriendMessage(
+            target.id ?? target.title,
+            `📄 forwarded a file: ${f.name}`,
+            f.file_id,
+          );
+        } else {
+          await forwardFile(
+            f.file_id,
+            target.kind === "node" ? target.id : undefined,
+          );
+        }
+        sent++;
+      } catch {
+        failed.push(f.name);
+      }
+    }
+    setNotice(
+      `forwarded ${sent} file${sent === 1 ? "" : "s"} to ${target.title}` +
+        (failed.length ? ` · failed: ${failed.join(", ")}` : ""),
+    );
+    leaveSelectMode();
+    await refresh();
+  }
+
   function addFolder() {
     const name = folderDraft.trim().replace(/\/+/g, "/").replace(/^\/|\/$/g, "");
     setNaming(false);
@@ -97,8 +199,17 @@ export function FilesPane({ nodeId }: { nodeId?: string }) {
           {cwd && <span className="files-path"> / {cwd}</span>}
         </span>
         <span className="row">
+          <button
+            className="ghost"
+            onClick={() => (selecting ? leaveSelectMode() : setSelecting(true))}
+          >
+            {selecting ? "Done" : "Select"}
+          </button>
           <button className="ghost" onClick={() => setNaming(true)}>
             New folder
+          </button>
+          <button className="ghost" onClick={() => void upload()}>
+            Upload
           </button>
           <button
             onClick={async () => {
@@ -111,6 +222,53 @@ export function FilesPane({ nodeId }: { nodeId?: string }) {
           </button>
         </span>
       </div>
+
+      {notice && <div className="muted files-notice">{notice}</div>}
+
+      {selecting && selected.size > 0 && (
+        <div className="row files-actions">
+          <span className="muted">{selected.size} selected</span>
+          <span className="forward">
+            <button
+              onClick={async () => {
+                setForwarding(true);
+                if (targets === null) setTargets(await forwardTargets());
+              }}
+            >
+              Forward…
+            </button>
+            {forwarding && (
+              <span className="forward-menu">
+                {(targets ?? []).map((t) => (
+                  <button
+                    key={`${t.kind}:${t.id ?? ""}`}
+                    type="button"
+                    onClick={() => void forwardSelectedTo(t)}
+                  >
+                    {t.title}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => setForwarding(false)}
+                >
+                  cancel
+                </button>
+              </span>
+            )}
+          </span>
+          {!confirmDelete ? (
+            <button className="ghost" onClick={() => setConfirmDelete(true)}>
+              Delete…
+            </button>
+          ) : (
+            <button className="danger" onClick={() => void deleteSelected()}>
+              Really delete {selected.size}?
+            </button>
+          )}
+        </div>
+      )}
 
       {naming && (
         <div className="row files-newfolder">
@@ -164,11 +322,22 @@ export function FilesPane({ nodeId }: { nodeId?: string }) {
         {here.map((f) => (
           <button
             key={f.file_id}
-            className="file-tile"
-            onClick={() => setOpen(f.file_id)}
+            className={`file-tile ${
+              selecting && selected.has(f.file_id) ? "on" : ""
+            }`}
+            aria-pressed={selecting ? selected.has(f.file_id) : undefined}
+            onClick={() =>
+              selecting ? toggle(f.file_id) : setOpen(f.file_id)
+            }
           >
             <span className="file-tile-icon">
-              {isSheetName(f.name) ? "▤" : "≡"}
+              {selecting
+                ? selected.has(f.file_id)
+                  ? "☑"
+                  : "☐"
+                : isSheetName(f.name)
+                  ? "▤"
+                  : "≡"}
             </span>
             <span className="file-tile-name">{f.name}</span>
             <span className="file-tile-sub">

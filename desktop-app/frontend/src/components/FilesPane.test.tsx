@@ -1,6 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { FilesPane } from "./FilesPane";
+
+// The device picker opens native UI — stubbed here; the pane's own
+// upload plumbing (drawer writes, notices) is what's under test.
+vi.mock("../device", () => ({
+  pickLocalFiles: vi.fn(),
+  fileToDrawerContent: vi.fn(),
+}));
+import { fileToDrawerContent, pickLocalFiles } from "../device";
 
 let routes: Record<string, { status: number; body: unknown }>;
 let calls: { method: string; path: string; query: string; body: unknown }[];
@@ -42,6 +56,21 @@ const FILES = {
       name: "notes.md",
       media_type: "text/markdown",
       size: 200,
+      created_at: "t",
+      updated_at: "t",
+    },
+  ],
+};
+
+const TWO_FILES = {
+  items: [
+    ...FILES.items,
+    {
+      file_id: "f2",
+      node_id: null,
+      name: "budget.csv",
+      media_type: "text/csv",
+      size: 90,
       created_at: "t",
       updated_at: "t",
     },
@@ -127,6 +156,128 @@ describe("FilesPane", () => {
     expect(screen.getByText("/ invoices")).toBeTruthy();
     expect(
       screen.getByText(/Empty folder — create a document to keep it/),
+    ).toBeTruthy();
+  });
+
+  it("uploads picked device files into the open folder", async () => {
+    routes["GET /v1/files"] = { status: 200, body: FILES };
+    routes["POST /v1/files"] = {
+      status: 201,
+      body: { ...FILES.items[0], file_id: "f9" },
+    };
+    vi.mocked(pickLocalFiles).mockResolvedValue([
+      new File(["a,b"], "budget.csv", { type: "text/csv" }),
+    ]);
+    vi.mocked(fileToDrawerContent).mockResolvedValue({
+      content: "a,b",
+      mediaType: "text/csv",
+    });
+    render(<FilesPane />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Upload" }));
+
+    await waitFor(() => {
+      const post = calls.find(
+        (c) => c.method === "POST" && c.path === "/v1/files",
+      );
+      expect(post?.body).toEqual({
+        name: "budget.csv",
+        content: "a,b",
+        media_type: "text/csv",
+      });
+    });
+    expect(await screen.findByText(/uploaded 1 file/)).toBeTruthy();
+  });
+
+  it("a refused upload lands as words next to the successes", async () => {
+    routes["GET /v1/files"] = { status: 200, body: FILES };
+    vi.mocked(pickLocalFiles).mockResolvedValue([
+      new File(["x"], "huge.bin"),
+    ]);
+    vi.mocked(fileToDrawerContent).mockRejectedValue(
+      new Error("huge.bin is too large for the drawer (1 MB cap)"),
+    );
+    render(<FilesPane />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Upload" }));
+
+    expect(
+      await screen.findByText(/huge.bin is too large/),
+    ).toBeTruthy();
+    expect(
+      calls.some((c) => c.method === "POST" && c.path === "/v1/files"),
+    ).toBe(false);
+  });
+
+  it("selects several files and deletes them in one two-tap move", async () => {
+    routes["GET /v1/files"] = { status: 200, body: TWO_FILES };
+    routes["DELETE /v1/files/f1"] = { status: 200, body: { deleted: true } };
+    routes["DELETE /v1/files/f2"] = { status: 200, body: { deleted: true } };
+    render(<FilesPane />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Select" }));
+    fireEvent.click(screen.getByText("notes.md"));
+    fireEvent.click(screen.getByText("budget.csv"));
+    expect(screen.getByText("2 selected")).toBeTruthy();
+
+    // First tap arms, second tap fires — no silent mass delete.
+    fireEvent.click(screen.getByRole("button", { name: "Delete…" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Really delete 2?" }),
+    );
+
+    await waitFor(() => {
+      const deletes = calls.filter((c) => c.method === "DELETE");
+      expect(deletes.map((c) => c.path).sort()).toEqual([
+        "/v1/files/f1",
+        "/v1/files/f2",
+      ]);
+    });
+    expect(await screen.findByText(/deleted 2 files/)).toBeTruthy();
+  });
+
+  it("forwards the whole selection to one picked destination", async () => {
+    routes["GET /v1/files"] = { status: 200, body: TWO_FILES };
+    routes["GET /v1/friends"] = { status: 200, body: { items: [] } };
+    routes["GET /v1/work/nodes"] = {
+      status: 200,
+      body: { items: [{ node_id: "n1", title: "Invoice Cleaner" }] },
+    };
+    routes["GET /v1/files/f1"] = {
+      status: 200,
+      body: { ...TWO_FILES.items[0], content: "hello" },
+    };
+    routes["GET /v1/files/f2"] = {
+      status: 200,
+      body: { ...TWO_FILES.items[1], content: "a,b" },
+    };
+    routes["POST /v1/files"] = {
+      status: 201,
+      body: { ...TWO_FILES.items[0], file_id: "copy" },
+    };
+    render(<FilesPane />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Select" }));
+    fireEvent.click(screen.getByText("notes.md"));
+    fireEvent.click(screen.getByText("budget.csv"));
+    fireEvent.click(screen.getByRole("button", { name: "Forward…" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Invoice Cleaner" }),
+    );
+
+    await waitFor(() => {
+      const copies = calls.filter(
+        (c) => c.method === "POST" && c.path === "/v1/files",
+      );
+      expect(copies).toHaveLength(2);
+      expect(
+        copies.every(
+          (c) => (c.body as { node_id?: string }).node_id === "n1",
+        ),
+      ).toBe(true);
+    });
+    expect(
+      await screen.findByText(/forwarded 2 files to Invoice Cleaner/),
     ).toBeTruthy();
   });
 
