@@ -659,6 +659,15 @@ export const api = {
   // don't keep history answer 404 — callers fall back to local storage.
   chatHistory: () =>
     req<{ items: ChatHistoryTurn[] }>("GET", "/v1/chat/history"),
+  // The data-subject's rights, self-serve: everything as one JSON
+  // document, and erasure that says exactly what it removed.
+  exportAccount: () => req<Record<string, unknown>>("GET", "/v1/account/export"),
+  deleteAccount: (password: string) =>
+    req<{ account: string; erased: Record<string, number>; notes: string[] }>(
+      "POST",
+      "/v1/account/delete",
+      { password },
+    ),
   // Friends: the peer list, exact-lookup (username or e-mail — never a
   // directory), one thread per person (opening it marks it read), send.
   friends: () => req<{ items: FriendConversation[] }>("GET", "/v1/friends"),

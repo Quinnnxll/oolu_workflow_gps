@@ -191,6 +191,15 @@ class PaymentProfileStore:
             )
         return profile
 
+    def delete(self, principal: str) -> bool:
+        """Data-subject erasure: the card metadata and customer reference,
+        gone. (The processor keeps its own records under its own terms.)"""
+        with self._conn.transaction() as db:
+            cursor = db.execute(
+                "DELETE FROM payment_profiles WHERE principal = ?", (principal,)
+            )
+        return bool(getattr(cursor, "rowcount", 0))
+
 
 class PaymentMethodsService:
     """Store + vault, composed: what the /v1/payment-methods routes call."""
@@ -224,6 +233,20 @@ class PaymentMethodsService:
             )
         )
         return card
+
+    def forget(self, principal: str) -> bool:
+        """Data-subject erasure: detach every saved card at the provider,
+        then drop the stored profile. Best-effort on the provider side —
+        the local record goes regardless."""
+        profile = self._store.get(principal)
+        if profile is None:
+            return False
+        for card in profile.cards:
+            try:
+                self._vault.detach(profile.customer_ref, card.pm_ref)
+            except PaymentError:
+                continue  # provider hiccup: local erasure still proceeds
+        return self._store.delete(principal)
 
     def remove_card(self, principal: str, pm_ref: str) -> bool:
         profile = self.profile(principal)

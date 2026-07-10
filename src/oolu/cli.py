@@ -412,6 +412,23 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "doctor", help="check this installation and say exactly what to fix"
     ).add_argument("--config", metavar="PATH", help="path to a models.yaml file")
+    backup = sub.add_parser(
+        "backup",
+        help="copy everything a restore needs into one timestamped folder",
+    )
+    backup.add_argument(
+        "--data",
+        metavar="DIR",
+        required=True,
+        help="the data directory to back up (.oolu/host for a host; "
+        "~/.oolu for the desktop)",
+    )
+    backup.add_argument(
+        "--out",
+        metavar="DIR",
+        default="backups",
+        help="where backup folders are created (default: ./backups)",
+    )
     sub.add_parser("version", help="print the version")
     return parser
 
@@ -419,6 +436,72 @@ def build_parser() -> argparse.ArgumentParser:
 # --------------------------------------------------------------------------- #
 # Settings / knowledge wiring.                                                #
 # --------------------------------------------------------------------------- #
+def _cmd_backup(args, out) -> int:
+    """One folder that restores the whole install.
+
+    Databases go through SQLite's ONLINE backup API — safe against a
+    live server mid-write, unlike a file copy. The keyring's machine.key
+    rides along: encrypted model keys are unreadable without it, so a
+    backup that skipped it would restore a host with amnesia. When the
+    durable store is PostgreSQL the runbook's pg_dump covers it — this
+    command still captures the local auxiliary databases.
+    """
+    import shutil
+    import sqlite3
+    from datetime import UTC, datetime
+    from pathlib import Path
+
+    data = Path(args.data).expanduser()
+    if not data.is_dir():
+        raise _CliError(f"no data directory at {data}")
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    destination = Path(args.out).expanduser() / f"oolu-backup-{stamp}"
+    destination.mkdir(parents=True, exist_ok=True)
+
+    copied: list[str] = []
+    for name in (
+        "host.db",
+        "identity.db",
+        "users.db",
+        "prices.db",
+        "traces.db",
+        "scripts.db",
+    ):
+        source_path = data / name
+        if not source_path.is_file():
+            continue
+        source = sqlite3.connect(source_path)
+        target = sqlite3.connect(destination / name)
+        try:
+            source.backup(target)
+        finally:
+            target.close()
+            source.close()
+        copied.append(name)
+    key_path = data / "machine.key"
+    if key_path.is_file():
+        shutil.copy2(key_path, destination / "machine.key")
+        copied.append("machine.key")
+    if not copied:
+        raise _CliError(
+            f"nothing to back up under {data} — is this really an OoLu"
+            " data directory?"
+        )
+    for name in copied:
+        out.write(f"[ok] {name}\n")
+    database_url = os.environ.get("OOLU_DATABASE_URL") or os.environ.get(
+        "DATABASE_URL"
+    )
+    if database_url:
+        out.write(
+            "[--] the durable store is PostgreSQL — back it up with"
+            " pg_dump (see docs/operations.md); the files above are the"
+            " local auxiliaries\n"
+        )
+    out.write(f"backup written to {destination}\n")
+    return 0
+
+
 def _load_settings(args):
     # Settings.load() resolves --config (or $OOLU_CONFIG, else defaults) AND layers
     # the OOLU_* env overrides on top. Calling Settings() directly would skip those
@@ -1506,6 +1589,8 @@ def main(argv: list[str] | None = None, *, builder=None, out=None) -> int:
             return _cmd_show_config(args, out)
         if args.command == "doctor":
             return _cmd_doctor(args, out)
+        if args.command == "backup":
+            return _cmd_backup(args, out)
         if args.command == "telegram":
             return _cmd_telegram(args)
         if args.command == "reply-teach":

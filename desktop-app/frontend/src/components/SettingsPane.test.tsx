@@ -376,3 +376,71 @@ describe("SettingsPane", () => {
     expect(await screen.findByText(/must be at most/)).toBeTruthy();
   });
 });
+
+describe("PrivacySection", () => {
+  it("deleting takes the password, then signs out on success", async () => {
+    routes["GET /v1/settings"] = { status: 200, body: CATALOG };
+    routes["POST /v1/account/delete"] = {
+      status: 200,
+      body: {
+        account: "disabled",
+        erased: { messages: 2 },
+        notes: ["the username stays reserved"],
+      },
+    };
+    render(<SettingsPane />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Delete…" }));
+    const confirm = screen.getByRole("button", { name: "Delete forever" });
+    expect((confirm as HTMLButtonElement).disabled).toBe(true); // no password yet
+    fireEvent.change(
+      screen.getByLabelText("Password to confirm deletion"),
+      { target: { value: "my-password" } },
+    );
+    fireEvent.click(confirm);
+
+    await waitFor(() => {
+      const post = calls.find((c) => c.path === "/v1/account/delete");
+      expect(post?.body).toEqual({ password: "my-password" });
+    });
+    expect(await screen.findByText(/username stays reserved/)).toBeTruthy();
+  });
+
+  it("a wrong password shows the server's refusal and deletes nothing", async () => {
+    routes["GET /v1/settings"] = { status: 200, body: CATALOG };
+    routes["POST /v1/account/delete"] = {
+      status: 403,
+      body: { error: { message: "deleting the account takes your password" } },
+    };
+    render(<SettingsPane />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Delete…" }));
+    fireEvent.change(
+      screen.getByLabelText("Password to confirm deletion"),
+      { target: { value: "wrong" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Delete forever" }));
+
+    expect(await screen.findByText(/takes your password/)).toBeTruthy();
+  });
+
+  it("downloads the account export as one JSON file", async () => {
+    routes["GET /v1/settings"] = { status: 200, body: CATALOG };
+    routes["GET /v1/account/export"] = {
+      status: 200,
+      body: { principal: "alice", chat: [] },
+    };
+    // jsdom has no blob URLs; patch just the two methods, keep `new URL()`.
+    const createURL = vi.fn(() => "blob:export");
+    const revokeURL = vi.fn();
+    URL.createObjectURL = createURL as unknown as typeof URL.createObjectURL;
+    URL.revokeObjectURL = revokeURL as unknown as typeof URL.revokeObjectURL;
+    render(<SettingsPane />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Download" }));
+
+    expect(await screen.findByText(/downloaded as/)).toBeTruthy();
+    expect(createURL).toHaveBeenCalled();
+    expect(revokeURL).toHaveBeenCalledWith("blob:export");
+  });
+});

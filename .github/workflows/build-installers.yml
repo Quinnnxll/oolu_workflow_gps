@@ -60,3 +60,28 @@ jobs:
         with:
           name: OoLu-Shell-${{ runner.os }}
           path: dist/OoLu-Shell*
+
+  # A pushed v* tag becomes a versioned GitHub Release carrying every
+  # platform's smoke-tested binary — the download page IS this job's
+  # output. workflow_dispatch runs build and upload artifacts only.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          path: release-artifacts
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF#refs/tags/}"
+          gh release create "$tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "OoLu $tag" \
+            --generate-notes \
+            release-artifacts/*/OoLu-Shell*

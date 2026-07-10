@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { accountConsoleUrl, api } from "../api";
+import { accountConsoleUrl, api, signOut } from "../api";
 import type {
   ModelKeyView,
   PaymentProfileView,
@@ -98,7 +98,147 @@ export function SettingsPane() {
         </section>
       ))}
       <PaymentSection />
+      <PrivacySection />
     </div>
+  );
+}
+
+// The data-subject's rights, self-serve: everything as one downloadable
+// document, and erasure that spells out what it removes — plus the legal
+// documents every host serves at stable public URLs.
+export function PrivacySection() {
+  const [confirming, setConfirming] = useState(false);
+  const [password, setPassword] = useState("");
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function download() {
+    setError("");
+    setBusy(true);
+    try {
+      const data = await api.exportAccount();
+      const blob = new Blob([JSON.stringify(data, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "oolu-account-export.json";
+      a.click();
+      URL.revokeObjectURL(url);
+      setNotice("Your data downloaded as oolu-account-export.json.");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function erase() {
+    setError("");
+    setBusy(true);
+    try {
+      const result = await api.deleteAccount(password);
+      setNotice(result.notes.join(" "));
+      signOut();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="settings-group privacy">
+      <h3>Privacy & data</h3>
+      <div className="setting-row">
+        <div className="setting-label">
+          <span>Download my data</span>
+          <span className="setting-desc">
+            Everything this host holds about you, as one JSON document.
+          </span>
+        </div>
+        <div className="setting-control">
+          <button disabled={busy} onClick={() => void download()}>
+            Download
+          </button>
+        </div>
+      </div>
+      <div className="setting-row">
+        <div className="setting-label">
+          <span>Delete my account</span>
+          <span className="setting-desc">
+            Erases your messages, conversation, sign-in identities, and
+            card details, and disables the account forever. Files in the
+            shared drawer stay — delete yours in Files first.
+          </span>
+        </div>
+        <div className="setting-control row">
+          {!confirming ? (
+            <button className="linklike" onClick={() => setConfirming(true)}>
+              Delete…
+            </button>
+          ) : (
+            <>
+              <input
+                aria-label="Password to confirm deletion"
+                type="password"
+                placeholder="your password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+              <button
+                disabled={busy || !password}
+                onClick={() => void erase()}
+              >
+                Delete forever
+              </button>
+              <button
+                className="linklike"
+                onClick={() => {
+                  setConfirming(false);
+                  setPassword("");
+                  setError("");
+                }}
+              >
+                cancel
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+      <div className="setting-row">
+        <div className="setting-label">
+          <span>Legal</span>
+          <span className="setting-desc">
+            The words this host serves at its public legal URLs.
+          </span>
+        </div>
+        <div className="setting-control row">
+          <button
+            className="linklike"
+            onClick={() => window.open("/v1/legal/terms", "_blank")}
+          >
+            Terms
+          </button>
+          <button
+            className="linklike"
+            onClick={() => window.open("/v1/legal/privacy", "_blank")}
+          >
+            Privacy
+          </button>
+          <button
+            className="linklike"
+            onClick={() => window.open("/v1/legal/node-policy", "_blank")}
+          >
+            Node Policy
+          </button>
+        </div>
+      </div>
+      {notice && <div className="muted">{notice}</div>}
+      {error && <div className="error">{error}</div>}
+    </section>
   );
 }
 

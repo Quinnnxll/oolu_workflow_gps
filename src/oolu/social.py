@@ -162,6 +162,19 @@ class DirectMessageStore:
                 entry["unread"] += 1
         return sorted(peers.values(), key=lambda e: e["last_at"], reverse=True)
 
+    def erase_principal(self, *, tenant: str, principal: str) -> int:
+        """Data-subject erasure: every message the principal sent OR
+        received is gone — the store holds ONE shared row per message, so
+        erasing an account removes its threads from the peers' view too
+        (said plainly in the account-deletion response). Returns count."""
+        with self._conn.transaction() as db:
+            cursor = db.execute(
+                """DELETE FROM dm_messages
+                   WHERE tenant_id = ? AND (sender = ? OR recipient = ?)""",
+                (tenant, principal, principal),
+            )
+        return int(getattr(cursor, "rowcount", 0) or 0)
+
     def unread_total(self, *, tenant: str, principal: str) -> int:
         with self._conn.lock:
             row = self._conn.db.execute(
@@ -241,6 +254,16 @@ class AssistantHistoryStore:
                 (tenant, principal, seq - ASSISTANT_HISTORY_KEEP),
             )
         return seq
+
+    def erase(self, *, tenant: str, principal: str) -> int:
+        """Data-subject erasure: the account's whole thread, gone."""
+        with self._conn.transaction() as db:
+            cursor = db.execute(
+                "DELETE FROM assistant_turns"
+                " WHERE tenant_id = ? AND principal = ?",
+                (tenant, principal),
+            )
+        return int(getattr(cursor, "rowcount", 0) or 0)
 
     def history(
         self, *, tenant: str, principal: str, limit: int = 200

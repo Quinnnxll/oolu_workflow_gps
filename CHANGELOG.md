@@ -4,6 +4,50 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Phase 4 of going public — ship and operate: the data-subject's rights,
+the legal surface, backups, the operator's numbers, and releases:
+
+- **Export and erasure, self-serve.** `GET /v1/account/export` returns
+  everything the host holds about the caller as one JSON document —
+  account, identity links, settings, the OoLu thread, friend messages,
+  Life-drawer files, runs, model usage, earnings, payment metadata.
+  `POST /v1/account/delete` demands the password (a stolen session must
+  not destroy an account), erases the per-person stores (messages both
+  sides — the store keeps one shared copy — the assistant thread,
+  identity links, verification records, card metadata with provider-
+  side detach), disables the account forever (the username is never
+  reissued — a freed name would let a stranger inherit its trust),
+  appends an `account.erased` audit record, and answers with exactly
+  what was and was not removed. Settings grows a "Privacy & data"
+  section: Download my data, Delete my account (password-confirmed),
+  and the legal links.
+- **The legal surface.** Three public, stable URLs: `/v1/legal/terms`
+  and `/v1/legal/privacy` serve the operator's `<data_dir>/legal/*.md`
+  verbatim when present, and until then built-in templates headed by an
+  unmissable "TEMPLATE — NOT LEGAL ADVICE" notice; `/v1/legal/
+  node-policy` serves the code-owned, hygiene-enforced Node Policy.
+- **`oolu backup`.** One command, one timestamped folder with everything
+  a restore needs: every SQLite database through the ONLINE backup API
+  (safe against a live server mid-write) plus the keyring's
+  `machine.key` — without which every stored model key is unreadable.
+  Says when the durable store is PostgreSQL and pg_dump owns that half.
+- **The operator's numbers.** `/v1/metrics` is now permission-gated
+  (`metrics:read` — grant a monitoring role that can read nothing else)
+  and carries `uptime_seconds`, so a prober can spot crash-loops.
+- **Releases and the runbook.** A pushed `v*` tag now publishes a
+  GitHub Release carrying every platform's smoke-tested shell binary
+  (new `release` job in build-installers.yml). `docs/operations.md` is
+  the ops runbook: backup schedule + restore drill, monitoring and what
+  to alert on, ship order, staging, retention, the legal files, the
+  rights routes, and the 3 a.m. incident list. `scripts/load_test.py`
+  measures the run pipeline (req/s, p50/p95) against a host you own.
+- Tests: export completeness, password-gated erasure with store-level
+  verification and the audit record, template-vs-operator legal
+  documents, the metrics permission wall with uptime, and live-database
+  backup round-trips in `test_account_privacy.py`; the Settings privacy
+  flows (download, delete with wrong-password refusal) in vitest. 159
+  vitest and the entire backend suite green; shell rebuilt.
+
 Phase 3 of going public: people talking to people, one conversation
 across devices, and a first minute that lands:
 

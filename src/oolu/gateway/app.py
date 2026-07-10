@@ -407,6 +407,8 @@ class GatewayApp:
         direct_messages=None,  # social.DirectMessageStore: friends talking
         assistant_history=None,  # social.AssistantHistoryStore: one OoLu
         # thread per account, shared by every signed-in device
+        legal_dir=None,  # where the operator's terms.md/privacy.md live;
+        # marked templates answer until those files exist
         value_patcher=None,  # orchestrator.ValuePatcher: fills creative inputs
         isolation=None,  # worker.IsolationPolicy: powers /v1/worker-health
         docker_available: bool = True,
@@ -487,6 +489,7 @@ class GatewayApp:
         self._mail_codes = mail_codes
         self._direct_messages = direct_messages
         self._assistant_history = assistant_history
+        self._legal_dir = legal_dir
         # What may run where, per trust level — rendered by the shell's
         # health screen from the policy that is actually enforced.
         from ..worker.policy import IsolationPolicy
@@ -497,6 +500,8 @@ class GatewayApp:
         self._config = config or GatewayConfig()
         self._idem = idempotency or durable.idempotency
         self._clock = clock or (lambda: datetime.now(UTC))
+        # For the metrics surface: how long this process has answered.
+        self._started_at = self._clock()
         self._buckets: dict[str, _TokenBucket] = {}
         self._connections: dict[str, dict[str, dict]] = defaultdict(dict)
         self._metrics: dict[str, int] = defaultdict(int)
@@ -694,8 +699,26 @@ class GatewayApp:
             self._connect_provider,
             requires_permission="providers:manage",
         )
-        r.add("GET", "/v1/metrics", self._metrics_endpoint)
+        # Operational counters are the operator's, not every member's: the
+        # bootstrap admin's "*" covers it; grant metrics:read for a
+        # monitoring account that can read nothing else.
+        r.add(
+            "GET",
+            "/v1/metrics",
+            self._metrics_endpoint,
+            requires_permission="metrics:read",
+        )
         r.add("GET", "/v1/worker-health", self._worker_health)
+        # The legal surface: public, stable URLs. Terms and privacy are
+        # the operator's files (templates answer until then); the Node
+        # Policy is code-owned — the hygiene machinery enforces it.
+        r.add("GET", "/v1/legal/terms", self._legal_terms, public=True)
+        r.add("GET", "/v1/legal/privacy", self._legal_privacy, public=True)
+        r.add("GET", "/v1/legal/node-policy", self._legal_node_policy, public=True)
+        # The data-subject's two rights, self-serve: everything as one
+        # JSON document, and erasure that says exactly what it removed.
+        r.add("GET", "/v1/account/export", self._account_export)
+        r.add("POST", "/v1/account/delete", self._account_delete)
         r.add("GET", "/v1/nodeplace", self._list_own_nodes)
         r.add("GET", "/v1/api-keys", self._api_keys_list)
         r.add("POST", "/v1/api-keys", self._api_keys_create)
@@ -1663,7 +1686,204 @@ class GatewayApp:
         )
 
     def _metrics_endpoint(self, request, session, params) -> Response:
-        return json_response(200, dict(self._metrics))
+        counters = dict(self._metrics)
+        counters["uptime_seconds"] = max(
+            0,
+            int(
+                (
+                    (request.now or self._clock()) - self._started_at
+                ).total_seconds()
+            ),
+        )
+        return json_response(200, counters)
+
+    # ------------------------------------------------------------------ #
+    # The legal surface: public, stable, operator-owned words.            #
+    # ------------------------------------------------------------------ #
+    def _legal_terms(self, request, session, params) -> Response:
+        from ..legal import legal_document
+
+        return Response(
+            status=200,
+            body=legal_document("terms", legal_dir=self._legal_dir),
+            content_type="text/markdown; charset=utf-8",
+        )
+
+    def _legal_privacy(self, request, session, params) -> Response:
+        from ..legal import legal_document
+
+        return Response(
+            status=200,
+            body=legal_document("privacy", legal_dir=self._legal_dir),
+            content_type="text/markdown; charset=utf-8",
+        )
+
+    def _legal_node_policy(self, request, session, params) -> Response:
+        return json_response(
+            200, {"version": NODE_POLICY_VERSION, "text": NODE_POLICY}
+        )
+
+    # ------------------------------------------------------------------ #
+    # The data-subject's rights: export everything, erase what's yours.   #
+    # ------------------------------------------------------------------ #
+    def _account_export(self, request, session, params) -> Response:
+        """Everything this host holds about the caller, as one JSON
+        document. Sections appear when the matching store exists; a
+        section this host doesn't keep simply isn't there."""
+        tenant, principal = session.tenant_id, session.principal_id
+        export: dict = {
+            "exported_at": (request.now or self._clock()).isoformat(),
+            "tenant": tenant,
+            "principal": principal,
+        }
+        if self._accounts is not None:
+            account = self._accounts.user(principal)
+            if account is not None:
+                export["account"] = {
+                    "username": account.username,
+                    "roles": sorted(account.roles),
+                    "disabled": account.disabled,
+                    "created_at": str(account.created_at),
+                }
+        if self._identity_links is not None:
+            export["identity_links"] = self._identity_links.links_for(principal)
+        if self._settings is not None:
+            export["settings"] = self._settings.effective(tenant)
+        if self._assistant_history is not None:
+            export["chat"] = self._assistant_history.history(
+                tenant=tenant, principal=principal, limit=10_000
+            )
+        if self._direct_messages is not None:
+            export["messages"] = {
+                conversation["peer"]: [
+                    {
+                        "from": m.sender,
+                        "text": m.body,
+                        "file_id": m.file_id,
+                        "at": m.sent_at.isoformat(),
+                    }
+                    for m in self._direct_messages.between(
+                        tenant=tenant,
+                        me=principal,
+                        peer=conversation["peer"],
+                        limit=10_000,
+                    )
+                ]
+                for conversation in self._direct_messages.conversations(
+                    tenant=tenant, principal=principal
+                )
+            }
+        if self._files is not None:
+            # The Life drawer. Node drawers belong to nodes (shared work
+            # records), so they are not part of a personal export.
+            export["files"] = [
+                {
+                    "name": f.name,
+                    "folder": f.folder,
+                    "media_type": f.media_type,
+                    "updated_at": f.updated_at.isoformat(),
+                    "content": f.content,
+                }
+                for f in self._files.list(tenant=tenant)
+            ]
+        export["runs"] = [
+            self._run_dict(s)
+            for s in self._durable.runs.list(limit=10_000)
+            if s.contract.metadata.get("tenant_id") == tenant
+        ]
+        if self._model_usage is not None:
+            export["model_usage_this_month"] = self._model_usage.view(tenant)
+        if self._billing is not None:
+            export["earnings"] = [
+                entry.model_dump(mode="json")
+                for entry in self._billing.entries(principal)
+            ]
+        if self._payments is not None:
+            try:
+                export["payment_profile"] = self._payments.profile(
+                    principal
+                ).model_dump(mode="json")
+            except Exception:  # noqa: BLE001 - a dead vault never blocks export
+                pass
+        if self._payout_store is not None:
+            payout = self._payout_store.get_account(principal)
+            if payout is not None:
+                export["payout_account"] = payout.model_dump(mode="json")
+        return json_response(200, export)
+
+    def _account_delete(self, request, session, params) -> Response:
+        """Erasure, honestly described: the password proves the owner (a
+        stolen session must not be able to destroy an account), the
+        per-person stores are wiped, the account is disabled forever
+        (never reissued — a freed name would let a stranger inherit a
+        reputation), and the response says exactly what was and was not
+        removed."""
+        accounts = self._require_accounts()
+        password = str((request.body or {}).get("password", ""))
+        try:
+            accounts.login(
+                session.principal_id, password, now=request.now or self._clock()
+            )
+        except AuthenticationError as exc:
+            raise GatewayError(
+                403,
+                "forbidden",
+                "deleting the account takes your password — a signed-in"
+                " device alone is not enough",
+            ) from exc
+        tenant, principal = session.tenant_id, session.principal_id
+        erased: dict[str, int] = {}
+        # The address first — the links still know it.
+        email = (
+            self._identity_links.email_of(principal)
+            if self._identity_links is not None
+            else None
+        )
+        if self._direct_messages is not None:
+            erased["messages"] = self._direct_messages.erase_principal(
+                tenant=tenant, principal=principal
+            )
+        if self._assistant_history is not None:
+            erased["chat_turns"] = self._assistant_history.erase(
+                tenant=tenant, principal=principal
+            )
+        if self._identity_links is not None:
+            erased["identity_links"] = self._identity_links.unlink_all(principal)
+        if email and self._mail_codes is not None:
+            erased["mail_codes"] = self._mail_codes.forget(email)
+        if self._payments is not None and self._payments.forget(principal):
+            erased["payment_profile"] = 1
+        accounts.set_disabled(principal, True)
+        self._durable.audit.append(
+            "account.erased",
+            {
+                "run_id": f"account:{principal}",
+                "tenant": tenant,
+                "principal": principal,
+                "erased": erased,
+            },
+        )
+        return json_response(
+            200,
+            {
+                "account": "disabled",
+                "erased": erased,
+                "notes": [
+                    "the username stays reserved and disabled forever —"
+                    " a freed name would let a stranger inherit its trust",
+                    "your messages were removed from BOTH sides of every"
+                    " conversation (the store keeps one shared copy)",
+                    "files live in the shared drawer — delete yours in"
+                    " Files before deleting the account if you want them"
+                    " gone",
+                    "append-only records the service must keep (the"
+                    " tamper-evident audit chain, financial ledgers) are"
+                    " retained; they are minimal and pseudonymous",
+                    "already-issued sign-in tokens expire on their own"
+                    " schedule; no new sign-in will succeed",
+                ],
+            },
+        )
 
     def _worker_health(self, request, session, params) -> Response:
         from ..worker.policy import execution_labels

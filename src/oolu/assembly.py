@@ -861,6 +861,9 @@ def build_host_runtime(
         # every signed-in device shares.
         direct_messages=DirectMessageStore(conn),
         assistant_history=AssistantHistoryStore(conn),
+        # The operator's legal documents; marked templates answer until
+        # terms.md / privacy.md exist here.
+        legal_dir=data / "legal",
         # The card vault is Stripe when a secret key exists, the test
         # double otherwise; the launch guard's transaction port opens only
         # by the operator's explicit switch (prices and verification still

@@ -535,7 +535,25 @@ def test_metrics_and_unknown_route(tmp_path):
     app, conn, ident = _app(tmp_path)
     token = ident.token("user-1")
     app.handle(_req("GET", "/v1/runs", token=token))
+    # Counters are the operator's: metrics:read gates the surface.
+    assert app.handle(_req("GET", "/v1/metrics", token=token)).status == 403
+    ident.store.add_role(
+        Role(
+            tenant_id="t1",
+            name="monitoring",
+            permissions=frozenset({"metrics:read"}),
+        )
+    )
+    ident.store.add_grant(
+        AuthorityGrant(
+            tenant_id="t1",
+            principal_id="user-1",
+            role_name="monitoring",
+            granted_by="x",
+        )
+    )
     metrics = app.handle(_req("GET", "/v1/metrics", token=token))
     assert metrics.body["requests"] >= 1
+    assert metrics.body["uptime_seconds"] >= 0
     assert app.handle(_req("GET", "/v1/nope", token=token)).status == 404
     conn.close()

@@ -170,6 +170,15 @@ class MailCodeStore:
                 ),
             )
 
+    def forget(self, email: str) -> int:
+        """Data-subject erasure: every code row for the address, gone
+        (verified marks included — a deleted account owes no history)."""
+        with self._conn.transaction() as db:
+            cursor = db.execute(
+                "DELETE FROM mail_codes WHERE email = ?", (email,)
+            )
+        return int(getattr(cursor, "rowcount", 0) or 0)
+
     def is_verified(self, email: str, purpose: str) -> bool:
         with self._conn.lock:
             row = self._conn.db.execute(

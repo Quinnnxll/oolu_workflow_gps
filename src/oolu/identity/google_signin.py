@@ -142,6 +142,15 @@ class IdentityLinkStore:
             for r in rows
         ]
 
+    def unlink_all(self, username: str) -> int:
+        """Data-subject erasure: every identity link (e-mail, Google, …)
+        behind the account, gone. Returns how many were removed."""
+        with self._conn.transaction() as db:
+            cursor = db.execute(
+                "DELETE FROM identity_links WHERE username = ?", (username,)
+            )
+        return int(getattr(cursor, "rowcount", 0) or 0)
+
 
 _USERNAME_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
