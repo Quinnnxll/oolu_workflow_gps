@@ -11,7 +11,7 @@ import { identityHue } from "../avatar";
 import { humanizeEvent } from "../humanize";
 import { useT } from "../ui";
 import { FilesPane } from "./FilesPane";
-import { NodeInteract } from "./NodeInteract";
+import { NodeInteract, reliabilityLine } from "./NodeInteract";
 
 // The Work environment: where a noder manages and observes their nodes.
 // A node's REGIME — Supernode or not, under which Supernode, audit or
@@ -442,9 +442,11 @@ export function NodeThread({
         )}
       </div>
 
-      {account.is_supernode && <KycSection nodeId={node.node_id} />}
+      {tab !== "interact" && account.is_supernode && (
+        <KycSection nodeId={node.node_id} />
+      )}
 
-      {account.is_supernode && members.length > 0 && (
+      {tab !== "interact" && account.is_supernode && members.length > 0 && (
         <div className="commits">
           <button
             className="convo-group toggle"
@@ -468,7 +470,7 @@ export function NodeThread({
         </div>
       )}
 
-      {watchesHolds && holds.length > 0 && (
+      {tab !== "interact" && watchesHolds && holds.length > 0 && (
         <div className="commits">
           <div className="convo-group">Pending</div>
           {holds.map((h) => (
@@ -498,11 +500,12 @@ export function NodeThread({
         </button>
       </div>
 
-      {tab === "interact" && <NodeInteract node={node} holds={holds} />}
+      {tab === "interact" && <NodeInteract node={node} />}
       {tab === "files" && <FilesPane nodeId={node.node_id} />}
 
       {tab === "activity" && (
         <div className="noder-log">
+          <div className="muted">{reliabilityLine(node)}</div>
           {activity === null && <div className="muted">Loading activity…</div>}
           {activity !== null && activity.length === 0 && (
             <div className="muted">

@@ -1,17 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import type { ChatAction, HoldItem, WorkNode } from "../api";
+import type { ChatAction, WorkNode } from "../api";
 import { actionLabel } from "./Chat";
 import { ForwardMenu } from "./ForwardMenu";
 
-// The node's interaction window: call OoLu out to act ON THIS NODE —
-// reply to requesters, sign final results onward (the manual audit
-// floor), and build execution nodes on its path. Acceleration is not a
-// button: whatever can move automatically already moved — what remains
-// here is exactly the work that needs a human, surfaced by itself as
-// clickable task chips the moment the window opens. The automation-
-// reliability line is the vision made visible: every verified run takes
-// an audit node closer to hands-off.
+// The node's interaction window — a conversation, nothing else. The
+// thread fills the pane and the composer sits under it; there is no
+// button chrome and no banner text eating the space. Everything is a
+// typed command OoLu answers deterministically: “pending” lists what
+// waits (with each task's id), “sign <task id> as <your name>” passes a
+// task to the next node, “reply <task id>: <message>” talks back, and
+// “build <what's missing>” puts a new execution node on the path. The
+// one hint line lives inside the empty thread and disappears with the
+// first message.
 
 type Msg =
   | { kind: "user"; text: string }
@@ -30,15 +31,7 @@ export function reliabilityLine(node: WorkNode): string {
   );
 }
 
-export function NodeInteract({
-  node,
-  holds = [],
-}: {
-  node: WorkNode;
-  // This node's held requests (the thread's desk already polls them):
-  // each becomes a clickable task chip that fills the sign command.
-  holds?: HoldItem[];
-}) {
+export function NodeInteract({ node }: { node: WorkNode }) {
   const storageKey = `oolu_node_chat_${node.node_id}`;
   const [thread, setThread] = useState<Msg[]>(() => {
     try {
@@ -87,56 +80,15 @@ export function NodeInteract({
     }
   }
 
-  // Sign fills the command WITH the task id when only one task waits;
-  // with several, the chips below (or “pending”) hand over the id.
-  function fillSign(pendingId?: string) {
-    const id = pendingId ?? (holds.length === 1 ? holds[0].pending_id : "");
-    setDraft(id ? `sign ${id.slice(0, 8)} as ` : "sign ");
-  }
-
   return (
     <div className="node-interact">
-      <p className="muted">{reliabilityLine(node)}</p>
-
-      {/* One row: list what waits, sign a task onward, build what's
-          missing. Acceleration is nobody's button — it already happened. */}
-      <div className="quickstarts">
-        <button className="quickstart" onClick={() => void send("pending")}>
-          Pending
-        </button>
-        <button className="quickstart" onClick={() => fillSign()}>
-          Sign
-        </button>
-        <button className="quickstart" onClick={() => setDraft("build ")}>
-          Build
-        </button>
-      </div>
-
-      {/* Whatever still needs a human surfaces by itself: each waiting
-          task is a chip; tapping it drops its id into the sign command. */}
-      {holds.length > 0 && (
-        <div className="quickstarts hold-chips">
-          <span className="muted">waiting:</span>
-          {holds.map((h) => (
-            <button
-              key={h.pending_id}
-              className="quickstart"
-              title={`sign ${h.pending_id.slice(0, 8)} onward`}
-              onClick={() => fillSign(h.pending_id)}
-            >
-              {h.name} · {h.pending_id.slice(0, 8)}
-            </button>
-          ))}
-        </div>
-      )}
-
       <div className="chat-thread node-interact-thread">
         {thread.length === 0 && (
           <div className="muted">
-            Ask OoLu to act on this node — “pending”, “sign &lt;task id&gt;
-            as &lt;your name&gt;” to pass a task to the next node, “reply
-            &lt;request&gt;: &lt;message&gt;”, or “build &lt;what's
-            missing&gt;”.
+            Ask OoLu to act on this node — “pending” lists what waits,
+            “sign &lt;task id&gt; as &lt;your name&gt;” passes a task to
+            the next node, “reply &lt;task id&gt;: &lt;message&gt;”, or
+            “build &lt;what's missing&gt;”.
           </div>
         )}
         {thread.map((m, i) => (

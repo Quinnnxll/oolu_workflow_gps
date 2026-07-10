@@ -4,6 +4,24 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The interact window becomes what it is — a conversation:
+
+- **Nothing but the thread and the composer.** The interact tab's
+  button row, task chips, and the "Automation reliability…" banner are
+  gone; the conversation now takes every pixel the tab has (the thread
+  stretches to fill). One hint line inside the EMPTY thread teaches the
+  typed commands — “pending”, “sign <task id> as <your name>”, “reply”,
+  “build” — and disappears with the first message. All commands still
+  answer deterministically.
+- **The stewardship blocks step aside while you talk.** With the
+  Interact tab open, the KYC block, the member-node fleet, and the
+  Pending desk fold away (they live on the other tabs as before), so
+  the conversation window is large and clean. The reliability line
+  moved to the Activity tab, where telemetry belongs.
+- Tests: the clean-window assertions (no buttons, no banner, hint
+  present), typed commands still driving the desk with task ids in the
+  listing. 173 vitest and the entire backend suite green; shell rebuilt.
+
 The retry that wouldn't press, the button acceleration never needed,
 and a desk that hands you the task id:
 

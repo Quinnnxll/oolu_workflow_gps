@@ -1449,7 +1449,10 @@ button.ghost {
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--panel);
-  min-height: 120px;
+  /* The conversation IS the window: it takes every pixel the tab has. */
+  flex: 1;
+  min-height: 220px;
+  overflow-y: auto;
 }
 
 .retry-count {

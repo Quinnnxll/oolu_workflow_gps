@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { WorkNode } from "../api";
 import { NodeInteract, reliabilityLine } from "./NodeInteract";
 
@@ -94,11 +94,28 @@ describe("NodeInteract", () => {
     expect((chat?.body as { node_id: string }).node_id).toBe("n1");
   });
 
-  it("one row — Pending sends, Sign and Build pre-fill", async () => {
+  it("is a clean conversation: no button chrome, no banner text", () => {
+    render(<NodeInteract node={node()} />);
+
+    // The whole pane is thread + composer — nothing else claims space.
+    expect(screen.queryByText(/Automation reliability/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Pending" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Build" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /accelerate/i })).toBeNull();
+    // One hint inside the empty thread teaches the typed commands —
+    // task id included — and disappears with the first message.
+    expect(screen.getByText(/sign <task id> as <your name>/)).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Send" }),
+    ).toBeTruthy();
+  });
+
+  it("typed commands still drive the desk", async () => {
     routes["POST /v1/chat"] = {
       status: 200,
       body: {
-        reply: "Nothing is waiting on this node right now.",
+        reply: "Waiting on you:\n• clean-the-books — from consumer-1 (a1b2c3d4)",
         source: "tool",
         actions: [{ tool: "node_holds" }],
         run_id: null,
@@ -106,79 +123,17 @@ describe("NodeInteract", () => {
     };
     render(<NodeInteract node={node()} />);
 
-    // Accelerate is nobody's button anymore — it happens by itself.
-    expect(screen.queryByRole("button", { name: /accelerate/i })).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: "Pending" }));
-    await waitFor(() =>
-      expect(calls.some((c) => c.path === "/v1/chat")).toBe(true),
+    fireEvent.change(
+      screen.getByPlaceholderText("Message OoLu about Invoice Cleaner…"),
+      { target: { value: "pending" } },
     );
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    // The listing carries each task's id — the handle Sign passes on.
+    expect(await screen.findByText(/a1b2c3d4/)).toBeTruthy();
     expect(
       (calls.find((c) => c.path === "/v1/chat")?.body as { message: string })
         .message,
     ).toBe("pending");
-
-    const box = screen.getByPlaceholderText(
-      "Message OoLu about Invoice Cleaner…",
-    ) as HTMLTextAreaElement;
-    // With no known waiting task, Sign pre-fills and the id comes from
-    // "pending" (or a task chip); signing still needs the typed name.
-    fireEvent.click(screen.getByRole("button", { name: "Sign" }));
-    expect(box.value).toBe("sign ");
-    fireEvent.click(screen.getByRole("button", { name: "Build" }));
-    expect(box.value).toBe("build ");
-  });
-
-  const HOLD = {
-    pending_id: "a1b2c3d4e5f60718",
-    name: "clean-the-books",
-    reserved: ["audit-node:n1"],
-    submitted_by: "consumer-1",
-    created_at: "2026-07-10T10:00:00Z",
-    expires_at: null,
-    replies: [],
-  };
-
-  it("Sign appends the task id when exactly one task waits", () => {
-    render(<NodeInteract node={node()} holds={[HOLD]} />);
-    fireEvent.click(screen.getByRole("button", { name: "Sign" }));
-    expect(
-      (
-        screen.getByPlaceholderText(
-          "Message OoLu about Invoice Cleaner…",
-        ) as HTMLTextAreaElement
-      ).value,
-    ).toBe("sign a1b2c3d4 as ");
-  });
-
-  it("waiting tasks surface as chips; tapping one fills its sign command", () => {
-    const second = {
-      ...HOLD,
-      pending_id: "ffee00112233",
-      name: "export-raw",
-    };
-    render(<NodeInteract node={node()} holds={[HOLD, second]} />);
-
-    // Both tasks visible with their ids — the click IS the id handover.
-    fireEvent.click(
-      screen.getByRole("button", { name: "export-raw · ffee0011" }),
-    );
-    expect(
-      (
-        screen.getByPlaceholderText(
-          "Message OoLu about Invoice Cleaner…",
-        ) as HTMLTextAreaElement
-      ).value,
-    ).toBe("sign ffee0011 as ");
-
-    // With several waiting, the bare Sign stays open-ended.
-    fireEvent.click(screen.getByRole("button", { name: "Sign" }));
-    expect(
-      (
-        screen.getByPlaceholderText(
-          "Message OoLu about Invoice Cleaner…",
-        ) as HTMLTextAreaElement
-      ).value,
-    ).toBe("sign ");
   });
 });
