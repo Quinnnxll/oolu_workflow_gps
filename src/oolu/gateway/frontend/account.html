@@ -40,10 +40,11 @@
 </head>
 <body>
 <h1>OoLu account</h1>
+<p><a id="back" href="/">← Back to OoLu</a></p>
 <p class="muted">Commitments live here, not in Settings: changing your plan
 (upgrade, downgrade, monthly or yearly) always starts by cancelling the
 current one — unused time comes back as a credit and is deducted from the
-next plan.</p>
+next plan. Changes show up in OoLu the moment you go back.</p>
 
 <div id="signin" class="card" hidden>
   <h2>Sign in</h2>
@@ -198,7 +199,9 @@ $("choose").addEventListener("click", async () => {
         " — due " + money(result.due_micros) + "."
       : " Price: " + money(result.price_micros) + ".";
     say("You are on " + result.plan + " (" + result.cycle + ")." + deduction +
-        (result.charged ? "" : " Nothing was charged (pre-launch)."), true);
+        (result.charged ? "" : " Nothing was charged (pre-launch).") +
+        " Go back to OoLu (link above) — Settings picks the change up" +
+        " the moment you return.", true);
     await refresh();
   } catch (err) { say(err.message, false); }
 });

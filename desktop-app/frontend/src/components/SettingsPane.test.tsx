@@ -339,7 +339,9 @@ describe("SettingsPane", () => {
     expect(await screen.findByLabelText("Default model")).toBeTruthy();
     expect(screen.getByLabelText("Local model URL")).toBeTruthy();
     expect(screen.getByText(/override the plan/)).toBeTruthy();
-    expect(screen.getByText(/no key, no cloud/)).toBeTruthy();
+    // The words appear in the section note AND the source dial's own
+    // description (the dictionary supplies the full catalog text).
+    expect(screen.getAllByText(/no key, no cloud/).length).toBeGreaterThan(0);
   });
 
   it("saves a change through the node", async () => {
@@ -446,6 +448,43 @@ describe("appearance settings", () => {
     });
     // The group heading re-renders in the chosen language.
     expect(await screen.findByText("应用")).toBeTruthy();
+    const { applyLanguage } = await import("../ui");
+    applyLanguage("en"); // leave the world as we found it
+  });
+
+  it("the settings' own words follow the language — with an honest fallback", async () => {
+    const catalog = {
+      items: [
+        ...APPEARANCE.items,
+        {
+          // A knob the dictionary does not know: the server's own words
+          // stand — a new setting is never blocked on the translation.
+          key: "lab.experimental",
+          group: "app",
+          label: "Warp drive",
+          kind: "bool",
+          value: false,
+          description: "Engage.",
+          managed: false,
+        },
+      ],
+    };
+    routes["GET /v1/settings"] = { status: 200, body: catalog };
+    routes["PUT /v1/settings"] = { status: 200, body: catalog };
+    render(<SettingsPane />);
+
+    expect(await screen.findByText("Theme")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Language"), {
+      target: { value: "zh" },
+    });
+    // The catalog rows themselves re-render translated: the item label,
+    // its description, and the control's accessible name.
+    expect(await screen.findByText("主题")).toBeTruthy();
+    expect(screen.getByText("应用的配色主题。")).toBeTruthy();
+    expect(screen.getByLabelText("语言")).toBeTruthy();
+    // The unknown knob keeps its server words, never a blank row.
+    expect(screen.getByText("Warp drive")).toBeTruthy();
+    expect(screen.getByText("Engage.")).toBeTruthy();
     const { applyLanguage } = await import("../ui");
     applyLanguage("en"); // leave the world as we found it
   });

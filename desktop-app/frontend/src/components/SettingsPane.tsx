@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
 import { accountConsoleUrl, api, signOut } from "../api";
-import { applyLanguage, applyTheme, choiceLabel, useT } from "../ui";
+import {
+  applyLanguage,
+  applyTheme,
+  choiceLabel,
+  settingDesc,
+  settingLabel,
+  t,
+  unitLabel,
+  useT,
+} from "../ui";
 import type {
   ModelKeyView,
   PaymentProfileView,
@@ -38,6 +47,14 @@ export function SettingsPane() {
     void refresh();
   }, [refresh]);
 
+  // Changes made in the account console (another tab) come back with the
+  // user: refreshing on focus is what links the plan change back to OoLu.
+  useEffect(() => {
+    const onFocus = () => void refresh();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [refresh]);
+
   async function save(key: string, value: unknown) {
     setError("");
     try {
@@ -62,21 +79,9 @@ export function SettingsPane() {
         <section key={group} className="settings-group">
           <h3>{tr(GROUP_KEYS[group] ?? group)}</h3>
           {group === "subscription" && (
-            <p className="muted">
-              Your plan is a commitment, not a preference — it's shown here
-              and managed in the account console (cancel the current plan
-              there to change terms).
-            </p>
+            <p className="muted">{tr("subscriptionNote")}</p>
           )}
-          {group === "model" && (
-            <p className="muted">
-              Where OoLu's brain lives. Subscription follows your OoLu plan
-              (Claude first). Add your own API key below and switch the
-              default model to own API to override the plan with your key —
-              or run a local model server on this machine and choose local:
-              no key, no cloud.
-            </p>
-          )}
+          {group === "model" && <p className="muted">{tr("modelNote")}</p>}
           {items
             .filter((i) => i.group === group)
             .map((item) => (
@@ -85,16 +90,14 @@ export function SettingsPane() {
           {group === "subscription" && (
             <div className="setting-row">
               <div className="setting-label">
-                <span>Manage plan</span>
-                <span className="setting-desc">
-                  Upgrade with deduction, cancel, or switch monthly/yearly.
-                </span>
+                <span>{tr("managePlan")}</span>
+                <span className="setting-desc">{tr("managePlanDesc")}</span>
               </div>
               <div className="setting-control">
                 <button
                   onClick={() => window.open(accountConsoleUrl(), "_blank")}
                 >
-                  Open the account console
+                  {tr("openConsole")}
                 </button>
               </div>
             </div>
@@ -160,25 +163,19 @@ export function PrivacySection() {
       <h3>{tr("privacyData")}</h3>
       <div className="setting-row">
         <div className="setting-label">
-          <span>Download my data</span>
-          <span className="setting-desc">
-            Everything this host holds about you, as one JSON document.
-          </span>
+          <span>{tr("downloadData")}</span>
+          <span className="setting-desc">{tr("downloadDataDesc")}</span>
         </div>
         <div className="setting-control">
           <button disabled={busy} onClick={() => void download()}>
-            Download
+            {tr("download")}
           </button>
         </div>
       </div>
       <div className="setting-row">
         <div className="setting-label">
-          <span>Delete my account</span>
-          <span className="setting-desc">
-            Erases your messages, conversation, sign-in identities, and
-            card details, and disables the account forever. Files in the
-            shared drawer stay — delete yours in Files first.
-          </span>
+          <span>{tr("deleteAccount")}</span>
+          <span className="setting-desc">{tr("deleteAccountDesc")}</span>
         </div>
         <div className="setting-control row">
           {!confirming ? (
@@ -216,10 +213,8 @@ export function PrivacySection() {
       </div>
       <div className="setting-row">
         <div className="setting-label">
-          <span>Legal</span>
-          <span className="setting-desc">
-            The words this host serves at its public legal URLs.
-          </span>
+          <span>{tr("legal")}</span>
+          <span className="setting-desc">{tr("legalDesc")}</span>
         </div>
         <div className="setting-control row">
           <button
@@ -556,22 +551,23 @@ function SettingRow({
     suggested !== null &&
     suggested !== String(item.value ?? "") &&
     (item.choices ?? []).includes(suggested);
+  // The catalog's words, in the interface language (the server's English
+  // rides along as the fallback for knobs the dictionary doesn't know).
+  const desc = settingDesc(item.key, item.description);
   return (
     <div className="setting-row">
       <div className="setting-label">
-        <span>{item.label}</span>
-        {item.description && (
-          <span className="setting-desc">{item.description}</span>
-        )}
+        <span>{settingLabel(item.key, item.label)}</span>
+        {desc && <span className="setting-desc">{desc}</span>}
         {showSuggestion && (
           <span className="setting-desc">
-            Your region suggests {suggested}.{" "}
+            {t("regionSuggests")} {suggested}.{" "}
             <button
               type="button"
               className="linklike"
               onClick={() => void onSave(item.key, suggested)}
             >
-              Use {suggested}
+              {t("use")} {suggested}
             </button>
           </span>
         )}
@@ -579,7 +575,7 @@ function SettingRow({
       <div className="setting-control">
         <SettingControl item={item} onSave={onSave} />
         {item.kind === "number" && item.unit && (
-          <span className="setting-unit">{item.unit}</span>
+          <span className="setting-unit">{unitLabel(item.unit)}</span>
         )}
       </div>
     </div>
@@ -598,11 +594,13 @@ function SettingControl({
     // itself refuses writes — this control never even offers one.
     return <span className="managed-value">{String(item.value ?? "")}</span>;
   }
+  // Accessible names follow the visible words — the same language.
+  const label = settingLabel(item.key, item.label);
   if (item.kind === "bool") {
     return (
       <input
         type="checkbox"
-        aria-label={item.label}
+        aria-label={label}
         checked={item.value === true}
         onChange={(e) => void onSave(item.key, e.target.checked)}
       />
@@ -611,7 +609,7 @@ function SettingControl({
   if (item.kind === "choice") {
     return (
       <select
-        aria-label={item.label}
+        aria-label={label}
         value={String(item.value ?? "")}
         onChange={(e) => void onSave(item.key, e.target.value)}
       >
@@ -627,7 +625,7 @@ function SettingControl({
     return (
       <input
         type="number"
-        aria-label={item.label}
+        aria-label={label}
         defaultValue={Number(item.value ?? 0)}
         min={item.minimum ?? undefined}
         max={item.maximum ?? undefined}
@@ -638,7 +636,7 @@ function SettingControl({
   return (
     <input
       type="text"
-      aria-label={item.label}
+      aria-label={label}
       defaultValue={String(item.value ?? "")}
       maxLength={item.max_length ?? undefined}
       onBlur={(e) => void onSave(item.key, e.target.value)}

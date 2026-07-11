@@ -97,17 +97,33 @@ export function toneForMood(mood?: string): SpeechTone {
   return (mood && MOOD_TONE[mood]) || { rate: 1.1, pitch: 1.12 };
 }
 
+// TTS reads WORDS: emoji are for the eye, not the ear — an engine
+// pronouncing them ("rocket", "party popper") turns a lively reply into
+// a comedy routine. Pictographs go, along with their plumbing (skin
+// tones, flags' regional indicators, keycaps, variation selectors, the
+// joiner that glues family emoji); every real word and its punctuation
+// stays.
+const UNSPEAKABLE =
+  /[\p{Extended_Pictographic}\u{1F1E6}-\u{1F1FF}\u{1F3FB}-\u{1F3FF}\u{FE0E}\u{FE0F}\u{200D}\u{20E3}]/gu;
+
+export function speakableText(text: string): string {
+  return text.replace(UNSPEAKABLE, " ").replace(/\s+/g, " ").trim();
+}
+
 // One voice at a time: a new reply always interrupts the previous one —
 // an assistant that talks over itself is worse than a silent one.
 export function speak(text: string, mood?: string): void {
-  if (!speechOutputSupported() || !text.trim()) return;
+  if (!speechOutputSupported()) return;
+  const words = speakableText(text);
+  // A reply that is ONLY emoji is spoken as silence, not described.
+  if (!words) return;
   const w = window as unknown as {
     speechSynthesis: SpeechSynthesis;
     SpeechSynthesisUtterance?: typeof SpeechSynthesisUtterance;
   };
   if (!w.SpeechSynthesisUtterance) return;
   w.speechSynthesis.cancel();
-  const utterance = new w.SpeechSynthesisUtterance(text);
+  const utterance = new w.SpeechSynthesisUtterance(words);
   const tone = toneForMood(mood);
   utterance.rate = tone.rate;
   utterance.pitch = tone.pitch;

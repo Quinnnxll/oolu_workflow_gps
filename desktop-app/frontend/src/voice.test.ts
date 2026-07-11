@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createRecognizer,
   speak,
+  speakableText,
   speechInputSupported,
   speechOutputSupported,
   toneForMood,
@@ -114,5 +115,38 @@ describe("voice", () => {
     const utt = speakSpy.mock.calls[0][0] as { rate: number; pitch: number };
     expect(utt.rate).toBe(toneForMood("excited").rate);
     expect(utt.pitch).toBe(toneForMood("excited").pitch);
+  });
+
+  it("emoji are for the eye, never the ear", () => {
+    // Pictographs, skin tones, flags, keycaps, and ZWJ families all go;
+    // words and their punctuation stay exactly as written.
+    expect(speakableText("On it! 🚀 I'll ping you.")).toBe(
+      "On it! I'll ping you.",
+    );
+    expect(speakableText("Done ✅✅ — all 3 files converted! 🎉")).toBe(
+      "Done — all 3 files converted!",
+    );
+    expect(speakableText("greetings 👍🏽 from 🇲🇼 the 👨‍👩‍👧 team #️⃣")).toBe(
+      "greetings from the team #",
+    );
+    // A reply that is ONLY emoji is silence, not a description of emoji.
+    expect(speakableText("🎉🎉🎉")).toBe("");
+
+    // speak() itself sends the cleaned words to the engine — and never
+    // utters an all-emoji reply at all.
+    const speakSpy = vi.fn();
+    vi.stubGlobal("speechSynthesis", { cancel: vi.fn(), speak: speakSpy });
+    vi.stubGlobal(
+      "SpeechSynthesisUtterance",
+      class {
+        constructor(public text: string) {}
+      },
+    );
+    speak("Love it! 🚀 Rolling now.");
+    const utt = speakSpy.mock.calls[0][0] as { text: string };
+    expect(utt.text).toBe("Love it! Rolling now.");
+    speakSpy.mockClear();
+    speak("💯🔥");
+    expect(speakSpy).not.toHaveBeenCalled();
   });
 });

@@ -4,6 +4,37 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Polish that was overdue: silent emoji, settings that speak your
+language, a console that comes back, and replies sized to yours:
+
+- **Emoji are for the eye, never the ear.** Speak-replies-aloud no
+  longer pronounces emoji ("rocket", "party popper"): pictographs and
+  their plumbing (skin tones, flags, keycaps, ZWJ families) are
+  stripped before the utterance — every real word and its punctuation
+  stays, and an all-emoji reply is spoken as silence, not described.
+- **The settings words follow the language.** Changing Language used to
+  translate only the group headers; every setting's label and
+  description stayed English (they come from the backend catalog). A
+  translation dictionary for the whole catalog (zh/es/fr) now covers
+  item labels, descriptions, accessible names, choice values (Fast /
+  Reasoning / Own API key / …), units, the section notes, the manage-
+  plan row, and the privacy rows — with the server's own English as the
+  honest fallback, so a new knob is never blocked on the dictionary.
+- **The account console links back.** The plan page now carries a
+  "← Back to OoLu" link, says changes show up the moment you return —
+  and the shell actually makes that true: Settings re-reads the catalog
+  on window focus, so a plan changed in the console tab is visible the
+  instant you're back.
+- **Replies mirror your length.** The assistant's prompt now instructs:
+  a short message earns a short reply — about as long as what you
+  wrote — running longer only when the substance truly needs it. Never
+  padding.
+- Tests: emoji stripping (words and punctuation intact, all-emoji =
+  silence, the engine receives the cleaned text), the catalog rows
+  translating live with the unknown-knob fallback, and the accessible
+  names following the visible words. 191 vitest green; shell rebuilt;
+  entire backend suite green (1082 passed); ruff clean.
+
 One reminder, not a storm — and the return earns the next one:
 
 - **The reminder posts once per idle stretch.** The chat's pending-work
