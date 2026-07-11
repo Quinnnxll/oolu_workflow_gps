@@ -3540,15 +3540,28 @@ class GatewayApp:
     def _proposal_model_for(self, session):
         """The proposal model for one request. An explicitly configured
         model wins; with none, the calling tenant's own recorded runs
-        advise (free, evidence-only) — constructed per request because
-        the evidence pool is the TENANT's history, never a neighbor's."""
+        advise through the LEARNED STACK — Beta counts first (direct
+        evidence), the small transformer for what counts cannot see
+        (cold starts, cross-goal shapes) — constructed per request
+        because the evidence pool is the TENANT's history, never a
+        neighbor's. Containment is the port's: advice stays clamped to
+        DEFAULT_PROPOSAL_STRENGTH pseudo-observations."""
         if self._proposal_model is not None:
             return self._proposal_model
         if self._trace_store is None:
             return None
         from ..orchestrator.proposals import TraceProposalModel
+        from ..orchestrator.ranker import (
+            LearnedProposalStack,
+            TinyTransformerProposalModel,
+        )
 
-        return TraceProposalModel(self._trace_store, context=session.tenant_id)
+        return LearnedProposalStack(
+            TraceProposalModel(self._trace_store, context=session.tenant_id),
+            TinyTransformerProposalModel(
+                self._trace_store, context=session.tenant_id
+            ),
+        )
 
     @staticmethod
     def _cost_weight(body: dict) -> float:

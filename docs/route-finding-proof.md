@@ -170,8 +170,17 @@ re-architecture.
 - LLM inability to build routes: **agreed, and designed for** — models
   only translate semantics and choose from menus; advice is bounded and
   optional, measured to be harmless even when adversarial.
-- The small learned router: **worth adding later for cold-start
-  semantics**, through the `ProposalModel` socket that already bounds it.
+- The small learned router: **now in the socket** —
+  `TinyTransformerProposalModel` (orchestrator/ranker.py), a pure-Python
+  one-head cross-attention ranker over hashed token embeddings (~10k
+  parameters), trained online on the trace store's outcomes. It ships
+  behind `LearnedProposalStack`: Beta counts outrank it wherever both
+  have an opinion, so it decides exactly what the proof scoped for it —
+  cold starts (new-node name/slot semantics), cross-goal generalization
+  (shared token embeddings), and context-conditioned choice (one ranker
+  per tenant's trace context). An untrained ranker answers "no opinion",
+  and the port's containment (bounded prior strength, unknown ids
+  dropped, exceptions downgrade to evidence-only) holds unchanged.
 
 Reproduce everything: `python benchmarks/route_scale.py`; the same claims
 run in CI as `tests/test_route_finding_proof.py`.

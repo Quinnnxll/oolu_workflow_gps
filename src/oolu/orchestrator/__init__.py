@@ -69,6 +69,7 @@ from .proposals import (
     TraceProposalModel,
     parse_weights,
 )
+from .ranker import LearnedProposalStack, TinyTransformerProposalModel
 from .rebuild import (
     AUTOBUILD_CONSENT_KEY,
     AUTOBUILD_HINT,
@@ -199,6 +200,8 @@ __all__ = [
     "StatusOutcomeMonitor",
     "TaskContract",
     "TraceProposalModel",
+    "LearnedProposalStack",
+    "TinyTransformerProposalModel",
     "WorkflowExecutor",
     "WorkflowOrchestrator",
 ]

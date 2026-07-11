@@ -4,6 +4,32 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The small transformer takes its reserved seat:
+
+- **route-finding-proof.md §5, implemented.** A pure-Python, dependency-
+  free small transformer — hashed token embeddings (words + character
+  trigrams), ONE cross-attention head pooling a candidate against the
+  goal-side query, a logistic scoring head; ~10k parameters — now sits
+  in the `ProposalModel` socket, trained online on the trace store's
+  recorded outcomes (the exact execution-result signal the proof names).
+- **The three wins it was scoped for, proven in tests.** Cold start: a
+  brand-new node whose name shares semantics with what worked wins the
+  tie for a goal the model never saw. Cross-goal generalization: the
+  parameters are shared token embeddings, so every goal's outcomes
+  teach every future goal. Context-conditioned choice: two tenants with
+  opposite histories get opposite advice from their own rankers.
+- **Containment unchanged — that's what makes it safe.** It ships as
+  `LearnedProposalStack`: Beta counts outrank it wherever both have an
+  opinion (it fills only what counts never saw); an untrained ranker
+  answers "no opinion", never noise; propose never raises (a burning
+  store downgrades to evidence-only assembly); and the port still
+  clamps all advice to DEFAULT_PROPOSAL_STRENGTH pseudo-observations.
+  The gateway's per-tenant default proposal model is now this stack.
+- Tests: cold-start/cross-goal preference, per-tenant opposite advice,
+  the untrained silence and the never-raise contract, and counts
+  outranking with the transformer filling only the unseen. Entire
+  backend suite green (1101 passed); ruff clean.
+
 The drawer speaks real file types — and files come back OUT:
 
 - **Real types, typed honestly.** The drawer's media map now covers the
