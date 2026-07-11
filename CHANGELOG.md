@@ -4,6 +4,19 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The Noder view is a record, not a control panel:
+
+- **The "Run again" button is gone.** A button-made rerun submitted the
+  intent as a fresh interaction with a fresh id — a stray duplicate
+  outside any conversation, which read as "run again created a new node".
+  Life/Noder now offers NO actions: it is the raw record. Re-running is
+  OoLu's job, asked in the chat ("run again <its name>" — the hint on
+  every log says so): the same task re-fires through its own route and
+  node, so every execution keeps accumulating in ONE history.
+- Tests: no button, the ask-OoLu hint, and nothing submitted by merely
+  viewing the record. 198 vitest and the entire backend suite green
+  (1096 passed); shell rebuilt; ruff clean.
+
 The interact window is an operator's desk, not a chatroom:
 
 - **The node's job is stated, and OoLu works it.** The Work interact

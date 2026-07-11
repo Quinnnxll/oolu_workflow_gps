@@ -226,20 +226,20 @@ describe("Life", () => {
 });
 
 describe("NoderThread", () => {
-  it("re-triggers the node's work with the same intent", async () => {
+  it("is a record, not a control panel — rerunning is asked of OoLu", async () => {
     routes["GET /v1/runs/r1/audit"] = { status: 200, body: { entries: [] } };
-    routes["POST /v1/runs"] = {
-      status: 202,
-      body: { ...RUN, run_id: "r2", phase: "submitted" },
-    };
-    const onRunAgain = vi.fn();
-    render(<NoderThread run={RUN} onRunAgain={onRunAgain} />);
+    render(<NoderThread run={RUN} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Run again" }));
-
-    expect(await screen.findByText(/Triggered again/)).toBeTruthy();
-    const post = calls.find((c) => c.method === "POST" && c.path === "/v1/runs");
-    expect(post?.body).toEqual({ intent: "convert report to pdf" });
-    expect(onRunAgain).toHaveBeenCalled();
+    // No Run again button: a button-made rerun minted a fresh entry with
+    // a fresh id, orphaning the history. The hint points at the chat,
+    // where OoLu re-fires the SAME task through its own route and node.
+    expect(screen.queryByRole("button", { name: "Run again" })).toBeNull();
+    expect(
+      await screen.findByText(/To run this again,\s*ask OoLu in the chat/),
+    ).toBeTruthy();
+    // Nothing was submitted by merely looking at the record.
+    expect(calls.some((c) => c.method === "POST" && c.path === "/v1/runs")).toBe(
+      false,
+    );
   });
 });

@@ -259,11 +259,7 @@ export function Life() {
           />
         )}
         {selected.kind === "noder" && (
-          <NoderThread
-            key={selected.run.run_id}
-            run={selected.run}
-            onRunAgain={refreshRuns}
-          />
+          <NoderThread key={selected.run.run_id} run={selected.run} />
         )}
         {selected.kind === "files" && <FilesPane />}
         {selected.kind === "settings" && <SettingsPane />}
@@ -277,14 +273,10 @@ export function Life() {
 // OoLu, who can read these logs and re-trigger the node on their behalf.
 export function NoderThread({
   run,
-  onRunAgain,
 }: {
   run: RunSummary;
-  onRunAgain: () => void;
 }) {
   const [events, setEvents] = useState<TimelineEvent[] | null>(null);
-  const [rerunning, setRerunning] = useState(false);
-  const [notice, setNotice] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -301,6 +293,10 @@ export function NoderThread({
     };
   }, [run.run_id]);
 
+  // The Noder view is a RECORD, not a control panel: no buttons here.
+  // Re-running is OoLu's job — asked in the chat, it re-fires the SAME
+  // task through its own route and node, never a stray duplicate from
+  // a button.
   return (
     <div className="noder-thread">
       <div className="noder-head">
@@ -311,26 +307,7 @@ export function NoderThread({
             {run.run_id} · {run.awaiting ?? run.phase}
           </div>
         </div>
-        <button
-          disabled={rerunning}
-          onClick={async () => {
-            setRerunning(true);
-            setNotice("");
-            try {
-              await api.submitTask(run.intent);
-              setNotice("Triggered again — the new interaction appears in the list.");
-              onRunAgain();
-            } catch (e) {
-              setNotice(`Could not trigger: ${(e as Error).message}`);
-            } finally {
-              setRerunning(false);
-            }
-          }}
-        >
-          {rerunning ? "Triggering…" : "Run again"}
-        </button>
       </div>
-      {notice && <div className="muted">{notice}</div>}
 
       <div className="noder-log">
         {events === null && <div className="muted">Loading log…</div>}
@@ -347,7 +324,9 @@ export function NoderThread({
       </div>
 
       <p className="muted noder-hint">
-        Raw node log — ask OoLu to review it or dig into it for you.
+        Raw node log — a record, not a control panel. To run this again,
+        ask OoLu in the chat (“run again {conciseName(run.intent)}”): it
+        re-fires the same task through its own route and node.
       </p>
     </div>
   );
