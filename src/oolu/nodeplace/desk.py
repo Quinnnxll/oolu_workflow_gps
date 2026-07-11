@@ -53,6 +53,9 @@ class RunSteps(BaseModel):
 
     run_id: str
     gross: float = 0.0
+    # The node that EXECUTED this run, by name — set when the feed
+    # aggregates a Supernode's members; a node's own feed leaves it None.
+    node_title: str | None = None
     steps: list[dict] = Field(default_factory=list)  # {seq, event_type, at}
 
 
@@ -361,31 +364,73 @@ class WorkDesk:
     def activity(
         self, node_id: str, *, tenant: str, limit: int = 20
     ) -> list[RunSteps]:
+        """The node's execution feed — and for a Supernode, the FLEET's.
+
+        Every execution touching a member node shows in the Supernode's
+        activity, tagged with the executing node's name (managing many
+        nodes is the point). Two evidence sources per node: marketplace
+        run bindings, and the metering ledger's verified runs — so
+        personal executions of a node's own function appear too, not
+        only paid ones."""
         node = self._registry.get_node(node_id)
         if node is None or node.tenant_id != tenant:
             raise ContributionError(f"no node '{node_id}'")
-        if self._attribution is None:
-            return []
-        version_ids = [
-            v.version_id for v in self._registry.list_versions(node_id)
-        ]
-        bindings = self._attribution.bindings_for_versions(version_ids)[-limit:]
-        feed: list[RunSteps] = []
-        for binding in bindings:
-            steps: list[dict] = []
-            if self._audit is not None:
-                steps = [
-                    {
-                        "seq": record.seq,
-                        "event_type": record.event_type,
-                        "at": record.at.isoformat(),
-                    }
-                    for record in self._audit.records(run_id=binding.run_id)
+        account = self._accounts.get(node_id)
+        sources: list[tuple[str, str | None]] = [(node_id, None)]
+        if account is not None and account.is_supernode:
+            for member in self._accounts.under(node_id):
+                m_node = self._registry.get_node(member.node_id)
+                if m_node is None or m_node.tenant_id != tenant:
+                    continue
+                m_versions = [
+                    v.version_id
+                    for v in self._registry.list_versions(member.node_id)
                 ]
-            feed.append(
-                RunSteps(run_id=binding.run_id, gross=binding.gross, steps=steps)
-            )
-        return feed
+                sources.append(
+                    (member.node_id, self._title(m_node, m_versions))
+                )
+        feed: list[RunSteps] = []
+        seen: set[str] = set()
+        for source_id, title in sources:
+            version_ids = [
+                v.version_id for v in self._registry.list_versions(source_id)
+            ]
+            entries: list[tuple[str, float]] = []
+            if self._attribution is not None:
+                entries += [
+                    (b.run_id, b.gross)
+                    for b in self._attribution.bindings_for_versions(version_ids)
+                ]
+            if self._metering is not None:
+                known = {run_id for run_id, _ in entries}
+                for event in self._metering.events():
+                    if event.version_id in version_ids and event.run_id not in known:
+                        entries.append((event.run_id, float(event.gross or 0.0)))
+            for run_id, gross in entries:
+                if run_id in seen:
+                    continue
+                seen.add(run_id)
+                steps: list[dict] = []
+                if self._audit is not None:
+                    steps = [
+                        {
+                            "seq": record.seq,
+                            "event_type": record.event_type,
+                            "at": record.at.isoformat(),
+                        }
+                        for record in self._audit.records(run_id=run_id)
+                    ]
+                feed.append(
+                    RunSteps(
+                        run_id=run_id,
+                        gross=gross,
+                        node_title=title,
+                        steps=steps,
+                    )
+                )
+        # One chronological feed across the fleet, oldest first, capped.
+        feed.sort(key=lambda entry: entry.steps[-1]["at"] if entry.steps else "")
+        return feed[-limit:]
 
     # ------------------------------------------------------------------ #
     # Audit-mode enforcement hook.                                        #

@@ -15,7 +15,14 @@ import {
 } from "../avatar";
 import type { Mood } from "../avatar";
 import { OoLuAvatar } from "./OoLuAvatar";
-import { capturePhoto, currentPosition, photoName, photoToDataUrl } from "../device";
+import {
+  capturePhoto,
+  currentPosition,
+  fileToDrawerContent,
+  photoName,
+  photoToDataUrl,
+  pickLocalFiles,
+} from "../device";
 import { createRecognizer, speak, speechInputSupported } from "../voice";
 import type { Recognizer } from "../voice";
 import {
@@ -39,6 +46,10 @@ type Msg =
   // never enters the history sent to the assistant. Each mentioned task
   // rides along as an arrow pointing back to its action window.
   | { kind: "reminder"; text: string; runs?: { runId: string; label: string }[] }
+  // OoLu asking for one of THIS device's senses. The request renders as
+  // grant/decline buttons; only a grant runs the sense — the user decides,
+  // never a silent sensor read. `done` freezes the buttons afterwards.
+  | { kind: "device"; device: string; done?: boolean }
   | { kind: "run"; runId: string };
 
 const CHAT_KEY = "oolu_chat";
@@ -178,28 +189,19 @@ export function Chat() {
     return () => clearInterval(t);
   }, []);
 
-  // The device menu: the senses are asked for exactly when tapped —
-  // the browser/app permission prompt appears then, never at startup.
-  const [plusOpen, setPlusOpen] = useState(false);
-  const plusRef = useRef<HTMLSpanElement | null>(null);
-  useEffect(() => {
-    if (!plusOpen) return;
-    function onPointerDown(event: MouseEvent | TouchEvent) {
-      const target = event.target as Node | null;
-      if (target && plusRef.current && !plusRef.current.contains(target)) {
-        setPlusOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("touchstart", onPointerDown);
-    return () => {
-      document.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("touchstart", onPointerDown);
-    };
-  }, [plusOpen]);
+  // The device's senses are OoLu's to REQUEST and the user's to grant:
+  // a turn may carry a device ask (location / camera / file), rendered
+  // as grant buttons — the browser/app permission prompt appears only
+  // after the user grants, never at startup, never from a hidden menu.
+  function settleDeviceRequest(index: number) {
+    setThread((t) =>
+      t.map((m, i) =>
+        i === index && m.kind === "device" ? { ...m, done: true } : m,
+      ),
+    );
+  }
 
   async function shareLocation() {
-    setPlusOpen(false);
     try {
       const here = await currentPosition();
       void send(
@@ -212,7 +214,6 @@ export function Chat() {
   }
 
   async function takePhoto() {
-    setPlusOpen(false);
     try {
       const shot = await capturePhoto();
       if (!shot) return; // a cancelled camera is not an event
@@ -222,6 +223,27 @@ export function Chat() {
       void send(
         `I just took a photo on this device — it is in Files as “${name}”` +
           " (folder: camera).",
+      );
+    } catch (e) {
+      setThread((t) => [...t, { kind: "assistant", text: (e as Error).message }]);
+    }
+  }
+
+  async function pickDeviceFile() {
+    try {
+      const picked = await pickLocalFiles();
+      if (picked.length === 0) return; // a cancelled picker is not an event
+      const landed: string[] = [];
+      for (const file of picked) {
+        const { content, mediaType } = await fileToDrawerContent(file);
+        await api.createFile(file.name, content, undefined, "", mediaType);
+        landed.push(file.name);
+      }
+      void send(
+        `I picked ${landed.length === 1 ? "a file" : `${landed.length} files`}` +
+          ` from this device — in Files as ${landed
+            .map((n) => `“${n}”`)
+            .join(", ")}.`,
       );
     } catch (e) {
       setThread((t) => [...t, { kind: "assistant", text: (e as Error).message }]);
@@ -278,6 +300,15 @@ export function Chat() {
           ...t,
           { kind: "assistant", text: turn.reply, actions: turn.actions },
         ];
+        // OoLu asked for a device sense: the request lands as grant
+        // buttons right under its words — the user decides.
+        if (
+          turn.device === "location" ||
+          turn.device === "camera" ||
+          turn.device === "file"
+        ) {
+          next.push({ kind: "device", device: turn.device });
+        }
         if (turn.run_id) next.push({ kind: "run", runId: turn.run_id });
         return next;
       });
@@ -458,6 +489,60 @@ export function Chat() {
                 </div>
               )}
             </div>
+          ) : m.kind === "device" ? (
+            // OoLu's ask for a device sense: the user grants or declines.
+            // Only a grant touches the sensor; a settled request keeps a
+            // quiet record of the decision instead of live buttons.
+            <div key={i} className="bubble assistant device-request">
+              {m.done ? (
+                <span className="muted">
+                  {m.device === "location"
+                    ? "location request settled"
+                    : m.device === "camera"
+                      ? "camera request settled"
+                      : "file request settled"}
+                </span>
+              ) : (
+                <div className="reminder-links">
+                  {m.device === "location" && (
+                    <button
+                      onClick={() => {
+                        settleDeviceRequest(i);
+                        void shareLocation();
+                      }}
+                    >
+                      Share my location
+                    </button>
+                  )}
+                  {m.device === "camera" && (
+                    <button
+                      onClick={() => {
+                        settleDeviceRequest(i);
+                        void takePhoto();
+                      }}
+                    >
+                      Take a photo
+                    </button>
+                  )}
+                  {m.device === "file" && (
+                    <button
+                      onClick={() => {
+                        settleDeviceRequest(i);
+                        void pickDeviceFile();
+                      }}
+                    >
+                      Choose a file
+                    </button>
+                  )}
+                  <button
+                    className="linklike"
+                    onClick={() => settleDeviceRequest(i)}
+                  >
+                    Not now
+                  </button>
+                </div>
+              )}
+            </div>
           ) : (
             <div key={i} className={`bubble ${m.kind}`}>
               {m.text}
@@ -480,28 +565,6 @@ export function Chat() {
         <div ref={endRef} />
       </div>
       <div className="chat-composer">
-        <span className="composer-plus" ref={plusRef}>
-          <button
-            type="button"
-            className="plus-btn"
-            title="Use this device — share my location, take a photo"
-            aria-label="Use this device"
-            disabled={busy}
-            onClick={() => setPlusOpen((open) => !open)}
-          >
-            ＋
-          </button>
-          {plusOpen && (
-            <span className="forward-menu plus-menu">
-              <button type="button" onClick={() => void shareLocation()}>
-                Share my location
-              </button>
-              <button type="button" onClick={() => void takePhoto()}>
-                Take a photo
-              </button>
-            </span>
-          )}
-        </span>
         <textarea
           placeholder={listening ? "Listening…" : tr("messageOoLu")}
           value={draft}

@@ -490,7 +490,10 @@ export function NodeThread({
         <KycSection nodeId={node.node_id} />
       )}
 
-      {tab !== "interact" && account.is_supernode && members.length > 0 && (
+      {/* The fleet roster lives on the Activity tab only — the Files tab
+          already answered "which nodes" there; repeating the list is
+          noise, not orientation. */}
+      {tab === "activity" && account.is_supernode && members.length > 0 && (
         <div className="commits">
           <button
             className="convo-group toggle"

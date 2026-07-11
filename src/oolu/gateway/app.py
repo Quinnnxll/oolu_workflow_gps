@@ -1025,6 +1025,10 @@ class GatewayApp:
                 "reply": say,
                 "source": turn.source,
                 "actions": turn.actions,
+                # OoLu asking for one of the DEVICE's senses (location /
+                # camera / file): the client renders a grant button — the
+                # user decides, never a silent sensor read.
+                "device": turn.device,
                 "run_id": run["run_id"] if run else None,
                 "run": run,
             },

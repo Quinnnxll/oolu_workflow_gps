@@ -61,6 +61,14 @@ or anything you can simply answer in words, keep "task" null and just talk.
 When in doubt, TALK — answer in "say" and offer to do the work rather than
 silently kicking off a task. Never invent work the user did not ask for.
 
+When the work needs THIS device's senses — the user's location, a fresh
+photo, or a file picked from the device — you ask: add an extra key
+"device": "location" | "camera" | "file" to your JSON, alongside words
+explaining why. The app shows your request as a grant button; the user
+grants or declines, and a grant arrives as their next message carrying the
+result. Request a sense ONLY when the task truly needs it — never as a
+reflex.
+
 You also have tools over the user's own files (documents and sheets). To use
 one, answer with EXACTLY one JSON object of the shape:
   {"tool": "list_files", "args": {}}
@@ -186,6 +194,10 @@ class ChatTurn:
     task: str | None = None
     source: str = "model"  # "rule" | "model" | "intent" | "tool"
     actions: list[dict] = field(default_factory=list)
+    # OoLu ASKING for one of this device's senses ("location" | "camera"
+    # | "file"): the app renders the request as a grant button — the user
+    # decides, and only a grant runs the sense.
+    device: str | None = None
 
 
 @dataclass(frozen=True)
@@ -240,7 +252,16 @@ def _parse_model_turn(raw: str) -> ChatTurn:
     task = data.get("task")
     say = say.strip() if isinstance(say, str) and say.strip() else None
     task = task.strip() if isinstance(task, str) and task.strip() else None
-    return ChatTurn(say=say or (ACK if task else "…"), task=task)
+    # A device request rides the same JSON: only the three named senses
+    # count — anything else the model invents is dropped, never granted.
+    device = data.get("device")
+    device = (
+        device.strip().lower()
+        if isinstance(device, str)
+        and device.strip().lower() in {"location", "camera", "file"}
+        else None
+    )
+    return ChatTurn(say=say or (ACK if task else "…"), task=task, device=device)
 
 
 @runtime_checkable
@@ -1738,6 +1759,7 @@ class ChatAssistant:
                 task=parsed.task,
                 source="model",
                 actions=actions,
+                device=parsed.device,
             )
         return ChatTurn(
             say="I got tangled up in my tools — tell me exactly what you need.",

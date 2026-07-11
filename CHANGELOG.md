@@ -4,6 +4,36 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The Supernode sees its fleet, the Files tab stops repeating it, and the
+device's senses are OoLu's to ask for:
+
+- **A Supernode's activity carries its fleet's executions.** The
+  activity feed used to show only the Supernode's own bound runs —
+  members' work was invisible. Now every execution touching a member
+  node appears in the Supernode's activity, tagged with the executing
+  node's name; and verified personal runs (a node's own function,
+  Issue 18) count as executions alongside paid marketplace runs — for
+  every node, not only Supernodes. One chronological feed across the
+  fleet.
+- **The member roster shows once.** The Member-nodes list rendered on
+  both the Activity and Files tabs of a Supernode; it now lives on
+  Activity only — the Files tab is the drawer, not a second directory.
+- **The + menu is gone; senses are requested, then granted.** Sharing
+  the location, using the camera, or picking a device file is no longer
+  a button to remember: the model asks — its reply can carry a device
+  request ("location" | "camera" | "file", anything else is dropped) —
+  and the chat renders it as grant/decline buttons. Only a grant runs
+  the sense (the OS permission prompt appears then, never at startup);
+  "Not now" reads nothing and sends nothing; a settled request keeps a
+  quiet record instead of live buttons. The model-bound history never
+  carries the request bubbles.
+- Tests: the fleet feed tagged by executing node and a member's verified
+  run in its own feed, the device-request parse (unknown senses
+  dropped), grant → sensor → result sent, decline → nothing read or
+  sent, refused OS permission → words not a dead button, and the + menu
+  gone. 192 vitest and the entire backend suite green (1094 passed);
+  shell rebuilt; ruff clean.
+
 OoLu's outbox — messages to friends and nodes, attributed, never
 impersonated:
 

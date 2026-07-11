@@ -481,10 +481,15 @@ describe("Chat", () => {
     expect(await screen.findByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
-  it("the device menu shares the location as a message when allowed", async () => {
+  it("OoLu requests the location; the user's grant runs and sends it", async () => {
     routes["POST /v1/chat"] = {
       status: 200,
-      body: { reply: "Got it — you're in Berlin.", source: "model", run_id: null },
+      body: {
+        reply: "I need your location for that — may I?",
+        source: "model",
+        run_id: null,
+        device: "location",
+      },
     };
     vi.stubGlobal("navigator", {
       geolocation: {
@@ -498,21 +503,65 @@ describe("Chat", () => {
     });
     render(<Chat />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Use this device" }));
-    fireEvent.click(
-      screen.getByRole("button", { name: "Share my location" }),
-    );
+    // The + menu is gone: senses are OoLu's to request, never a button
+    // to remember.
+    expect(screen.queryByRole("button", { name: "Use this device" })).toBeNull();
 
-    await waitFor(() => {
-      const chat = calls.find((c) => c.path === "/v1/chat");
-      expect(
-        (chat?.body as { message: string })?.message,
-      ).toContain("my location right now: 52.52000, 13.40500 (±9 m)");
+    fireEvent.change(screen.getByPlaceholderText("Message OoLu…"), {
+      target: { value: "how far is the office?" },
     });
-    expect(await screen.findByText(/you're in Berlin/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    // The request lands as a grant button — nothing was read yet.
+    const grant = await screen.findByRole("button", {
+      name: "Share my location",
+    });
+    expect(calls.filter((c) => c.path === "/v1/chat")).toHaveLength(1);
+
+    fireEvent.click(grant);
+    await waitFor(() => {
+      const chats = calls.filter((c) => c.path === "/v1/chat");
+      expect(chats).toHaveLength(2);
+      expect((chats[1].body as { message: string }).message).toContain(
+        "my location right now: 52.52000, 13.40500 (±9 m)",
+      );
+    });
+    // The settled request keeps a record, not live buttons.
+    expect(screen.getByText("location request settled")).toBeTruthy();
   });
 
-  it("a refused location lands as words, not a dead button", async () => {
+  it("declining a device request reads nothing and sends nothing", async () => {
+    routes["POST /v1/chat"] = {
+      status: 200,
+      body: {
+        reply: "May I use the camera?",
+        source: "model",
+        run_id: null,
+        device: "camera",
+      },
+    };
+    render(<Chat />);
+    fireEvent.change(screen.getByPlaceholderText("Message OoLu…"), {
+      target: { value: "what am I looking at?" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Not now" }));
+    expect(screen.getByText("camera request settled")).toBeTruthy();
+    // Only the user's own message went out — the decline sent nothing.
+    expect(calls.filter((c) => c.path === "/v1/chat")).toHaveLength(1);
+  });
+
+  it("a refused location permission lands as words, not a dead button", async () => {
+    routes["POST /v1/chat"] = {
+      status: 200,
+      body: {
+        reply: "I need your location for that.",
+        source: "model",
+        run_id: null,
+        device: "location",
+      },
+    };
     vi.stubGlobal("navigator", {
       geolocation: {
         getCurrentPosition: (
@@ -522,17 +571,19 @@ describe("Chat", () => {
       },
     });
     render(<Chat />);
+    fireEvent.change(screen.getByPlaceholderText("Message OoLu…"), {
+      target: { value: "where am I?" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Use this device" }));
     fireEvent.click(
-      screen.getByRole("button", { name: "Share my location" }),
+      await screen.findByRole("button", { name: "Share my location" }),
     );
-
     expect(
       await screen.findByText(/location permission was refused/),
     ).toBeTruthy();
-    // Nothing was sent to the assistant — there was nothing to send.
-    expect(calls.some((c) => c.path === "/v1/chat")).toBe(false);
+    // Only the user's own message reached the assistant.
+    expect(calls.filter((c) => c.path === "/v1/chat")).toHaveLength(1);
   });
 
   it("turns a transport failure into an apology, not a crash", async () => {

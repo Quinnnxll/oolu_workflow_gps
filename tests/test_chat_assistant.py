@@ -106,6 +106,14 @@ def test_unparseable_model_text_is_speech_never_work():
     assert turn.say.startswith("sure")
 
 
+def test_a_device_request_rides_the_reply():
+    # OoLu asking for a device sense: only the three named senses count.
+    turn = _parse_model_turn('{"say": "May I?", "task": null, "device": "location"}')
+    assert turn.device == "location" and turn.task is None
+    junk = _parse_model_turn('{"say": "hm", "task": null, "device": "microphone"}')
+    assert junk.device is None
+
+
 def test_model_task_without_say_gets_the_ack():
     turn = _parse_model_turn('{"say": "", "task": "fetch the report"}')
     assert turn.say == ACK

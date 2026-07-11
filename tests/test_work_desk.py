@@ -427,3 +427,92 @@ def test_audit_node_holds_the_contract_for_manual_commit(tmp_path):
         )
     finally:
         conn.close()
+
+
+def test_a_supernodes_activity_carries_its_fleets_executions(tmp_path):
+    """Every execution touching a member node shows in the Supernode's
+    activity, tagged with the executing node's name — and a member's
+    verified personal runs count as executions too, not only paid ones."""
+    from datetime import UTC, datetime
+
+    from oolu.durable import DurableConnection
+    from oolu.metering.models import MeteringEvent
+    from oolu.metering.store import MeteringLedger
+    from oolu.nodeplace import NodeplaceService, RegistryStore
+    from oolu.skills.models import ActionEvent, ReusableSkill, SkillSignature
+
+    conn = DurableConnection(tmp_path / "durable.db")
+    try:
+        registry = RegistryStore(conn)
+        service = NodeplaceService(registry)
+        metering = MeteringLedger(conn)
+        desk = WorkDesk(
+            registry=registry,
+            accounts=NodeAccountStore(conn),
+            metering=metering,
+        )
+
+        def contribute(words: str):
+            skill = ReusableSkill(
+                name=words,
+                description=words,
+                signature=SkillSignature(application="script", adapter="script"),
+                actions=[
+                    ActionEvent(
+                        correlation_id="fn",
+                        adapter="script",
+                        operation="run",
+                        parameters={"script": "x = 1"},
+                    )
+                ],
+            )
+            return service.contribute(
+                noder_principal="alice",
+                tenant_id="t1",
+                skill=skill,
+                semver="1.0.0",
+                title=words.title(),
+                summary=words,
+            )
+
+        supernode = contribute("finance division")
+        desk.create_account(
+            supernode.node.node_id,
+            principal="alice",
+            tenant="t1",
+            is_supernode=True,
+        )
+        exporter = contribute("raw exporter")
+        cleaner = contribute("invoice cleaner")
+        for member in (exporter, cleaner):
+            desk.create_account(
+                member.node.node_id,
+                principal="alice",
+                tenant="t1",
+                supernode_id=supernode.node.node_id,
+                authority_level=1,
+            )
+        at = datetime(2026, 7, 11, 12, 0, tzinfo=UTC)
+        for index, member in enumerate((exporter, cleaner)):
+            metering.record(
+                MeteringEvent(
+                    idempotency_key=f"node-verify:r{index}",
+                    run_id=f"r{index}",
+                    version_id=member.version.version_id,
+                    outcome="succeeded",
+                    audit_seq=index,
+                    occurred_at=at,
+                )
+            )
+
+        feed = desk.activity(supernode.node.node_id, tenant="t1")
+        assert {r.run_id for r in feed} == {"r0", "r1"}
+        # Who executed it, by name — the fleet's feed says so.
+        assert {r.node_title for r in feed} == {"Raw Exporter", "Invoice Cleaner"}
+
+        # A member's OWN feed carries its verified run too, untagged.
+        own = desk.activity(exporter.node.node_id, tenant="t1")
+        assert [r.run_id for r in own] == ["r0"]
+        assert own[0].node_title is None
+    finally:
+        conn.close()

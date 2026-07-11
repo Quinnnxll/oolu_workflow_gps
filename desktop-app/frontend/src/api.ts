@@ -452,6 +452,9 @@ export interface ChatTurnReply {
   reply: string;
   source: string;
   actions?: ChatAction[];
+  // OoLu asking for one of THIS device's senses: "location" | "camera" |
+  // "file". The client renders a grant button — the user decides.
+  device?: string | null;
   run_id: string | null;
 }
 
