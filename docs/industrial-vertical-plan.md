@@ -122,6 +122,18 @@ speculative:
    graph → kernel → adapter → verification, comparing router tiers
    under identical tools and budgets, so the foundation-model question
    stays permanently evidence-gated.
+   *(built: `benchmarks/level_b.py` + `tests/test_level_b.py` — the
+   shaft grows 8→12mm; contenders drive the SAME Bench (reads free,
+   proposals and CAD runs counted) and the finish line is recomputed
+   from the graph. The scripted careful-engineer is FIT in 5 steps;
+   the reckless-intern is caught by the kernel and refused by the §23
+   gate. A model-backed planner auditions by implementing one
+   function.)*
+
+All six steps are built. The next occupants of this plan: wiring a
+model-backed planner into the Level B seat, Blender/animation (spec
+Phase 3), and cross-object constraint references for dependency-wide
+regression protection.
 
 Steps 1–2 are the spine (a graph without the kernel is a database; a
 kernel without the graph has nothing to guard). Blender/SOLIDWORKS come

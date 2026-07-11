@@ -4,6 +4,30 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Level B: the whole vertical, benchmarked under one budget (step 6):
+
+- **A subsystem change is the exam.** `benchmarks/level_b.py`: the
+  suspension shaft grows 8mm -> 12mm, and a planner must propagate it
+  through everything the vertical built — read the graph, grow the
+  bracket's bore through the kernel (honestly, past the 20mm
+  manufacturability wall), REBUILD AND MEASURE with the real geometry
+  kernel, file the measurements as evidence citing the CURRENT shaft,
+  and advance the status. Every contender gets the same Bench: reads
+  free, proposals and CAD runs counted against an identical budget.
+- **The finish line is the graph's, not the planner's.** Acceptance is
+  recomputed from committed truth alone: clearance for the grown
+  shaft, manufacturability, measured zero interference, measured mass
+  in budget, approved status — evidence of yesterday's world verifies
+  nothing. The scripted careful-engineer completes all five in 5
+  counted steps and is FIT for the seat (§23); the reckless-intern —
+  bores past the wall (caught by the kernel), never re-measures,
+  ships anyway — fails the gate with its shortfall itemized. A
+  model-backed planner auditions by implementing one function against
+  the same Bench.
+- **In CI, deterministically.** `tests/test_level_b.py` pins the
+  claims: completion within budget, the caught violation, the refused
+  pretender, determinism, and an honest failure on a starved budget.
+
 The vertical gets physical: the CadQuery hand (step 5):
 
 - **A real geometry kernel joins the hands.** `skills/cad_adapter.py`
