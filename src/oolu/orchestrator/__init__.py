@@ -81,6 +81,12 @@ from .rebuild import (
     RouteRebuilder,
     parse_plan_steps,
 )
+from .replay import (
+    ReplayReport,
+    earns_its_cost,
+    replay,
+    synthetic_semantic_runs,
+)
 from .scheduler import DagRouteRunner, action_node_key
 from .state import (
     ORCHESTRATOR_SCHEMA_VERSION,
@@ -202,6 +208,10 @@ __all__ = [
     "TraceProposalModel",
     "LearnedProposalStack",
     "TinyTransformerProposalModel",
+    "ReplayReport",
+    "earns_its_cost",
+    "replay",
+    "synthetic_semantic_runs",
     "WorkflowExecutor",
     "WorkflowOrchestrator",
 ]

@@ -181,6 +181,17 @@ re-architecture.
   per tenant's trace context). An untrained ranker answers "no opinion",
   and the port's containment (bounded prior strength, unknown ids
   dropped, exceptions downgrade to evidence-only) holds unchanged.
+- The replay harness: **built, and the gate is real** —
+  `orchestrator/replay.py` replays a corpus prequentially (test, then
+  train — nothing predicts from its own future), scores every step by
+  Brier with abstentions at the neutral coin, and splits cold
+  (never-seen nodes) from warm. On the seeded audition world the
+  shipped stack beats the counting baseline exactly where this section
+  scoped it (cold ~0.20 vs the baseline's forced 0.25, warm identical),
+  and the same gate — `earns_its_cost` — rejects a model that endorses
+  everything. Any future occupant of the seat (Mamba/SSM, a bigger
+  transformer) auditions here before it may bill an inference.
 
-Reproduce everything: `python benchmarks/route_scale.py`; the same claims
-run in CI as `tests/test_route_finding_proof.py`.
+Reproduce everything: `python benchmarks/route_scale.py` and
+`python benchmarks/proposal_replay.py`; the same claims run in CI as
+`tests/test_route_finding_proof.py` and `tests/test_proposal_replay.py`.

@@ -226,7 +226,9 @@ class TraceProposalModel:
     sequence checkpoint (Mamba/SSM via the routing gateway or ONNX) later
     implements the same protocol, trains on the same corpus
     (``knowledge.corpus.export_jsonl``), and must beat this baseline in
-    the replay harness to earn its inference cost.
+    the replay harness to earn its inference cost. That harness exists:
+    ``orchestrator.replay`` (run it: ``python benchmarks/proposal_replay.py``;
+    the gate is ``earns_its_cost``).
     """
 
     def __init__(self, store: TraceStore, *, context: str = "", max_runs: int = 500):

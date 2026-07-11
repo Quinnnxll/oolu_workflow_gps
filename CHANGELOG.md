@@ -4,6 +4,31 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The replay harness: a learned ranker auditions before it may bill:
+
+- **The promised gate exists.** route-finding-proof.md §5 (and
+  `TraceProposalModel`'s docstring) said any smarter occupant of the
+  `ProposalModel` seat "must beat this baseline in the replay harness
+  to earn its inference cost" — a harness that didn't exist.
+  `orchestrator/replay.py` is that harness: it replays a trace corpus
+  PREQUENTIALLY (test, then train — no model ever predicts from its
+  own future), scores every step by Brier with abstentions at the
+  neutral coin (0.25), and splits cold (never-seen nodes) from warm —
+  so a cold-start win shows up exactly where §5 promised it.
+- **The verdict is real, both ways.** On the seeded audition world
+  (kin providers mostly work, strangers mostly fail, brand-new
+  provider generations arrive with zero history), the shipped
+  `LearnedProposalStack` EARNS its seat: cold ~0.20 vs the counting
+  baseline's forced 0.25, warm identical (counts outrank inside the
+  stack, so verified evidence is never degraded), overall strictly
+  better. And the same `earns_its_cost` gate REJECTS a pretender that
+  endorses everything — a gate that can only say yes gates nothing.
+- **Runnable and in CI.** `python benchmarks/proposal_replay.py`
+  prints the audition table and verdict; `tests/test_proposal_replay.py`
+  runs the same claims in CI — prequential mechanics, cold/warm split,
+  determinism, the stack's pass, the pretender's fail. Any future
+  Mamba/SSM or bigger transformer auditions here first.
+
 Two honesty gaps close: durable growth offers, and failure evidence:
 
 - **The question OoLu asked survives the process that asked it.** The
