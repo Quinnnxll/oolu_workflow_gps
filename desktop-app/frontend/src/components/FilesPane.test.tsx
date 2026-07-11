@@ -135,18 +135,36 @@ describe("FilesPane", () => {
     fireEvent.click(screen.getByText("..").closest("button")!);
     expect(await screen.findByText("2026")).toBeTruthy();
 
-    // A new document lands in the CURRENT folder.
-    fireEvent.click(screen.getByRole("button", { name: "New document" }));
-    await screen.findByLabelText("File name");
-    const create = calls.find((c) => c.method === "POST");
-    expect((create?.body as { folder: string }).folder).toBe("reports");
+    // An upload lands in the CURRENT folder — documents themselves are
+    // OoLu's to write, so the + holds only the human moves.
+    expect(screen.queryByRole("button", { name: "New document" })).toBeNull();
+    routes["POST /v1/files"] = {
+      status: 201,
+      body: { ...FILES.items[0], file_id: "f9" },
+    };
+    vi.mocked(pickLocalFiles).mockResolvedValue([
+      new File(["a,b"], "budget.csv", { type: "text/csv" }),
+    ]);
+    vi.mocked(fileToDrawerContent).mockResolvedValue({
+      content: "a,b",
+      mediaType: "text/csv",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Upload from device" }),
+    );
+    await waitFor(() => {
+      const create = calls.find((c) => c.method === "POST");
+      expect((create?.body as { folder: string }).folder).toBe("reports");
+    });
   });
 
   it("creates an empty folder and keeps it until a file lands", async () => {
     routes["GET /v1/files"] = { status: 200, body: { items: [] } };
     render(<FilesPane />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "New folder" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add" }));
+    fireEvent.click(screen.getByRole("button", { name: "New folder" }));
     fireEvent.change(screen.getByLabelText("Folder name"), {
       target: { value: "invoices" },
     });
@@ -155,7 +173,7 @@ describe("FilesPane", () => {
     // The pane navigates straight into the fresh folder.
     expect(screen.getByText("/ invoices")).toBeTruthy();
     expect(
-      screen.getByText(/Empty folder — create a document to keep it/),
+      screen.getByText(/Empty folder — drag a file in/),
     ).toBeTruthy();
   });
 
@@ -174,7 +192,10 @@ describe("FilesPane", () => {
     });
     render(<FilesPane />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Upload" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Upload from device" }),
+    );
 
     await waitFor(() => {
       const post = calls.find(
@@ -199,7 +220,10 @@ describe("FilesPane", () => {
     );
     render(<FilesPane />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Upload" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Upload from device" }),
+    );
 
     expect(
       await screen.findByText(/huge.bin is too large/),
@@ -207,6 +231,54 @@ describe("FilesPane", () => {
     expect(
       calls.some((c) => c.method === "POST" && c.path === "/v1/files"),
     ).toBe(false);
+  });
+
+  it("dragging a file onto a folder moves it there", async () => {
+    routes["GET /v1/files"] = {
+      status: 200,
+      body: {
+        items: [
+          { ...FILES.items[0] }, // notes.md at the top level
+          {
+            file_id: "f2",
+            node_id: null,
+            name: "q3.md",
+            folder: "reports",
+            media_type: "text/markdown",
+            size: 10,
+            created_at: "t",
+            updated_at: "t",
+          },
+        ],
+      },
+    };
+    routes["PUT /v1/files/f1"] = {
+      status: 200,
+      body: { ...FILES.items[0], folder: "reports" },
+    };
+    render(<FilesPane />);
+
+    const tile = (await screen.findByText("notes.md")).closest("button")!;
+    const folder = screen.getByText("reports").closest("button")!;
+    const dataTransfer = {
+      data: {} as Record<string, string>,
+      setData(key: string, value: string) {
+        this.data[key] = value;
+      },
+      getData(key: string) {
+        return this.data[key] ?? "";
+      },
+    };
+    fireEvent.dragStart(tile, { dataTransfer });
+    fireEvent.drop(folder, { dataTransfer });
+
+    await waitFor(() => {
+      const move = calls.find(
+        (c) => c.method === "PUT" && c.path === "/v1/files/f1",
+      );
+      expect(move?.body).toEqual({ folder: "reports" });
+    });
+    expect(await screen.findByText(/moved “notes.md” to reports/)).toBeTruthy();
   });
 
   it("selects several files and deletes them in one two-tap move", async () => {
@@ -296,9 +368,23 @@ describe("FilesPane", () => {
     expect(await screen.findByText(/keeps its files to itself/)).toBeTruthy();
     expect(calls[0].query).toBe("node_id=n1");
 
-    fireEvent.click(screen.getByRole("button", { name: "New document" }));
-    await screen.findByLabelText("File name");
-    const create = calls.find((c) => c.method === "POST");
-    expect((create?.body as { node_id: string }).node_id).toBe("n1");
+    // No "New document" in the node's drawer either — documents are
+    // OoLu's to write. An upload still lands in the NODE's files.
+    expect(screen.queryByRole("button", { name: "New document" })).toBeNull();
+    vi.mocked(pickLocalFiles).mockResolvedValue([
+      new File(["hi"], "spec.md", { type: "text/markdown" }),
+    ]);
+    vi.mocked(fileToDrawerContent).mockResolvedValue({
+      content: "hi",
+      mediaType: "text/markdown",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Upload from device" }),
+    );
+    await waitFor(() => {
+      const create = calls.find((c) => c.method === "POST");
+      expect((create?.body as { node_id: string }).node_id).toBe("n1");
+    });
   });
 });

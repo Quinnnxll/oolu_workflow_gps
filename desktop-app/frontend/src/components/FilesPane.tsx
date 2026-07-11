@@ -39,6 +39,8 @@ export function FilesPane({ nodeId }: { nodeId?: string }) {
   const [drafts, setDrafts] = useState<string[]>([]);
   const [naming, setNaming] = useState(false);
   const [folderDraft, setFolderDraft] = useState("");
+  // The one + menu: upload from the device, or make a folder.
+  const [adding, setAdding] = useState(false);
   // Select mode: tiles toggle instead of opening, and the bar below acts
   // on everything selected at once — forward or delete, one move.
   const [selecting, setSelecting] = useState(false);
@@ -191,6 +193,30 @@ export function FilesPane({ nodeId }: { nodeId?: string }) {
     setCwd(path);
   }
 
+  // Dragging a file tile onto a folder tile MOVES it there — the file
+  // itself carries its folder, so a move is one honest PATCH.
+  async function moveFile(fileId: string, folder: string) {
+    setNotice("");
+    try {
+      const moved = await api.saveFile(fileId, { folder });
+      setNotice(`moved “${moved.name}” to ${folder || "the top level"}`);
+    } catch (e) {
+      setNotice((e as Error).message);
+    }
+    await refresh();
+  }
+
+  function dropHandlers(folder: string) {
+    return {
+      onDragOver: (e: React.DragEvent) => e.preventDefault(),
+      onDrop: (e: React.DragEvent) => {
+        e.preventDefault();
+        const fileId = e.dataTransfer?.getData("text/oolu-file-id");
+        if (fileId) void moveFile(fileId, folder);
+      },
+    };
+  }
+
   return (
     <div className="files-pane">
       <div className="files-head">
@@ -205,21 +231,41 @@ export function FilesPane({ nodeId }: { nodeId?: string }) {
           >
             {selecting ? "Done" : "Select"}
           </button>
-          <button className="ghost" onClick={() => setNaming(true)}>
-            New folder
-          </button>
-          <button className="ghost" onClick={() => void upload()}>
-            Upload
-          </button>
-          <button
-            onClick={async () => {
-              const doc = await api.createFile("untitled.md", "", nodeId, cwd);
-              await refresh();
-              setOpen(doc.file_id);
-            }}
-          >
-            New document
-          </button>
+          {/* Documents are OoLu's to write — ask in the chat. The + holds
+              what only a human can do here: bring device files in, and
+              shape folders. */}
+          <span className="composer-plus">
+            <button
+              className="ghost plus-btn"
+              aria-label="Add"
+              title="Upload from this device, or make a folder"
+              onClick={() => setAdding((open) => !open)}
+            >
+              ＋
+            </button>
+            {adding && (
+              <span className="forward-menu plus-menu">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAdding(false);
+                    void upload();
+                  }}
+                >
+                  Upload from device
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAdding(false);
+                    setNaming(true);
+                  }}
+                >
+                  New folder
+                </button>
+              </span>
+            )}
+          </span>
         </span>
       </div>
 
@@ -291,7 +337,8 @@ export function FilesPane({ nodeId }: { nodeId?: string }) {
         <div className="pane-empty muted">
           {nodeId
             ? "Nothing here yet — this node keeps its files to itself."
-            : "No files yet. Create one, or ask OoLu to write something down."}
+            : "No files yet — ask OoLu to write something down, or press + " +
+              "to bring one in from this device."}
         </div>
       )}
 
@@ -302,6 +349,9 @@ export function FilesPane({ nodeId }: { nodeId?: string }) {
             onClick={() =>
               setCwd(cwd.includes("/") ? cwd.slice(0, cwd.lastIndexOf("/")) : "")
             }
+            {...dropHandlers(
+              cwd.includes("/") ? cwd.slice(0, cwd.lastIndexOf("/")) : "",
+            )}
           >
             <span className="file-tile-icon">←</span>
             <span className="file-tile-name">..</span>
@@ -313,10 +363,11 @@ export function FilesPane({ nodeId }: { nodeId?: string }) {
             key={`dir:${name}`}
             className="file-tile folder"
             onClick={() => setCwd(cwd ? `${cwd}/${name}` : name)}
+            {...dropHandlers(cwd ? `${cwd}/${name}` : name)}
           >
             <span className="file-tile-icon">▣</span>
             <span className="file-tile-name">{name}</span>
-            <span className="file-tile-sub">folder</span>
+            <span className="file-tile-sub">folder · drop files to move</span>
           </button>
         ))}
         {here.map((f) => (
@@ -326,6 +377,10 @@ export function FilesPane({ nodeId }: { nodeId?: string }) {
               selecting && selected.has(f.file_id) ? "on" : ""
             }`}
             aria-pressed={selecting ? selected.has(f.file_id) : undefined}
+            draggable={!selecting}
+            onDragStart={(e) =>
+              e.dataTransfer?.setData("text/oolu-file-id", f.file_id)
+            }
             onClick={() =>
               selecting ? toggle(f.file_id) : setOpen(f.file_id)
             }
@@ -350,7 +405,7 @@ export function FilesPane({ nodeId }: { nodeId?: string }) {
 
       {cwd && here.length === 0 && folders.length === 0 && (
         <div className="pane-empty muted">
-          Empty folder — create a document to keep it.
+          Empty folder — drag a file in, or ask OoLu to write one here.
         </div>
       )}
     </div>

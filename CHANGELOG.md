@@ -4,6 +4,35 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Uploads that carry the file, folders you can drop into, and a drawer
+where OoLu writes the documents:
+
+- **An upload can never again be a hollow file that "passed".** The
+  reading path was entirely mock-tested; it is now proven with REAL
+  files — a text file's actual words, a typeless .csv, a binary's true
+  bytes as a data URL — and hardened: a non-empty file that reads back
+  blank is REFUSED in words ("could not read <name> — nothing arrived
+  from disk") instead of saved as an empty document, and images still
+  upload on webviews without createImageBitmap (shipped as-is within
+  the budget instead of failing). The assistant is told the other half:
+  a file on THIS device is reachable only through the "file" device
+  request — never as an engine task, whose sandbox cannot see the
+  device and would only fabricate an empty stand-in.
+- **Drag a file onto a folder to move it.** File tiles are draggable;
+  folder tiles (and the ".." row) accept the drop — one honest PATCH
+  moves the file, with the move named in words. Works in the Life
+  drawer and every node's drawer alike.
+- **"New document" is gone — documents are OoLu's to write.** In both
+  the Life Files page and a node's Files tab, the toolbar is now
+  Select plus ONE + menu holding what only a human can do here: Upload
+  from device, and New folder. Ask OoLu for the document itself.
+- Tests: the real reading path end to end (words, typeless text, binary
+  bytes, the no-downscale image fallback, the blank-read refusal),
+  drag-to-move landing the PATCH and the notice, uploads landing in the
+  current folder and the node's drawer through the + menu, and the
+  New-document button's absence in both drawers. 198 vitest and the
+  entire backend suite green (1094 passed); shell rebuilt; ruff clean.
+
 The Supernode sees its fleet, the Files tab stops repeating it, and the
 device's senses are OoLu's to ask for:
 

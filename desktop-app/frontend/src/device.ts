@@ -61,12 +61,45 @@ export function capturePhoto(): Promise<File | null> {
   });
 }
 
+// Read a file into a data URL, refusing honestly when it exceeds the
+// budget or when a non-empty file reads back blank — every way a
+// "correct name, hollow content" upload could happen must end in words,
+// never in a silently empty document that "passed".
+function readAsDataUrl(file: File, maxBytes: number): Promise<string> {
+  if (file.size > Math.floor(maxBytes * 0.74)) {
+    return Promise.reject(
+      new Error(`${file.name} is too large for the drawer (1 MB cap)`),
+    );
+  }
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = String(reader.result || "");
+      const payload = url.split(",", 2)[1] ?? "";
+      if (file.size > 0 && payload.length === 0) {
+        reject(
+          new Error(`could not read ${file.name} — nothing arrived from disk`),
+        );
+        return;
+      }
+      resolve(url);
+    };
+    reader.onerror = () => reject(new Error(`could not read ${file.name}`));
+    reader.readAsDataURL(file);
+  });
+}
+
 // Shrink a shot until it fits the drawer: longest side capped, JPEG
 // quality stepped down until the data URL is under the byte budget.
 export async function photoToDataUrl(
   file: File,
   { maxDim = 1280, maxBytes = 900_000 }: { maxDim?: number; maxBytes?: number } = {},
 ): Promise<string> {
+  if (typeof createImageBitmap !== "function") {
+    // An older webview can't downscale: ship the picture as-is when it
+    // fits the budget, refuse honestly when it doesn't — never a blank.
+    return readAsDataUrl(file, maxBytes);
+  }
   const bitmap = await createImageBitmap(file);
   const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
   const canvas = document.createElement("canvas");
@@ -117,17 +150,16 @@ export async function fileToDrawerContent(
     if (text.length > maxBytes) {
       throw new Error(`${file.name} is too large for the drawer (1 MB cap)`);
     }
+    if (file.size > 0 && text.length === 0) {
+      // A non-empty file that reads back blank is a FAILED read, not a
+      // document: refuse in words instead of saving a hollow file.
+      throw new Error(
+        `could not read ${file.name} — nothing arrived from disk`,
+      );
+    }
     return { content: text, mediaType: type || "text/markdown" };
   }
-  if (file.size > Math.floor(maxBytes * 0.74)) {
-    throw new Error(`${file.name} is too large for the drawer (1 MB cap)`);
-  }
-  const dataUrl = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error(`could not read ${file.name}`));
-    reader.readAsDataURL(file);
-  });
+  const dataUrl = await readAsDataUrl(file, maxBytes);
   return { content: dataUrl, mediaType: type || "application/octet-stream" };
 }
 
