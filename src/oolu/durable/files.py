@@ -1,13 +1,16 @@
-"""User files: named, editable documents living in the durable database.
+"""User files: named documents living in the durable database.
 
 The conversation produces and consumes documents and sheets; they need a
 home the user can open, read, and edit from the app — on the same durable
 connection the runs live on (SQLite locally, Postgres on a host), so a
 hosted deployment's files are as multi-device as its runs.
 
-Deliberately text-only and small: documents and CSV sheets, not an object
-store. Large binary evidence stays in the content-addressed artifact
-store; these are the files a person edits.
+Two shapes, one drawer. INLINE files (documents, sheets, small images as
+data URLs) live in the row itself, person-editable, capped sane. BLOB
+files — the PDFs, decks, videos, and datasets developers and creators
+actually exchange — keep their bytes in the content-addressed artifact
+store next door, with the row carrying only metadata and the reference:
+the drawer stays a drawer, and the database never swallows a video.
 """
 
 from __future__ import annotations
@@ -17,8 +20,11 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-# A person-editable file, not a data lake: keep rows sane.
+# A person-editable INLINE file, not a data lake: keep rows sane.
 MAX_FILE_BYTES = 1_000_000
+# The blob door's own ceiling — filesystem-backed, so generous, but still
+# a stated number the refusal can speak.
+MAX_BLOB_BYTES = 100_000_000
 
 
 class FileTooLargeError(ValueError):
@@ -58,11 +64,17 @@ class UserFile(BaseModel):
     folder: str = ""
     media_type: str = "text/markdown"
     content: str = ""
+    # A BLOB file: bytes live in the artifact store under this reference
+    # (sha256:...), the row carries only metadata. content stays "".
+    blob_ref: str | None = None
+    blob_size: int = 0
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
 
     @property
     def size(self) -> int:
+        if self.blob_ref:
+            return self.blob_size
         return len(self.content.encode("utf-8"))
 
 
@@ -74,19 +86,64 @@ _SCHEMA = """CREATE TABLE IF NOT EXISTS user_files (
 
 
 class UserFileStore:
-    """Tenant-scoped file CRUD over the shell's own durable connection."""
+    """Tenant-scoped file CRUD over the shell's own durable connection.
 
-    def __init__(self, conn) -> None:
+    ``artifacts`` (a ``FilesystemArtifactStore``) opens the blob door:
+    ``save_bytes``/``read_bytes`` for files whose bytes do not belong in
+    a database row. Without it the store stays exactly what it was —
+    inline documents only.
+    """
+
+    def __init__(self, conn, *, artifacts=None) -> None:
         self._conn = conn
+        self._artifacts = artifacts
         with self._conn.transaction() as db:
             db.execute(_SCHEMA)
 
+    @property
+    def blobs_enabled(self) -> bool:
+        return self._artifacts is not None
+
     def save(self, file: UserFile) -> UserFile:
-        if file.size > MAX_FILE_BYTES:
+        if not file.blob_ref and file.size > MAX_FILE_BYTES:
             raise FileTooLargeError(
                 f"file exceeds {MAX_FILE_BYTES} bytes; large data belongs in"
                 " the artifact store"
             )
+        self._persist(file)
+        return file
+
+    def save_bytes(self, file: UserFile, data: bytes) -> UserFile:
+        """The blob door: the bytes land in the artifact store, the row
+        keeps the metadata and the self-verifying reference."""
+        if self._artifacts is None:
+            raise FileTooLargeError(
+                "this host keeps no blob store — only inline documents fit"
+            )
+        if len(data) > MAX_BLOB_BYTES:
+            raise FileTooLargeError(
+                f"file exceeds {MAX_BLOB_BYTES} bytes"
+            )
+        ref = self._artifacts.put(
+            file.file_id, data, media_type=file.media_type
+        )
+        saved = file.model_copy(
+            update={"content": "", "blob_ref": ref, "blob_size": len(data)}
+        )
+        self._persist(saved)
+        return saved
+
+    def read_bytes(self, file: UserFile) -> bytes:
+        """The file's true bytes, whichever shape it is stored in."""
+        if file.blob_ref:
+            if self._artifacts is None:
+                raise FileTooLargeError(
+                    "this host keeps no blob store — the bytes are elsewhere"
+                )
+            return self._artifacts.get(file.blob_ref)
+        return file.content.encode("utf-8")
+
+    def _persist(self, file: UserFile) -> None:
         with self._conn.transaction() as db:
             db.execute(
                 """INSERT INTO user_files (file_id, tenant_id, payload_json)
@@ -95,7 +152,6 @@ class UserFileStore:
                      payload_json = excluded.payload_json""",
                 (file.file_id, file.tenant_id, file.model_dump_json()),
             )
-        return file
 
     def get(self, file_id: str, *, tenant: str) -> UserFile | None:
         with self._conn.lock:
@@ -119,9 +175,31 @@ class UserFileStore:
         return [f for f in files if f.node_id == node_id]
 
     def delete(self, file_id: str, *, tenant: str) -> bool:
+        doomed = self.get(file_id, tenant=tenant)
         with self._conn.transaction() as db:
             cursor = db.execute(
                 "DELETE FROM user_files WHERE file_id = ? AND tenant_id = ?",
                 (file_id, tenant),
             )
-            return cursor.rowcount > 0
+            deleted = cursor.rowcount > 0
+        # The blob goes too — UNLESS another row still references the same
+        # content-addressed bytes (identical uploads deduplicate).
+        if (
+            deleted
+            and doomed is not None
+            and doomed.blob_ref
+            and self._artifacts is not None
+            and not self._blob_in_use(doomed.blob_ref)
+        ):
+            self._artifacts.delete(doomed.blob_ref)
+        return deleted
+
+    def _blob_in_use(self, blob_ref: str) -> bool:
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                "SELECT payload_json FROM user_files"
+            ).fetchall()
+        return any(
+            UserFile.model_validate_json(row["payload_json"]).blob_ref == blob_ref
+            for row in rows
+        )

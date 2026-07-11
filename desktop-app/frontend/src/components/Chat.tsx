@@ -235,8 +235,14 @@ export function Chat() {
       if (picked.length === 0) return; // a cancelled picker is not an event
       const landed: string[] = [];
       for (const file of picked) {
-        const { content, mediaType } = await fileToDrawerContent(file);
-        await api.createFile(file.name, content, undefined, "", mediaType);
+        try {
+          const { content, mediaType } = await fileToDrawerContent(file);
+          await api.createFile(file.name, content, undefined, "", mediaType);
+        } catch (e) {
+          // Past the inline cap: the blob door carries the full bytes.
+          if (!/too large/i.test((e as Error).message)) throw e;
+          await api.uploadFileBytes(file);
+        }
         landed.push(file.name);
       }
       void send(

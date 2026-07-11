@@ -4,6 +4,35 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The 1 MB ceiling breaks: blob-backed files, raw in and raw out:
+
+- **Two shapes, one drawer.** Inline files (documents, sheets, small
+  images) stay in the database row, person-editable, capped at 1 MB as
+  before. BLOB files — the PDFs, decks, videos, and datasets the row
+  cap could never hold — keep their bytes in the content-addressed
+  artifact store on disk (up to 100 MB each, identical uploads
+  deduplicated), with the row carrying only metadata and the
+  self-verifying sha256 reference. The database never swallows a video.
+- **Raw bytes travel raw.** `POST /v1/files/upload` takes the file as
+  the request body — no base64, no JSON envelope — and
+  `GET /v1/files/{id}/content` streams it back typed honestly, named
+  for the device's save dialog, tenant-walled like every other read.
+  Editing a binary's bytes as JSON text is refused in words (rename and
+  move still work); deleting the last reference removes the blob from
+  disk — no orphans.
+- **The app upgrades uploads automatically.** Past the inline cap, the
+  Files + menu and the chat's file grant switch to the blob door with
+  the FULL original bytes — no downscaling, no refusal — and a
+  blob-backed file opens as its honest card (or player) with the bytes
+  fetched behind the scenes for viewing and download.
+- **Proven end to end, no fakes.** The Chromium smoke now pushes a
+  2 MiB binary (every byte value) through the + menu, sees its card,
+  and downloads it back byte-identical — device → blob store → device.
+  Plus store/route tests: the 2 MiB round-trip with type and
+  disposition, dedup-safe deletes, the tenant wall on /content, and
+  the refused text-edit. 1130 backend tests and 205 vitest green;
+  shell rebuilt; ruff clean.
+
 CI sees everything now — and one real browser walks the real app:
 
 - **The frontend is in CI.** The `ci` workflow gains a frontend job:

@@ -546,6 +546,8 @@ export interface FileMeta {
   folder?: string;
   media_type: string;
   size: number;
+  // Blob-backed: the bytes live behind /content, not in the row.
+  has_blob?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -798,6 +800,41 @@ export const api = {
   ) => req<FileDoc>("PUT", `/v1/files/${id}`, patch),
   deleteFile: (id: string) =>
     req<{ deleted: boolean }>("DELETE", `/v1/files/${id}`),
+  // The blob door: raw bytes in and out — no base64, no JSON envelope —
+  // for the files the inline row cap cannot hold.
+  uploadFileBytes: async (
+    file: File,
+    nodeId?: string,
+    folder = "",
+  ): Promise<FileMeta> => {
+    const query = new URLSearchParams({ name: file.name });
+    if (nodeId) query.set("node_id", nodeId);
+    if (folder) query.set("folder", folder);
+    const headers: Record<string, string> = {
+      "Content-Type": file.type || "application/octet-stream",
+    };
+    const token = apiToken();
+    if (token) headers["Authorization"] = "Bearer " + token;
+    const res = await fetch(`${BASE()}/v1/files/upload?${query}`, {
+      method: "POST",
+      headers,
+      body: file,
+    });
+    const text = await res.text();
+    const data = text ? JSON.parse(text) : {};
+    if (!res.ok) {
+      throw new Error(data?.error?.message ?? data?.error ?? `${res.status}`);
+    }
+    return data as FileMeta;
+  },
+  fileBytes: async (id: string): Promise<Blob> => {
+    const headers: Record<string, string> = {};
+    const token = apiToken();
+    if (token) headers["Authorization"] = "Bearer " + token;
+    const res = await fetch(`${BASE()}/v1/files/${id}/content`, { headers });
+    if (!res.ok) throw new Error(`could not fetch the file (${res.status})`);
+    return res.blob();
+  },
   // ---- the Work environment: node accounts and stewardship -------------
   workNodes: () => req<{ items: WorkNode[] }>("GET", "/v1/work/nodes"),
   workAccountCreate: (nodeId: string, fixed: NodeAccountCreate) =>

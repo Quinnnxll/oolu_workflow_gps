@@ -51,7 +51,7 @@ function isPdf(file: FileDoc): boolean {
 }
 
 function isBinary(file: FileDoc): boolean {
-  return file.content.startsWith("data:");
+  return Boolean(file.has_blob) || file.content.startsWith("data:");
 }
 
 const KIND_WORDS: [string, string][] = [
@@ -85,6 +85,10 @@ export function FileView({
   const [file, setFile] = useState<FileDoc | null>(null);
   const [name, setName] = useState("");
   const [error, setError] = useState("");
+  // Blob-backed files keep their bytes behind /content: fetched once on
+  // open, held as an object URL for the viewer/player and the download.
+  const [blob, setBlob] = useState<Blob | null>(null);
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -103,6 +107,27 @@ export function FileView({
       cancelled = true;
     };
   }, [fileId]);
+
+  useEffect(() => {
+    if (!file?.has_blob) return;
+    let cancelled = false;
+    let url: string | null = null;
+    api
+      .fileBytes(file.file_id)
+      .then((bytes) => {
+        if (cancelled) return;
+        url = URL.createObjectURL(bytes);
+        setBlob(bytes);
+        setBlobUrl(url);
+      })
+      .catch((e) => {
+        if (!cancelled) setError((e as Error).message);
+      });
+    return () => {
+      cancelled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [file?.file_id, file?.has_blob]);
 
   if (error) return <div className="pane-empty">{error}</div>;
   if (!file) return <div className="pane-empty muted">Opening…</div>;
@@ -143,7 +168,7 @@ export function FileView({
           onClick={() =>
             saveToDevice(
               file.name,
-              contentToBlob(file.content, file.media_type),
+              blob ?? contentToBlob(file.content, file.media_type),
             )
           }
         >
@@ -159,14 +184,32 @@ export function FileView({
           delete
         </button>
       </div>
-      {isImage(file) ? (
-        <img className="file-image" src={file.content} alt={file.name} />
+      {file.has_blob && !blobUrl && !isBinary(file) ? (
+        <div className="pane-empty muted">Fetching the file…</div>
+      ) : isImage(file) ? (
+        <img
+          className="file-image"
+          src={file.has_blob ? (blobUrl ?? "") : file.content}
+          alt={file.name}
+        />
       ) : isVideo(file) ? (
-        <video className="file-media" controls src={file.content} />
+        <video
+          className="file-media"
+          controls
+          src={file.has_blob ? (blobUrl ?? "") : file.content}
+        />
       ) : isAudio(file) ? (
-        <audio className="file-media" controls src={file.content} />
+        <audio
+          className="file-media"
+          controls
+          src={file.has_blob ? (blobUrl ?? "") : file.content}
+        />
       ) : isPdf(file) ? (
-        <iframe className="file-frame" title={file.name} src={file.content} />
+        <iframe
+          className="file-frame"
+          title={file.name}
+          src={file.has_blob ? (blobUrl ?? "") : file.content}
+        />
       ) : isBinary(file) ? (
         <div className="doc-page binary-card">
           <p>
@@ -175,10 +218,11 @@ export function FileView({
           </p>
           <p>
             <button
+              disabled={Boolean(file.has_blob) && !blob}
               onClick={() =>
                 saveToDevice(
                   file.name,
-                  contentToBlob(file.content, file.media_type),
+                  blob ?? contentToBlob(file.content, file.media_type),
                 )
               }
             >

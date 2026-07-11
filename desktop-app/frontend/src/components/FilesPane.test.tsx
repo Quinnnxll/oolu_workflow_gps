@@ -22,7 +22,13 @@ let calls: { method: string; path: string; query: string; body: unknown }[];
 const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
   const u = new URL(String(input), "http://local.test");
   const method = init?.method ?? "GET";
-  const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+  // A raw (blob-door) body is a File, not JSON — record it as undefined.
+  let body: unknown;
+  try {
+    body = init?.body ? JSON.parse(String(init.body)) : undefined;
+  } catch {
+    body = undefined;
+  }
   calls.push({ method, path: u.pathname, query: u.search.slice(1), body });
   const hit = routes[`${method} ${u.pathname}`] ?? { status: 200, body: {} };
   return {
@@ -211,7 +217,13 @@ describe("FilesPane", () => {
   });
 
   it("a refused upload lands as words next to the successes", async () => {
+    // Past the inline cap the blob door takes over — so a refusal now
+    // means even the blob store said no (its own 100 MB ceiling).
     routes["GET /v1/files"] = { status: 200, body: FILES };
+    routes["POST /v1/files/upload"] = {
+      status: 413,
+      body: { error: { message: "file exceeds 100000000 bytes" } },
+    };
     vi.mocked(pickLocalFiles).mockResolvedValue([
       new File(["x"], "huge.bin"),
     ]);
@@ -225,9 +237,7 @@ describe("FilesPane", () => {
       screen.getByRole("button", { name: "Upload from device" }),
     );
 
-    expect(
-      await screen.findByText(/huge.bin is too large/),
-    ).toBeTruthy();
+    expect(await screen.findByText(/file exceeds/)).toBeTruthy();
     expect(
       calls.some((c) => c.method === "POST" && c.path === "/v1/files"),
     ).toBe(false);
@@ -386,5 +396,39 @@ describe("FilesPane", () => {
       const create = calls.find((c) => c.method === "POST");
       expect((create?.body as { node_id: string }).node_id).toBe("n1");
     });
+  });
+});
+
+describe("FilesPane — the blob door", () => {
+  it("past the inline cap, the upload takes the blob door with full bytes", async () => {
+    routes["GET /v1/files"] = { status: 200, body: { items: [] } };
+    routes["POST /v1/files/upload"] = {
+      status: 201,
+      body: { ...FILES.items[0], file_id: "f9", name: "movie.mp4", has_blob: true },
+    };
+    vi.mocked(pickLocalFiles).mockResolvedValue([
+      new File(["x"], "movie.mp4", { type: "video/mp4" }),
+    ]);
+    vi.mocked(fileToDrawerContent).mockRejectedValue(
+      new Error("movie.mp4 is too large for the drawer (1 MB cap)"),
+    );
+    render(<FilesPane />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Upload from device" }),
+    );
+
+    await waitFor(() => {
+      const raw = calls.find(
+        (c) => c.method === "POST" && c.path === "/v1/files/upload",
+      );
+      expect(raw?.query).toContain("name=movie.mp4");
+    });
+    // The blob door succeeded: no refusal, one upload counted.
+    expect(await screen.findByText(/uploaded 1 file/)).toBeTruthy();
+    expect(
+      calls.some((c) => c.method === "POST" && c.path === "/v1/files"),
+    ).toBe(false);
   });
 });

@@ -492,6 +492,7 @@ def build_host_runtime(
         PaymentProfileStore,
         SubscriptionService,
     )
+    from .durable.artifacts import FilesystemArtifactStore
     from .durable.files import UserFileStore
     from .gateway import GatewayApp
     from .gateway.asgi import GatewayASGI
@@ -854,7 +855,12 @@ def build_host_runtime(
         desk=desk,
         kyc=kyc,
         hygiene=hygiene,
-        files=UserFileStore(conn),
+        # The drawer with its blob door: inline documents in the database,
+        # real binaries (PDF/DOCX/MP4/...) as content-addressed files on
+        # disk — the database never swallows a video.
+        files=UserFileStore(
+            conn, artifacts=FilesystemArtifactStore(data / "file-blobs")
+        ),
         settings_node=settings_node,
         # The brain behind chat: the same keyring/meter planning uses —
         # pasted keys survive restarts encrypted, every consultation is

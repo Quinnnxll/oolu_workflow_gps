@@ -78,6 +78,31 @@ def test_the_shell_carries_a_conversation_and_a_file_end_to_end(tmp_path):
                 page.get_by_role("button", name="download").click()
             downloaded = download_info.value.path()
             assert Path(downloaded).read_text() == WORDS
+            page.get_by_role("button", name="← files").click()
+
+            # 5. Past the inline cap: a 2 MiB binary takes the BLOB door —
+            # full bytes up, the honest card in place, full bytes back.
+            big = tmp_path / "dataset.bin"
+            payload = bytes(range(256)) * 8192  # 2 MiB, every byte value
+            big.write_bytes(payload)
+            page.get_by_role("button", name="Add").click()
+            with page.expect_file_chooser() as chooser_info:
+                page.get_by_role(
+                    "button", name="Upload from device"
+                ).click()
+            chooser_info.value.set_files(str(big))
+            expect(
+                page.get_by_text(re.compile("uploaded 1 file"))
+            ).to_be_visible()
+            page.get_by_text("dataset.bin").click()
+            expect(
+                page.get_by_text(re.compile("binary file"))
+            ).to_be_visible()
+            with page.expect_download() as blob_download:
+                page.get_by_role(
+                    "button", name="Download to this device"
+                ).click()
+            assert Path(blob_download.value.path()).read_bytes() == payload
 
             browser.close()
     finally:

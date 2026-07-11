@@ -809,7 +809,11 @@ class GatewayApp:
         r.add("GET", "/v1/usage/model", self._model_usage_view)
         r.add("GET", "/v1/files", self._files_list)
         r.add("POST", "/v1/files", self._files_create)
+        # The blob door: raw bytes in (no base64, no JSON envelope), raw
+        # bytes out — the shapes real PDFs, decks, and videos travel in.
+        r.add("POST", "/v1/files/upload", self._files_upload)
         r.add("GET", "/v1/files/{file_id}", self._files_get)
+        r.add("GET", "/v1/files/{file_id}/content", self._files_content)
         r.add("PUT", "/v1/files/{file_id}", self._files_update)
         r.add("DELETE", "/v1/files/{file_id}", self._files_delete)
         r.add("GET", "/v1/work/nodes", self._work_nodes)
@@ -2819,6 +2823,8 @@ class GatewayApp:
             "folder": file.folder,
             "media_type": file.media_type,
             "size": file.size,
+            # Blob-backed: the bytes live behind /content, not in the row.
+            "has_blob": bool(file.blob_ref),
             "created_at": file.created_at.isoformat(),
             "updated_at": file.updated_at.isoformat(),
         }
@@ -2862,6 +2868,60 @@ class GatewayApp:
             201, {**self._file_meta(file), "content": file.content}
         )
 
+    def _files_upload(self, request, session, params) -> Response:
+        """Raw bytes into the drawer's blob store — the door past the
+        inline row cap. Name/folder/node ride the query string; the body
+        IS the file, exactly as picked, no base64 inflation."""
+        store = self._require_files()
+        if not store.blobs_enabled:
+            raise GatewayError(
+                404, "not_found", "this host keeps no blob store"
+            )
+        name = str(request.query.get("name", "")).strip()
+        if not name:
+            raise GatewayError(400, "invalid_request", "name is required")
+        try:
+            folder = normalize_folder(request.query.get("folder"))
+        except ValueError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        data = request.raw
+        if not data:
+            raise GatewayError(400, "invalid_request", "the body is the file — it is empty")
+        node_id = str(request.query.get("node_id") or "") or None
+        media_type = str(
+            request.header("content-type") or _media_type_for(name)
+        ).split(";")[0].strip()
+        file = UserFile(
+            tenant_id=session.tenant_id,
+            node_id=node_id,
+            name=name,
+            folder=folder,
+            media_type=media_type or _media_type_for(name),
+        )
+        try:
+            saved = store.save_bytes(file, data)
+        except FileTooLargeError as exc:
+            raise GatewayError(413, "too_large", str(exc)) from exc
+        return json_response(201, self._file_meta(saved))
+
+    def _files_content(self, request, session, params) -> Response:
+        """The file's true bytes, whichever shape it is stored in —
+        typed honestly, named for the device's save dialog."""
+        file = self._load_file(params, session)
+        store = self._require_files()
+        try:
+            data = store.read_bytes(file)
+        except FileTooLargeError as exc:
+            raise GatewayError(404, "not_found", str(exc)) from exc
+        return Response(
+            status=200,
+            body=data,
+            content_type=file.media_type or "application/octet-stream",
+            headers={
+                "Content-Disposition": f'attachment; filename="{file.name}"'
+            },
+        )
+
     def _load_file(self, params, session) -> UserFile:
         store = self._require_files()
         file = store.get(params["file_id"], tenant=session.tenant_id)
@@ -2877,6 +2937,15 @@ class GatewayApp:
         store = self._require_files()
         file = self._load_file(params, session)
         body = request.body or {}
+        if file.blob_ref and "content" in body and body["content"] is not None:
+            # A binary's bytes are not a text field: editing them through
+            # a JSON string could only corrupt the file. Re-upload instead.
+            raise GatewayError(
+                400,
+                "invalid_request",
+                "this is a binary file — its bytes are written by upload, "
+                "not edited as text (rename and move are fine)",
+            )
         try:
             folder = (
                 normalize_folder(body["folder"])

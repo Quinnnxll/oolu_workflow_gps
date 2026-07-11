@@ -254,3 +254,137 @@ def test_the_drawer_speaks_real_file_types():
     # The old floor still stands.
     assert _media_type_for("rows.csv") == "text/csv"
     assert _media_type_for("notes") == "text/markdown"
+
+
+# --------------------------------------------------------------------------- #
+# The blob door: past the inline cap, bytes live in the artifact store.        #
+# --------------------------------------------------------------------------- #
+def test_the_blob_door_end_to_end(tmp_path):
+    """Raw bytes in (no base64, no JSON envelope), raw bytes out — a 2 MiB
+    video lands past the inline cap, streams back byte-identical, refuses
+    text edits, stays tenant-walled, and leaves no orphan on delete."""
+    from test_http_gateway import NOW
+
+    from oolu.durable.artifacts import FilesystemArtifactStore
+    from oolu.gateway.http import Request
+
+    base, conn, ident = _app(tmp_path)
+    store = UserFileStore(
+        conn, artifacts=FilesystemArtifactStore(tmp_path / "blobs")
+    )
+    app = GatewayApp(
+        base._durable,
+        validator=ident.validator,
+        resolver=ident.resolver,
+        files=store,
+    )
+    token = ident.token("user-1", "t1")
+    try:
+        payload = bytes(range(256)) * 8192  # 2 MiB — past the inline cap
+        uploaded = app.handle(
+            Request(
+                method="POST",
+                path="/v1/files/upload",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "video/mp4",
+                },
+                query={"name": "clip.mp4", "folder": "footage"},
+                raw=payload,
+                now=NOW,
+            )
+        )
+        assert uploaded.status == 201, uploaded.body
+        meta = uploaded.body
+        assert meta["has_blob"] is True
+        assert meta["size"] == len(payload)
+        assert meta["media_type"] == "video/mp4"
+        assert meta["folder"] == "footage"
+        file_id = meta["file_id"]
+
+        # The row never swallowed the bytes; /content returns them whole.
+        read = app.handle(_req("GET", f"/v1/files/{file_id}", token=token))
+        assert read.body["content"] == "" and read.body["has_blob"] is True
+        content = app.handle(
+            _req("GET", f"/v1/files/{file_id}/content", token=token)
+        )
+        assert content.status == 200
+        assert content.body == payload
+        assert content.content_type == "video/mp4"
+        assert 'filename="clip.mp4"' in content.headers["Content-Disposition"]
+
+        # Text-editing a binary is refused in words; renaming still works.
+        refused = app.handle(
+            _req(
+                "PUT",
+                f"/v1/files/{file_id}",
+                token=token,
+                body={"content": "oops"},
+            )
+        )
+        assert refused.status == 400
+        renamed = app.handle(
+            _req(
+                "PUT",
+                f"/v1/files/{file_id}",
+                token=token,
+                body={"name": "match.mp4"},
+            )
+        )
+        assert renamed.status == 200, renamed.body
+
+        # Another tenant gets a 404 on the bytes too, never a peek.
+        other = app.handle(
+            _req(
+                "GET",
+                f"/v1/files/{file_id}/content",
+                token=ident.token("user-2", "t2"),
+            )
+        )
+        assert other.status == 404
+
+        # Deleting the file deletes the blob from disk — no orphans.
+        def blobs():
+            return [
+                p
+                for p in (tmp_path / "blobs").rglob("*")
+                if p.is_file() and p.suffix != ".meta"
+            ]
+
+        assert len(blobs()) == 1
+        app.handle(_req("DELETE", f"/v1/files/{file_id}", token=token))
+        assert blobs() == []
+    finally:
+        conn.close()
+
+
+def test_identical_blobs_deduplicate_and_delete_safely(tmp_path):
+    from oolu.durable.artifacts import FilesystemArtifactStore
+
+    conn = DurableConnection(tmp_path / "d.db")
+    try:
+        store = UserFileStore(
+            conn, artifacts=FilesystemArtifactStore(tmp_path / "blobs")
+        )
+        data = b"same bytes" * 1000
+        first = store.save_bytes(
+            UserFile(
+                tenant_id="t1", name="a.bin", media_type="application/octet-stream"
+            ),
+            data,
+        )
+        second = store.save_bytes(
+            UserFile(
+                tenant_id="t1", name="b.bin", media_type="application/octet-stream"
+            ),
+            data,
+        )
+        assert first.blob_ref == second.blob_ref  # content addressing dedupes
+        # Deleting one keeps the shared bytes alive for the other...
+        assert store.delete(first.file_id, tenant="t1") is True
+        assert store.read_bytes(store.get(second.file_id, tenant="t1")) == data
+        # ...and deleting the LAST reference removes the blob itself.
+        store.delete(second.file_id, tenant="t1")
+        assert [p for p in (tmp_path / "blobs").rglob("*") if p.is_file()] == []
+    finally:
+        conn.close()
