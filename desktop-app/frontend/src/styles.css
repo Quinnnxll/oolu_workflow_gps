@@ -711,6 +711,16 @@ main.chat-main {
   left: 0;
 }
 
+/* In the Files head the + sits at the TOP of the page: the menu must
+   open DOWNWARD, or it slides under the app header where no click can
+   reach it (the E2E smoke caught exactly that). */
+.files-head .plus-menu {
+  bottom: auto;
+  top: 110%;
+  left: auto;
+  right: 0;
+}
+
 
 .forward-done {
   margin-left: 6px;

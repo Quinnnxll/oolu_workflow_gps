@@ -174,9 +174,13 @@ def test_members_see_screens_degrade_honestly(host_server):
         # No stored users:manage authority: the screen says so, plainly.
         page.get_by_role("link", name="Users").click()
         expect(page.get_by_text("Your account does not have authority")).to_be_visible()
-        # Billing is not wired on this host: honest, not a broken screen.
+        # The money stack is ALWAYS wired on a host now (assembly's
+        # earnings/payout/dispute surfaces answer everywhere; the launch
+        # guard gates real charging) — the screen shows the empty ledger,
+        # not a "not enabled" wall. This assertion was written before
+        # that change and only now runs in CI, where it caught up.
         page.get_by_role("link", name="Earnings").click()
-        expect(page.get_by_text("not enabled on this host")).to_be_visible()
+        expect(page.get_by_text("No earnings yet.")).to_be_visible()
         browser.close()
 
 

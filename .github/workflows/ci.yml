@@ -1,5 +1,6 @@
-# Continuous integration: lint + the full test suite. Runs on every push
-# and pull request, and on demand from the Actions tab (workflow_dispatch).
+# Continuous integration: lint + the full test suite (browser E2E
+# included), and the frontend's own tests + build-drift check. Runs on
+# every push and pull request, and on demand from the Actions tab.
 name: ci
 
 on:
@@ -17,8 +18,35 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install (with the extras the suite exercises)
-        run: python -m pip install -e ".[serve,http,oidc,postgres]" pytest "ruff==0.15.8"
+        run: python -m pip install -e ".[serve,http,oidc,postgres]" pytest "ruff==0.15.8" playwright
+      - name: Install Chromium
+        # The E2E smoke drives the COMMITTED shell in a real browser —
+        # the anti-lie for everything unit tests fake.
+        run: python -m playwright install --with-deps chromium
       - name: Lint
         run: ruff check src tests
       - name: Test
         run: python -m pytest
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop-app/frontend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop-app/frontend/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Test (vitest)
+        run: npx vitest run
+      - name: Build the shell (typechecks first)
+        run: npm run build:shell
+      - name: The committed shell must match the source — no drift
+        # Editing frontend source without rebuilding ships a stale app;
+        # this step makes that a red build instead of a silent lie.
+        run: git diff --exit-code -- ../../src/oolu/gateway/frontend/shell

@@ -4,6 +4,33 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+CI sees everything now — and one real browser walks the real app:
+
+- **The frontend is in CI.** The `ci` workflow gains a frontend job:
+  npm ci, the full vitest suite, the shell build (typecheck included),
+  and a DRIFT CHECK — the committed shell bundle must match a fresh
+  build of the source, so editing frontend code without rebuilding is a
+  red build instead of a silently stale app. Until now, none of the 204
+  frontend tests ever ran in CI.
+- **A real end-to-end smoke, on every push.** The Python job installs
+  Playwright + Chromium, which turns ON the browser tests that were
+  silently skipping everywhere — and adds a new one: the COMMITTED
+  shell served by the real GatewayASGI over the real host runtime,
+  driven by a real browser through the desktop's own #auth bootstrap —
+  chat answered, a REAL file uploaded from disk through the + menu, its
+  words visible on the reading page, and downloaded back byte-for-byte.
+  Device → drawer → device, closed loop, no fakes anywhere.
+- **The smoke already paid for itself.** First run caught a real bug no
+  unit test could see: the Files + menu opened UPWARD (styled for the
+  chat composer at the bottom of the screen), sliding under the app
+  header where no click could reach it — Upload and New folder were
+  unreachable at the top of the page. The menu now opens downward in
+  the Files head. Enabling the skipped browser tests also caught a
+  stale assertion (a host's Earnings screen shows the empty ledger now
+  that the money stack is always wired) — updated to today's truth.
+- Entire backend suite green with the browser tests ON (1128 passed);
+  204 vitest; shell rebuilt; ruff clean.
+
 The small transformer takes its reserved seat:
 
 - **route-finding-proof.md §5, implemented.** A pure-Python, dependency-
