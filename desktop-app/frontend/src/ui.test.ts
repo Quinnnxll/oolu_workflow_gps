@@ -70,3 +70,37 @@ describe("choice labels", () => {
     expect(choiceLabel("USD")).toBe("USD");
   });
 });
+
+describe("chrome beyond Settings", () => {
+  it("the whole surface follows the language — Chat, Work, Files, feed words", async () => {
+    const { applyLanguage, t } = await import("./ui");
+    const { humanizeEvent } = await import("./humanize");
+
+    applyLanguage("zh");
+    expect(t("work.myNodes")).toBe("我的节点");
+    expect(t("files.yours")).toBe("你的文件");
+    expect(t("net.header")).toBe("网络访问");
+    expect(t("run.approve")).toBe("批准");
+    expect(humanizeEvent("workflow.started")).toBe("开始工作");
+
+    applyLanguage("fr");
+    expect(t("chat.welcome")).toContain("OoLu");
+    expect(t("files.newFolder")).toBe("Nouveau dossier");
+    expect(humanizeEvent("workflow.executed")).toBe("A exécuté les actions");
+    // Unknown events still degrade to readable words, never raw codes.
+    expect(humanizeEvent("weird.thing")).toBe("weird thing");
+
+    applyLanguage("en");
+    expect(humanizeEvent("workflow.started")).toBe("Started working");
+  });
+
+  it("templated strings place their values per language", async () => {
+    const { applyLanguage, tf } = await import("./ui");
+    applyLanguage("es");
+    expect(tf("files.reallyDelete", { n: 3 })).toBe("¿Eliminar 3 de verdad?");
+    applyLanguage("zh");
+    expect(tf("work.healthy", { pct: 90 })).toBe("健康度 90%");
+    applyLanguage("en");
+    expect(tf("work.healthy", { pct: 90 })).toBe("90% healthy");
+  });
+});

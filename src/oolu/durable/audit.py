@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Sequence
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict
@@ -107,6 +107,34 @@ class DurableAuditLog:
                     (run_id,),
                 ).fetchall()
         return [self._row(row) for row in rows]
+
+    def executed_statuses(
+        self,
+        run_ids: Sequence[str],
+        *,
+        event_type: str = "workflow.executed",
+        chunk: int = 500,
+    ) -> list[str]:
+        """The ``status`` payload field of every matching record for these
+        runs — the stats path's targeted, indexed read. The full-log scan
+        this replaces grew with the machine's whole history; this grows
+        with the runs actually asked about."""
+        ids = list(dict.fromkeys(run_ids))
+        statuses: list[str] = []
+        with self._conn.lock:
+            for start in range(0, len(ids), chunk):
+                piece = ids[start : start + chunk]
+                marks = ",".join("?" for _ in piece)
+                rows = self._conn.db.execute(
+                    "SELECT payload_json FROM audit_log"
+                    f" WHERE event_type = ? AND run_id IN ({marks})",
+                    (event_type, *piece),
+                ).fetchall()
+                statuses += [
+                    json.loads(row["payload_json"]).get("status")
+                    for row in rows
+                ]
+        return statuses
 
     def verify(self) -> bool:
         """Recompute the chain end to end; ``False`` if any link is broken."""

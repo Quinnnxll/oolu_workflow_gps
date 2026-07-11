@@ -4,6 +4,7 @@ import type { FileMeta } from "../api";
 import { fileToDrawerContent, pickLocalFiles } from "../device";
 import { forwardFile, forwardTargets } from "../forward";
 import type { ForwardTarget } from "../forward";
+import { tf, useT } from "../ui";
 import { FileView } from "./FileView";
 
 // One drawer of files — the Life account's shared drawer (no nodeId) or a
@@ -51,6 +52,7 @@ export function childFolders(files: FileMeta[], cwd: string): string[] {
 }
 
 export function FilesPane({ nodeId }: { nodeId?: string }) {
+  const tr = useT();
   const [files, setFiles] = useState<FileMeta[]>([]);
   const [open, setOpen] = useState<string | null>(null);
   const [cwd, setCwd] = useState("");
@@ -248,7 +250,7 @@ export function FilesPane({ nodeId }: { nodeId?: string }) {
     <div className="files-pane">
       <div className="files-head">
         <span className="convo-group">
-          {nodeId ? "This node's files" : "Your files"}
+          {nodeId ? tr("files.nodes") : tr("files.yours")}
           {cwd && <span className="files-path"> / {cwd}</span>}
         </span>
         <span className="row">
@@ -256,7 +258,7 @@ export function FilesPane({ nodeId }: { nodeId?: string }) {
             className="ghost"
             onClick={() => (selecting ? leaveSelectMode() : setSelecting(true))}
           >
-            {selecting ? "Done" : "Select"}
+            {selecting ? tr("files.done") : tr("files.select")}
           </button>
           {/* Documents are OoLu's to write — ask in the chat. The + holds
               what only a human can do here: bring device files in, and
@@ -264,8 +266,8 @@ export function FilesPane({ nodeId }: { nodeId?: string }) {
           <span className="composer-plus">
             <button
               className="ghost plus-btn"
-              aria-label="Add"
-              title="Upload from this device, or make a folder"
+              aria-label={tr("files.add")}
+              title={tr("files.addTitle")}
               onClick={() => setAdding((open) => !open)}
             >
               ＋
@@ -279,7 +281,7 @@ export function FilesPane({ nodeId }: { nodeId?: string }) {
                     void upload();
                   }}
                 >
-                  Upload from device
+                  {tr("files.upload")}
                 </button>
                 <button
                   type="button"
@@ -288,7 +290,7 @@ export function FilesPane({ nodeId }: { nodeId?: string }) {
                     setNaming(true);
                   }}
                 >
-                  New folder
+                  {tr("files.newFolder")}
                 </button>
               </span>
             )}
@@ -300,7 +302,9 @@ export function FilesPane({ nodeId }: { nodeId?: string }) {
 
       {selecting && selected.size > 0 && (
         <div className="row files-actions">
-          <span className="muted">{selected.size} selected</span>
+          <span className="muted">
+            {tf("files.selectedCount", { n: selected.size })}
+          </span>
           <span className="forward">
             <button
               onClick={async () => {
@@ -308,7 +312,7 @@ export function FilesPane({ nodeId }: { nodeId?: string }) {
                 if (targets === null) setTargets(await forwardTargets());
               }}
             >
-              Forward…
+              {tr("files.forward")}
             </button>
             {forwarding && (
               <span className="forward-menu">
@@ -326,18 +330,18 @@ export function FilesPane({ nodeId }: { nodeId?: string }) {
                   className="ghost"
                   onClick={() => setForwarding(false)}
                 >
-                  cancel
+                  {tr("cancel")}
                 </button>
               </span>
             )}
           </span>
           {!confirmDelete ? (
             <button className="ghost" onClick={() => setConfirmDelete(true)}>
-              Delete…
+              {tr("files.deleteEllipsis")}
             </button>
           ) : (
             <button className="danger" onClick={() => void deleteSelected()}>
-              Really delete {selected.size}?
+              {tf("files.reallyDelete", { n: selected.size })}
             </button>
           )}
         </div>
@@ -346,8 +350,8 @@ export function FilesPane({ nodeId }: { nodeId?: string }) {
       {naming && (
         <div className="row files-newfolder">
           <input
-            aria-label="Folder name"
-            placeholder="folder name"
+            aria-label={tr("files.folderName")}
+            placeholder={tr("files.folderNamePh")}
             value={folderDraft}
             autoFocus
             onChange={(e) => setFolderDraft(e.target.value)}
@@ -356,16 +360,13 @@ export function FilesPane({ nodeId }: { nodeId?: string }) {
               if (e.key === "Escape") setNaming(false);
             }}
           />
-          <button onClick={addFolder}>Create</button>
+          <button onClick={addFolder}>{tr("files.create")}</button>
         </div>
       )}
 
       {files.length === 0 && folders.length === 0 && !cwd && (
         <div className="pane-empty muted">
-          {nodeId
-            ? "Nothing here yet — this node keeps its files to itself."
-            : "No files yet — ask OoLu to write something down, or press + " +
-              "to bring one in from this device."}
+          {nodeId ? tr("files.emptyNode") : tr("files.emptyLife")}
         </div>
       )}
 
@@ -382,7 +383,7 @@ export function FilesPane({ nodeId }: { nodeId?: string }) {
           >
             <span className="file-tile-icon">←</span>
             <span className="file-tile-name">..</span>
-            <span className="file-tile-sub">up one level</span>
+            <span className="file-tile-sub">{tr("files.upOne")}</span>
           </button>
         )}
         {folders.map((name) => (
@@ -394,7 +395,7 @@ export function FilesPane({ nodeId }: { nodeId?: string }) {
           >
             <span className="file-tile-icon">▣</span>
             <span className="file-tile-name">{name}</span>
-            <span className="file-tile-sub">folder · drop files to move</span>
+            <span className="file-tile-sub">{tr("files.folderSub")}</span>
           </button>
         ))}
         {here.map((f) => (
@@ -430,9 +431,7 @@ export function FilesPane({ nodeId }: { nodeId?: string }) {
       </div>
 
       {cwd && here.length === 0 && folders.length === 0 && (
-        <div className="pane-empty muted">
-          Empty folder — drag a file in, or ask OoLu to write one here.
-        </div>
+        <div className="pane-empty muted">{tr("files.emptyFolder")}</div>
       )}
     </div>
   );

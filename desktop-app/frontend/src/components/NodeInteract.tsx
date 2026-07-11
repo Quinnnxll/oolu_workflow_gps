@@ -3,6 +3,7 @@ import { api } from "../api";
 import type { ChatAction, WorkNode } from "../api";
 import { actionLabel } from "./Chat";
 import { ForwardMenu } from "./ForwardMenu";
+import { t, tf, useT } from "../ui";
 
 // The node's interaction window — a conversation, nothing else. The
 // thread fills the pane and the composer sits under it; there is no
@@ -22,16 +23,17 @@ export function reliabilityLine(node: WorkNode): string {
   const health = node.health;
   const verified = health.verified_successes + health.verified_failures;
   if (health.score === null || verified === 0) {
-    return "Automation reliability: no verified runs yet — it grows with every task this node executes.";
+    return t("interact.reliabilityNone");
   }
-  return (
-    `Automation reliability: ${(health.score * 100).toFixed(1)}% over ` +
-    `${verified} verified ${verified === 1 ? "run" : "runs"} — every ` +
-    "verified run takes this node closer to hands-off."
-  );
+  return tf("interact.reliability", {
+    pct: (health.score * 100).toFixed(1),
+    n: verified,
+    runs: verified === 1 ? t("interact.runOne") : t("interact.runMany"),
+  });
 }
 
 export function NodeInteract({ node }: { node: WorkNode }) {
+  const tr = useT();
   const storageKey = `oolu_node_chat_${node.node_id}`;
   const [thread, setThread] = useState<Msg[]>(() => {
     try {
@@ -84,12 +86,7 @@ export function NodeInteract({ node }: { node: WorkNode }) {
     <div className="node-interact">
       <div className="chat-thread node-interact-thread">
         {thread.length === 0 && (
-          <div className="muted">
-            Ask OoLu to act on this node — “pending” lists what waits,
-            “sign &lt;task id&gt; as &lt;your name&gt;” passes a task to
-            the next node, “reply &lt;task id&gt;: &lt;message&gt;”, or
-            “build &lt;what's missing&gt;”.
-          </div>
+          <div className="muted">{tr("interact.hint")}</div>
         )}
         {thread.map((m, i) => (
           <div key={i} className={`bubble ${m.kind}`}>
@@ -114,7 +111,7 @@ export function NodeInteract({ node }: { node: WorkNode }) {
 
       <div className="chat-composer">
         <textarea
-          placeholder={`Message OoLu about ${node.title}…`}
+          placeholder={tf("interact.messageAbout", { name: node.title })}
           value={draft}
           rows={2}
           onChange={(e) => setDraft(e.target.value)}
@@ -126,7 +123,7 @@ export function NodeInteract({ node }: { node: WorkNode }) {
           }}
         />
         <button disabled={busy} onClick={() => void send()}>
-          {busy ? "…" : "Send"}
+          {busy ? "…" : tr("send")}
         </button>
       </div>
     </div>

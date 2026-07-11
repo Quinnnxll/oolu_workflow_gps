@@ -11,7 +11,7 @@ import type {
 import { identityHue } from "../avatar";
 import { pickLocalFiles } from "../device";
 import { humanizeEvent } from "../humanize";
-import { useT } from "../ui";
+import { t, tf, useT } from "../ui";
 import { FilesPane } from "./FilesPane";
 import { NodeInteract, reliabilityLine } from "./NodeInteract";
 
@@ -54,10 +54,10 @@ export function Work({ onLife }: { onLife: () => void }) {
         </div>
 
         <div className="work-head">
-          <span className="convo-group">My nodes</span>
+          <span className="convo-group">{tr("work.myNodes")}</span>
           <button
             className="add-node"
-            title="Create a node or onboard an existing one"
+            title={tr("work.addNodeTitle")}
             onClick={() => setSelected("add")}
           >
             +
@@ -65,9 +65,7 @@ export function Work({ onLife }: { onLife: () => void }) {
         </div>
 
         {nodes.length === 0 && (
-          <div className="convo-empty">
-            No nodes yet — press + to create or onboard one.
-          </div>
+          <div className="convo-empty">{tr("work.empty")}</div>
         )}
         {nodes.map((n) => (
           <button
@@ -111,8 +109,8 @@ export function Work({ onLife }: { onLife: () => void }) {
         {!selected && (
           <div className="pane-empty">
             <KycReviewInbox />
-            <p>Pick a node to see what it has been doing.</p>
-            <p className="muted">Earnings and health update as runs verify.</p>
+            <p>{tr("work.pick")}</p>
+            <p className="muted">{tr("work.pickSub")}</p>
           </div>
         )}
       </section>
@@ -134,16 +132,16 @@ function clock(iso: string): string {
 // what it isn't (no auto-growing => no mention at all).
 export function regimeTag(account: WorkNode["account"]): string {
   const parts: string[] = [];
-  if (account.is_supernode) parts.push("Supernode");
+  if (account.is_supernode) parts.push(t("regime.supernode"));
   if (account.authority_level != null) parts.push(`L${account.authority_level}`);
-  if (account.audit_mode) parts.push("Audit");
-  if (account.allow_autodev_data) parts.push("Auto-growing");
-  return parts.length ? `(${parts.join(", ")})` : "(standalone)";
+  if (account.audit_mode) parts.push(t("regime.audit"));
+  if (account.allow_autodev_data) parts.push(t("regime.autogrow"));
+  return parts.length ? `(${parts.join(", ")})` : `(${t("regime.standalone")})`;
 }
 
 function healthLabel(n: WorkNode): string {
-  if (n.health.score === null) return "no runs yet";
-  return `${Math.round(n.health.score * 100)}% healthy`;
+  if (n.health.score === null) return t("work.noRunsYet");
+  return tf("work.healthy", { pct: Math.round(n.health.score * 100) });
 }
 
 // ---- create (regime fixed forever) / onboard (no choices) -----------------
@@ -154,6 +152,7 @@ export function AddNode({
   supernodes: WorkNode[];
   onDone: (nodeId: string) => void;
 }) {
+  const tr = useT();
   const [mode, setMode] = useState<"create" | "onboard">("create");
   const [title, setTitle] = useState("");
   const [summary, setSummary] = useState("");
@@ -177,8 +176,7 @@ export function AddNode({
     setError("");
     if (mode === "create" && !policyOk) {
       // The Node Policy is agreed upfront or the node is not created.
-      setError("Please agree to the Node Policy first — it is what lets "
-        + "the platform restrict or remove clone, fraud, and zombie nodes.");
+      setError(t("work.policyFirst"));
       return;
     }
     setBusy(true);
@@ -220,36 +218,34 @@ export function AddNode({
           className={mode === "create" ? "on" : ""}
           onClick={() => setMode("create")}
         >
-          Create a node
+          {tr("work.createTab")}
         </button>
         <button
           type="button"
           className={mode === "onboard" ? "on" : ""}
           onClick={() => setMode("onboard")}
         >
-          Onboard existing
+          {tr("work.onboardTab")}
         </button>
       </div>
 
       {mode === "create" ? (
         <>
-          <label htmlFor="node-title">Name</label>
+          <label htmlFor="node-title">{tr("work.name")}</label>
           <input
             id="node-title"
             value={title}
             required
             onChange={(e) => setTitle(e.target.value)}
           />
-          <label htmlFor="node-summary">What it does</label>
+          <label htmlFor="node-summary">{tr("work.whatItDoes")}</label>
           <input
             id="node-summary"
             value={summary}
             onChange={(e) => setSummary(e.target.value)}
           />
 
-          <label htmlFor="node-function">
-            Function (optional — bring your own code)
-          </label>
+          <label htmlFor="node-function">{tr("work.fnLabel")}</label>
           <div className="row">
             <button
               type="button"
@@ -261,28 +257,20 @@ export function AddNode({
                 setFnScript(await file.text());
               }}
             >
-              Upload a .py function
+              {tr("work.uploadPy")}
             </button>
             {fnName && <span className="muted">{fnName}</span>}
           </div>
           <textarea
             id="node-function"
             className="node-function"
-            placeholder={
-              "Paste or upload a self-contained Python function. It must " +
-              "call emit_result once with its output. It runs sandboxed — " +
-              "no network, no host credentials — and is screened and " +
-              "verified before it is ever stored."
-            }
+            placeholder={tr("work.fnPlaceholder")}
             value={fnScript}
             rows={6}
             onChange={(e) => setFnScript(e.target.value)}
           />
 
-          <p className="muted fixed-note">
-            The choices below are fixed at creation — they can never be
-            changed later.
-          </p>
+          <p className="muted fixed-note">{tr("work.fixedNote")}</p>
 
           <label className="checkline">
             <input
@@ -290,19 +278,18 @@ export function AddNode({
               checked={isSupernode}
               onChange={(e) => setIsSupernode(e.target.checked)}
             />
-            Supernode — manages many nodes for a group, a corporation, or a
-            government division, with humans in full control (always audits)
+            {tr("work.supernodeCheck")}
           </label>
 
           {supernodes.length > 0 && (
             <>
-              <label htmlFor="node-under">Under Supernode</label>
+              <label htmlFor="node-under">{tr("work.underSupernode")}</label>
               <select
                 id="node-under"
                 value={under}
                 onChange={(e) => setUnder(e.target.value)}
               >
-                <option value="">(none — standalone, no authority)</option>
+                <option value="">{tr("work.noneStandalone")}</option>
                 {supernodes.map((s) => (
                   <option key={s.node_id} value={s.node_id}>
                     {s.title}
@@ -314,7 +301,7 @@ export function AddNode({
 
           {under && (
             <label htmlFor="node-authority">
-              Authority
+              {tr("work.authority")}
               <select
                 id="node-authority"
                 value={authority}
@@ -330,13 +317,7 @@ export function AddNode({
           )}
 
           {under && !isSupernode && (
-            <p className="muted fixed-note">
-              A node created under a Supernode starts with NO responsible
-              account. Its node id is the claim ticket: give it only to the
-              person who should onboard, and never post it publicly — the
-              user account that onboards becomes the responsible shown on
-              the node.
-            </p>
+            <p className="muted fixed-note">{tr("work.claimNote")}</p>
           )}
 
           <label className="checkline">
@@ -346,7 +327,7 @@ export function AddNode({
               disabled={isSupernode}
               onChange={(e) => setAudit(e.target.checked)}
             />
-            Audit node — every request must be committed manually
+            {tr("work.auditCheck")}
           </label>
           <label className="checkline">
             <input
@@ -354,7 +335,7 @@ export function AddNode({
               checked={autoGrow}
               onChange={(e) => setAutoGrow(e.target.checked)}
             />
-            Auto-growing — data passing this node may feed new development
+            {tr("work.autogrowCheck")}
           </label>
 
           <label className="checkline policy">
@@ -363,20 +344,13 @@ export function AddNode({
               checked={policyOk}
               onChange={(e) => setPolicyOk(e.target.checked)}
             />
-            I agree to the Node Policy — clone, fraud, and zombie nodes are
-            detected and can be restricted or removed by the platform
+            {tr("work.policyCheck")}
           </label>
         </>
       ) : (
         <>
-          <p className="muted">
-            Take responsibility for a node that already exists. Audit,
-            auto-growing, and any Supernode membership or authority were
-            fixed when it was created — onboarding offers no choices.
-            Onboarding names YOU: your user ID appears on the node as its
-            responsible.
-          </p>
-          <label htmlFor="node-id">Node id</label>
+          <p className="muted">{tr("work.onboardNote")}</p>
+          <label htmlFor="node-id">{tr("work.nodeId")}</label>
           <input
             id="node-id"
             value={nodeId}
@@ -387,7 +361,11 @@ export function AddNode({
       )}
 
       <button type="submit" disabled={busy}>
-        {busy ? "Working…" : mode === "create" ? "Create node" : "Onboard"}
+        {busy
+          ? tr("work.working")
+          : mode === "create"
+            ? tr("work.createNode")
+            : tr("work.onboard")}
       </button>
       {error ? <div className="error">{error}</div> : null}
     </form>
@@ -402,6 +380,7 @@ export function NodeThread({
   node: WorkNode;
   allNodes: WorkNode[];
 }) {
+  const tr = useT();
   const [activity, setActivity] = useState<NodeRunSteps[] | null>(null);
   const [holds, setHolds] = useState<HoldItem[]>([]);
   const [tab, setTab] = useState<"activity" | "interact" | "files">(
@@ -456,9 +435,9 @@ export function NodeThread({
           <div className="muted">
             {node.node_id} ·{" "}
             {account.responsible
-              ? `responsible ${account.responsible}`
-              : "not onboarded yet"}
-            {account.admin ? ` · admin ${account.admin}` : ""}
+              ? `${tr("work.responsible")} ${account.responsible}`
+              : tr("work.notOnboarded")}
+            {account.admin ? ` · ${tr("work.admin")} ${account.admin}` : ""}
           </div>
         </div>
         <span className={`phase phase-${account.status}`}>
@@ -467,12 +446,7 @@ export function NodeThread({
       </div>
 
       {!account.responsible && (
-        <p className="muted fixed-note">
-          This node has no responsible account yet. Do not show its node id
-          publicly — whoever onboards with it becomes the responsible. Share
-          it only with the person meant to take responsibility; once they
-          onboard, their user ID appears here.
-        </p>
+        <p className="muted fixed-note">{tr("work.unclaimedNote")}</p>
       )}
 
       {/* The regime, fixed at creation: one concise tag, never knobs. */}
@@ -480,7 +454,7 @@ export function NodeThread({
         <span className="badge">{regimeTag(account)}</span>
         {account.supernode_id && (
           <span className="muted">
-            under{" "}
+            {tr("work.under")}{" "}
             {allNodes.find((n) => n.node_id === account.supernode_id)?.title ??
               account.supernode_id.slice(0, 8)}
           </span>
@@ -501,15 +475,15 @@ export function NodeThread({
             aria-expanded={showMembers}
             onClick={() => setShowMembers((s) => !s)}
           >
-            {showMembers ? "▾" : "▸"} Member nodes ({members.length})
+            {showMembers ? "▾" : "▸"} {tr("work.memberNodes")} (
+            {members.length})
           </button>
           {showMembers &&
             members.map((m) => (
               <div key={m.node_id} className="commit-row">
                 <span>
                   {m.title} ·{" "}
-                  {m.account.responsible ||
-                    "not onboarded — keep its id private"}
+                  {m.account.responsible || tr("work.keepIdPrivate")}
                 </span>
                 {/* Fixed at creation, authority included: display only. */}
                 <span className="muted">{regimeTag(m.account)}</span>
@@ -520,7 +494,7 @@ export function NodeThread({
 
       {tab !== "interact" && watchesHolds && holds.length > 0 && (
         <div className="commits">
-          <div className="convo-group">Pending</div>
+          <div className="convo-group">{tr("work.pending")}</div>
           {holds.map((h) => (
             <HoldDesk key={h.pending_id} hold={h} onDecided={refresh} />
           ))}
@@ -532,19 +506,19 @@ export function NodeThread({
           className={tab === "activity" ? "on" : ""}
           onClick={() => setTab("activity")}
         >
-          Activity
+          {tr("work.tabActivity")}
         </button>
         <button
           className={tab === "interact" ? "on" : ""}
           onClick={() => setTab("interact")}
         >
-          Interact
+          {tr("work.tabInteract")}
         </button>
         <button
           className={tab === "files" ? "on" : ""}
           onClick={() => setTab("files")}
         >
-          Files
+          {tr("files")}
         </button>
       </div>
 
@@ -560,12 +534,11 @@ export function NodeThread({
       {tab === "activity" && (
         <div className="noder-log">
           <div className="muted">{reliabilityLine(node)}</div>
-          {activity === null && <div className="muted">Loading activity…</div>}
+          {activity === null && (
+            <div className="muted">{tr("work.loadingActivity")}</div>
+          )}
           {activity !== null && activity.length === 0 && (
-            <div className="muted">
-              No executions yet — runs appear here as the marketplace uses
-              this node.
-            </div>
+            <div className="muted">{tr("work.noExecutions")}</div>
           )}
           {activity?.map((run) => (
             <div key={run.run_id} className="feed-run">
@@ -598,10 +571,8 @@ export function NodeThread({
 
       <p className="muted noder-hint">
         {account.responsible
-          ? "You are responsible for this node — every step above is yours " +
-            "to answer for."
-          : "No one answers for this node yet — it gets its responsible " +
-            "when the right person onboards with the node id."}
+          ? tr("work.yoursToAnswer")
+          : tr("work.nooneAnswers")}
       </p>
     </div>
   );
@@ -615,6 +586,7 @@ function NetworkGrant({
   nodeId: string;
   account: NodeAccountView;
 }) {
+  const tr = useT();
   // The grant answers to the server; local state tracks the last account
   // the server returned, so a save updates the list without a full reload.
   const [hosts, setHosts] = useState<string[]>(account.network_hosts ?? []);
@@ -634,18 +606,13 @@ function NetworkGrant({
 
   return (
     <div className="commits network-grant">
-      <div className="convo-group">Network access</div>
-      {hosts.length === 0 && (
-        <div className="muted">
-          No hosts granted — this node cannot reach the web at all until you
-          name the exact hosts it may fetch from.
-        </div>
-      )}
+      <div className="convo-group">{tr("net.header")}</div>
+      {hosts.length === 0 && <div className="muted">{tr("net.none")}</div>}
       {hosts.map((h) => (
         <div key={h} className="commit-row">
           <span>{h}</span>
           <button onClick={() => void save(hosts.filter((x) => x !== h))}>
-            Withdraw
+            {tr("net.withdraw")}
           </button>
         </div>
       ))}
@@ -658,13 +625,13 @@ function NetworkGrant({
         }}
       >
         <input
-          aria-label="Host to grant"
+          aria-label={tr("net.hostLabel")}
           placeholder="api.example.com"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
         />
         <button type="submit" disabled={!draft.trim()}>
-          Grant host
+          {tr("net.grant")}
         </button>
       </form>
       {error ? <div className="error">{error}</div> : null}
@@ -680,6 +647,7 @@ function HoldDesk({
   hold: HoldItem;
   onDecided: () => void;
 }) {
+  const tr = useT();
   const [signature, setSignature] = useState("");
   const [reply, setReply] = useState("");
   const [error, setError] = useState("");
@@ -698,13 +666,14 @@ function HoldDesk({
     <div className="hold-desk">
       <div className="commit-row">
         <span>
-          {hold.name} · from {hold.submitted_by ?? "unknown"}
+          {hold.name} · {tr("hold.from")}{" "}
+          {hold.submitted_by ?? tr("hold.unknown")}
         </span>
         <span className="row">
           <button
             onClick={() => void act(() => api.decideHold(hold.pending_id, true))}
           >
-            Allow
+            {tr("hold.allow")}
           </button>
           <button
             className="ghost"
@@ -712,14 +681,14 @@ function HoldDesk({
               void act(() => api.decideHold(hold.pending_id, false))
             }
           >
-            Reject
+            {tr("hold.reject")}
           </button>
         </span>
       </div>
       <div className="row hold-tools">
         <input
           aria-label={`Sign for ${hold.name}`}
-          placeholder="type your name to sign"
+          placeholder={tr("hold.signPh")}
           value={signature}
           onChange={(e) => setSignature(e.target.value)}
           onKeyDown={(e) => {
@@ -739,13 +708,13 @@ function HoldDesk({
             )
           }
         >
-          Sign & allow
+          {tr("hold.sign")}
         </button>
       </div>
       <div className="row hold-tools">
         <input
           aria-label={`Reply to ${hold.name}`}
-          placeholder="type a reply to the requester"
+          placeholder={tr("hold.replyPh")}
           value={reply}
           onChange={(e) => setReply(e.target.value)}
           onKeyDown={(e) => {
@@ -767,7 +736,7 @@ function HoldDesk({
             })
           }
         >
-          Send reply
+          {tr("hold.sendReply")}
         </button>
       </div>
       {hold.replies?.length > 0 && (
@@ -789,6 +758,7 @@ function HoldDesk({
 // 403 and sees nothing): pending applications, fast-tracked first, with the
 // approve/reject verdict right on the row. A verdict clears the row.
 export function KycReviewInbox() {
+  const tr = useT();
   const [items, setItems] = useState<KycApplication[] | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
@@ -823,7 +793,7 @@ export function KycReviewInbox() {
   return (
     <div className="commits kyc-inbox">
       <div className="convo-group">
-        KYC reviews awaiting your verdict ({items.length})
+        {tr("kyc.inbox")} ({items.length})
       </div>
       {items.map((app) => (
         <div key={app.node_id} className="commit-row">
@@ -832,21 +802,19 @@ export function KycReviewInbox() {
             {app.registration_no ? ` · reg ${app.registration_no}` : ""}
           </span>
           <span className="muted">
-            {app.screen === "fast_track"
-              ? "fast lane — trusted domain"
-              : "standard queue"}
+            {app.screen === "fast_track" ? tr("kyc.fastRow") : tr("kyc.queue")}
           </span>
           <button
             disabled={busy === app.node_id}
             onClick={() => void decide(app.node_id, true)}
           >
-            Approve
+            {tr("kyc.approve")}
           </button>
           <button
             disabled={busy === app.node_id}
             onClick={() => void decide(app.node_id, false)}
           >
-            Reject
+            {tr("hold.reject")}
           </button>
         </div>
       ))}
@@ -860,6 +828,7 @@ export function KycReviewInbox() {
 // Personal mailboxes are refused before anything is stored, and the fee
 // rides on the paying plan — both walls answer here in words.
 export function KycSection({ nodeId }: { nodeId: string }) {
+  const tr = useT();
   const [view, setView] = useState<KycView | null>(null);
   const [legalName, setLegalName] = useState("");
   const [email, setEmail] = useState("");
@@ -887,7 +856,7 @@ export function KycSection({ nodeId }: { nodeId: string }) {
     return (
       <div className="account-row">
         <span className="badge">
-          ✓ KYC verified · global trust ×{view.trust_multiplier}
+          ✓ {tr("kyc.verifiedBadge")} ×{view.trust_multiplier}
         </span>
         <span className="muted">{app.legal_name}</span>
       </div>
@@ -919,15 +888,15 @@ export function KycSection({ nodeId }: { nodeId: string }) {
 
   return (
     <div className="commits kyc">
-      <div className="convo-group">KYC — legal entity</div>
+      <div className="convo-group">{tr("kyc.header")}</div>
 
       {app?.status === "pending_review" && (
         <div className="commit-row">
-          <span className="badge">Under review</span>
+          <span className="badge">{tr("kyc.underReview")}</span>
           <span className="muted">
             {app.screen === "fast_track"
-              ? "fast lane — trusted company domain"
-              : "standard queue"}{" "}
+              ? tr("kyc.fastLane")
+              : tr("kyc.queue")}{" "}
             · {app.legal_name}
           </span>
         </div>
@@ -935,24 +904,19 @@ export function KycSection({ nodeId }: { nodeId: string }) {
 
       {app?.status === "rejected" && (
         <p className="muted">
-          The last application was rejected
-          {app.decision_note ? ` — ${app.decision_note}` : ""}. You can apply
-          again below.
+          {tr("kyc.rejectedLead")}
+          {app.decision_note ? ` — ${app.decision_note}` : ""}
+          {tr("kyc.rejectedTail")}
         </p>
       )}
 
       {(!app || app.status === "rejected") && (
         <>
-          <p className="muted">
-            Obey the KYC policy to rank with global trust: verification
-            rides on your paying plan, and a verified Supernode carries a
-            trust multiplier for every node under it. Use a company
-            mailbox — personal mailboxes are refused.
-          </p>
+          <p className="muted">{tr("kyc.pitch")}</p>
           <div className="setting-control row">
             <input
               aria-label="Legal entity name"
-              placeholder="legal entity name"
+              placeholder={tr("kyc.legalNamePh")}
               value={legalName}
               onChange={(e) => setLegalName(e.target.value)}
             />
@@ -964,7 +928,7 @@ export function KycSection({ nodeId }: { nodeId: string }) {
             />
             <input
               aria-label="Registration number"
-              placeholder="registration no. (optional)"
+              placeholder={tr("kyc.regNoPh")}
               value={regNo}
               onChange={(e) => setRegNo(e.target.value)}
             />
@@ -972,7 +936,7 @@ export function KycSection({ nodeId }: { nodeId: string }) {
               disabled={busy || !legalName.trim() || !email.trim()}
               onClick={() => void submit()}
             >
-              Apply
+              {tr("kyc.apply")}
             </button>
           </div>
           {error && <div className="error">{error}</div>}

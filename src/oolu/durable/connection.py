@@ -24,7 +24,7 @@ from pathlib import Path
 
 from ..persistence import Migration, migrate
 
-DURABLE_SCHEMA_VERSION = 1
+DURABLE_SCHEMA_VERSION = 2
 
 
 def _create_durable_schema(conn: sqlite3.Connection) -> None:
@@ -170,10 +170,28 @@ def _drop_durable_schema(conn: sqlite3.Connection) -> None:
         conn.execute(f"DROP TABLE IF EXISTS {table}")
 
 
+def _create_audit_indexes(conn: sqlite3.Connection) -> None:
+    # The stats and activity paths ask the audit log by run and by event
+    # type; without these, every such question walked the whole chain.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_audit_log_run ON audit_log(run_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_audit_log_type_run"
+        " ON audit_log(event_type, run_id)"
+    )
+
+
+def _drop_audit_indexes(conn: sqlite3.Connection) -> None:
+    conn.execute("DROP INDEX IF EXISTS idx_audit_log_run")
+    conn.execute("DROP INDEX IF EXISTS idx_audit_log_type_run")
+
+
 # Ordered schema history for the durable runtime. Append-only: add new steps,
 # never edit a released one.
 DURABLE_MIGRATIONS: tuple[Migration, ...] = (
     Migration(up=_create_durable_schema, down=_drop_durable_schema),
+    Migration(up=_create_audit_indexes, down=_drop_audit_indexes),
 )
 
 

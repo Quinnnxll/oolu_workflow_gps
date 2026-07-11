@@ -22,6 +22,12 @@ _SCHEMA = (
         version_id TEXT NOT NULL,
         PRIMARY KEY (run_id, version_id)
     )""",
+    # The stats path asks by VERSION ("which runs did this version ride?");
+    # the primary keys above only serve the run-first direction.
+    """CREATE INDEX IF NOT EXISTS idx_binding_versions_version
+       ON binding_versions(version_id)""",
+    """CREATE INDEX IF NOT EXISTS idx_run_bindings_version
+       ON run_bindings(version_id)""",
 )
 
 
@@ -59,6 +65,20 @@ class AttributionStore:
                 "SELECT payload_json FROM run_bindings WHERE run_id = ?", (run_id,)
             ).fetchone()
         return RunBinding.model_validate_json(row["payload_json"]) if row else None
+
+    def version_run_ids(self, version_id: str) -> list[str]:
+        """Every run this version participated in, by the indexes alone —
+        the participation table for contract runs, plus the representative
+        column for bindings written before that table existed. The cost
+        follows the version's own history, never the store's size."""
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                """SELECT run_id FROM binding_versions WHERE version_id = ?
+                   UNION
+                   SELECT run_id FROM run_bindings WHERE version_id = ?""",
+                (version_id, version_id),
+            ).fetchall()
+        return [row["run_id"] for row in rows]
 
     def bindings_for_versions(self, version_ids: list[str]) -> list[RunBinding]:
         """Every run bound to any of these versions — a node's execution

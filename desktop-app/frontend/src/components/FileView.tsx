@@ -5,6 +5,7 @@ import { parseCsv, serializeCsv } from "../csv";
 import { contentToBlob, saveToDevice } from "../device";
 import { forwardFile, forwardTargets } from "../forward";
 import type { ForwardTarget } from "../forward";
+import { tf, useT } from "../ui";
 
 // Files live in the same conversation surface as everything else: a
 // document reads like a message thread page, a sheet is a themed grid —
@@ -82,6 +83,7 @@ export function FileView({
   onDeleted: () => void;
   onBack?: () => void;
 }) {
+  const tr = useT();
   const [file, setFile] = useState<FileDoc | null>(null);
   const [name, setName] = useState("");
   const [error, setError] = useState("");
@@ -130,7 +132,7 @@ export function FileView({
   }, [file?.file_id, file?.has_blob]);
 
   if (error) return <div className="pane-empty">{error}</div>;
-  if (!file) return <div className="pane-empty muted">Opening…</div>;
+  if (!file) return <div className="pane-empty muted">{tr("file.opening")}</div>;
 
   async function saveName() {
     if (!file || name.trim() === file.name) return;
@@ -151,7 +153,7 @@ export function FileView({
       <div className="file-head">
         {onBack && (
           <button className="linklike" onClick={onBack}>
-            ← files
+            {tr("file.backToFiles")}
           </button>
         )}
         <input
@@ -164,7 +166,7 @@ export function FileView({
         <ForwardFileMenu fileId={file.file_id} />
         <button
           className="linklike"
-          title="save this file to the device — true bytes, true type"
+          title={tr("file.saveTitle")}
           onClick={() =>
             saveToDevice(
               file.name,
@@ -172,7 +174,7 @@ export function FileView({
             )
           }
         >
-          download
+          {tr("file.download")}
         </button>
         <button
           className="linklike"
@@ -181,11 +183,11 @@ export function FileView({
             onDeleted();
           }}
         >
-          delete
+          {tr("file.deleteAction")}
         </button>
       </div>
       {file.has_blob && !blobUrl && !isBinary(file) ? (
-        <div className="pane-empty muted">Fetching the file…</div>
+        <div className="pane-empty muted">{tr("file.fetching")}</div>
       ) : isImage(file) ? (
         <img
           className="file-image"
@@ -226,7 +228,7 @@ export function FileView({
                 )
               }
             >
-              Download to this device
+              {tr("file.downloadDevice")}
             </button>
           </p>
           <p className="muted">
@@ -246,6 +248,7 @@ export function FileView({
 // Forward a file: a COPY lands in the picked drawer (a node's, or the
 // Life drawer) under its "forwarded" folder — originals never move.
 function ForwardFileMenu({ fileId }: { fileId: string }) {
+  const tr = useT();
   const [open, setOpen] = useState(false);
   const [targets, setTargets] = useState<ForwardTarget[] | null>(null);
   const [done, setDone] = useState("");
@@ -261,7 +264,7 @@ function ForwardFileMenu({ fileId }: { fileId: string }) {
           if (targets === null) setTargets(await forwardTargets());
         }}
       >
-        forward
+        {tr("file.forwardAction")}
       </button>
       {open && (
         <span className="forward-menu">
@@ -275,14 +278,14 @@ function ForwardFileMenu({ fileId }: { fileId: string }) {
                     fileId,
                     t.kind === "node" ? t.id : undefined,
                   );
-                  setDone(`copied to ${t.title}`);
+                  setDone(tf("file.copiedTo", { name: t.title }));
                 } catch (e) {
                   setDone(`couldn't forward (${(e as Error).message})`);
                 }
                 setOpen(false);
               }}
             >
-              {t.kind === "oolu" ? "Your files (Life)" : t.title}
+              {t.kind === "oolu" ? tr("file.lifeDrawer") : t.title}
             </button>
           ))}
           <button
@@ -290,7 +293,7 @@ function ForwardFileMenu({ fileId }: { fileId: string }) {
             className="ghost"
             onClick={() => setOpen(false)}
           >
-            cancel
+            {tr("cancel")}
           </button>
         </span>
       )}
@@ -306,6 +309,7 @@ function Document({
   file: FileDoc;
   onSave: (content: string) => Promise<void>;
 }) {
+  const tr = useT();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(file.content);
 
@@ -318,11 +322,11 @@ function Document({
               <p key={i}>{block}</p>
             ))
           ) : (
-            <p className="muted">This document is empty.</p>
+            <p className="muted">{tr("file.emptyDoc")}</p>
           )}
         </div>
         <div className="file-actions">
-          <button onClick={() => setEditing(true)}>Edit</button>
+          <button onClick={() => setEditing(true)}>{tr("file.edit")}</button>
         </div>
       </>
     );

@@ -141,10 +141,15 @@ class WorkDesk:
         the entry evenly among them (exact for the single-node case)."""
         if self._billing is None or self._metering is None:
             return {}
-        events_by_id = {e.event_id: e for e in self._metering.events()}
         totals: dict[str, int] = {}
         for entry in self._billing.entries(principal):
-            event = events_by_id.get(entry.event_id or "")
+            # A key lookup per entry (the noder's own earnings history) —
+            # never a materialization of everything ever metered.
+            event = (
+                self._metering.get_by_event_id(entry.event_id)
+                if entry.event_id
+                else None
+            )
             if event is None:
                 continue
             participants: list[str] = []

@@ -4,6 +4,35 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Hot paths stop scanning, and the whole interface speaks your language:
+
+- **Stats and earnings read through indexes now.** `LiveVersionStats`
+  walked every metering event AND every audit record per version
+  question, and the desk's earnings join materialized the whole ledger
+  per page view — cost that grew with the machine's total history.
+  Both now read only what the question touches: the version's bound
+  runs from the attribution store's participation index
+  (`version_run_ids`), exactly those runs' metering events
+  (`events_for_version`) and executed audit records
+  (`executed_statuses`), and a key lookup per billing entry
+  (`get_by_event_id`). New indexes ride the schema: metering events by
+  version and run, bindings by version, and the audit log by run and
+  (event_type, run) — durable schema v2 on SQLite and Postgres alike.
+  A brute-force reference test proves the indexed answers identical on
+  a mixed world (direct events, contract participation, legacy
+  bindings, local failures, audit failures).
+- **i18n beyond Settings.** The Chat, Work, and Files chrome — the
+  first-run card, quick starts, mood line, device asks, run cards and
+  their status words, the noder's whole desk (create/onboard forms,
+  regime tags, holds, network grants, KYC), the files drawer, tiles,
+  and the open file view, the node interact window, and even the
+  activity feed's function words (`humanizeEvent`/`statusSentence`) —
+  now follows app.language live in all four languages (en/zh/es/fr),
+  through the same dictionary Settings already used, with a `tf()`
+  helper so templated sentences order their words per language. Quick
+  starts translate their labels while keeping the deterministic
+  English commands underneath. 208 vitest green, shell rebuilt.
+
 The replay harness: a learned ranker auditions before it may bill:
 
 - **The promised gate exists.** route-finding-proof.md §5 (and

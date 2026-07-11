@@ -3,7 +3,7 @@ import { api, TERMINAL_PHASES } from "../api";
 import type { ChatAction, ChatHistoryTurn } from "../api";
 import { humanizeEvent, statusSentence } from "../humanize";
 import { conciseName } from "../naming";
-import { useT } from "../ui";
+import { t, tf, useT } from "../ui";
 import type { TaskView, TimelineEvent } from "../types";
 import {
   currentAvatarSignals,
@@ -58,29 +58,29 @@ const CHAT_KEY = "oolu_chat";
 const FIRST_RUN_KEY = "oolu_first_run_done";
 const FIRST_TASK =
   "fetch https://example.com and keep what it says as a note";
-const WELCOME =
-  "Hey! ⚡ I'm OoLu, your get-it-done sidekick. What are we tackling first?";
 // Holding Send this long starts a voice conversation instead of sending.
 const LONG_PRESS_MS = 550;
 
 // The presence line under the name — what the companion is up to,
-// phrased like a friend's status, not a system state.
-const MOOD_LINE: Record<Mood, string> = {
-  calm: "here with you",
-  happy: "loving how that went ✨",
-  thinking: "heads-down on your tasks",
-  worried: "on it — sorting a problem",
-  excited: "fired up and all ears! ⚡",
+// phrased like a friend's status, not a system state. Dictionary keys,
+// so the presence follows app.language like the rest of the chrome.
+const MOOD_KEY: Record<Mood, string> = {
+  calm: "mood.calm",
+  happy: "mood.happy",
+  thinking: "mood.thinking",
+  worried: "mood.worried",
+  excited: "mood.excited",
 };
 
-// Quick starts: one tap into the real command surface — each maps to a
-// deterministic command or a rule the assistant already answers.
-const QUICK_STARTS: { label: string; message: string }[] = [
-  { label: "What can you do?", message: "what can you do" },
-  { label: "My tasks", message: "my tasks" },
-  { label: "My files", message: "list files" },
-  { label: "My nodes", message: "my nodes" },
-  { label: "My settings", message: "settings" },
+// Quick starts: one tap into the real command surface. The LABEL follows
+// the interface language; the message stays the deterministic English
+// command the assistant's rule matcher already answers.
+const QUICK_STARTS: { labelKey: string; message: string }[] = [
+  { labelKey: "quick.whatCanYouDo", message: "what can you do" },
+  { labelKey: "quick.myTasks", message: "my tasks" },
+  { labelKey: "quick.myFiles", message: "list files" },
+  { labelKey: "quick.myNodes", message: "my nodes" },
+  { labelKey: "quick.mySettings", message: "settings" },
 ];
 
 function loadThread(): Msg[] {
@@ -411,27 +411,27 @@ export function Chat() {
         <OoLuAvatar size={64} />
         <div className="chat-head-body">
           <div className="chat-head-name">OoLu</div>
-          <div className="chat-head-sub">{MOOD_LINE[mood]}</div>
+          <div className="chat-head-sub">{tr(MOOD_KEY[mood])}</div>
         </div>
       </div>
       <div className="chat-thread">
         {thread.length === 0 && (
           <>
-            <div className="bubble assistant">{WELCOME}</div>
+            <div className="bubble assistant">{tr("chat.welcome")}</div>
             <div className="quickstarts">
               {QUICK_STARTS.map((q) => (
                 <button
-                  key={q.label}
+                  key={q.labelKey}
                   className="quickstart"
                   onClick={() => void send(q.message)}
                 >
-                  {q.label}
+                  {tr(q.labelKey)}
                 </button>
               ))}
             </div>
             {firstRun && (
               <div className="bubble assistant first-run">
-                <div>First time here? A minute to your first task:</div>
+                <div>{tr("chat.firstRunTitle")}</div>
                 <ol>
                   <li>
                     <button
@@ -441,9 +441,9 @@ export function Chat() {
                         void send("hi");
                       }}
                     >
-                      Say hi
+                      {tr("chat.sayHi")}
                     </button>{" "}
-                    — hear how I talk.
+                    {tr("chat.sayHiTail")}
                   </li>
                   <li>
                     <button
@@ -453,19 +453,14 @@ export function Chat() {
                         setDraft(FIRST_TASK);
                       }}
                     >
-                      Try a first task
+                      {tr("chat.tryTask")}
                     </button>{" "}
-                    — I'll put it in the box; press Send and watch it run
-                    in Noder.
+                    {tr("chat.tryTaskTail")}
                   </li>
-                  <li>
-                    Give me a brain: open <b>Settings</b> in the list to add
-                    a model key or point me at a local model — tasks run
-                    without one, conversation gets smarter with one.
-                  </li>
+                  <li>{tr("chat.brainTip")}</li>
                 </ol>
                 <button className="linklike" onClick={finishFirstRun}>
-                  Got it — hide this
+                  {tr("chat.gotIt")}
                 </button>
               </div>
             )}
@@ -478,7 +473,7 @@ export function Chat() {
             </div>
           ) : m.kind === "reminder" ? (
             <div key={i} className="bubble assistant reminder">
-              <span className="reminder-chip">reminder</span>
+              <span className="reminder-chip">{tr("chat.reminderChip")}</span>
               {m.text}
               {m.runs && m.runs.length > 0 && (
                 <div className="reminder-links">
@@ -486,7 +481,7 @@ export function Chat() {
                     <button
                       key={r.runId}
                       className="linklike"
-                      title="open this task's action window"
+                      title={tr("chat.openTask")}
                       onClick={() => jumpToRun(r.runId)}
                     >
                       ↦ {r.label}
@@ -503,10 +498,10 @@ export function Chat() {
               {m.done ? (
                 <span className="muted">
                   {m.device === "location"
-                    ? "location request settled"
+                    ? tr("device.locationSettled")
                     : m.device === "camera"
-                      ? "camera request settled"
-                      : "file request settled"}
+                      ? tr("device.cameraSettled")
+                      : tr("device.fileSettled")}
                 </span>
               ) : (
                 <div className="reminder-links">
@@ -517,7 +512,7 @@ export function Chat() {
                         void shareLocation();
                       }}
                     >
-                      Share my location
+                      {tr("device.shareLocation")}
                     </button>
                   )}
                   {m.device === "camera" && (
@@ -527,7 +522,7 @@ export function Chat() {
                         void takePhoto();
                       }}
                     >
-                      Take a photo
+                      {tr("device.takePhoto")}
                     </button>
                   )}
                   {m.device === "file" && (
@@ -537,14 +532,14 @@ export function Chat() {
                         void pickDeviceFile();
                       }}
                     >
-                      Choose a file
+                      {tr("device.chooseFile")}
                     </button>
                   )}
                   <button
                     className="linklike"
                     onClick={() => settleDeviceRequest(i)}
                   >
-                    Not now
+                    {tr("device.notNow")}
                   </button>
                 </div>
               )}
@@ -572,7 +567,7 @@ export function Chat() {
       </div>
       <div className="chat-composer">
         <textarea
-          placeholder={listening ? "Listening…" : tr("messageOoLu")}
+          placeholder={listening ? tr("chat.listening") : tr("messageOoLu")}
           value={draft}
           rows={2}
           onChange={(e) => setDraft(e.target.value)}
@@ -589,9 +584,9 @@ export function Chat() {
           title={
             speechInputSupported()
               ? listening
-                ? "Listening — tap to stop"
-                : "Tap to send · hold to speak"
-              : "Send"
+                ? tr("chat.tapToStop")
+                : tr("chat.tapHold")
+              : tr("send")
           }
           aria-label={listening ? "Stop listening" : "Send"}
           onPointerDown={pressStart}
@@ -609,6 +604,7 @@ export function Chat() {
 // One piece of work, living inside the conversation. Polls while active;
 // pauses surface as questions/decisions the user answers in place.
 export function RunCard({ runId }: { runId: string }) {
+  const tr = useT(); // the card's chrome follows app.language live
   const [task, setTask] = useState<TaskView | null>(null);
   const [gone, setGone] = useState(false);
   const [steps, setSteps] = useState<TimelineEvent[] | null>(null);
@@ -674,10 +670,10 @@ export function RunCard({ runId }: { runId: string }) {
   }, [terminal, gone, refresh, refreshSteps, showSteps]);
 
   if (gone) {
-    return <div className="run-card muted">This task is no longer available.</div>;
+    return <div className="run-card muted">{tr("run.gone")}</div>;
   }
   if (!task) {
-    return <div className="run-card muted">Starting…</div>;
+    return <div className="run-card muted">{tr("run.starting")}</div>;
   }
 
   return (
@@ -704,14 +700,14 @@ export function RunCard({ runId }: { runId: string }) {
               disabled={acting}
               onClick={() => void decide(() => api.confirm(task.run_id, true))}
             >
-              {acting ? "…" : "Approve"}
+              {acting ? "…" : tr("run.approve")}
             </button>
             <button
               className="ghost"
               disabled={acting}
               onClick={() => void decide(() => api.confirm(task.run_id, false))}
             >
-              Reject
+              {tr("run.reject")}
             </button>
           </div>
         </div>
@@ -722,11 +718,10 @@ export function RunCard({ runId }: { runId: string }) {
           {task.prompt && <p>{task.prompt}</p>}
           {task.user_retries > 0 && (
             <p className="muted">
-              {task.user_retries}{" "}
-              {task.user_retries === 1 ? "retry" : "retries"} so far
-              {task.user_retries >= 2
-                ? " — the next retry lets OoLu plan and rebuild the path"
-                : ""}
+              {task.user_retries === 1
+                ? tr("run.retriesOne")
+                : tf("run.retriesMany", { n: task.user_retries })}
+              {task.user_retries >= 2 ? tr("run.nextRebuilds") : ""}
             </p>
           )}
           <div className="row">
@@ -736,7 +731,7 @@ export function RunCard({ runId }: { runId: string }) {
                 void decide(() => api.resolveIncident(task.run_id, "retry"))
               }
             >
-              {acting ? "Retrying…" : "Retry"}
+              {acting ? tr("run.retrying") : tr("run.retry")}
             </button>
             <button
               className="ghost"
@@ -745,7 +740,7 @@ export function RunCard({ runId }: { runId: string }) {
                 void decide(() => api.resolveIncident(task.run_id, "abort"))
               }
             >
-              Abort
+              {tr("run.abort")}
             </button>
           </div>
         </div>
@@ -767,23 +762,23 @@ export function RunCard({ runId }: { runId: string }) {
             if (next && steps === null) void refreshSteps();
           }}
         >
-          {showSteps ? "hide what I did" : "what I did"}
+          {showSteps ? tr("run.hideSteps") : tr("run.showSteps")}
         </button>
         {task.can_cancel && !terminal && (
           <button
             className="linklike"
             onClick={async () => setTask(await api.cancel(task.run_id))}
           >
-            cancel
+            {tr("cancel")}
           </button>
         )}
       </div>
 
       {showSteps && (
         <div className="run-steps">
-          {steps === null && <div className="muted">Fetching the record…</div>}
+          {steps === null && <div className="muted">{tr("run.fetching")}</div>}
           {steps !== null && steps.length === 0 && (
-            <div className="muted">Nothing recorded yet.</div>
+            <div className="muted">{tr("run.nothingYet")}</div>
           )}
           {steps?.map((s, i) => (
             <div key={i} className="run-step" title={s.label}>
@@ -819,11 +814,11 @@ export function actionLabel(action: ChatAction): string {
 }
 
 function statusLabel(task: TaskView): string {
-  if (task.awaiting === "clarification") return "needs an answer";
-  if (task.awaiting === "confirmation") return "needs a decision";
-  if (task.awaiting === "incident") return "hit a snag";
-  if (task.phase === "completed") return "done";
-  if (task.phase === "failed") return "failed";
-  if (task.phase === "cancelled") return "cancelled";
-  return "working…";
+  if (task.awaiting === "clarification") return t("status.needsAnswer");
+  if (task.awaiting === "confirmation") return t("status.needsDecision");
+  if (task.awaiting === "incident") return t("status.snag");
+  if (task.phase === "completed") return t("status.done");
+  if (task.phase === "failed") return t("status.failed");
+  if (task.phase === "cancelled") return t("status.cancelled");
+  return t("status.working");
 }

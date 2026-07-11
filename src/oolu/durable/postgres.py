@@ -131,6 +131,12 @@ def _create_pg_schema(pg: Any) -> None:
                hash TEXT NOT NULL,
                at TEXT NOT NULL
            )""",
+        # Schema v2: the stats and activity paths ask the audit log by run
+        # and by event type — indexed on both backends alike.
+        """CREATE INDEX IF NOT EXISTS idx_audit_log_run
+           ON audit_log(run_id)""",
+        """CREATE INDEX IF NOT EXISTS idx_audit_log_type_run
+           ON audit_log(event_type, run_id)""",
         """CREATE TABLE IF NOT EXISTS routes (
                route_id TEXT PRIMARY KEY,
                run_id TEXT NOT NULL,

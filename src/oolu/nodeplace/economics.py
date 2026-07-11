@@ -87,15 +87,22 @@ class LiveVersionStats:
         self._attribution = attribution
 
     def version_stats(self, version_id: str) -> VersionStats:
+        # Indexed reads only: the version's bound runs (participation
+        # index), then the metering events and executed audit records of
+        # exactly those runs — the cost follows THIS version's history,
+        # never the ledgers' total size.
+        run_ids = (
+            self._attribution.version_run_ids(version_id)
+            if self._attribution is not None
+            else []
+        )
         successes = 0
         failures = 0
         costs: list[float] = []
-        for event in self._metering.events():
-            if not self._touches(event.run_id, event.version_id, version_id):
-                continue
+        for event in self._metering.events_for_version(version_id, run_ids):
             if event.outcome == "failed":
                 # Local failure evidence (no run binding, so the audit
-                # scan below can never see it — and never double-counts
+                # count below can never see it — and never double-counts
                 # it either, for the same reason).
                 failures += 1
                 continue
@@ -103,37 +110,20 @@ class LiveVersionStats:
             if event.provider_cost is not None:
                 costs.append(event.provider_cost)
 
-        if self._audit is not None and self._attribution is not None:
-            for record in self._audit.records():
-                if record.event_type != _EXECUTED_EVENT:
-                    continue
-                if record.payload.get("status") == ExecutionStatus.SUCCEEDED.value:
-                    continue
-                run_id = record.payload.get("run_id", "")
-                if self._touches(run_id, None, version_id):
-                    failures += 1
+        if self._audit is not None and run_ids:
+            failures += sum(
+                1
+                for status in self._audit.executed_statuses(
+                    run_ids, event_type=_EXECUTED_EVENT
+                )
+                if status != ExecutionStatus.SUCCEEDED.value
+            )
 
         return VersionStats(
             successes=successes,
             failures=failures,
             provider_cost_mean=(sum(costs) / len(costs)) if costs else None,
         )
-
-    def _touches(
-        self, run_id: str, event_version: str | None, version_id: str
-    ) -> bool:
-        """Did this run involve the version? A contract run binds several
-        nodes at once, so the aggregate binding's participation list counts
-        as much as the representative recorded on the event itself."""
-        if event_version == version_id:
-            return True
-        if self._attribution is None:
-            return False
-        binding = self._attribution.get_binding(run_id)
-        if binding is None:
-            return False
-        return version_id in (binding.version_ids or [binding.version_id])
-
 
 class AssembledCandidate(BaseModel):
     """One marketplace listing, joined with everything the economics need."""
