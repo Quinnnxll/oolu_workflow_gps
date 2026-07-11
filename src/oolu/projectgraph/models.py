@@ -166,6 +166,45 @@ class ProposalResult(BaseModel):
     revisions: dict[str, int] = Field(default_factory=dict)
 
 
+# A finding's weight: blocking findings stop an object's status from
+# advancing to approved/released while open; the rest inform.
+FINDING_SEVERITIES = ("blocking", "major", "minor")
+
+
+def build_finding(
+    *,
+    target: "GraphObject",
+    critic: str,
+    severity: str,
+    finding: str,
+    evidence: dict[str, Any],
+    recommended_action: str,
+    affected_requirement: str | None = None,
+) -> "GraphObject":
+    """A critic's finding, shaped as a graph object of type ``finding``.
+
+    It lives under ``issues/{target path}`` — the territory an owner
+    grants critics WITHOUT opening the design itself, so "critics
+    submit findings, not rewrites" is enforced by scopes, not
+    etiquette. Evidence is required by the door: a finding without
+    evidence is an opinion."""
+    return GraphObject(
+        path=f"issues/{target.path}",
+        type="finding",
+        owner=critic,
+        parameters={
+            "target": target.object_id,
+            "severity": severity,
+            "finding": finding,
+            "recommended_action": recommended_action,
+            "affected_requirement": affected_requirement,
+            "state": "open",
+        },
+        evidence=[evidence],
+        provenance={"critic": critic},
+    )
+
+
 def path_covered(path: str, scopes: list[str]) -> bool:
     """Prefix-subtree matching: scope "a/b" covers "a/b" and "a/b/c",
     never "a/bc" — the same wall shape as the host allowlist."""

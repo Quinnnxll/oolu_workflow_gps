@@ -4,6 +4,26 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Critics: findings with evidence, and teeth (vertical step 4):
+
+- **Findings, not rewrites.** A critic files a finding through
+  `POST /v1/graph/{project}/findings`: target, severity
+  (blocking/major/minor), the finding in words, a recommended next
+  action, and EVIDENCE — required at the door, because a finding
+  without evidence is an opinion (400). The finding lands as a graph
+  object under `issues/{target path}` THROUGH the kernel, so the owner
+  grants critics the issues subtree only — the design itself stays
+  closed to them by territory, not etiquette (the spec's own §8 scope
+  shape). Findings are revisioned truth like everything else:
+  resolved on the record with a reason, listed open-first at
+  `GET /v1/graph/{project}/findings`.
+- **Blocking findings stop the climb.** The kernel gains an
+  advancement gate: an object with an OPEN blocking finding cannot
+  move to approved/released — the rejection names the finding and its
+  recommended action. Fixing parameters stays allowed (that is HOW
+  findings get resolved), minors and majors inform without blocking,
+  and a resolved finding unblocks the very next proposal.
+
 The evaluator: actions promise, observation decides (vertical step 3):
 
 - **One predicate language.** `oolu/predicates.py` — a pointer walks

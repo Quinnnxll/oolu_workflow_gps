@@ -130,10 +130,13 @@ from ..orchestrator.state import (
     TaskContract,
 )
 from ..projectgraph import (
+    FINDING_SEVERITIES,
     GraphProposal,
     GraphScopes,
+    PatchOp,
     ProjectGraphStore,
     TransactionKernel,
+    build_finding,
     path_covered,
 )
 from ..providers.chatmodel import ChatModelRouter
@@ -843,6 +846,8 @@ class GatewayApp:
             self._graph_object,
         )
         r.add("POST", "/v1/graph/{project_id}/scopes", self._graph_grant)
+        r.add("POST", "/v1/graph/{project_id}/findings", self._graph_find)
+        r.add("GET", "/v1/graph/{project_id}/findings", self._graph_findings)
         r.add("GET", "/v1/files", self._files_list)
         r.add("POST", "/v1/files", self._files_create)
         # The blob door: raw bytes in (no base64, no JSON envelope), raw
@@ -3133,6 +3138,99 @@ class GatewayApp:
                     for e in entries
                 ]
             },
+        )
+
+    def _graph_find(self, request, session, params) -> Response:
+        """A critic files a finding — evidence-backed, never a rewrite.
+
+        The finding lands as a graph object under ``issues/{target
+        path}`` THROUGH the kernel, so the critic needs write scope on
+        the issues subtree only — the design itself stays closed to
+        them. Every required field is enforced at the door: a finding
+        without evidence is an opinion, and an opinion is a 400."""
+        project = self._graph_project_or_404(session, params)
+        visible = self._graph_read_filter(
+            project, params["project_id"], session
+        )
+        body = request.body or {}
+        target = self._project_graph.get(
+            params["project_id"], str(body.get("target") or "")
+        )
+        if target is None or visible is None or not visible(target.path):
+            raise GatewayError(404, "not_found", "no such object")
+        severity = str(body.get("severity") or "")
+        if severity not in FINDING_SEVERITIES:
+            raise GatewayError(
+                400,
+                "invalid_request",
+                f"severity must be one of {', '.join(FINDING_SEVERITIES)}",
+            )
+        words = str(body.get("finding") or "").strip()
+        action = str(body.get("recommended_action") or "").strip()
+        evidence = body.get("evidence")
+        if not words or not action:
+            raise GatewayError(
+                400,
+                "invalid_request",
+                "a finding names what is wrong AND what to do next",
+            )
+        if not isinstance(evidence, dict) or not evidence:
+            raise GatewayError(
+                400,
+                "invalid_request",
+                "a finding without evidence is an opinion — attach the "
+                "measurements",
+            )
+        finding = build_finding(
+            target=target,
+            critic=session.principal_id,
+            severity=severity,
+            finding=words,
+            evidence=evidence,
+            recommended_action=action,
+            affected_requirement=body.get("affected_requirement"),
+        )
+        result = self._graph_kernel.process(
+            GraphProposal(
+                project_id=params["project_id"],
+                owner=session.principal_id,
+                reason=f"finding against '{target.object_id}': {words}",
+                patch=[PatchOp(op="create", object=finding)],
+            ),
+            tenant=session.tenant_id,
+        )
+        payload = result.model_dump(mode="json")
+        payload["finding_id"] = finding.object_id
+        return json_response(
+            200 if result.status == "committed" else 409, payload
+        )
+
+    def _graph_findings(self, request, session, params) -> Response:
+        """The findings ledger — open issues first, readable territory
+        only, optionally narrowed to one target object."""
+        project = self._graph_project_or_404(session, params)
+        visible = self._graph_read_filter(
+            project, params["project_id"], session
+        )
+        if visible is None:
+            raise GatewayError(
+                403, "forbidden", "no territory granted in this project"
+            )
+        wanted = request.query.get("target")
+        findings = [
+            obj
+            for obj in self._project_graph.list(
+                params["project_id"], path="issues"
+            )
+            if obj.type == "finding"
+            and visible(obj.path)
+            and (wanted is None or obj.parameters.get("target") == wanted)
+        ]
+        findings.sort(
+            key=lambda o: (o.parameters.get("state") != "open", o.path)
+        )
+        return json_response(
+            200, {"items": [o.model_dump(mode="json") for o in findings]}
         )
 
     def _graph_grant(self, request, session, params) -> Response:

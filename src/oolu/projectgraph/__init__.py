@@ -10,6 +10,7 @@ hash-chained audit log either way.
 
 from .kernel import TransactionKernel
 from .models import (
+    FINDING_SEVERITIES,
     OBJECT_STATUSES,
     ConstraintSpec,
     GraphObject,
@@ -17,12 +18,14 @@ from .models import (
     GraphScopes,
     PatchOp,
     ProposalResult,
+    build_finding,
     evaluate_constraint,
     path_covered,
 )
 from .store import ProjectGraphStore
 
 __all__ = [
+    "FINDING_SEVERITIES",
     "OBJECT_STATUSES",
     "ConstraintSpec",
     "GraphObject",
@@ -32,6 +35,7 @@ __all__ = [
     "ProposalResult",
     "ProjectGraphStore",
     "TransactionKernel",
+    "build_finding",
     "evaluate_constraint",
     "path_covered",
 ]

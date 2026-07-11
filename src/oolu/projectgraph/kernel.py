@@ -83,6 +83,10 @@ class TransactionKernel:
         if reasons:
             return self._reject(proposal, reasons, warnings)
 
+        self._gate_advancement(proposal.project_id, candidates, reasons)
+        if reasons:
+            return self._reject(proposal, reasons, warnings)
+
         committed = [candidate for _base, candidate in candidates.values()]
         self._store.apply_commit(
             proposal.project_id, committed, proposal_id=proposal.proposal_id
@@ -320,6 +324,47 @@ class TransactionKernel:
             cursor = child
         cursor[parts[-1]] = op.new_value
         return working.model_copy(update={root: fresh})
+
+    # ------------------------------------------------------------------ #
+    # Critics have teeth: an OPEN blocking finding stops the climb.        #
+    # ------------------------------------------------------------------ #
+    _ADVANCED = ("approved", "released")
+
+    def _gate_advancement(
+        self,
+        project_id: str,
+        candidates: dict[str, tuple[GraphObject | None, GraphObject]],
+        reasons: list[str],
+    ) -> None:
+        """Model output is not project truth until it climbs the ladder —
+        and an object with an OPEN blocking finding does not climb.
+        Fixing parameters stays allowed (that is HOW findings get
+        resolved); only advancement to approved/released is gated."""
+        for base, candidate in candidates.values():
+            if candidate.type == "finding":
+                continue
+            advancing = candidate.status in self._ADVANCED and (
+                base is None or base.status != candidate.status
+            )
+            if not advancing:
+                continue
+            open_blocking = [
+                obj
+                for obj in self._store.list(project_id, path="issues")
+                if obj.type == "finding"
+                and obj.parameters.get("target") == candidate.object_id
+                and obj.parameters.get("state") == "open"
+                and obj.parameters.get("severity") == "blocking"
+            ]
+            for finding in open_blocking:
+                reasons.append(
+                    f"'{candidate.object_id}' cannot advance to "
+                    f"'{candidate.status}': open blocking finding "
+                    f"'{finding.object_id}' — "
+                    f"{finding.parameters.get('finding', '')} "
+                    f"(recommended: "
+                    f"{finding.parameters.get('recommended_action', '')})"
+                )
 
     # ------------------------------------------------------------------ #
     @staticmethod

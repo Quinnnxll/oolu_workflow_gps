@@ -103,6 +103,11 @@ speculative:
 4. **Critic findings + regression protection breadth** — findings as
    typed evidence-backed objects; kernel-enforced protection of
    previously-passed hard constraints across dependency edges.
+   *(built: `build_finding` — findings live under `issues/{target
+   path}`, so critics get territory without the design; the door
+   refuses findings without evidence; open BLOCKING findings gate
+   status advancement to approved/released. Cross-object dependency
+   breadth waits for real interfaces in step 5.)*
 5. **First engineering hand: a CadQuery node** — parametric parts,
    STEP/STL into the blob store, mass properties and geometry validity
    as postconditions, running in the severed sandbox. This is where
