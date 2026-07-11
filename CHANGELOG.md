@@ -4,6 +4,31 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The interact window is an operator's desk, not a chatroom:
+
+- **The node's job is stated, and OoLu works it.** The Work interact
+  window's model context now opens with the node's ROUTE job: process
+  what the previous node (or a user) delivered — incoming activity
+  lands as held requests on its desk and as files/messages in its
+  drawer — and pass the results onward exactly as the route plans
+  (sign/allow moves a held request to the next node by id;
+  send_message delivers a result to a Supernode sibling or a friend by
+  name). OoLu is told it is the OPERATOR at this desk: prefer DOING —
+  open what arrived, edit or produce the result, pass it on, and
+  (with consent) build the execution nodes that automate the step —
+  over purely chatting.
+- **The window's file hands reach the node's OWN drawer.** list, read,
+  and write in the interact window used to touch the Life drawer; they
+  now operate on THIS node's files — the same drawer where the route's
+  deliveries (folder messages/) land — so "open the file, edit it,
+  save the result" happens where the work actually is. The Life drawer
+  stays untouched from a node's window.
+- Tests: the node window listing/reading/writing the node's own drawer
+  while the Life drawer stays as it was, and the operator charter
+  (job, pass-onward, operator-not-chatbot, own-drawer reach) riding
+  the model's context. Entire backend suite green (1096 passed); ruff
+  clean.
+
 Uploads that carry the file, folders you can drop into, and a drawer
 where OoLu writes the documents:
 

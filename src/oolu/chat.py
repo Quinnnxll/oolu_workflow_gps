@@ -808,6 +808,30 @@ class NodeChatTools(GatewayChatTools):
         self._holds_reply = holds_reply
         self._builder = builder
 
+    def list_files(self) -> list[UserFile]:
+        """The interact window's file hands reach THIS NODE's drawer —
+        the inbox where the route's previous node (or a user) delivered
+        the work — never the Life drawer: the operator processes what
+        arrived HERE and passes the results onward."""
+        return self._store.list(
+            tenant=self._chat_tenant,
+            node_id=str(self._node.get("node_id") or "") or None,
+        )
+
+    def write_file(self, name: str, content: str) -> UserFile:
+        matches = self.resolve(name)
+        if len(matches) == 1:
+            updated = matches[0].model_copy(update={"content": content})
+            return self._store.save(updated)
+        return self._store.save(
+            UserFile(
+                tenant_id=self._chat_tenant,
+                node_id=str(self._node.get("node_id") or "") or None,
+                name=name.strip(),
+                content=content,
+            )
+        )
+
     def message_targets(self) -> list[dict]:
         """The gateway targets plus this node's own org: from a node's
         interact window, the nodes under the SAME Supernode are reachable

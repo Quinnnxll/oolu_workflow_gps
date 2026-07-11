@@ -278,3 +278,73 @@ def test_a_node_off_the_callers_desk_is_a_404(tmp_path):
         assert other.status == 404
     finally:
         conn.close()
+
+
+def test_the_interact_windows_files_are_the_nodes_own(tmp_path):
+    """The operator's file hands reach THIS node's drawer — the inbox the
+    route's previous node (or a user) delivered into — never the Life
+    drawer: open what arrived, produce the result, pass it on."""
+    app, conn, ident, registry, desk, node_id, pending_id = _rig(tmp_path)
+    try:
+        from oolu.durable.files import UserFile
+
+        app._files.save(
+            UserFile(tenant_id="t1", name="life-note.md", content="life")
+        )
+        app._files.save(
+            UserFile(
+                tenant_id="t1", node_id=node_id, name="batch-7.md", content="rows"
+            )
+        )
+
+        listed = _chat(app, ident, node_id, "list files")
+        assert "batch-7.md" in listed.body["reply"]
+        assert "life-note.md" not in listed.body["reply"]
+
+        read = _chat(app, ident, node_id, "read batch-7")
+        assert "rows" in read.body["reply"]
+
+        wrote = _chat(app, ident, node_id, "write to result.md: forty-two")
+        assert "Saved result.md" in wrote.body["reply"]
+        [doc] = [
+            f
+            for f in app._files.list(tenant="t1", node_id=node_id)
+            if f.name == "result.md"
+        ]
+        assert doc.content == "forty-two"
+        # The Life drawer stayed exactly as it was.
+        assert {f.name for f in app._files.list(tenant="t1", node_id=None)} == {
+            "life-note.md"
+        }
+    finally:
+        conn.close()
+
+
+def test_the_operator_charter_rides_the_models_context(tmp_path):
+    """The interact window's model context states the node's route job —
+    process what the previous node delivered, pass the results onward —
+    and that OoLu is the operator here, not a chatbot."""
+    app, conn, ident, registry, desk, node_id, pending_id = _rig(tmp_path)
+    try:
+
+        class _Model:
+            def __init__(self):
+                self.calls: list[list[dict]] = []
+
+            def reply(self, messages):
+                self.calls.append(messages)
+                return '{"say": "On it — opening the batch now.", "task": null}'
+
+        model = _Model()
+        app._tenant_model = lambda tenant: model
+        _chat(app, ident, node_id, "a new batch just arrived")
+        [messages] = model.calls
+        notes = "\n".join(
+            m["content"] for m in messages if m.get("role") == "system"
+        )
+        assert "THIS NODE'S JOB" in notes
+        assert "PASS THE RESULTS ONWARD" in notes
+        assert "OPERATOR" in notes and "not a chatbot" in notes
+        assert "reach THIS node's own drawer" in notes
+    finally:
+        conn.close()
