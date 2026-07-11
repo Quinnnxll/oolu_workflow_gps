@@ -72,9 +72,13 @@ one, answer with EXACTLY one JSON object of the shape:
   {"tool": "list_nodes", "args": {}}
   {"tool": "get_settings", "args": {}}
   {"tool": "set_setting", "args": {"key": "<a settings key>", "value": <the new value>}}
+  {"tool": "send_message", "args": {"to": "<a friend or node, by name>", "text": "<the message>"}}
 The tool's result arrives as the next message; then answer the user with the
 {"say", "task"} shape. write_file replaces the whole file — read it first
-when editing. Touch only files the user asked about. To redo past work, set
+when editing. Touch only files the user asked about. send_message delivers
+to a friend or one of the user's nodes by name — the delivery is marked as
+forwarded via OoLu from the user (you never impersonate them); use it ONLY
+when the user asked to send or forward something. To redo past work, set
 "task" to that run's intent — there is no tool for starting work."""
 
 _HELP = (
@@ -278,6 +282,64 @@ class FileChatTools:
         )
 
 
+# --------------------------------------------------------------------------- #
+# OoLu's outbox: messages to friends and nodes, on the user's behalf.          #
+# --------------------------------------------------------------------------- #
+# The user names the destination in their own words; OoLu resolves the best
+# compatible target (name match, tie-broken by the user's own habits) and
+# the BACKEND delivers to the exact id — a friend gets a real server
+# message, a node gets a document in its own drawer. Every delivery is
+# marked as forwarded via OoLu from the user: OoLu carries the words, it
+# never impersonates.
+VIA_OOLU_MARK = "↪ forwarded via OoLu from"
+
+
+@runtime_checkable
+class MessagingTools(Protocol):
+    """Where a chat turn may send words, and how they are delivered."""
+
+    def message_targets(self) -> list[dict]: ...
+    def deliver_message(self, kind: str, target_id: str, text: str) -> str: ...
+
+
+def resolve_message_target(
+    targets: list[dict],
+    wanted: str,
+    *,
+    exact_lookup=None,  # (name) -> dict | None: reach past the listing
+) -> list[dict]:
+    """The best compatible destination for a name the user typed.
+
+    Exact name first; else substring; else every-word match. Ties break on
+    HABIT — who the user actually talks to (bigger = more recent/frequent)
+    — and only a CLEAR winner is chosen: equals stay ambiguous so the
+    caller asks instead of guessing. ``exact_lookup`` reaches accounts the
+    target listing deliberately omits (a host is never a directory): an
+    exact username still resolves."""
+    wanted_cf = re.sub(r"\s+", " ", (wanted or "").strip().casefold())
+    if not wanted_cf:
+        return []
+
+    def named(target: dict) -> str:
+        return str(target.get("name", "")).casefold()
+
+    pool = [t for t in targets if named(t) == wanted_cf]
+    if not pool:
+        pool = [t for t in targets if wanted_cf in named(t)]
+    if not pool:
+        words = wanted_cf.split()
+        pool = [t for t in targets if all(w in named(t) for w in words)]
+    if not pool and exact_lookup is not None:
+        found = exact_lookup(wanted.strip())
+        return [found] if found else []
+    if len(pool) <= 1:
+        return pool
+    pool = sorted(pool, key=lambda t: -float(t.get("habit", 0.0)))
+    if float(pool[0].get("habit", 0.0)) > float(pool[1].get("habit", 0.0)):
+        return [pool[0]]
+    return pool
+
+
 @runtime_checkable
 class EngineTools(Protocol):
     """The engine's read surface: what a chat turn may inspect."""
@@ -306,6 +368,8 @@ class GatewayChatTools(FileChatTools):
         durable=None,  # durable.DurableWorkflowService
         desk=None,  # nodeplace.WorkDesk
         settings=None,  # settings_node.SettingsNode
+        accounts=None,  # identity.LocalAccountService: exact-name friends
+        direct_messages=None,  # social.DirectMessageStore: real deliveries
         # The DESKTOP's own machine, when this gateway runs on it (the
         # `oolu desktop` loopback). A multi-user host never sets this —
         # a server has no business in anyone's home directory.
@@ -317,6 +381,8 @@ class GatewayChatTools(FileChatTools):
         self._durable = durable
         self._desk = desk
         self._settings = settings
+        self._accounts = accounts
+        self._direct_messages = direct_messages
         self._local_root = local_root
 
     def local_search_enabled(self) -> bool:
@@ -424,6 +490,117 @@ class GatewayChatTools(FileChatTools):
                 principal=self._principal, tenant=self._chat_tenant
             )
         ]
+
+    def exact_friend(self, name: str) -> dict | None:
+        """An account by EXACT username — the one reach past the target
+        listing, mirroring the friends surface: a host is never a
+        directory, but a name you already know still resolves."""
+        if self._accounts is None:
+            return None
+        account = self._accounts.user(str(name or "").strip())
+        if (
+            account is None
+            or account.tenant_id != self._chat_tenant
+            or account.disabled
+            or account.username == self._principal
+        ):
+            return None
+        return {
+            "kind": "friend",
+            "id": account.username,
+            "name": account.username,
+            "habit": 0.0,
+        }
+
+    def message_targets(self) -> list[dict]:
+        """Where a message can go from here: the friends the user actually
+        talks to — habit is how recent the conversation, the user's own
+        behaviour as the tiebreak — and the nodes on their desk. Never a
+        roster of strangers; an exact username resolves via exact_friend."""
+        targets: list[dict] = []
+        if self._direct_messages is not None:
+            convos = self._direct_messages.conversations(
+                tenant=self._chat_tenant, principal=self._principal
+            )
+            total = len(convos)
+            for rank, convo in enumerate(convos):
+                targets.append(
+                    {
+                        "kind": "friend",
+                        "id": convo["peer"],
+                        "name": convo["peer"],
+                        "habit": float(total - rank),
+                    }
+                )
+        if self._desk is not None:
+            for entry in self._desk.overview(
+                principal=self._principal, tenant=self._chat_tenant
+            ):
+                targets.append(
+                    {
+                        "kind": "node",
+                        "id": entry.node_id,
+                        "name": entry.title,
+                        "habit": 0.0,
+                    }
+                )
+        return targets
+
+    def deliver_message(self, kind: str, target_id: str, text: str) -> str:
+        """Exact-ID delivery behind the name resolution: a friend gets a
+        real server message, a node gets a document in its own drawer —
+        and both arrive marked as forwarded via OoLu from the user, so
+        the recipient always sees WHO sent it. OoLu never impersonates."""
+        text = (text or "").strip()
+        if not text:
+            return "error: the message needs words"
+        reachable = any(
+            t["kind"] == kind and t["id"] == target_id
+            for t in self.message_targets()
+        )
+        if not reachable and not (
+            kind == "friend" and self.exact_friend(target_id) is not None
+        ):
+            return "error: that isn't a destination you can reach from here"
+        if kind == "friend":
+            if self._direct_messages is None:
+                return (
+                    "error: friends live on a server — OoLu Global, or "
+                    "your own private network server"
+                )
+            try:
+                self._direct_messages.send(
+                    tenant=self._chat_tenant,
+                    sender=self._principal,
+                    recipient=target_id,
+                    body=f"{VIA_OOLU_MARK} {self._principal}:\n{text}",
+                )
+            except ValueError as exc:
+                return f"error: {exc}"
+            return f"sent to {target_id}"
+        if kind == "node":
+            from uuid import uuid4
+
+            from .naming import concise_name
+
+            name = (
+                f"{(concise_name(text) or 'message').lower()}"
+                f"-{uuid4().hex[:6]}.md"
+            )
+            try:
+                saved = self._store.save(
+                    UserFile(
+                        tenant_id=self._chat_tenant,
+                        node_id=target_id,
+                        name=name,
+                        folder="messages",
+                        content=f"> {VIA_OOLU_MARK} {self._principal}\n\n{text}",
+                    )
+                )
+            except FileTooLargeError as exc:
+                return f"error: {exc}"
+            return f"delivered to the node's drawer as “{saved.name}”"
+        return "error: unknown destination kind"
 
     def get_settings(self) -> list[dict]:
         if self._settings is None:
@@ -583,6 +760,8 @@ class NodeChatTools(GatewayChatTools):
         durable=None,
         desk=None,
         settings=None,
+        accounts=None,
+        direct_messages=None,
         node: dict,
         holds_list,  # () -> list[dict]
         holds_decide,  # (pending_id, approved, signature) -> str
@@ -596,12 +775,37 @@ class NodeChatTools(GatewayChatTools):
             durable=durable,
             desk=desk,
             settings=settings,
+            accounts=accounts,
+            direct_messages=direct_messages,
         )
         self._node = dict(node)
         self._holds_list = holds_list
         self._holds_decide = holds_decide
         self._holds_reply = holds_reply
         self._builder = builder
+
+    def message_targets(self) -> list[dict]:
+        """The gateway targets plus this node's own org: from a node's
+        interact window, the nodes under the SAME Supernode are reachable
+        too — colleagues on the fleet, not strangers."""
+        targets = super().message_targets()
+        node_id = str(self._node.get("node_id") or "")
+        if self._desk is None or not node_id:
+            return targets
+        seen = {(t["kind"], t["id"]) for t in targets}
+        for member in self._desk.siblings(node_id, tenant=self._chat_tenant):
+            key = ("node", member["node_id"])
+            if key in seen:
+                continue
+            targets.append(
+                {
+                    "kind": "node",
+                    "id": member["node_id"],
+                    "name": member["title"],
+                    "habit": 0.0,
+                }
+            )
+        return targets
 
     def node_context(self) -> dict:
         return dict(self._node)
@@ -1036,6 +1240,11 @@ def _file_command(message: str, tools: ChatTools) -> ChatTurn | None:
         if node is not None:
             return node
 
+    if isinstance(tools, MessagingTools):
+        message = _message_command(text, tools)
+        if message is not None:
+            return message
+
     if isinstance(tools, EngineTools):
         engine = _engine_command(text, tools)
         if engine is not None:
@@ -1059,6 +1268,49 @@ def _file_command(message: str, tools: ChatTools) -> ChatTurn | None:
             return ChatTurn(say=f"Which one do you mean: {names}?", source="tool")
         # No such file: not a file command after all.
     return None
+
+
+# "send <words> to <name>" / "message <name>: <words>" — the greedy first
+# group means the LAST " to " splits, so a message containing "to" still
+# reaches the right person ("send the go to market plan to bob").
+_SEND_TO_RE = re.compile(r"^(?:send|forward)\s+(.+)\s+to\s+([^:\n]{1,60})$", re.I | re.S)
+_TELL_RE = re.compile(r"^(?:message|tell)\s+([^:\n]{1,60}):\s*(.+)$", re.I | re.S)
+
+
+def _message_command(text: str, tools: "MessagingTools") -> ChatTurn | None:
+    """Deterministic sending for the interact windows and model-less
+    installs: the user names the destination, resolution finds the best
+    compatible target (habits break ties), and delivery is by exact id.
+    A name nothing matches falls through — it probably wasn't a message
+    command at all."""
+    stripped = text.strip()
+    send = _SEND_TO_RE.match(stripped)
+    tell = _TELL_RE.match(stripped)
+    if send:
+        body, wanted = send.group(1).strip(), send.group(2).strip()
+    elif tell:
+        wanted, body = tell.group(1).strip(), tell.group(2).strip()
+    else:
+        return None
+    matches = resolve_message_target(
+        tools.message_targets(),
+        wanted,
+        exact_lookup=getattr(tools, "exact_friend", None),
+    )
+    if not matches:
+        return None
+    if len(matches) > 1:
+        names = "; ".join(f"{t['name']} ({t['kind']})" for t in matches[:6])
+        return ChatTurn(say=f"Which one do you mean: {names}?", source="tool")
+    target = matches[0]
+    result = tools.deliver_message(target["kind"], str(target["id"]), body)
+    if result.startswith("error:"):
+        return ChatTurn(say=f"I couldn't: {result[7:].strip()}", source="tool")
+    return ChatTurn(
+        say=f"Sent to {target['name']} — marked as forwarded via OoLu from you.",
+        source="tool",
+        actions=[{"tool": "send_message", "name": str(target["name"])}],
+    )
 
 
 _RUN_LIST_PHRASES = frozenset(
@@ -1357,6 +1609,31 @@ def _run_tool(tools: ChatTools, call: _ToolCall) -> tuple[str, dict | None]:
     if call.name == "build_node" and isinstance(tools, NodeTools):
         result = tools.build_node(str(call.args.get("goal", "")).strip())
         action = None if result.startswith("error:") else {"tool": "build_node"}
+        return result, action
+    if call.name == "send_message" and isinstance(tools, MessagingTools):
+        wanted = str(call.args.get("to", "")).strip()
+        matches = resolve_message_target(
+            tools.message_targets(),
+            wanted,
+            exact_lookup=getattr(tools, "exact_friend", None),
+        )
+        if not matches:
+            return f"error: no friend or node here matches '{wanted}'", None
+        if len(matches) > 1:
+            names = "; ".join(str(t["name"]) for t in matches[:6])
+            return (
+                f"error: ambiguous — could be {names}; ask the user which",
+                None,
+            )
+        result = tools.deliver_message(
+            matches[0]["kind"],
+            str(matches[0]["id"]),
+            str(call.args.get("text", "")),
+        )
+        action = None if result.startswith("error:") else {
+            "tool": "send_message",
+            "name": str(matches[0]["name"]),
+        }
         return result, action
     return f"error: unknown tool '{call.name}'", None
 

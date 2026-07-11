@@ -4,6 +4,39 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+OoLu's outbox — messages to friends and nodes, attributed, never
+impersonated:
+
+- **OoLu sends messages now, in Life and Work alike.** "send lunch at
+  noon? to bob", "message carol: see you at five", or just asking the
+  model to let someone know — a new `send_message` hand delivers to
+  friends, to the user's own nodes, and (from a node's interact window)
+  to the nodes under the SAME Supernode: the org's members, not
+  strangers.
+- **The best compatible destination, never a guess.** The user names
+  the target in their own words; resolution goes exact name → substring
+  → every-word, and ties break on the user's own HABITS — who they
+  actually talk to (conversation recency). Only a clear winner is
+  chosen; equals make OoLu ask. A host is still never a directory: the
+  candidate list is the people you talk to and your own nodes, but an
+  EXACT username you already know always resolves.
+- **The backend delivers to exact ids.** A friend gets a real server
+  message through the same store the Friends surface uses (tenant
+  walls, enabled-account and not-yourself checks intact); a node gets a
+  document in its OWN drawer (folder `messages`), the same drawer the
+  Files surface shows.
+- **Every delivery says who sent it.** The message arrives marked
+  "↪ forwarded via OoLu from <user>" — presented as carried by OoLu,
+  showing WHO forwarded it, never as words the recipient's own side
+  typed. OoLu carries; it does not impersonate.
+- Tests: resolution (exact beats habit, habits break substring ties,
+  equals stay ambiguous, exact-lookup fallback), marked deliveries to a
+  friend and into a node's drawer, unreachable/disabled/self refusals,
+  the deterministic "send … to …" command (a message containing "to"
+  lands whole), fall-through to work when nothing matches, the model's
+  tool path, and Supernode siblings reachable from the interact window.
+  Entire backend suite green (1092 passed); ruff clean.
+
 Polish that was overdue: silent emoji, settings that speak your
 language, a console that comes back, and replies sized to yours:
 

@@ -917,6 +917,8 @@ class GatewayApp:
                     durable=self._durable,
                     desk=self._desk,
                     settings=self._settings,
+                    accounts=self._accounts,
+                    direct_messages=self._direct_messages,
                     local_root=self._local_files_root,
                 )
         router = self._tenant_model(session.tenant_id)
@@ -1265,6 +1267,8 @@ class GatewayApp:
             durable=self._durable,
             desk=self._desk,
             settings=self._settings,
+            accounts=self._accounts,
+            direct_messages=self._direct_messages,
             node={
                 "node_id": node_id,
                 "title": entry.title,

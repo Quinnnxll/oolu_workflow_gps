@@ -174,6 +174,28 @@ class WorkDesk:
     def account_for(self, node_id: str) -> NodeAccount | None:
         return self._accounts.get(node_id)
 
+    def siblings(self, node_id: str, *, tenant: str) -> list[dict]:
+        """The nodes under the SAME Supernode as this one — the org's
+        members a node may message. Same-tenant only, self excluded, each
+        as ``{"node_id", "title"}`` with the title the desk would show."""
+        account = self._accounts.get(node_id)
+        if account is None or not account.supernode_id:
+            return []
+        members: list[dict] = []
+        for member in self._accounts.under(account.supernode_id):
+            if member.node_id == node_id:
+                continue
+            node = self._registry.get_node(member.node_id)
+            if node is None or node.tenant_id != tenant:
+                continue
+            version_ids = [
+                v.version_id for v in self._registry.list_versions(node.node_id)
+            ]
+            members.append(
+                {"node_id": node.node_id, "title": self._title(node, version_ids)}
+            )
+        return members
+
     def mark_verified(self, node_id: str) -> NodeAccount | None:
         """The verification door: a node whose own function completed a
         real, audited run stops being 'needs_verification' and goes live.

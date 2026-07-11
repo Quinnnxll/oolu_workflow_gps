@@ -110,3 +110,15 @@ class NodeAccountStore:
         if row is None:
             return None
         return NodeAccount.model_validate_json(row["payload_json"])
+
+    def under(self, supernode_id: str) -> list[NodeAccount]:
+        """Every account created under one Supernode — the org's members.
+        A human-sized scan: a Supernode manages a fleet, not a census."""
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                "SELECT payload_json FROM node_accounts"
+            ).fetchall()
+        accounts = [
+            NodeAccount.model_validate_json(row["payload_json"]) for row in rows
+        ]
+        return [a for a in accounts if a.supernode_id == supernode_id]
