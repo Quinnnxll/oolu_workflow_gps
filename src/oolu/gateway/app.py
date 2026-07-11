@@ -74,6 +74,7 @@ from ..knowledge.traces import TraceStore
 from ..metering.attribution import AttributionStore
 from ..metering.models import MeteringEvent
 from ..metering.store import MeteringLedger
+from ..naming import concise_name
 from ..nodeplace import (
     NODE_POLICY,
     NODE_POLICY_VERSION,
@@ -116,7 +117,6 @@ from ..orchestrator import (
     OrchestratorError,
     patch_or_defaults,
 )
-from ..naming import concise_name
 from ..orchestrator.rebuild import AUTOBUILD_CONSENT_KEY, AUTOBUILD_HINT
 from ..orchestrator.state import (
     PauseKind,

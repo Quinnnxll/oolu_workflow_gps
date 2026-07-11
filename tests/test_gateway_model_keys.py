@@ -127,7 +127,6 @@ def test_the_model_test_route_proves_a_key_answers(tmp_path):
 def test_adding_a_second_key_leaves_a_deliberate_source_alone(tmp_path):
     gateway, transport, meter, conns, ident = _wired(tmp_path)
     token = ident.token("user-1")
-    from oolu.settings_node import SettingsNode
 
     # First key flips subscription -> own-api.
     first = gateway.handle(

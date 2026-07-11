@@ -508,6 +508,7 @@ def build_host_runtime(
     )
     from .identity.apikeys import ApiKeyService
     from .knowledge import TraceStore
+    from .mail import MailCodeStore
     from .metering import AttributionStore, MeteringLedger
     from .nodeplace import (
         CandidateAssembler,
@@ -520,7 +521,6 @@ def build_host_runtime(
         RegistryStore,
         WorkDesk,
     )
-    from .mail import MailCodeStore
     from .providers.keyring import ModelKeyring
     from .settings_node import SettingsNode, SettingsStore
     from .social import AssistantHistoryStore, DirectMessageStore
@@ -547,7 +547,7 @@ def build_host_runtime(
     # revocation are a restart, not a migration). The usage store books
     # every tenant's consultations durably; the subscription brain serves
     # model.source="subscription" inside the plan's monthly allowance.
-    from .billing import ModelUsageStore, PLATFORM_TENANT, SubscriptionBrain
+    from .billing import PLATFORM_TENANT, ModelUsageStore, SubscriptionBrain
     from .providers.keyring import PROVIDERS
 
     if platform_model_keys is not None:

@@ -17,7 +17,6 @@ from datetime import UTC, datetime
 from test_http_gateway import _app, _req
 
 from oolu.billing import FakeCardVault, PaymentMethodsService, PaymentProfileStore
-from oolu.durable.connection import DurableConnection
 from oolu.durable.files import UserFile, UserFileStore
 from oolu.gateway import GatewayApp
 from oolu.identity import AuthorityGrant, LocalAccountService, LocalUserStore, Role

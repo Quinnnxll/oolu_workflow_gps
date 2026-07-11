@@ -17,7 +17,6 @@ from types import SimpleNamespace
 
 from test_http_gateway import (
     _autonomous,
-    _req,
 )
 from test_node_interact import FakeAuthor, _chat, _rig
 

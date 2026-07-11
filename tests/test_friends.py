@@ -21,9 +21,9 @@ from oolu.gateway import GatewayApp
 from oolu.identity import LocalAccountService, LocalUserStore
 from oolu.identity.google_signin import IdentityLinkStore
 from oolu.social import (
+    MAX_MESSAGE_CHARS,
     AssistantHistoryStore,
     DirectMessageStore,
-    MAX_MESSAGE_CHARS,
 )
 
 NOW = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)

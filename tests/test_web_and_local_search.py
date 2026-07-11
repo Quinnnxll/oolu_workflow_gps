@@ -106,6 +106,7 @@ def test_the_chat_turn_tells_the_model_it_can_search(tmp_path):
     without it a keyed install claims it can't browse — or hands the
     search to the engine, whose network-severed sandbox can only fail."""
     from test_http_gateway import _app, _req
+
     from oolu.chat import WEB_SEARCH_NOTE
 
     class _SearchingModel:

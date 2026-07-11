@@ -13,10 +13,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
 from test_chat_model_router import FakeTransport, _anthropic_reply, _openai_reply
 from test_http_gateway import _app, _req
-
-import pytest
 
 from oolu.billing import (
     PLAN_MODEL_ALLOWANCE_USD,

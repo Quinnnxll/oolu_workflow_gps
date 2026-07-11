@@ -12,7 +12,6 @@ authority, audit; and failed automations carry stable error codes.
 from __future__ import annotations
 
 from test_contract_run import (
-    RAW,
     TIDY,
     _CliExecutor,
     _grant_approver,

@@ -12,7 +12,6 @@ never edits the current node.
 
 from __future__ import annotations
 
-from test_http_gateway import _app, _req
 from test_node_interact import FakeAuthor, _chat, _rig
 
 from oolu.cache import LocalScriptCache

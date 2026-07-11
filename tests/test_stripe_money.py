@@ -14,7 +14,7 @@ runs end to end on the fake processor.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest

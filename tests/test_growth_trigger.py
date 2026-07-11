@@ -14,7 +14,7 @@ yes builds exactly the offered goal, nothing else.
 from __future__ import annotations
 
 from test_chat_assistant import _FakeModel
-from test_http_gateway import _Identity, _autonomous, _req
+from test_http_gateway import _autonomous, _Identity, _req
 from test_node_interact import FakeAuthor
 from test_node_rerun import _ScriptExec
 

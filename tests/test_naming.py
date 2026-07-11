@@ -39,7 +39,7 @@ def test_all_stopwords_falls_back_to_the_trimmed_text():
 
 def test_learned_skill_without_a_name_gets_a_keyword_identity(tmp_path):
     from oolu.naming import concise_name as cname
-    from oolu.skills.learner import SkillLearner, _slug
+    from oolu.skills.learner import _slug
 
     # The cli names an unnamed recording with the intent's keywords; the
     # learner then derives the id from that concise name.

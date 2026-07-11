@@ -11,7 +11,7 @@ leaves the queue.
 from __future__ import annotations
 
 from test_http_gateway import _req
-from test_supernode_kyc import TRUSTED, _kyc_rig, _seed_supernode
+from test_supernode_kyc import _kyc_rig, _seed_supernode
 
 from oolu.identity import AuthorityGrant, Role
 from oolu.nodeplace import KycStatus
