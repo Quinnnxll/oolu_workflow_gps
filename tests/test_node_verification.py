@@ -252,3 +252,96 @@ def test_mark_verified_touches_only_needs_verification(tmp_path):
         assert desk.mark_verified("ghost") is None
     finally:
         conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# Failure evidence: local use can dip health, not only climb it.               #
+# --------------------------------------------------------------------------- #
+def test_a_failed_personal_run_is_evidence_too(tmp_path):
+    from test_http_gateway import _req
+
+    from oolu.skills.models import ExecutionOutcome, ExecutionStatus
+
+    app, conn, ident, desk, script_exec = _rig(tmp_path)
+    try:
+        metering = MeteringLedger(conn)
+        app._metering = metering
+        _speak_work(app, [TASK_TURN, TASK_TURN])
+        _chat(app, ident, "please tidy up my invoice files")
+        _chat(app, ident, "yes")  # built, ran, verified: 1 success, live
+
+        # The function starts failing (the upstream format changed).
+        def failing(action, *, idempotency_key):
+            script_exec.actions.append(action)
+            return ExecutionOutcome(
+                idempotency_key=idempotency_key,
+                skill_id=action.correlation_id,
+                status=ExecutionStatus.FAILED,
+                error="the upstream format changed",
+            )
+
+        script_exec.execute = failing
+        second = _chat(app, ident, "please tidy up my invoice files")
+        run_id = second.body["run_id"]
+        assert run_id is not None
+
+        # A paused run is not evidence yet: the user's abort makes it
+        # terminal, and THAT is when the failure lands in the ledger.
+        resolved = app.handle(
+            _req(
+                "POST",
+                f"/v1/runs/{run_id}/incidents",
+                token=ident.token("user-1", "t1"),
+                body={"decision": "abort"},
+            )
+        )
+        assert resolved.status == 200, resolved.body
+        assert resolved.body["phase"] == "failed"
+
+        events = metering.events()
+        assert [e.outcome for e in events] == ["succeeded", "failed"]
+        failed = events[-1]
+        assert failed.idempotency_key == f"node-verify:{run_id}"
+        assert failed.consumer_principal is None  # never unlocks rating
+
+        # Health reads both ways now: one success, one failure — 50%.
+        stats = LiveVersionStats(metering=metering)
+        version_stats = stats.version_stats(failed.version_id)
+        assert version_stats.successes == 1
+        assert version_stats.failures == 1
+
+        # A failure never silently demotes the account: still live —
+        # error states are set explicitly, never inferred.
+        [entry] = desk.overview(principal="user-1", tenant="t1")
+        assert entry.status == "live"
+    finally:
+        conn.close()
+
+
+def test_ratings_unlock_only_from_a_successful_run(tmp_path):
+    from datetime import UTC, datetime
+
+    from oolu.metering.models import MeteringEvent
+
+    conn = DurableConnection(tmp_path / "ledger.db")
+    try:
+        metering = MeteringLedger(conn)
+
+        def event(key, outcome):
+            return MeteringEvent(
+                idempotency_key=key,
+                run_id=key,
+                version_id="v1",
+                consumer_principal="carol",
+                outcome=outcome,
+                audit_seq=1,
+                occurred_at=datetime.now(UTC),
+            )
+
+        metering.record(event("r-fail", "failed"))
+        # A failed run is evidence, not a receipt: no rating unlocks.
+        assert not metering.verified_run("v1", "carol")
+        metering.record(event("r-ok", "succeeded"))
+        assert metering.verified_run("v1", "carol")
+    finally:
+        conn.close()

@@ -17,6 +17,7 @@ from .connection import (
 from .files import FileTooLargeError, UserFile, UserFileStore
 from .idempotency import IdempotencyLedger
 from .maintenance import backup, delete_workflow, prune_retention, restore
+from .offers import GrowthOfferStore
 from .outbox import OutboxMessage, OutboxStatus, TransactionalOutbox
 from .queue import DurableTaskQueue, Task, TaskQueue, TaskStatus
 from .records import DurableRecordStore, DurableRunStateStore
@@ -30,6 +31,7 @@ __all__ = [
     "DurableConnection",
     "DurableRecordStore",
     "FileTooLargeError",
+    "GrowthOfferStore",
     "UserFile",
     "UserFileStore",
     "DurableRunStateStore",

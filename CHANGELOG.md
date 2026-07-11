@@ -4,6 +4,33 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Two honesty gaps close: durable growth offers, and failure evidence:
+
+- **The question OoLu asked survives the process that asked it.** The
+  growth trigger's standing offers ("say yes and I'll build/run it")
+  lived in process memory — a restart or a second gateway process lost
+  the question between the ask and the answer. They are now one small
+  durable row each (`GrowthOfferStore`, on the runtime's own
+  connection): keyed to the person asked, newest question wins,
+  consumed atomically so a consent is spent exactly once — whichever
+  process serves the next message.
+- **A node's health can dip from local use, not only climb.** Personal
+  runs of a node's own function recorded only successes, so a locally
+  broken node kept a spotless record. A run that ends FAILED now
+  records a verified failure in the same metering ledger (one event
+  per run, terminal phases only — a paused run is not evidence yet;
+  the user's abort is what makes it terminal). `LiveVersionStats`
+  reads both ways: failed events count as failures, successes are
+  filtered by outcome, and the audit-side failure scan is unchanged —
+  no double counting, because personal runs carry no run binding.
+  A failure never promotes, never silently demotes, and never unlocks
+  rating: `verified_run` now requires a SUCCESSFUL run explicitly.
+- **Tested end to end.** The offer survives a "restart" (a fresh store
+  over the same connection sees and spends it, exactly once); one
+  offer per person, tenant-walled; a failing node's second run aborts
+  into a verified failure — health reads 1-and-1 — while the account
+  stays live and ratings stay locked.
+
 Semantic goal dedup: the twin-node leak closes, reuse offered first:
 
 - **A twin is called a twin.** Node identity used to hang on the exact

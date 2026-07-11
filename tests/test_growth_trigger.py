@@ -160,7 +160,7 @@ def test_a_stuck_task_becomes_an_offer_not_a_wall(tmp_path):
         assert GOAL in reply
         assert response.body["run_id"] is None
         # The offer stands, keyed to the person, holding the exact goal.
-        assert app._growth_offers[("t1", "user-1")] == ("build", GOAL, GOAL)
+        assert app._growth_offers.get("t1", "user-1") == ("build", GOAL, GOAL)
     finally:
         conn.close()
 
@@ -179,7 +179,7 @@ def test_yes_builds_the_node_and_refires_the_task(tmp_path):
         assert agreed.body["actions"] == [{"tool": "build_node"}]
         assert agreed.body["source"] == "tool"
         # The consent was spent: no standing offer remains.
-        assert app._growth_offers == {}
+        assert app._growth_offers.get("t1", "user-1") is None
         # The node landed on the user's desk, born with its function.
         mine = desk.overview(principal="user-1", tenant="t1")
         assert [e.title for e in mine] == ["Normalize Invoice Csv Files"]
@@ -202,7 +202,7 @@ def test_no_leaves_things_as_they_are(tmp_path):
 
         declined = _chat(app, ident, "no thanks")
         assert "leaving it as is" in declined.body["reply"]
-        assert app._growth_offers == {}
+        assert app._growth_offers.get("t1", "user-1") is None
         assert desk.overview(principal="user-1", tenant="t1") == []
         assert script_exec.actions == []
     finally:
@@ -222,7 +222,7 @@ def test_any_other_message_withdraws_the_offer(tmp_path):
         # conversation just continues.
         weather = _chat(app, ident, "how's the weather looking?")
         assert weather.body["reply"] == "Sunny all week!"
-        assert app._growth_offers == {}
+        assert app._growth_offers.get("t1", "user-1") is None
 
         # A later "yes" is an ordinary message, never a stale consent.
         assert len(model.calls) == 2
@@ -240,7 +240,7 @@ def test_no_offer_without_a_model_to_write_the_function(tmp_path):
         reply = response.body["reply"]
         assert "I can't run that on this machine yet" in reply
         assert "grow that missing piece" not in reply
-        assert app._growth_offers == {}
+        assert app._growth_offers.get("t1", "user-1") is None
     finally:
         conn.close()
 
@@ -250,12 +250,12 @@ def test_the_offer_survives_only_in_the_main_conversation(tmp_path):
     try:
         _speak_work(app, [TASK_TURN, '{"say": "Hi there!", "task": null}'])
         _chat(app, ident, "please tidy up my invoice files")
-        assert app._growth_offers[("t1", "user-1")] == ("build", GOAL, GOAL)
+        assert app._growth_offers.get("t1", "user-1") == ("build", GOAL, GOAL)
         # Another person's yes answers nothing — the offer is keyed to
         # the person who was asked.
         other = _chat(app, ident, "yes", principal="user-2")
         assert "Built" not in other.body["reply"]
-        assert app._growth_offers[("t1", "user-1")] == ("build", GOAL, GOAL)
+        assert app._growth_offers.get("t1", "user-1") == ("build", GOAL, GOAL)
     finally:
         conn.close()
 
@@ -287,7 +287,7 @@ def test_a_paraphrase_offers_reuse_instead_of_a_twin(tmp_path):
         assert "answers for nearly this" in reply
         assert "Normalize Invoice Csv Files" in reply
         assert "grow that missing piece" not in reply
-        assert app._growth_offers[("t1", "user-1")] == (
+        assert app._growth_offers.get("t1", "user-1") == (
             "reuse",
             GOAL,
             PARAPHRASE,
@@ -316,7 +316,7 @@ def test_yes_to_reuse_runs_the_existing_node_and_mints_nothing(tmp_path):
         # And nothing new was minted: the desk still holds exactly one node.
         mine = desk.overview(principal="user-1", tenant="t1")
         assert [e.title for e in mine] == ["Normalize Invoice Csv Files"]
-        assert app._growth_offers == {}
+        assert app._growth_offers.get("t1", "user-1") is None
     finally:
         conn.close()
 
@@ -333,7 +333,7 @@ def test_no_to_reuse_rolls_into_a_distinct_build_offer(tmp_path):
         declined = _chat(app, ident, "no")
         assert "different work" in declined.body["reply"]
         assert PARAPHRASE in declined.body["reply"]
-        assert app._growth_offers[("t1", "user-1")] == (
+        assert app._growth_offers.get("t1", "user-1") == (
             "build_distinct",
             PARAPHRASE,
             PARAPHRASE,
@@ -367,5 +367,48 @@ def test_the_build_door_refuses_a_twin_in_words(tmp_path):
         built = app._build_function_node(session, PARAPHRASE, allow_twin=True)
         assert "Built a NEW node" in built
         assert len(desk.overview(principal="user-1", tenant="t1")) == 2
+    finally:
+        conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# Durability: the question OoLu asked survives the process that asked it.      #
+# --------------------------------------------------------------------------- #
+def test_the_offer_survives_a_restart(tmp_path):
+    from oolu.durable import GrowthOfferStore
+
+    app, conn, ident, desk, script_exec = _rig(tmp_path)
+    try:
+        _speak_work(app, [TASK_TURN])
+        _chat(app, ident, "please tidy up my invoice files")
+        assert app._growth_offers.get("t1", "user-1") == ("build", GOAL, GOAL)
+
+        # The host restarts: a fresh store over the same durable connection
+        # (what a new process sees) still holds the standing question.
+        reborn = GrowthOfferStore(conn)
+        assert reborn.get("t1", "user-1") == ("build", GOAL, GOAL)
+        # The consent is spent exactly once, atomically — and spending it
+        # in one process spends it in all of them.
+        assert reborn.pop("t1", "user-1") == ("build", GOAL, GOAL)
+        assert reborn.pop("t1", "user-1") is None
+        assert app._growth_offers.get("t1", "user-1") is None
+    finally:
+        conn.close()
+
+
+def test_one_offer_per_person_and_the_newest_wins(tmp_path):
+    from oolu.durable import DurableConnection, GrowthOfferStore
+
+    conn = DurableConnection(tmp_path / "offers.db")
+    try:
+        offers = GrowthOfferStore(conn)
+        offers.put("t1", "alice", kind="build", goal="old", original_goal="old")
+        offers.put("t1", "alice", kind="reuse", goal="new", original_goal="ask")
+        offers.put("t1", "bob", kind="build", goal="his", original_goal="his")
+        # The newest question is the one on the table; people never share.
+        assert offers.get("t1", "alice") == ("reuse", "new", "ask")
+        assert offers.pop("t1", "bob") == ("build", "his", "his")
+        assert offers.get("t1", "bob") is None
+        assert offers.get("t2", "alice") is None  # tenant-walled
     finally:
         conn.close()

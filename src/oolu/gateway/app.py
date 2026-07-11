@@ -58,6 +58,7 @@ from ..durable.files import (
     normalize_folder,
 )
 from ..durable.idempotency import IdempotencyLedger
+from ..durable.offers import GrowthOfferStore
 from ..durable.service import DurableWorkflowService
 from ..identity.apikeys import KEY_PREFIX, ApiKeyError, ApiKeyService, scope_allows
 from ..identity.errors import AuthenticationError, AuthorizationError
@@ -537,8 +538,10 @@ class GatewayApp:
         # twin guard's reuse-first door), keeping the user's
         # ``original_goal`` so a "no" can roll into a distinct build offer;
         # "build_distinct" is that follow-up — the user already said this
-        # is different work, so the twin guard steps aside.
-        self._growth_offers: dict[tuple[str, str], tuple[str, str, str]] = {}
+        # is different work, so the twin guard steps aside. DURABLE on the
+        # runtime's own connection: the question OoLu asked must survive a
+        # restart, and the yes must land whichever process serves it.
+        self._growth_offers = GrowthOfferStore(durable.conn)
         self._google = google_signin
         self._identity_links = identity_links
         self._mail = mail
@@ -987,7 +990,7 @@ class GatewayApp:
             # any other reply withdraws it, because consent detached from
             # the question it answered is not consent.
             offer = self._growth_offers.pop(
-                (session.tenant_id, session.principal_id), None
+                session.tenant_id, session.principal_id
             )
             if offer is not None:
                 kind, offered_goal, original_goal = offer
@@ -1006,9 +1009,13 @@ class GatewayApp:
                     # Different work after all — the plain build offer
                     # follows, standing for exactly one message like every
                     # offer, and marked so the twin guard honors the answer.
-                    self._growth_offers[
-                        (session.tenant_id, session.principal_id)
-                    ] = ("build_distinct", original_goal, original_goal)
+                    self._growth_offers.put(
+                        session.tenant_id,
+                        session.principal_id,
+                        kind="build_distinct",
+                        goal=original_goal,
+                        original_goal=original_goal,
+                    )
                     turn = ChatTurn(
                         say=GROWTH_BUILD_INSTEAD.format(goal=original_goal),
                         source="tool",
@@ -1430,7 +1437,6 @@ class GatewayApp:
             and self._resolve_node_function(session, goal) is None
         )
         if can_offer:
-            key = (session.tenant_id, session.principal_id)
             # The twin guard, reuse first: when a node already answers for
             # NEARLY this goal (same work, said differently), the offer is
             # to run THAT node — one node, one history — and only a "no"
@@ -1438,11 +1444,23 @@ class GatewayApp:
             # here (_resolve_node_function already gated the offer).
             similar = self._find_similar_function_node(session, goal)
             if similar is not None:
-                self._growth_offers[key] = ("reuse", similar["goal"], goal)
+                self._growth_offers.put(
+                    session.tenant_id,
+                    session.principal_id,
+                    kind="reuse",
+                    goal=similar["goal"],
+                    original_goal=goal,
+                )
                 return say + GROWTH_REUSE_OFFER.format(
                     title=similar["title"], existing=similar["goal"]
                 )
-            self._growth_offers[key] = ("build", goal, goal)
+            self._growth_offers.put(
+                session.tenant_id,
+                session.principal_id,
+                kind="build",
+                goal=goal,
+                original_goal=goal,
+            )
             return say + GROWTH_OFFER.format(goal=goal)
         hint = (
             (run.get("autobuild") or {}).get("hint")
@@ -4885,22 +4903,29 @@ class GatewayApp:
         return state
 
     def _record_function_verification(self, state: RunState) -> None:
-        """A COMPLETED run through a node's own function IS a verified run.
+        """A TERMINAL run through a node's own function IS evidence.
 
         The engine executed the node's stored code end to end — sandboxed,
         audited, through the same pipeline as any run — so the node earns
-        real verification evidence from local use: a metering event keyed
-        to its version (idempotent per run), and the account's one honest
-        promotion, needs_verification -> live. This is the door out of
-        'stuck at needs-verification forever': marketplace bindings only
-        ever verified PAID runs, which personal nodes never get.
+        real evidence from local use, both ways: a COMPLETED run records a
+        verified success (and the account's one honest promotion,
+        needs_verification -> live — the door out of 'stuck at
+        needs-verification forever'); a FAILED run records a verified
+        FAILURE, so a node's health can dip from local use, not only
+        climb. One event per run (idempotent on the run id), terminal
+        phases only — a paused run is not evidence yet, and a retry that
+        lands here again cannot double-record.
 
         The event carries NO consumer principal (the deriver's no-binding
-        shape): a self-run proves the function works, but it must never
-        unlock rating your own node."""
+        shape): a self-run proves the function works — or doesn't — but
+        it must never unlock rating your own node."""
         if self._metering is None or self._nodeplace is None:
             return
-        if state.phase is not Phase.COMPLETED:
+        if state.phase is Phase.COMPLETED:
+            outcome = "succeeded"
+        elif state.phase is Phase.FAILED:
+            outcome = "failed"
+        else:
             return
         function = (state.contract.metadata or {}).get("node_function")
         if not isinstance(function, dict) or not function.get("node_id"):
@@ -4916,12 +4941,14 @@ class GatewayApp:
                 idempotency_key=f"node-verify:{state.run_id}",
                 run_id=state.run_id,
                 version_id=version.version_id,
-                outcome="succeeded",
+                outcome=outcome,
                 audit_seq=last.seq if last else 0,
                 occurred_at=last.at if last else datetime.now(UTC),
             )
         )
-        if recorded and self._desk is not None:
+        # Only a SUCCESS promotes: a failed run never verifies a node,
+        # and error/restricted states are never healed here either way.
+        if recorded and outcome == "succeeded" and self._desk is not None:
             self._desk.mark_verified(node_id)
 
     def _run_dict(self, state: RunState) -> dict:

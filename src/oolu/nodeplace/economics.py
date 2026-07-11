@@ -66,10 +66,13 @@ class LiveVersionStats:
     """Verified stats from production records.
 
     Successes (and their measured provider cost) come from the **metering
-    ledger** — the exactly-once record of platform-verified success events.
-    Failures come from the **audit log**'s ``workflow.executed`` records with
-    a non-success status, attributed to a version through the run bindings.
-    Neither number can be self-reported.
+    ledger** — the exactly-once record of platform-verified events, filtered
+    to the succeeded ones. Failures come from two honest sources: metering
+    events recorded with a failed outcome (personal runs of a node's own
+    function record their failures too — health can dip, not only climb),
+    and the **audit log**'s ``workflow.executed`` records with a non-success
+    status, attributed to a version through the run bindings. Neither number
+    can be self-reported.
     """
 
     def __init__(
@@ -85,15 +88,21 @@ class LiveVersionStats:
 
     def version_stats(self, version_id: str) -> VersionStats:
         successes = 0
+        failures = 0
         costs: list[float] = []
         for event in self._metering.events():
             if not self._touches(event.run_id, event.version_id, version_id):
+                continue
+            if event.outcome == "failed":
+                # Local failure evidence (no run binding, so the audit
+                # scan below can never see it — and never double-counts
+                # it either, for the same reason).
+                failures += 1
                 continue
             successes += 1
             if event.provider_cost is not None:
                 costs.append(event.provider_cost)
 
-        failures = 0
         if self._audit is not None and self._attribution is not None:
             for record in self._audit.records():
                 if record.event_type != _EXECUTED_EVENT:

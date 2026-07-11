@@ -58,10 +58,14 @@ class MeteringLedger:
         return MeteringEvent.model_validate_json(row["payload_json"])
 
     def verified_run(self, version_id: str, consumer_principal: str) -> bool:
+        """Did this consumer have a verified SUCCESSFUL run of the version?
+        Failed evidence lives in the same ledger now, and a failed run
+        must never unlock rating — the filter keeps that invariant."""
         with self._conn.lock:
             row = self._conn.db.execute(
                 "SELECT 1 FROM metering_events"
-                " WHERE version_id = ? AND consumer_principal = ? LIMIT 1",
+                " WHERE version_id = ? AND consumer_principal = ?"
+                " AND outcome = 'succeeded' LIMIT 1",
                 (version_id, consumer_principal),
             ).fetchone()
         return row is not None
