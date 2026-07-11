@@ -9,6 +9,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..predicates import check, resolve_pointer
+
 SKILL_SCHEMA_VERSION = 1
 
 
@@ -39,6 +41,24 @@ class ExecutionStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+class Postcondition(BaseModel):
+    """What this action PROMISES the observed state will show.
+
+    The evaluator's half of the production loop: the executor reports
+    what it observed (the outcome's ``evidence``), and each
+    postcondition is a deterministic predicate over that report —
+    "interference_count == 0", "result/mass_kg <= 3.5". A run that
+    succeeds by the API but breaks a promise is not a success. Same
+    predicate language as the project graph's constraints."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    pointer: str  # into the outcome's evidence, e.g. "result/mass_kg"
+    op: Literal["<=", ">=", "<", ">", "==", "!=", "exists"]
+    value: Any = None
+
+
 class ActionEvent(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -48,6 +68,9 @@ class ActionEvent(BaseModel):
     adapter: str
     operation: str
     parameters: dict[str, Any] = Field(default_factory=dict)
+    # The action's declared promises about the state it produces —
+    # checked by the runner against the outcome's observed evidence.
+    postconditions: list[Postcondition] = Field(default_factory=list)
     actor: str | None = None
     credential_ref: str | None = None
     observed_at: datetime = Field(default_factory=_now)
@@ -148,6 +171,52 @@ class ExecutionOutcome(BaseModel):
     recovery_status: ExecutionStatus | None = None
     started_at: datetime = Field(default_factory=_now)
     completed_at: datetime | None = None
+
+
+def verify_postconditions(
+    action: ActionEvent, outcome: ExecutionOutcome
+) -> ExecutionOutcome:
+    """The evaluator: judge a SUCCEEDED outcome against the action's
+    declared promises.
+
+    Only success is judged — a failure is already honest. Every
+    postcondition is checked (never just the first miss), what was
+    actually observed rides the evidence under ``postconditions``, and
+    any miss DEMOTES the outcome to FAILED with the exact broken
+    promise in words: "succeeded by the API, failed by the evaluator."
+    Never raises — a broken check is a failed check."""
+    if outcome.status is not ExecutionStatus.SUCCEEDED:
+        return outcome
+    if not action.postconditions:
+        return outcome
+    misses: list[str] = []
+    observed: dict[str, Any] = {}
+    for promise in action.postconditions:
+        exists, found = resolve_pointer(outcome.evidence, promise.pointer)
+        observed[promise.name] = found if exists else None
+        if check(outcome.evidence, promise.pointer, promise.op, promise.value):
+            continue
+        held = repr(found) if exists else "nothing"
+        expected = (
+            f"{promise.pointer} {promise.op}"
+            + ("" if promise.op == "exists" else f" {promise.value!r}")
+        )
+        misses.append(f"'{promise.name}': expected {expected}, observed {held}")
+    verdict = {
+        "checked": len(action.postconditions),
+        "verified": not misses,
+        "observed": observed,
+    }
+    evidence = {**outcome.evidence, "postconditions": verdict}
+    if not misses:
+        return outcome.model_copy(update={"evidence": evidence})
+    return outcome.model_copy(
+        update={
+            "status": ExecutionStatus.FAILED,
+            "error": "postconditions unmet — " + "; ".join(misses),
+            "evidence": evidence,
+        }
+    )
 
 
 class ApprovalRecord(BaseModel):

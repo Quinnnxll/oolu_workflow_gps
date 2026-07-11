@@ -12,7 +12,11 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime
 
-from ..skills.models import ExecutionOutcome, ExecutionStatus
+from ..skills.models import (
+    ExecutionOutcome,
+    ExecutionStatus,
+    verify_postconditions,
+)
 from ..skills.ports import ActionExecutor
 from ..skills.requirements import RequirementBrief
 from .ports import OrchestratorError
@@ -343,8 +347,12 @@ class ActionExecutorRouteRunner:
                     started_at=started,
                     completed_at=datetime.now(UTC),
                 )
-            outcome = executor.execute(
-                item.action, idempotency_key=f"{idempotency_key}:{item.action.id}"
+            outcome = verify_postconditions(
+                item.action,
+                executor.execute(
+                    item.action,
+                    idempotency_key=f"{idempotency_key}:{item.action.id}",
+                ),
             )
             outcomes.append(outcome)
             if outcome.status is not ExecutionStatus.SUCCEEDED:

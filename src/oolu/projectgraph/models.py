@@ -20,6 +20,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..predicates import check, pointer_root
+
 
 def _id() -> str:
     return uuid4().hex
@@ -99,13 +101,16 @@ class PatchOp(BaseModel):
       declared ``base_revision`` and ``old_value`` must both match what
       the graph actually holds — a stale idea of the world is rejected,
       never merged.
+    - ``append``: add ONE entry to ``evidence`` or ``relations`` — how
+      an observation (a verified run's postconditions, a critic's
+      finding) is FILED onto truth without racing a whole-list replace.
     - ``supersede``: retire an object (status -> superseded). Truth is
       append-only: nothing is ever erased, history keeps every revision.
     """
 
     model_config = ConfigDict(frozen=True)
 
-    op: Literal["create", "set", "supersede"]
+    op: Literal["create", "set", "append", "supersede"]
     object_id: str = ""
     base_revision: int | None = None
     pointer: str = ""
@@ -173,20 +178,6 @@ def path_covered(path: str, scopes: list[str]) -> bool:
     return False
 
 
-def resolve_pointer(payload: dict[str, Any], pointer: str) -> tuple[bool, Any]:
-    """``(exists, value)`` for a slash pointer into an object's payload."""
-    current: Any = payload
-    for part in pointer.strip("/").split("/"):
-        if not isinstance(current, dict) or part not in current:
-            return False, None
-        current = current[part]
-    return True, current
-
-
-def pointer_root(pointer: str) -> str:
-    return pointer.strip("/").split("/")[0] if pointer.strip("/") else ""
-
-
 def valid_set_pointer(pointer: str) -> bool:
     """A ``set`` may reach nested values under parameters/
     native_references, or replace relations/evidence/status whole."""
@@ -199,24 +190,7 @@ def valid_set_pointer(pointer: str) -> bool:
 def evaluate_constraint(
     payload: dict[str, Any], constraint: ConstraintSpec
 ) -> bool:
-    """Deterministic verdict for one constraint against one payload."""
-    exists, value = resolve_pointer(payload, constraint.pointer)
-    if constraint.op == "exists":
-        return exists
-    if not exists:
-        return False
-    try:
-        if constraint.op == "==":
-            return bool(value == constraint.value)
-        if constraint.op == "!=":
-            return bool(value != constraint.value)
-        left, right = float(value), float(constraint.value)
-    except (TypeError, ValueError):
-        return False
-    if constraint.op == "<=":
-        return left <= right
-    if constraint.op == ">=":
-        return left >= right
-    if constraint.op == "<":
-        return left < right
-    return left > right
+    """Deterministic verdict for one constraint against one payload —
+    the shared predicate language, so an object's walls and an action's
+    postconditions are judged by the same code."""
+    return check(payload, constraint.pointer, constraint.op, constraint.value)

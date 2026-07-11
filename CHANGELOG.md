@@ -4,6 +4,27 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The evaluator: actions promise, observation decides (vertical step 3):
+
+- **One predicate language.** `oolu/predicates.py` — a pointer walks
+  into observed state, a comparison judges what it finds, and a check
+  NEVER raises. The project graph's constraints and the new action
+  postconditions are the same code: "the wall an object must honor"
+  and "the state a run promised to produce" get one judge.
+- **Actions declare promises.** `ActionEvent` gains `postconditions`
+  — "result/mass_kg <= 3.5", "interference_count == 0" — checked by
+  BOTH route runners against the outcome's observed evidence. A run
+  that succeeds by the API but breaks a promise is DEMOTED to a
+  failure with every broken promise in words ("succeeded by the API,
+  failed by the evaluator"); what was observed rides the evidence
+  either way. Only success is judged — a failure is already honest —
+  and the demotion feeds the existing failure-evidence path untouched.
+- **Observation lands on truth.** The kernel gains an `append` op —
+  one entry onto an object's `evidence` or `relations`, base-revision
+  honest, never a racing whole-list replace — the door through which
+  a verified run's postcondition verdict (or, next, a critic's
+  finding) is FILED onto the project graph.
+
 The industrial vertical begins: the Project Graph and its kernel:
 
 - **A second kind of truth.** Alongside runs and files, OoLu now keeps

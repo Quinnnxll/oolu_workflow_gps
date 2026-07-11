@@ -32,6 +32,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any, Callable
 
+from ..predicates import pointer_root, resolve_pointer
 from .models import (
     OBJECT_STATUSES,
     GraphObject,
@@ -39,8 +40,6 @@ from .models import (
     ProposalResult,
     evaluate_constraint,
     path_covered,
-    pointer_root,
-    resolve_pointer,
     valid_set_pointer,
 )
 from .store import ProjectGraphStore
@@ -161,6 +160,13 @@ class TransactionKernel:
                     f"{where}: no base revision — a proposal must declare "
                     "the truth it reasoned against"
                 )
+            if op.op == "append" and op.pointer.strip("/") not in (
+                "evidence",
+                "relations",
+            ):
+                reasons.append(
+                    f"{where}: append reaches only evidence or relations"
+                )
             if op.op == "set" and not valid_set_pointer(op.pointer):
                 reasons.append(
                     f"{where}: '{op.pointer}' is not a settable pointer "
@@ -256,6 +262,10 @@ class TransactionKernel:
 
             if op.op == "supersede":
                 working = working.model_copy(update={"status": "superseded"})
+            elif op.op == "append":
+                field = op.pointer.strip("/")
+                grown = [*getattr(working, field), op.new_value]
+                working = working.model_copy(update={field: grown})
             else:
                 updated = self._apply_set(working, op, where, reasons)
                 if updated is None:

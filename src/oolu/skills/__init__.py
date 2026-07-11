@@ -58,10 +58,12 @@ from .models import (
     Demonstration,
     ExecutionOutcome,
     ExecutionStatus,
+    Postcondition,
     ReusableSkill,
     SkillParameter,
     SkillSignature,
     StateSnapshot,
+    verify_postconditions,
 )
 from .pack import (
     SkillPack,
@@ -210,6 +212,8 @@ __all__ = [
     "Demonstration",
     "DemonstrationCompiler",
     "ExecutionOutcome",
+    "Postcondition",
+    "verify_postconditions",
     "ExecutionStatus",
     "ExecutionStore",
     "EventSink",

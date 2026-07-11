@@ -97,6 +97,9 @@ speculative:
 3. **Postconditions + observation** — actions declare expected
    postconditions, executors return observed state, the evaluator
    compares; failures feed the existing failure-evidence path.
+   *(built: `predicates.py`, `Postcondition`/`verify_postconditions`
+   in `skills/models.py`, judged at both route runners; the kernel's
+   `append` op files verified observations as graph evidence)*
 4. **Critic findings + regression protection breadth** — findings as
    typed evidence-backed objects; kernel-enforced protection of
    previously-passed hard constraints across dependency edges.

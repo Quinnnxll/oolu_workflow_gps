@@ -26,7 +26,12 @@ import time
 from datetime import UTC, datetime
 
 from ..knowledge.traces import NodeObservation, TraceStore
-from ..skills.models import ActionEvent, ExecutionOutcome, ExecutionStatus
+from ..skills.models import (
+    ActionEvent,
+    ExecutionOutcome,
+    ExecutionStatus,
+    verify_postconditions,
+)
 from ..skills.ports import ActionExecutor
 from .state import Blueprint, ExecutionRecord, RoutePlan
 
@@ -405,7 +410,12 @@ class DagRouteRunner:
     def _run_action(self, action: ActionEvent, key: str) -> ExecutionOutcome:
         executor = self._executors[action.adapter]
         try:
-            return executor.execute(action, idempotency_key=key)
+            # The evaluator rides every hand: a success that breaks the
+            # action's declared postconditions is demoted to a failure
+            # with the exact broken promise in words.
+            return verify_postconditions(
+                action, executor.execute(action, idempotency_key=key)
+            )
         except Exception as exc:  # an executor bug must not wedge the route
             logger.exception(
                 "executor raised for %s/%s", action.adapter, action.operation
