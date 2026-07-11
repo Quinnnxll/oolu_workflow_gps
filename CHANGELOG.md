@@ -4,6 +4,38 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The industrial vertical begins: the Project Graph and its kernel:
+
+- **A second kind of truth.** Alongside runs and files, OoLu now keeps
+  a Global Project Graph (`src/oolu/projectgraph/`): typed, revisioned
+  objects — parameters, relations, constraints, evidence, provenance —
+  each at a declared place in the project tree. Every committed
+  revision is kept forever (`graph_history`); every past truth stays
+  readable verbatim. Projects are tenant-walled and owned by whoever
+  opens them (the same claim pattern as node onboarding).
+- **Models propose, the kernel commits.** The transaction kernel is
+  the ONLY door through which graph truth changes. Every proposal
+  carries a required reason and structured ops (create / set /
+  supersede) that declare the base revision AND the exact old value
+  they believe they are replacing — stale or misremembered proposals
+  are rejected in words, never merged. Territory is granted by the
+  owner as path-scoped read/write grants (forbidden wins, fail
+  closed — the egress-grant consent shape, applied to truth).
+  Previously passed HARD constraints are protected: a patch that would
+  regress one is refused; pre-existing violations persist as spoken
+  warnings instead of wedging unrelated work; soft constraints only
+  warn. Both verdicts land in the hash-chained audit log and the
+  proposal ledger.
+- **Doors on the gateway.** `POST /v1/graph/{project}/proposals`
+  (identity stamped from the session, 409 verdict with reasons on
+  rejection), object reads with per-revision history, owner-granted
+  scopes, and the owner's proposal ledger. Invisible and nonexistent
+  answer alike — a 404 never confirms what the asker may not see.
+- **Why.** docs/industrial-vertical-plan.md maps the industrial
+  build spec onto OoLu: this is steps 1–2, the spine that upgrades
+  OoLu's state from "runs + files" to engineering truth. Next:
+  postconditions and observation, critics, and the CadQuery hand.
+
 Hot paths stop scanning, and the whole interface speaks your language:
 
 - **Stats and earnings read through indexes now.** `LiveVersionStats`

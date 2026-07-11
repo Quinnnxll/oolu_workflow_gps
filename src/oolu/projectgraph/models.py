@@ -1,0 +1,222 @@
+"""The Global Project Graph's vocabulary — typed, revisioned truth.
+
+The graph is the only source of APPROVED project truth (the industrial
+vertical's external project memory): every object carries its revision,
+its owner, its constraints, and the evidence behind it; every change
+arrives as a structured PROPOSAL of patch operations against declared
+base revisions, and only the transaction kernel may commit one.
+
+Deliberately small at birth: objects, constraints, patch ops, proposals,
+scopes, and the result shape. What a field MEANS for suspension arms or
+render scenes lives in the objects' own parameters — the graph stores
+truth, it does not model domains.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import Any, Literal
+from uuid import uuid4
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+def _id() -> str:
+    return uuid4().hex
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+# The proposal lifecycle an object's ``status`` may hold — model output
+# is not project truth until it climbs this ladder.
+OBJECT_STATUSES = (
+    "draft",
+    "proposed",
+    "verified",
+    "approved",
+    "released",
+    "superseded",
+)
+
+# Where a ``set`` pointer may reach. ``parameters`` and
+# ``native_references`` are nested (slash pointers walk into them);
+# ``relations``, ``evidence``, and ``status`` replace whole.
+_NESTED_ROOTS = ("parameters", "native_references")
+_WHOLE_ROOTS = ("relations", "evidence", "status")
+
+
+class ConstraintSpec(BaseModel):
+    """One declarative check an object must honor.
+
+    ``hard`` constraints are walls: once one PASSES at a committed
+    revision, the kernel refuses any patch that would regress it.
+    ``soft`` constraints only warn. The check is a comparison against a
+    pointer into the object's own payload — deterministic, evaluable
+    without any model."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    severity: Literal["hard", "soft"] = "hard"
+    pointer: str  # e.g. "parameters/front/y_mm"
+    op: Literal["<=", ">=", "<", ">", "==", "!=", "exists"]
+    value: Any = None
+
+
+class GraphObject(BaseModel):
+    """One node of project truth, exactly the build spec's shape."""
+
+    model_config = ConfigDict(frozen=True)
+
+    # Stamped by the kernel from the proposal — a create op's payload
+    # never needs to repeat (or gets to lie about) its project.
+    project_id: str = ""
+    object_id: str = Field(default_factory=_id)
+    # The object's place in the project tree ("subsystems/suspension/
+    # front") — what read/write scopes are granted against.
+    path: str
+    type: str
+    revision: int = 1
+    status: str = "draft"
+    # The principal answering for this object.
+    owner: str = ""
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    relations: list[dict[str, Any]] = Field(default_factory=list)
+    constraints: list[ConstraintSpec] = Field(default_factory=list)
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+    native_references: dict[str, Any] = Field(default_factory=dict)
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    updated_at: datetime = Field(default_factory=_now)
+
+
+class PatchOp(BaseModel):
+    """One structured change. Never a rewrite — an exact, checkable step.
+
+    - ``create``: a brand-new object (carried whole in ``object``).
+    - ``set``: change ONE pointed-at value on an existing object; the
+      declared ``base_revision`` and ``old_value`` must both match what
+      the graph actually holds — a stale idea of the world is rejected,
+      never merged.
+    - ``supersede``: retire an object (status -> superseded). Truth is
+      append-only: nothing is ever erased, history keeps every revision.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    op: Literal["create", "set", "supersede"]
+    object_id: str = ""
+    base_revision: int | None = None
+    pointer: str = ""
+    old_value: Any = None
+    new_value: Any = None
+    object: GraphObject | None = None
+
+
+class GraphProposal(BaseModel):
+    """A model's (or human's) offered change — words and ops, no writes."""
+
+    model_config = ConfigDict(frozen=True)
+
+    proposal_id: str = Field(default_factory=_id)
+    project_id: str
+    # The principal submitting; the kernel checks THEIR scopes.
+    owner: str = ""
+    # The node whose work produced this proposal, when one did.
+    node_id: str | None = None
+    # Every change includes a reason — the core rule, enforced.
+    reason: str
+    patch: list[PatchOp]
+    expected_effects: dict[str, Any] = Field(default_factory=dict)
+    confidence: float | None = None
+
+
+class GraphScopes(BaseModel):
+    """A principal's read/write territory inside one project.
+
+    Path-prefix semantics, the same shape as the machine allowlist and
+    the egress grants: a scope names a subtree; ``forbidden`` always
+    wins. The project's owner needs no scopes — everyone else starts
+    with NOTHING until the owner grants territory. Fail closed."""
+
+    model_config = ConfigDict(frozen=True)
+
+    principal: str
+    read_paths: list[str] = Field(default_factory=list)
+    write_paths: list[str] = Field(default_factory=list)
+    forbidden_paths: list[str] = Field(default_factory=list)
+
+
+class ProposalResult(BaseModel):
+    """What the kernel decided, in words — commit or reject, never silence."""
+
+    model_config = ConfigDict(frozen=True)
+
+    proposal_id: str
+    status: Literal["committed", "rejected"]
+    reasons: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    # object_id -> the revision this commit produced.
+    revisions: dict[str, int] = Field(default_factory=dict)
+
+
+def path_covered(path: str, scopes: list[str]) -> bool:
+    """Prefix-subtree matching: scope "a/b" covers "a/b" and "a/b/c",
+    never "a/bc" — the same wall shape as the host allowlist."""
+    for scope in scopes:
+        scope = scope.strip("/")
+        if not scope:
+            continue
+        if path == scope or path.startswith(scope + "/"):
+            return True
+    return False
+
+
+def resolve_pointer(payload: dict[str, Any], pointer: str) -> tuple[bool, Any]:
+    """``(exists, value)`` for a slash pointer into an object's payload."""
+    current: Any = payload
+    for part in pointer.strip("/").split("/"):
+        if not isinstance(current, dict) or part not in current:
+            return False, None
+        current = current[part]
+    return True, current
+
+
+def pointer_root(pointer: str) -> str:
+    return pointer.strip("/").split("/")[0] if pointer.strip("/") else ""
+
+
+def valid_set_pointer(pointer: str) -> bool:
+    """A ``set`` may reach nested values under parameters/
+    native_references, or replace relations/evidence/status whole."""
+    root = pointer_root(pointer)
+    if root in _NESTED_ROOTS:
+        return True
+    return pointer.strip("/") in _WHOLE_ROOTS
+
+
+def evaluate_constraint(
+    payload: dict[str, Any], constraint: ConstraintSpec
+) -> bool:
+    """Deterministic verdict for one constraint against one payload."""
+    exists, value = resolve_pointer(payload, constraint.pointer)
+    if constraint.op == "exists":
+        return exists
+    if not exists:
+        return False
+    try:
+        if constraint.op == "==":
+            return bool(value == constraint.value)
+        if constraint.op == "!=":
+            return bool(value != constraint.value)
+        left, right = float(value), float(constraint.value)
+    except (TypeError, ValueError):
+        return False
+    if constraint.op == "<=":
+        return left <= right
+    if constraint.op == ">=":
+        return left >= right
+    if constraint.op == "<":
+        return left < right
+    return left > right

@@ -129,6 +129,13 @@ from ..orchestrator.state import (
     RunState,
     TaskContract,
 )
+from ..projectgraph import (
+    GraphProposal,
+    GraphScopes,
+    ProjectGraphStore,
+    TransactionKernel,
+    path_covered,
+)
 from ..providers.chatmodel import ChatModelRouter
 from ..providers.keyring import PROVIDERS, ModelKeyring
 from ..providers.vault import SecretVault
@@ -542,6 +549,13 @@ class GatewayApp:
         # runtime's own connection: the question OoLu asked must survive a
         # restart, and the yes must land whichever process serves it.
         self._growth_offers = GrowthOfferStore(durable.conn)
+        # The Global Project Graph: typed, revisioned truth, changed ONLY
+        # through the transaction kernel — every verdict lands in the
+        # hash-chained audit log (docs/industrial-vertical-plan.md, 1–2).
+        self._project_graph = ProjectGraphStore(durable.conn)
+        self._graph_kernel = TransactionKernel(
+            self._project_graph, audit=durable.audit.append
+        )
         self._google = google_signin
         self._identity_links = identity_links
         self._mail = mail
@@ -819,6 +833,16 @@ class GatewayApp:
         # This month's model usage for the caller's tenant, plus the plan's
         # included allowance when a hosted brain exists here.
         r.add("GET", "/v1/usage/model", self._model_usage_view)
+        # The Global Project Graph: proposals in, truth out.
+        r.add("POST", "/v1/graph/{project_id}/proposals", self._graph_propose)
+        r.add("GET", "/v1/graph/{project_id}/proposals", self._graph_ledger)
+        r.add("GET", "/v1/graph/{project_id}/objects", self._graph_objects)
+        r.add(
+            "GET",
+            "/v1/graph/{project_id}/objects/{object_id}",
+            self._graph_object,
+        )
+        r.add("POST", "/v1/graph/{project_id}/scopes", self._graph_grant)
         r.add("GET", "/v1/files", self._files_list)
         r.add("POST", "/v1/files", self._files_create)
         # The blob door: raw bytes in (no base64, no JSON envelope), raw
@@ -2984,6 +3008,160 @@ class GatewayApp:
             "created_at": file.created_at.isoformat(),
             "updated_at": file.updated_at.isoformat(),
         }
+
+    # ------------------------------------------------------------------ #
+    # The Global Project Graph: models propose, the kernel commits.       #
+    # ------------------------------------------------------------------ #
+    def _graph_propose(self, request, session, params) -> Response:
+        """Submit a structured proposal against the project's truth.
+
+        The first principal to touch a project id becomes its OWNER —
+        the same claim pattern as node onboarding. The submitting
+        principal is stamped from the SESSION, never taken from the
+        body: a proposal cannot speak in someone else's name. A
+        rejection is an honest verdict with reasons (409), never a
+        server error."""
+        project = self._project_graph.ensure_project(
+            params["project_id"],
+            tenant=session.tenant_id,
+            owner=session.principal_id,
+        )
+        if project is None:
+            raise GatewayError(404, "not_found", "no such project")
+        body = request.body or {}
+        try:
+            proposal = GraphProposal.model_validate(
+                {
+                    "reason": body.get("reason", ""),
+                    "patch": body.get("patch") or [],
+                    "expected_effects": body.get("expected_effects") or {},
+                    "confidence": body.get("confidence"),
+                    "node_id": body.get("node_id"),
+                    "project_id": params["project_id"],
+                    "owner": session.principal_id,
+                }
+            )
+        except ValidationError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        result = self._graph_kernel.process(proposal, tenant=session.tenant_id)
+        return json_response(
+            200 if result.status == "committed" else 409,
+            result.model_dump(mode="json"),
+        )
+
+    def _graph_read_filter(self, project: dict, project_id: str, session):
+        """The reader's territory: the owner sees all; everyone else
+        sees exactly what was granted (read ∪ write, forbidden wins) —
+        and a principal with no grant sees NOTHING. None = no access."""
+        if session.principal_id == project["owner"]:
+            return lambda path: True
+        scopes = self._project_graph.scopes_for(
+            project_id, session.principal_id
+        )
+        if scopes is None:
+            return None
+        readable = scopes.read_paths + scopes.write_paths
+        return lambda path: not path_covered(
+            path, scopes.forbidden_paths
+        ) and path_covered(path, readable)
+
+    def _graph_project_or_404(self, session, params) -> dict:
+        project = self._project_graph.project(
+            params["project_id"], tenant=session.tenant_id
+        )
+        if project is None:
+            raise GatewayError(404, "not_found", "no such project")
+        return project
+
+    def _graph_objects(self, request, session, params) -> Response:
+        project = self._graph_project_or_404(session, params)
+        visible = self._graph_read_filter(
+            project, params["project_id"], session
+        )
+        if visible is None:
+            raise GatewayError(
+                403, "forbidden", "no territory granted in this project"
+            )
+        items = [
+            obj.model_dump(mode="json")
+            for obj in self._project_graph.list(
+                params["project_id"], path=request.query.get("path", "")
+            )
+            if visible(obj.path)
+        ]
+        return json_response(200, {"items": items})
+
+    def _graph_object(self, request, session, params) -> Response:
+        project = self._graph_project_or_404(session, params)
+        visible = self._graph_read_filter(
+            project, params["project_id"], session
+        )
+        current = self._project_graph.get(
+            params["project_id"], params["object_id"]
+        )
+        if current is None or visible is None or not visible(current.path):
+            # Invisible and nonexistent answer alike: a 404 that never
+            # confirms what the asker may not see.
+            raise GatewayError(404, "not_found", "no such object")
+        wanted = request.query.get("revision")
+        if wanted is not None:
+            past = self._project_graph.at_revision(
+                params["project_id"], params["object_id"], int(wanted)
+            )
+            if past is None:
+                raise GatewayError(404, "not_found", "no such revision")
+            return json_response(200, past.model_dump(mode="json"))
+        return json_response(200, current.model_dump(mode="json"))
+
+    def _graph_ledger(self, request, session, params) -> Response:
+        """The proposal ledger — every verdict, either way. The owner's
+        view for now; scoped readers get their slice when critics land."""
+        project = self._graph_project_or_404(session, params)
+        if session.principal_id != project["owner"]:
+            raise GatewayError(
+                403, "forbidden", "only the project's owner reads the ledger"
+            )
+        entries = self._project_graph.proposals(params["project_id"])
+        return json_response(
+            200,
+            {
+                "items": [
+                    {
+                        "proposal": e["proposal"].model_dump(mode="json"),
+                        "result": e["result"].model_dump(mode="json"),
+                    }
+                    for e in entries
+                ]
+            },
+        )
+
+    def _graph_grant(self, request, session, params) -> Response:
+        """Territory is granted by the OWNER, in writing — the same
+        consent shape as the egress grants: explicit paths, forbidden
+        wins, and nothing at all until the grant exists."""
+        project = self._graph_project_or_404(session, params)
+        if session.principal_id != project["owner"]:
+            raise GatewayError(
+                403, "forbidden", "only the project's owner grants territory"
+            )
+        body = request.body or {}
+        try:
+            scopes = GraphScopes.model_validate(
+                {
+                    "principal": body.get("principal", ""),
+                    "read_paths": body.get("read_paths") or [],
+                    "write_paths": body.get("write_paths") or [],
+                    "forbidden_paths": body.get("forbidden_paths") or [],
+                }
+            )
+        except ValidationError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        if not scopes.principal.strip():
+            raise GatewayError(
+                400, "invalid_request", "whose territory? name a principal"
+            )
+        self._project_graph.grant_scopes(params["project_id"], scopes)
+        return json_response(200, scopes.model_dump(mode="json"))
 
     def _files_list(self, request, session, params) -> Response:
         store = self._require_files()
