@@ -4,6 +4,34 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The vertical gets physical: the CadQuery hand (step 5):
+
+- **A real geometry kernel joins the hands.** `skills/cad_adapter.py`
+  executes semantic CAD actions — never UI clicks — through
+  CadQuery/OpenCascade: `build` turns a compact feature list (box,
+  cylinder, hole, fillet, shell) into a B-rep solid and reports the
+  spec's CAD observation honestly (validity, exact volume, mass under
+  a declared density, center of mass, bounding box); `assemble` places
+  parts and MEASURES interference by boolean intersection — a shared
+  volume is a count, not a hope. STEP and STL exports land in the same
+  content-addressed store the file drawer's blobs live in,
+  self-verifying by sha256. Unbuildable features and a missing kernel
+  fail in words; the hand is deterministic, host-side (like http), and
+  the sandbox stays severed.
+- **The whole loop, proven on metal (well, B-rep aluminium).** The
+  evaluator judges the engineering hand like any other: a bracket
+  whose measured 31 g breaks its declared 10 g mass budget is demoted
+  by its own promise — naming only the broken half. And a marketplace
+  NODE whose action is a cad build runs end to end through the
+  contract path, its outcome carrying the kernel's measurements and
+  the postcondition verdict — the "lightweight domain adapter,
+  generalized as a node," demonstrated on real geometry.
+- **Opt-in weight.** CadQuery ships behind the new `cad` extra
+  (heavy binary wheels); the desktop hands pick it up automatically
+  wherever it is installed (`OOLU_CAD=off` to refuse), CI installs it
+  so the geometry tests run for real, and hosts without it skip the
+  hand silently.
+
 Critics: findings with evidence, and teeth (vertical step 4):
 
 - **Findings, not rewrites.** A critic files a finding through

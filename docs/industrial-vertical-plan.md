@@ -112,6 +112,12 @@ speculative:
    STEP/STL into the blob store, mass properties and geometry validity
    as postconditions, running in the severed sandbox. This is where
    "adapter generalizes as node" is proven on a real domain.
+   *(built: `skills/cad_adapter.py` — semantic build/assemble over
+   CadQuery/OpenCascade, measured observation per §19, real boolean
+   interference, STEP/STL into the content-addressed store, the `cad`
+   extra in CI, and a marketplace node forging a bracket end to end
+   through the contract path. Host-side deterministic hand, like http —
+   the sandbox stays severed.)*
 6. **Level B benchmark** — a subsystem-change task through
    graph → kernel → adapter → verification, comparing router tiers
    under identical tools and budgets, so the foundation-model question

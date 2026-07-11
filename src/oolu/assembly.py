@@ -319,6 +319,25 @@ def build_desktop_hands(
                 ],
             )
         )
+    if env.get("OOLU_CAD", "").strip().lower() not in {"off", "0", "false"}:
+        # The engineering hand: on wherever its geometry kernel is
+        # installed (the 'cad' extra), silent where it isn't. Exports
+        # land in the SAME content-addressed store the file drawer's
+        # blobs live in, so surfacing a part later is a row, not a copy.
+        try:
+            import cadquery  # noqa: F401, PLC0415 - availability probe
+
+            from .durable.artifacts import FilesystemArtifactStore
+            from .skills.cad_adapter import CadActionExecutor
+
+            executor = CadActionExecutor(
+                artifacts=FilesystemArtifactStore(
+                    Path(data_dir) / "file-blobs"
+                )
+            )
+            hands[executor.name] = executor
+        except ImportError:
+            pass
     return hands
 
 

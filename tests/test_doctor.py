@@ -196,7 +196,7 @@ def test_ci_lints_and_runs_the_suite():
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
     assert "python -m pytest" in ci
     assert "ruff check src tests" in ci
-    assert '".[serve,http,oidc,postgres]"' in ci  # the extras the suite needs
+    assert '".[serve,http,oidc,postgres,cad]"' in ci  # the extras the suite needs
 
 
 def test_readme_documents_the_doctor():
