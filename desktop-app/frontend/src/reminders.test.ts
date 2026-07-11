@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  REMIND_EVERY_MS,
+  REMIND_DORMANT_MS,
   REMIND_IDLE_MS,
   reminderDue,
   reminderText,
+  returnedFromAway,
 } from "./reminders";
 import type { RunSummary } from "./types";
 
@@ -26,7 +27,7 @@ describe("reminderDue", () => {
     ).toBe(false);
   });
 
-  it("fires once the idle window passes, then keeps its distance", () => {
+  it("fires ONCE per idle stretch — never again while it sits at the bottom", () => {
     const idle = { lastActivityAt: t0, lastReminderAt: 0 };
     expect(reminderDue(idle, t0 + REMIND_IDLE_MS)).toBe(true);
 
@@ -34,20 +35,54 @@ describe("reminderDue", () => {
       lastActivityAt: t0,
       lastReminderAt: t0 + REMIND_IDLE_MS,
     };
-    expect(reminderDue(reminded, t0 + REMIND_IDLE_MS + 60_000)).toBe(false);
-    expect(
-      reminderDue(reminded, t0 + REMIND_IDLE_MS + REMIND_EVERY_MS),
-    ).toBe(true);
+    // Five minutes later, an hour later: the bubble is already the last
+    // thing in the thread — repeating it is a nag storm, not presence.
+    expect(reminderDue(reminded, t0 + REMIND_IDLE_MS + 5 * 60_000)).toBe(
+      false,
+    );
+    expect(reminderDue(reminded, t0 + 60 * 60_000)).toBe(false);
   });
 
-  it("a new user message resets the idle clock", () => {
+  it("a new user message opens a fresh stretch", () => {
     const spoke = {
-      lastActivityAt: t0 + REMIND_EVERY_MS,
-      lastReminderAt: t0,
+      lastActivityAt: t0 + 10 * 60_000,
+      lastReminderAt: t0 + REMIND_IDLE_MS, // the previous stretch's bubble
     };
     expect(
-      reminderDue(spoke, t0 + REMIND_EVERY_MS + REMIND_IDLE_MS - 1),
+      reminderDue(spoke, t0 + 10 * 60_000 + REMIND_IDLE_MS - 1),
     ).toBe(false);
+    expect(reminderDue(spoke, t0 + 10 * 60_000 + REMIND_IDLE_MS)).toBe(true);
+  });
+
+  it("goes dormant after a long absence instead of posting into an empty room", () => {
+    // Nothing was ever posted this stretch (the work turned pending late),
+    // but the user has been gone past the dormancy line: wait for their
+    // return — that is what earns the next reminder.
+    const gone = { lastActivityAt: t0, lastReminderAt: 0 };
+    expect(reminderDue(gone, t0 + REMIND_DORMANT_MS)).toBe(false);
+    expect(reminderDue(gone, t0 + 3 * REMIND_DORMANT_MS)).toBe(false);
+  });
+});
+
+describe("returnedFromAway", () => {
+  const t0 = 1_000_000;
+
+  it("a short pause is not an absence", () => {
+    expect(
+      returnedFromAway(
+        { lastActivityAt: t0, lastReminderAt: 0 },
+        t0 + REMIND_DORMANT_MS - 1,
+      ),
+    ).toBe(false);
+  });
+
+  it("past the dormancy line, the return earns one fresh reminder", () => {
+    expect(
+      returnedFromAway(
+        { lastActivityAt: t0, lastReminderAt: 0 },
+        t0 + REMIND_DORMANT_MS,
+      ),
+    ).toBe(true);
   });
 });
 

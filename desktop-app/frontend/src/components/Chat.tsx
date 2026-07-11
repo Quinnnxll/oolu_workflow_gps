@@ -23,6 +23,7 @@ import {
   reminderDue,
   reminderRuns,
   reminderText,
+  returnedFromAway,
 } from "../reminders";
 import { Clarification } from "./Clarification";
 import { ForwardMenu } from "./ForwardMenu";
@@ -152,8 +153,10 @@ export function Chat() {
   }, []);
 
   // The conversation is endless, so unfinished work surfaces ITSELF: once
-  // the user has been idle a while, a reminder bubble lists what is still
-  // running and what waits on them — at a bounded cadence, never a storm.
+  // the user has been idle a while, ONE reminder bubble lists what is
+  // still running and what waits on them — it stays at the bottom of the
+  // thread, never repeated while it sits there. After a long absence the
+  // loop goes dormant; the user's return earns the next look (in send).
   const clockRef = useRef({ lastActivityAt: Date.now(), lastReminderAt: 0 });
   useEffect(() => {
     const t = setInterval(async () => {
@@ -244,6 +247,9 @@ export function Chat() {
     if (!text || busy) return;
     setDraft("");
     setBusy(true);
+    // Coming back from a long absence (the reminder loop went dormant)
+    // earns one fresh look at the open work — posted after the reply.
+    const wasAway = returnedFromAway(clockRef.current, Date.now());
     clockRef.current.lastActivityAt = Date.now();
     updateAvatarSignals({ userMood: deriveUserMood(text) });
     setThread((t) => [...t, { kind: "user", text }]);
@@ -275,6 +281,24 @@ export function Chat() {
         if (turn.run_id) next.push({ kind: "run", runId: turn.run_id });
         return next;
       });
+      // The welcome-back reminder: the user was gone long enough for the
+      // idle loop to go dormant, so their return is the moment the open
+      // work surfaces again — once, right after their answer.
+      if (wasAway) {
+        try {
+          const items = (await api.runs()).items;
+          const text = reminderText(items);
+          if (text) {
+            clockRef.current.lastReminderAt = Date.now();
+            setThread((t) => [
+              ...t,
+              { kind: "reminder", text, runs: reminderRuns(items) },
+            ]);
+          }
+        } catch {
+          /* the run list being unreachable is never worth a chat error */
+        }
+      }
     } catch (e) {
       setThread((t) => [
         ...t,

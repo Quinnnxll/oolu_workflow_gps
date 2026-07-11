@@ -370,7 +370,7 @@ describe("Chat", () => {
     expect(screen.queryByText(/First time here/)).toBeNull();
   });
 
-  it("reminds an idle user of pending work — once, at a bounded cadence", async () => {
+  it("reminds an idle user of pending work — once, never again and again", async () => {
     vi.useFakeTimers();
     try {
       routes["GET /v1/runs"] = {
@@ -392,16 +392,62 @@ describe("Chat", () => {
       expect(
         screen.getByText(/“Email Bob Numbers” \(needs a decision\)/),
       ).toBeTruthy();
-      // Reminders never enter the model-bound history and never repeat
-      // inside the five-minute window.
+      // The bubble sits at the bottom of the thread — repeating it while
+      // the user is still away is a nag storm, not presence. Five minutes
+      // on: still exactly one reminder.
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(60_000);
+        await vi.advanceTimersByTimeAsync(5 * 60_000);
+      });
+      expect(screen.getAllByText("reminder")).toHaveLength(1);
+      // And past the dormancy line the loop is asleep entirely.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(13 * 60_000);
       });
       expect(screen.getAllByText("reminder")).toHaveLength(1);
     } finally {
       vi.useRealTimers();
     }
-  });
+  }, 20_000);
+
+  it("the user's return after a long absence earns one fresh reminder", async () => {
+    vi.useFakeTimers();
+    try {
+      routes["GET /v1/runs"] = {
+        status: 200,
+        body: {
+          items: [
+            baseRun({ awaiting: "confirmation", phase: "confirmation" }),
+          ],
+        },
+      };
+      routes["POST /v1/chat"] = {
+        status: 200,
+        body: { reply: "Welcome back!", source: "model", run_id: null },
+      };
+      render(<Chat />);
+
+      // The stretch's one reminder posts, then the loop goes dormant
+      // while the user stays away past the fifteen-minute line.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(16 * 60_000);
+      });
+      expect(screen.getAllByText("reminder")).toHaveLength(1);
+
+      // The user comes back and speaks: the reply lands first, then ONE
+      // fresh look at the still-open work follows it.
+      fireEvent.change(screen.getByPlaceholderText("Message OoLu…"), {
+        target: { value: "hey, I'm back" },
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Send" }));
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(screen.getByText("Welcome back!")).toBeTruthy();
+      expect(screen.getAllByText("reminder")).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20_000);
 
   it("a reminder's arrow points straight back to the action window", async () => {
     routes["GET /v1/runs"] = {

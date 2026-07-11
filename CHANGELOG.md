@@ -4,6 +4,28 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+One reminder, not a storm — and the return earns the next one:
+
+- **The reminder posts once per idle stretch.** The chat's pending-work
+  reminder used to repeat every five minutes for as long as the user was
+  away — a nag storm into an empty room. Now the one bubble posts after
+  two idle minutes and, while it sits at the bottom of the thread
+  unanswered, it is never repeated: saying it again adds nothing.
+- **Fifteen minutes of absence puts the loop to sleep.** Past the
+  dormancy line the user is not "about to look", so the reminder loop
+  pauses entirely instead of reminding nobody — even when work turns
+  pending while they're gone.
+- **Coming back earns one fresh look.** The user's next message after a
+  long absence is the event that surfaces the open work again: the reply
+  lands first, then a single welcome-back reminder lists what still
+  waits on them and what is still running — with the same jump-arrows
+  straight back to each task's action window.
+- Tests: one reminder per stretch (five minutes on, still one), dormancy
+  past the line (nothing posted into the empty room), a new message
+  opening a fresh stretch, and the welcome-back reminder following the
+  reply exactly once. 191 vitest green; shell rebuilt; entire backend
+  suite green (1082 passed).
+
 Substance over names, and verification that actually happens:
 
 - **Search reads what the node DOES.** Contributing a node now derives
