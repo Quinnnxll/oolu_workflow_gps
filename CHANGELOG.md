@@ -4,6 +4,40 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Gated network egress: a node reaches only the hosts its human granted:
+
+- **Consent on the account, not in code.** Every node account carries
+  `network_hosts` — the exact public hosts its HTTP actions may reach,
+  given and withdrawable by the humans who answer for the node through
+  the same account door as status and admin (`POST
+  /v1/work/nodes/{id}/account`). Bare hostnames only, at most 8:
+  URLs, ports, wildcards, IP literals, and localhost are refused in
+  words — the machine's own network is never grantable. Subdomains of
+  a granted host are covered, matching the machine allowlist's
+  semantics.
+- **Stamped at execution, enforced on every hop.** When a contract is
+  prepared to run, each REGISTERED child's http actions get the owning
+  node's grant stamped on (held contracts are stamped at approval
+  time, so a run honors the consent of the moment it is authorized —
+  not the moment it was submitted). The host-side HTTP executor — the
+  honest enforcement point while the sandbox stays severed — checks
+  the grant on the first request and on every redirect: a granted URL
+  that bounces toward an ungranted host dies at the bounce, exactly
+  like the SSRF guard. An empty grant fails closed — a registered node
+  reaches NOTHING until someone consents. Ad-hoc actions a user
+  submits directly stay governed by the machine policy alone.
+- **A place to say yes.** The Work node thread gains a "Network
+  access" desk: the granted hosts listed with a Withdraw button each,
+  one input to grant the next — visible only to an onboarded node's
+  humans. `docs/THREAT_MODEL.md` gains the "Node network egress"
+  section spelling out the wall.
+- **Proven at every layer.** Executor tests (granted host + subdomain
+  pass, ungranted blocked before the network, empty grant fails
+  closed, redirect re-checked), grant validation refusals, stamping
+  (registered children marked, ad-hoc spared, compile untouched), and
+  the whole wall end to end: contribute an http node, run blocked in
+  words, consent through the desk, run green, withdraw, blocked again.
+
 The 1 MB ceiling breaks: blob-backed files, raw in and raw out:
 
 - **Two shapes, one drawer.** Inline files (documents, sheets, small

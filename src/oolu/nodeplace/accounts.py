@@ -21,6 +21,54 @@ from pydantic import BaseModel, ConfigDict, Field
 AUTHORITY_MIN = 1
 AUTHORITY_MAX = 5
 
+# A node's egress grant names at most this many hosts — a grant is a
+# short, reviewable list, never a mirror of the internet.
+MAX_NETWORK_HOSTS = 8
+
+
+def normalize_network_hosts(hosts: object) -> tuple[str, ...]:
+    """A node's egress grant in canonical form: bare lowercase hostnames.
+
+    Refused in words: schemes/paths (a grant names a HOST, not a URL),
+    IP literals and localhost (the SSRF guard's territory — a grant must
+    never be a tunnel into the machine's own network), wildcards, and
+    silly lengths. Subdomains of a granted host are implicitly covered,
+    matching the executor's semantics."""
+    if hosts is None:
+        return ()
+    if not isinstance(hosts, (list, tuple)):
+        raise ValueError("network hosts must be a list of hostnames")
+    cleaned: list[str] = []
+    for raw in hosts:
+        host = str(raw).strip().lower()
+        if not host:
+            continue
+        if "://" in host or "/" in host or ":" in host or " " in host:
+            raise ValueError(
+                f"'{host}' is not a bare hostname — grants name hosts, "
+                "not URLs or ports"
+            )
+        if "*" in host:
+            raise ValueError(
+                "wildcards are not grants — name the host; subdomains of "
+                "a granted host are already covered"
+            )
+        if host == "localhost" or host.replace(".", "").isdigit():
+            raise ValueError(
+                f"'{host}' points at an address, not a public name — "
+                "the machine's own network is never grantable"
+            )
+        if "." not in host or len(host) > 253:
+            raise ValueError(f"'{host}' is not a valid public hostname")
+        if host not in cleaned:
+            cleaned.append(host)
+    if len(cleaned) > MAX_NETWORK_HOSTS:
+        raise ValueError(
+            f"a grant names at most {MAX_NETWORK_HOSTS} hosts — a short, "
+            "reviewable list, never a mirror of the internet"
+        )
+    return tuple(cleaned)
+
 
 class NodeStatus(str, Enum):
     LIVE = "live"
@@ -60,6 +108,11 @@ class NodeAccount(BaseModel):
     supernode_id: str | None = None
     # New nodes are not live until verified; errors demote explicitly.
     status: NodeStatus = NodeStatus.NEEDS_VERIFICATION
+    # The node's egress CONSENT: the exact public hosts its http actions
+    # may reach, granted (and withdrawable) by the responsible human.
+    # Empty = no egress at all for this node — fail closed. Operational
+    # like status, not fixed at creation: consent can change its mind.
+    network_hosts: tuple[str, ...] = ()
     # An audit node never runs unattended: every request is held until a
     # human commits it. FIXED AT CREATION — a node cannot quietly shed
     # its audit regime later.

@@ -22,7 +22,12 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .accounts import NodeAccount, NodeAccountStore, NodeStatus
+from .accounts import (
+    NodeAccount,
+    NodeAccountStore,
+    NodeStatus,
+    normalize_network_hosts,
+)
 from .errors import ContributionError, OwnershipError
 
 
@@ -328,13 +333,17 @@ class WorkDesk:
         tenant: str,
         status: str | None = None,
         admin: str | None = None,
+        network_hosts: list[str] | tuple[str, ...] | None = None,
     ) -> NodeAccount:
-        """The mutable slice of an account: status and admin. NOTHING else.
+        """The mutable slice of an account: status, admin, and the egress
+        grant. NOTHING else.
 
         Authority level, Supernode membership, audit, and auto-growing were
         all fixed at creation — for everyone, the Supernode's humans
         included — and are refused here by construction: this method simply
-        has no parameters for them."""
+        has no parameters for them. The egress grant IS mutable because it
+        is consent — given and withdrawable by the same humans who answer
+        for the node."""
         node = self._registry.get_node(node_id)
         if node is None or node.tenant_id != tenant:
             raise ContributionError(f"no node '{node_id}'")
@@ -352,6 +361,11 @@ class WorkDesk:
             update={
                 "status": current.status if status is None else NodeStatus(status),
                 "admin": current.admin if admin is None else (admin or None),
+                "network_hosts": (
+                    current.network_hosts
+                    if network_hosts is None
+                    else normalize_network_hosts(network_hosts)
+                ),
                 "updated_at": datetime.now(UTC),
             }
         )
@@ -447,6 +461,26 @@ class WorkDesk:
             if account is not None and not account.allow_autodev_data:
                 blocked.add(version_id)
         return blocked
+
+    def network_grants(self, version_ids: list[str]) -> dict[str, tuple[str, ...]]:
+        """Each REGISTERED version's egress consent, keyed by version id.
+
+        A version whose node has an account maps to that account's granted
+        hosts; registered but never onboarded maps to ``()`` — published
+        code nobody answers for gets no egress until someone does. Versions
+        the registry does not know are OMITTED, not defaulted: an ad-hoc
+        child is the submitter's own request, and the stamping step leaves
+        it to the machine policy."""
+        grants: dict[str, tuple[str, ...]] = {}
+        for version_id in version_ids:
+            version = self._registry.get_version(version_id)
+            if version is None:
+                continue
+            account = self._accounts.get(version.node_id)
+            grants[version_id] = (
+                account.network_hosts if account is not None else ()
+            )
+        return grants
 
     def audit_holds_for(self, version_ids: list[str]) -> list[str]:
         """Which of these versions belong to audit-mode nodes — the reasons

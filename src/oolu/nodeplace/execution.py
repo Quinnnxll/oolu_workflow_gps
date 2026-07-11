@@ -17,7 +17,7 @@ invariant intact on every direct path.
 
 from __future__ import annotations
 
-from typing import NamedTuple
+from typing import Mapping, NamedTuple
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -114,6 +114,55 @@ def compile_runnable(contract: NodeContract) -> CompiledContract:
             "orchestrator flow so approval can be granted"
         )
     return compiled
+
+
+def stamp_egress_grants(
+    contract: NodeContract,
+    compiled: CompiledContract,
+    grants: Mapping[str, tuple[str, ...]],
+) -> CompiledContract:
+    """Stamp each node-owned http action with its node's egress grant.
+
+    ``grants`` maps a child's version id to the owning node's consented
+    hosts (``WorkDesk.network_grants``) — REGISTERED nodes only. A child
+    present in ``grants`` gets ``_egress_hosts`` stamped onto every http
+    action it contributed, even when the grant is empty: the executor
+    fails an empty grant closed, so a registered node reaches nothing
+    until its responsible human consents. Children absent from ``grants``
+    (ad-hoc, unregistered) stay unstamped — they are the submitter's own
+    direct request, governed by the machine policy alone.
+
+    Call this at EXECUTION time, not hold time: consent is withdrawable,
+    so a held contract must run under the grants of the moment it is
+    approved, not the moment it was submitted."""
+    children = (
+        contract.body.nodes if isinstance(contract.body, SubgraphBody) else [contract]
+    )
+    id_by_name = {child.name: child.id for child in children}
+    stamped: list = []
+    changed = False
+    for item in compiled.blueprint.actions:
+        action = item.action
+        owner = compiled.owners.get(action.id)
+        version_id = id_by_name.get(owner or "")
+        if action.adapter == "http" and version_id in grants:
+            action = action.model_copy(
+                update={
+                    "parameters": {
+                        **action.parameters,
+                        "_egress_hosts": list(grants[version_id]),
+                    }
+                }
+            )
+            item = item.model_copy(update={"action": action})
+            changed = True
+        stamped.append(item)
+    if not changed:
+        return compiled
+    return CompiledContract(
+        blueprint=compiled.blueprint.model_copy(update={"actions": stamped}),
+        owners=compiled.owners,
+    )
 
 
 class ContractEstimate(NamedTuple):

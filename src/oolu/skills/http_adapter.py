@@ -76,6 +76,13 @@ def _addresses_are_public(host: str, resolver: Callable[[str], list[str]]) -> bo
     return True
 
 
+def _grant_allows(host: str, grant: frozenset[str]) -> bool:
+    """Exact host or a subdomain of a granted host — the same semantics as
+    the machine allowlist, so the two walls read alike."""
+    host = host.lower()
+    return any(host == g or host.endswith("." + g) for g in grant)
+
+
 def _default_resolver(host: str) -> list[str]:
     return [info[4][0] for info in socket.getaddrinfo(host, None)]
 
@@ -126,9 +133,22 @@ class HttpActionExecutor:
             str(k): str(v)
             for k, v in (action.parameters.get("headers") or {}).items()
         }
+        # The NODE's egress grant, stamped onto the action at compile time.
+        # Key present = consent applies: only the granted hosts pass, on
+        # EVERY hop; an empty grant means the node was given no egress at
+        # all — fail closed. Key absent = a plain (non-node) action: the
+        # machine policy alone governs, as before.
+        grant: frozenset[str] | None = None
+        if "_egress_hosts" in action.parameters:
+            raw = action.parameters.get("_egress_hosts") or []
+            grant = frozenset(
+                str(h).strip().lower() for h in raw if str(h).strip()
+            )
 
         try:
-            outcome = self._fetch(action, idempotency_key, url.strip(), headers)
+            outcome = self._fetch(
+                action, idempotency_key, url.strip(), headers, grant
+            )
         except Exception as exc:  # noqa: BLE001 - a dead network is a failed
             # action with a reason, never a crashed run.
             outcome = self._done(
@@ -138,8 +158,12 @@ class HttpActionExecutor:
         return outcome
 
     # ------------------------------------------------------------------ #
-    def _guard(self, url: str) -> str | None:
-        """The policy verdict for one URL. None = allowed, else the reason."""
+    def _guard(
+        self, url: str, grant: frozenset[str] | None = None
+    ) -> str | None:
+        """The policy verdict for one URL. None = allowed, else the reason.
+        ``grant`` is the owning NODE's consented host list: when present it
+        is a second wall inside the machine's — no grant, no egress."""
         parts = urlsplit(url)
         if parts.scheme not in ("http", "https"):
             return f"only http(s) URLs are allowed, not {parts.scheme!r}"
@@ -148,6 +172,16 @@ class HttpActionExecutor:
             return "the URL has no host"
         if not self._policy.host_allowed(host):
             return f"host {host!r} is not on this machine's allowlist"
+        if grant is not None:
+            if not grant:
+                return (
+                    "this node has no network grant — its responsible can "
+                    "grant named hosts on the node's account"
+                )
+            if not _grant_allows(host, grant):
+                return (
+                    f"host {host!r} is outside this node's granted hosts"
+                )
         if self._policy.allow_private:
             return None
         if not _addresses_are_public(host, self._resolver):
@@ -158,7 +192,12 @@ class HttpActionExecutor:
         return None
 
     def _fetch(
-        self, action: ActionEvent, key: str, url: str, headers: dict[str, str]
+        self,
+        action: ActionEvent,
+        key: str,
+        url: str,
+        headers: dict[str, str],
+        grant: frozenset[str] | None = None,
     ) -> ExecutionOutcome:
         import httpx
 
@@ -170,7 +209,9 @@ class HttpActionExecutor:
 
         current = url
         for _hop in range(_MAX_REDIRECTS + 1):
-            reason = self._guard(current)
+            # The grant rides every hop: a granted URL that redirects to an
+            # ungranted host dies at the bounce, same as the SSRF guard.
+            reason = self._guard(current, grant)
             if reason is not None:
                 return self._done(
                     action, key, ExecutionStatus.BLOCKED, error=reason

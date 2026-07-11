@@ -481,6 +481,23 @@ button.convo-group.toggle:hover {
   font-size: 12.5px;
 }
 
+/* Egress consent: the granted hosts list plus the one-line grant form. */
+.network-grant .grant-row {
+  display: flex;
+  gap: 6px;
+}
+
+.network-grant .grant-row input {
+  flex: 1;
+  min-width: 0;
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 5px 8px;
+  font-size: 13px;
+}
+
 .commit-row .row {
   display: flex;
   gap: 6px;

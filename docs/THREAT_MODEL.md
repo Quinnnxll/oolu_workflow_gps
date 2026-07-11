@@ -18,6 +18,10 @@ Containers reduce exposure but are not a perfect security boundary. Images shoul
 
 Dependency installation may temporarily require network access. Synthesized code must run only after that access is severed. Operators should verify enforcement outside the process itself and deny access to metadata services, local networks, and control-plane endpoints.
 
+## Node network egress
+
+The sandbox stays severed; when a node needs the web it goes through the host-side HTTP executor, which is the honest enforcement point. Every registered node carries an egress grant on its account (`network_hosts`): the exact public hosts its HTTP actions may reach, given — and withdrawable — by the humans responsible for the node. The grant is stamped onto the node's actions when a contract is prepared for execution (held contracts are stamped at approval time, so a run always honors current consent) and enforced on every redirect hop, inside the machine-level allowlist and the always-on SSRF guard. An empty grant fails closed: a registered node reaches nothing until someone consents. Grants name bare public hostnames only — never URLs, ports, wildcards, IP literals, or localhost — and are capped at a short, reviewable list. Ad-hoc actions a user submits directly remain governed by the machine policy alone; the grant wall is for code that answers to someone else.
+
 ## Cache poisoning
 
 A successful run is not proof that a script is benign for every equivalent-looking task. Cache keys include intent, engine and cache-schema versions, prompt policy, routing models, backend identity, and package index. Cached scripts are bypassed after two recorded failures. Local database permissions, provenance, integrity checks, inspection, expiry, and revocation should be strengthened before shared caches are introduced.

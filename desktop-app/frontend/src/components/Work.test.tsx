@@ -346,6 +346,41 @@ describe("NodeThread", () => {
     expect(screen.getByText("run run12345")).toBeTruthy();
   });
 
+  it("egress consent: grant a host, see it listed, withdraw it again", async () => {
+    routes["GET /v1/work/nodes/n1/activity"] = {
+      status: 200,
+      body: { items: [] },
+    };
+    routes["POST /v1/work/nodes/n1/account"] = {
+      status: 200,
+      body: { ...workNode().account, network_hosts: ["api.example.com"] },
+    };
+    render(<NodeThread node={workNode()} allNodes={[workNode()]} />);
+
+    // Fail closed is spoken, not implied: no grant means no web at all.
+    expect(await screen.findByText("Network access")).toBeTruthy();
+    expect(screen.getByText(/No hosts granted/)).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Host to grant"), {
+      target: { value: "API.example.com" },
+    });
+    fireEvent.click(screen.getByText("Grant host"));
+
+    expect(await screen.findByText("api.example.com")).toBeTruthy();
+    const post = calls.find(
+      (c) => c.method === "POST" && c.path === "/v1/work/nodes/n1/account",
+    );
+    // Lowercased, and the body carries ONLY the grant — never the regime.
+    expect(post?.body).toEqual({ network_hosts: ["api.example.com"] });
+
+    routes["POST /v1/work/nodes/n1/account"] = {
+      status: 200,
+      body: { ...workNode().account, network_hosts: [] },
+    };
+    fireEvent.click(screen.getByText("Withdraw"));
+    expect(await screen.findByText(/No hosts granted/)).toBeTruthy();
+  });
+
   it("the regime is one concise tag — silent about what the node isn't", async () => {
     routes["GET /v1/work/nodes/n1/activity"] = {
       status: 200,

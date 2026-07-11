@@ -109,6 +109,7 @@ from ..nodeplace import (
     preview_assembly,
     reserved_operations,
     reward_multiplier,
+    stamp_egress_grants,
     utility,
 )
 from ..orchestrator import (
@@ -3066,6 +3067,10 @@ class GatewayApp:
                     tenant=session.tenant_id,
                     status=body.get("status"),
                     admin=body.get("admin"),
+                    # The egress CONSENT: the exact hosts this node's http
+                    # actions may reach — given and withdrawable by the
+                    # humans who answer for the node, validated hard.
+                    network_hosts=body.get("network_hosts"),
                 )
         except OwnershipError as exc:
             raise GatewayError(403, "forbidden", str(exc)) from exc
@@ -3852,6 +3857,14 @@ class GatewayApp:
             trace_exclude = frozenset(
                 c.name for c in children if c.id in blocked
             )
+            # Each registered child's http actions carry that node's egress
+            # CONSENT into the executor — stamped at execution time, so the
+            # run honors the grants of this moment, not of compile time.
+            compiled = stamp_egress_grants(
+                contract,
+                compiled,
+                self._desk.network_grants([c.id for c in children]),
+            )
 
         def submit() -> dict:
             result = execute_contract(
@@ -4083,6 +4096,20 @@ class GatewayApp:
             raise GatewayError(402, "budget_exceeded", str(exc)) from exc
         except ReviewRequiredError as exc:
             raise GatewayError(409, "review_required", str(exc)) from exc
+        if self._desk is not None:
+            # Consent is withdrawable while a contract sits held, so the
+            # egress grants are stamped from the accounts of THIS moment —
+            # the approver authorizes a run under current consent.
+            members = (
+                parsed.body.nodes
+                if isinstance(parsed.body, SubgraphBody)
+                else [parsed]
+            )
+            compiled = stamp_egress_grants(
+                parsed,
+                compiled,
+                self._desk.network_grants([c.id for c in members]),
+            )
         result = execute_contract(
             parsed,
             compiled,

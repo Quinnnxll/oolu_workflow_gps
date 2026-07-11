@@ -4,6 +4,7 @@ import type {
   HoldItem,
   KycApplication,
   KycView,
+  NodeAccountView,
   NodeRunSteps,
   WorkNode,
 } from "../api";
@@ -547,6 +548,12 @@ export function NodeThread({
         </button>
       </div>
 
+      {/* Egress consent lives with the rest of the human desk: what this
+          node may reach on the web, granted and withdrawable here. */}
+      {tab === "activity" && account.responsible && (
+        <NetworkGrant nodeId={node.node_id} account={account} />
+      )}
+
       {tab === "interact" && <NodeInteract node={node} />}
       {tab === "files" && <FilesPane nodeId={node.node_id} />}
 
@@ -596,6 +603,71 @@ export function NodeThread({
           : "No one answers for this node yet — it gets its responsible " +
             "when the right person onboards with the node id."}
       </p>
+    </div>
+  );
+}
+
+// ---- the node's egress consent: exact hosts, given and withdrawable -------
+function NetworkGrant({
+  nodeId,
+  account,
+}: {
+  nodeId: string;
+  account: NodeAccountView;
+}) {
+  // The grant answers to the server; local state tracks the last account
+  // the server returned, so a save updates the list without a full reload.
+  const [hosts, setHosts] = useState<string[]>(account.network_hosts ?? []);
+  const [draft, setDraft] = useState("");
+  const [error, setError] = useState("");
+
+  async function save(next: string[]) {
+    setError("");
+    try {
+      const saved = await api.workAccount(nodeId, { network_hosts: next });
+      setHosts(saved.network_hosts ?? []);
+      setDraft("");
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  return (
+    <div className="commits network-grant">
+      <div className="convo-group">Network access</div>
+      {hosts.length === 0 && (
+        <div className="muted">
+          No hosts granted — this node cannot reach the web at all until you
+          name the exact hosts it may fetch from.
+        </div>
+      )}
+      {hosts.map((h) => (
+        <div key={h} className="commit-row">
+          <span>{h}</span>
+          <button onClick={() => void save(hosts.filter((x) => x !== h))}>
+            Withdraw
+          </button>
+        </div>
+      ))}
+      <form
+        className="grant-row"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const host = draft.trim().toLowerCase();
+          if (host && !hosts.includes(host)) void save([...hosts, host]);
+        }}
+      >
+        <input
+          aria-label="Host to grant"
+          placeholder="api.example.com"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+        />
+        <button type="submit" disabled={!draft.trim()}>
+          Grant host
+        </button>
+      </form>
+      {error ? <div className="error">{error}</div> : null}
     </div>
   );
 }

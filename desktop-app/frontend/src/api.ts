@@ -568,6 +568,10 @@ export interface NodeAccountView {
   status: string;
   audit_mode: boolean;
   allow_autodev_data: boolean;
+  // The node's egress CONSENT: the exact public hosts its web requests may
+  // reach. Empty = no network at all — granted, and withdrawable, by the
+  // humans who answer for the node.
+  network_hosts?: string[];
 }
 
 // The regime fixed at creation — audit, auto-growing, supernode-ness and
@@ -589,6 +593,8 @@ export interface NodeAccountCreate {
 export interface NodeAccountPatch {
   admin: string;
   status: string;
+  // Replaces the whole egress grant — bare hostnames only, at most 8.
+  network_hosts: string[];
 }
 
 export interface WorkNode {

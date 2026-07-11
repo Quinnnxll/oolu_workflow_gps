@@ -43,6 +43,7 @@ from .execution import (
     estimate_contract_gross,
     execute_contract,
     reserved_operations,
+    stamp_egress_grants,
 )
 from .holds import PendingContractRecord, PendingContractStore
 from .hygiene import (
@@ -233,5 +234,6 @@ __all__ = [
     "reward_multiplier",
     "sanitize_skill",
     "similarity",
+    "stamp_egress_grants",
     "utility",
 ]
