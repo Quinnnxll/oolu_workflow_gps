@@ -4,6 +4,35 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Semantic goal dedup: the twin-node leak closes, reuse offered first:
+
+- **A twin is called a twin.** Node identity used to hang on the exact
+  goal sentence, so "normalize invoice csvs" and "normalize invoice csv
+  files" minted two nodes with split histories. `naming.goal_similarity`
+  now reads two sentences AS GOALS — token overlap over the stopword-
+  filtered content words catches rewordings, character trigrams catch
+  morphology ('csvs' vs 'csv files') — and at `NEAR_GOAL_SIMILARITY`
+  the same work said twice is one goal.
+- **Reuse first, always asked.** When a chat task fails for want of a
+  function and a node already answers for NEARLY that goal, the growth
+  trigger now offers to RUN that node — "the execution lands in its one
+  log instead of minting a twin" — never to build. A "yes" routes the
+  run through the existing node's own function; a "no" means different
+  work, and rolls into the plain build offer with the twin guard stood
+  down (the user answered it). Nothing reroutes silently: the guard
+  only ever asks.
+- **The build door names the near-match.** Building through the
+  interact window (or any consented build) refuses a near-identical
+  goal in words — which node already answers, built for what sentence,
+  and how to proceed: run that goal, or say this one more distinctly.
+  `allow_twin` exists solely for the user's explicit "this is
+  different work" answer.
+- **Tested at both layers.** Similarity thresholds (twins caught,
+  different work kept apart, politeness words never split a goal) plus
+  the full conversation: paraphrase → reuse offer → yes runs the
+  existing node and mints nothing; no → distinct-build offer → yes
+  mints the second node; and the build door's refusal + override.
+
 Gated network egress: a node reaches only the hosts its human granted:
 
 - **Consent on the account, not in code.** Every node account carries

@@ -7,7 +7,13 @@ description. Explicit names are always honored verbatim.
 
 from __future__ import annotations
 
-from oolu.naming import concise_name, keyword_slug, keywords
+from oolu.naming import (
+    NEAR_GOAL_SIMILARITY,
+    concise_name,
+    goal_similarity,
+    keyword_slug,
+    keywords,
+)
 
 
 def test_keywords_keep_order_drop_stopwords_and_duplicates():
@@ -35,6 +41,39 @@ def test_all_stopwords_falls_back_to_the_trimmed_text():
     assert concise_name("do it") == "do it"
     assert concise_name("") == ""
     assert keyword_slug("do it for me") == ""
+
+
+def test_goal_similarity_calls_a_twin_a_twin():
+    # The flagship leak: plural/wording drift over the SAME work.
+    assert (
+        goal_similarity(
+            "normalize invoice csvs", "normalize invoice csv files"
+        )
+        >= NEAR_GOAL_SIMILARITY
+    )
+    # Politeness and glue words never split a goal in two.
+    assert (
+        goal_similarity(
+            "please normalize the invoice csvs", "normalize invoice csvs"
+        )
+        == 1.0
+    )
+    assert goal_similarity("same goal", "same goal") == 1.0
+
+
+def test_goal_similarity_keeps_different_work_apart():
+    assert (
+        goal_similarity("normalize invoice csvs", "email weekly report")
+        < NEAR_GOAL_SIMILARITY
+    )
+    assert (
+        goal_similarity(
+            "tidy up my invoice files", "book flights to nairobi"
+        )
+        < NEAR_GOAL_SIMILARITY
+    )
+    assert goal_similarity("", "normalize invoice csvs") < NEAR_GOAL_SIMILARITY
+    assert goal_similarity("", "") == 1.0
 
 
 def test_learned_skill_without_a_name_gets_a_keyword_identity(tmp_path):

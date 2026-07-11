@@ -1166,6 +1166,24 @@ GROWTH_OFFER = (
     "it. Say “no” to leave things as they are."
 )
 
+# The reuse-first twin guard: when a node already answers for NEARLY this
+# goal (the same work, said differently), the offer is to run THAT node —
+# one node, one history — never to silently mint a twin. A "no" is
+# answered with the plain build offer, so genuinely different work still
+# gets its own node, with the user's consent.
+GROWTH_REUSE_OFFER = (
+    " You already have a node that answers for nearly this — “{title}”, "
+    "built for “{existing}”. Say “yes” and I'll run it for this, so the "
+    "execution lands in its one log instead of minting a twin. Say “no” "
+    "if this is different work."
+)
+
+GROWTH_BUILD_INSTEAD = (
+    "Okay — different work, then. Say “yes” and I'll build a separate node "
+    "for “{goal}” with its own written-and-verified function, then run it. "
+    "Say “no” to leave things as they are."
+)
+
 _CONSENT_YES = frozenset(
     {
         "yes",

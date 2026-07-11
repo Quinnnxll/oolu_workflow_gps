@@ -36,7 +36,9 @@ from ..billing import (
 from ..billing.launch import LaunchGuard
 from ..billing.subscription import SubscriptionError, SubscriptionService
 from ..chat import (
+    GROWTH_BUILD_INSTEAD,
     GROWTH_OFFER,
+    GROWTH_REUSE_OFFER,
     WEB_SEARCH_NOTE,
     ChatAssistant,
     ChatTurn,
@@ -74,7 +76,7 @@ from ..knowledge.traces import TraceStore
 from ..metering.attribution import AttributionStore
 from ..metering.models import MeteringEvent
 from ..metering.store import MeteringLedger
-from ..naming import concise_name
+from ..naming import NEAR_GOAL_SIMILARITY, concise_name, goal_similarity
 from ..nodeplace import (
     NODE_POLICY,
     NODE_POLICY_VERSION,
@@ -528,9 +530,15 @@ class GatewayApp:
         self._model_routers: dict[str, ChatModelRouter] = {}
         # Standing growth offers (the n8n-style trigger): a chat task that
         # failed for want of a working function asks, in the conversation,
-        # whether to build the missing node. One goal per person, and it
+        # whether to build the missing node. One offer per person, and it
         # stands for exactly one message — the very next turn answers it.
-        self._growth_offers: dict[tuple[str, str], str] = {}
+        # The value is (kind, goal, original_goal): "build" builds and runs
+        # ``goal``; "reuse" runs the near-match node's own ``goal`` (the
+        # twin guard's reuse-first door), keeping the user's
+        # ``original_goal`` so a "no" can roll into a distinct build offer;
+        # "build_distinct" is that follow-up — the user already said this
+        # is different work, so the twin guard steps aside.
+        self._growth_offers: dict[tuple[str, str], tuple[str, str, str]] = {}
         self._google = google_signin
         self._identity_links = identity_links
         self._mail = mail
@@ -978,13 +986,33 @@ class GatewayApp:
             # that one goal, one build. It stands for exactly one message;
             # any other reply withdraws it, because consent detached from
             # the question it answered is not consent.
-            offered_goal = self._growth_offers.pop(
+            offer = self._growth_offers.pop(
                 (session.tenant_id, session.principal_id), None
             )
-            if offered_goal is not None:
+            if offer is not None:
+                kind, offered_goal, original_goal = offer
                 answer = consent_answer(message)
-                if answer == "yes":
-                    turn, run = self._grow_node_and_run(session, offered_goal)
+                if answer == "yes" and kind == "reuse":
+                    turn, run = self._reuse_node_and_run(session, offered_goal)
+                elif answer == "yes":
+                    turn, run = self._grow_node_and_run(
+                        session,
+                        offered_goal,
+                        # The user already said this is different work: the
+                        # twin guard asked, was answered, and steps aside.
+                        allow_twin=kind == "build_distinct",
+                    )
+                elif answer == "no" and kind == "reuse":
+                    # Different work after all — the plain build offer
+                    # follows, standing for exactly one message like every
+                    # offer, and marked so the twin guard honors the answer.
+                    self._growth_offers[
+                        (session.tenant_id, session.principal_id)
+                    ] = ("build_distinct", original_goal, original_goal)
+                    turn = ChatTurn(
+                        say=GROWTH_BUILD_INSTEAD.format(goal=original_goal),
+                        source="tool",
+                    )
                 elif answer == "no":
                     turn = ChatTurn(
                         say="Okay — leaving it as is. Ask me again whenever "
@@ -1402,9 +1430,19 @@ class GatewayApp:
             and self._resolve_node_function(session, goal) is None
         )
         if can_offer:
-            self._growth_offers[(session.tenant_id, session.principal_id)] = (
-                goal
-            )
+            key = (session.tenant_id, session.principal_id)
+            # The twin guard, reuse first: when a node already answers for
+            # NEARLY this goal (same work, said differently), the offer is
+            # to run THAT node — one node, one history — and only a "no"
+            # rolls into the build offer. An exact match never reaches
+            # here (_resolve_node_function already gated the offer).
+            similar = self._find_similar_function_node(session, goal)
+            if similar is not None:
+                self._growth_offers[key] = ("reuse", similar["goal"], goal)
+                return say + GROWTH_REUSE_OFFER.format(
+                    title=similar["title"], existing=similar["goal"]
+                )
+            self._growth_offers[key] = ("build", goal, goal)
             return say + GROWTH_OFFER.format(goal=goal)
         hint = (
             (run.get("autobuild") or {}).get("hint")
@@ -1420,13 +1458,44 @@ class GatewayApp:
             say += f" If you want me to auto-build what's missing: {hint}"
         return say
 
-    def _grow_node_and_run(self, session, goal: str) -> tuple[ChatTurn, dict | None]:
+    def _reuse_node_and_run(
+        self, session, goal: str
+    ) -> tuple[ChatTurn, dict | None]:
+        """The reuse half of the twin guard: the user said yes to running
+        the node that already answers for (nearly) this — the run routes
+        through that node's OWN function, so the execution lands in its
+        one log instead of a twin's."""
+        function = self._resolve_node_function(session, goal)
+        title = function["title"] if function is not None else concise_name(goal)
+        try:
+            run = self._start_intent_run(session, goal)
+        except GatewayError as exc:
+            if exc.code != "cannot_execute":
+                raise
+            return (
+                ChatTurn(
+                    say=f"I couldn't run “{title}” — {exc.message}.",
+                    source="tool",
+                ),
+                None,
+            )
+        self._metrics["chat_runs"] += 1
+        say = (
+            f"Running “{title}” — the node that already answers for this; "
+            "the execution lands in its own log."
+        )
+        say = self._describe_run_failure(say, run, autobuild_hint=False)
+        return ChatTurn(say=say, source="tool"), run
+
+    def _grow_node_and_run(
+        self, session, goal: str, *, allow_twin: bool = False
+    ) -> tuple[ChatTurn, dict | None]:
         """The consented half of the growth trigger: the user said yes, so
         build the node — the SAME gated path as the interact window's build
         (executable-work judgement, the written function, the contribute
         screen) — and immediately re-fire the task, which now routes through
         the node's own function."""
-        result = self._build_function_node(session, goal)
+        result = self._build_function_node(session, goal, allow_twin=allow_twin)
         if result.startswith("error:"):
             return (
                 ChatTurn(
@@ -1476,7 +1545,13 @@ class GatewayApp:
         return ChatTurn(say=say, source="tool", actions=actions), run
 
     def _build_function_node(
-        self, session, goal: str, *, under_entry=None, under_node_id=None
+        self,
+        session,
+        goal: str,
+        *,
+        under_entry=None,
+        under_node_id=None,
+        allow_twin: bool = False,
     ) -> str:
         """Create ONE node born WITH its own execution function — the shared
         core behind the interact window's ``build`` and the chat's growth
@@ -1524,6 +1599,22 @@ class GatewayApp:
                 f"({existing.node_id[:8]}). No copy was made: running "
                 "it again lands every execution in its own log."
             )
+        if not allow_twin:
+            # The twin guard: near-identical goals ('csvs' vs 'csv files')
+            # would mint two nodes with split histories. The refusal names
+            # the node that already answers — the caller decides whether
+            # to reuse it or say the goal more distinctly. ``allow_twin``
+            # is the user's explicit "this is different work" answer.
+            similar = self._find_similar_function_node(session, goal)
+            if similar is not None:
+                return (
+                    "error: a node already answers for nearly this — "
+                    f"“{similar['title']}” ({similar['node_id'][:8]}), "
+                    f"built for “{similar['goal']}”. Running that goal "
+                    "lands every execution in its one log; if this is "
+                    "truly different work, say the goal more distinctly "
+                    "and I'll build it."
+                )
         author = self._node_function_author(session.tenant_id)
         if author is None:
             return (
@@ -1684,6 +1775,52 @@ class GatewayApp:
                 or f"node:{skill_id}"
             ),
         }
+
+    def _find_similar_function_node(self, session, goal: str) -> dict | None:
+        """The twin guard's lookup: the user's own function node whose goal
+        is the SAME work said differently, if one exists.
+
+        Exact goals are :meth:`_resolve_node_function`'s job — this finds
+        what an exact key can never see ('csvs' vs 'csv files'), by
+        ``goal_similarity`` against each function node's stored goal
+        sentence. A human-sized scan over one person's desk, never the
+        marketplace; best match at or above ``NEAR_GOAL_SIMILARITY`` wins."""
+        if self._nodeplace is None:
+            return None
+        exact_id = self._function_skill_id(session.tenant_id, goal)
+        try:
+            nodes = self._nodeplace.list_own_nodes(
+                noder_principal=session.principal_id,
+                tenant_id=session.tenant_id,
+            )
+        except Exception:  # noqa: BLE001 - the guard is best-effort
+            return None
+        best: tuple[float, dict] | None = None
+        for node in nodes:
+            if not node.skill_id.startswith("fn-") or node.skill_id == exact_id:
+                continue
+            version = self._nodeplace.latest_version(node.node_id)
+            if version is None:
+                continue
+            try:
+                skill = ReusableSkill.model_validate_json(
+                    version.sanitized_skill_json
+                )
+            except Exception:  # noqa: BLE001
+                continue
+            score = goal_similarity(goal, skill.description)
+            if score >= NEAR_GOAL_SIMILARITY and (
+                best is None or score > best[0]
+            ):
+                best = (
+                    score,
+                    {
+                        "node_id": node.node_id,
+                        "title": skill.name,
+                        "goal": skill.description,
+                    },
+                )
+        return best[1] if best is not None else None
 
     def _start_intent_run(self, session, intent: str, *, max_recovery: int = 1) -> dict:
         """Submit a plain intent as a run: the non-marketplace core of

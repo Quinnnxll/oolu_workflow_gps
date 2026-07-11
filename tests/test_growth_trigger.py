@@ -160,7 +160,7 @@ def test_a_stuck_task_becomes_an_offer_not_a_wall(tmp_path):
         assert GOAL in reply
         assert response.body["run_id"] is None
         # The offer stands, keyed to the person, holding the exact goal.
-        assert app._growth_offers[("t1", "user-1")] == GOAL
+        assert app._growth_offers[("t1", "user-1")] == ("build", GOAL, GOAL)
     finally:
         conn.close()
 
@@ -250,11 +250,122 @@ def test_the_offer_survives_only_in_the_main_conversation(tmp_path):
     try:
         _speak_work(app, [TASK_TURN, '{"say": "Hi there!", "task": null}'])
         _chat(app, ident, "please tidy up my invoice files")
-        assert app._growth_offers[("t1", "user-1")] == GOAL
+        assert app._growth_offers[("t1", "user-1")] == ("build", GOAL, GOAL)
         # Another person's yes answers nothing — the offer is keyed to
         # the person who was asked.
         other = _chat(app, ident, "yes", principal="user-2")
         assert "Built" not in other.body["reply"]
-        assert app._growth_offers[("t1", "user-1")] == GOAL
+        assert app._growth_offers[("t1", "user-1")] == ("build", GOAL, GOAL)
+    finally:
+        conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# The twin guard: near-identical goals reuse the node, never mint a copy.      #
+# --------------------------------------------------------------------------- #
+PARAPHRASE = "normalize invoice csvs"
+PARAPHRASE_TURN = '{"say": "On it!", "task": "' + PARAPHRASE + '"}'
+
+
+def _built_first_node(app, ident):
+    """Walk the plain growth flow once: the GOAL node exists afterwards."""
+    _chat(app, ident, "please tidy up my invoice files")
+    agreed = _chat(app, ident, "yes")
+    assert "Built a NEW node" in agreed.body["reply"]
+
+
+def test_a_paraphrase_offers_reuse_instead_of_a_twin(tmp_path):
+    app, conn, ident, desk, script_exec = _rig(tmp_path)
+    try:
+        _speak_work(app, [TASK_TURN, PARAPHRASE_TURN])
+        _built_first_node(app, ident)
+
+        # The SAME work, said differently: the exact key misses, but the
+        # twin guard finds the node and offers to REUSE it — not to build.
+        response = _chat(app, ident, "tidy the invoice csvs for me")
+        reply = response.body["reply"]
+        assert "answers for nearly this" in reply
+        assert "Normalize Invoice Csv Files" in reply
+        assert "grow that missing piece" not in reply
+        assert app._growth_offers[("t1", "user-1")] == (
+            "reuse",
+            GOAL,
+            PARAPHRASE,
+        )
+    finally:
+        conn.close()
+
+
+def test_yes_to_reuse_runs_the_existing_node_and_mints_nothing(tmp_path):
+    app, conn, ident, desk, script_exec = _rig(tmp_path)
+    try:
+        _speak_work(app, [TASK_TURN, PARAPHRASE_TURN])
+        _built_first_node(app, ident)
+        runs_before = len(script_exec.actions)
+        _chat(app, ident, "tidy the invoice csvs for me")
+
+        agreed = _chat(app, ident, "yes")
+        reply = agreed.body["reply"]
+        assert "already answers for this" in reply
+        assert agreed.body["run_id"] is not None
+        # The execution landed in the EXISTING node's log: the run executed
+        # ITS stored function, under ITS goal — one node, one history.
+        action = script_exec.actions[-1]
+        assert action.parameters["goal"] == GOAL
+        assert len(script_exec.actions) == runs_before + 1
+        # And nothing new was minted: the desk still holds exactly one node.
+        mine = desk.overview(principal="user-1", tenant="t1")
+        assert [e.title for e in mine] == ["Normalize Invoice Csv Files"]
+        assert app._growth_offers == {}
+    finally:
+        conn.close()
+
+
+def test_no_to_reuse_rolls_into_a_distinct_build_offer(tmp_path):
+    app, conn, ident, desk, script_exec = _rig(tmp_path)
+    try:
+        _speak_work(app, [TASK_TURN, PARAPHRASE_TURN])
+        _built_first_node(app, ident)
+        _chat(app, ident, "tidy the invoice csvs for me")
+
+        # "No" means this is different work — the plain build offer
+        # follows, marked so the twin guard honors the user's answer.
+        declined = _chat(app, ident, "no")
+        assert "different work" in declined.body["reply"]
+        assert PARAPHRASE in declined.body["reply"]
+        assert app._growth_offers[("t1", "user-1")] == (
+            "build_distinct",
+            PARAPHRASE,
+            PARAPHRASE,
+        )
+
+        # The consented build mints the SECOND node despite the near-match.
+        agreed = _chat(app, ident, "yes")
+        assert "Built a NEW node" in agreed.body["reply"]
+        mine = desk.overview(principal="user-1", tenant="t1")
+        assert len(mine) == 2
+        assert script_exec.actions[-1].parameters["goal"] == PARAPHRASE
+    finally:
+        conn.close()
+
+
+def test_the_build_door_refuses_a_twin_in_words(tmp_path):
+    from types import SimpleNamespace
+
+    app, conn, ident, desk, script_exec = _rig(tmp_path)
+    try:
+        _speak_work(app, [TASK_TURN])
+        _built_first_node(app, ident)
+        session = SimpleNamespace(tenant_id="t1", principal_id="user-1")
+
+        refusal = app._build_function_node(session, PARAPHRASE)
+        assert refusal.startswith("error:")
+        assert "answers for nearly this" in refusal
+        assert "Normalize Invoice Csv Files" in refusal
+        assert "more distinctly" in refusal
+        # The user's explicit "this is different work" opens the door.
+        built = app._build_function_node(session, PARAPHRASE, allow_twin=True)
+        assert "Built a NEW node" in built
+        assert len(desk.overview(principal="user-1", tenant="t1")) == 2
     finally:
         conn.close()
