@@ -725,7 +725,13 @@ def build_host_runtime(
     price_book = PriceBook(data / "prices.db")
     traces = TraceStore(data / "traces.db")
 
-    nodeplace_service = NodeplaceService(registry)
+    # Publish is gated on proof: at least one verified run (local runs
+    # through the node's own function count) before a listing can go
+    # active on the global nodeplace — a name is not a capability.
+    nodeplace_service = NodeplaceService(
+        registry,
+        verified=lambda version_id: stats.version_stats(version_id).successes > 0,
+    )
     if seed_handiwork_for:
         # The desktop's prebuilt hands, packaged as ONE visible node the
         # local user answers for. Idempotent — created on first launch.
@@ -834,6 +840,10 @@ def build_host_runtime(
         market=market,
         price_book=price_book,
         attribution=attribution,
+        # Verified-run evidence: a run through a node's own function lands
+        # here, so built nodes verify from LOCAL use — the door out of
+        # needs_verification that marketplace bindings alone never open.
+        metering=metering,
         trace_store=traces,
         # Contract runs get the same hands as the orchestrator — the
         # script executor included, so a node's OWN function (its script

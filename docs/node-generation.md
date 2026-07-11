@@ -176,7 +176,12 @@ needs an "and", split the node and let the subgraph compose them.
   the approval flow, and the safety gate reviews every contribution. The
   generator's duty is honesty in operations, not creative labeling.
 - **Every generated node starts as `needs_verification`.** Status becomes
-  `live` through verified runs, not through the generator's confidence.
+  `live` through verified runs, not through the generator's confidence —
+  and a COMPLETED run through the node's own function counts: the engine
+  records it as verification evidence and promotes the account. Publish
+  into the global nodeplace is gated on that proof, and a node with no
+  executable function inside can neither publish nor be a candidate — a
+  name is not a capability.
 - **Audit nodes** (`audit_mode`) never run unattended — every request is
   held for a manual commit. Generators never set this; responsibles do.
 - **Data consent** (`allow_autodev_data`): if the node the generator is

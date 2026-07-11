@@ -174,6 +174,21 @@ class WorkDesk:
     def account_for(self, node_id: str) -> NodeAccount | None:
         return self._accounts.get(node_id)
 
+    def mark_verified(self, node_id: str) -> NodeAccount | None:
+        """The verification door: a node whose own function completed a
+        real, audited run stops being 'needs_verification' and goes live.
+        ONLY that one transition — error and restricted states are never
+        silently healed by a passing run, and an already-live node is
+        left untouched."""
+        account = self._accounts.get(node_id)
+        if account is None or account.status is not NodeStatus.NEEDS_VERIFICATION:
+            return account
+        promoted = account.model_copy(
+            update={"status": NodeStatus.LIVE, "updated_at": datetime.now(UTC)}
+        )
+        self._accounts.upsert(promoted)
+        return promoted
+
     def create_account(
         self,
         node_id: str,

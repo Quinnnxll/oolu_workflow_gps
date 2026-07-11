@@ -101,6 +101,12 @@ class Listing(BaseModel):
     title: str
     summary: str
     tags: list[str] = Field(default_factory=list)
+    # What the node actually DOES, as tokens derived from its function at
+    # contribute time (adapter/operation words, the script's imports and
+    # definitions, the slot vocabulary) — never from its title. These join
+    # the search index, so discovery matches substance; a flattering name
+    # over an empty shell matches nothing the author didn't build.
+    capabilities: list[str] = Field(default_factory=list)
     # The slot vocabulary: what this node consumes and produces, in the same
     # typed terms the goal assembler plans over. Defaults are derived from
     # the contributed skill; noders may declare richer vocabularies.

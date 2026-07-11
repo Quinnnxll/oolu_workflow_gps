@@ -152,7 +152,9 @@ class RegistryStore:
                     listing.status.value,
                     listing.title,
                     listing.summary,
-                    json.dumps(listing.tags),
+                    # The search index: author tags AND function-derived
+                    # capabilities, so discovery matches what the node DOES.
+                    json.dumps(listing.tags + listing.capabilities),
                     listing.model_dump_json(),
                     listing.updated_at.isoformat(),
                 ),
@@ -168,7 +170,7 @@ class RegistryStore:
                     listing.status.value,
                     listing.title,
                     listing.summary,
-                    json.dumps(listing.tags),
+                    json.dumps(listing.tags + listing.capabilities),
                     listing.model_dump_json(),
                     listing.updated_at.isoformat(),
                     listing.listing_id,

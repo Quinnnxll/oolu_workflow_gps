@@ -72,6 +72,8 @@ from ..identity.sessions import default_assurance
 from ..identity.tokens import OidcValidator
 from ..knowledge.traces import TraceStore
 from ..metering.attribution import AttributionStore
+from ..metering.models import MeteringEvent
+from ..metering.store import MeteringLedger
 from ..nodeplace import (
     NODE_POLICY,
     NODE_POLICY_VERSION,
@@ -371,6 +373,10 @@ class GatewayApp:
         market: CandidateAssembler | None = None,
         price_book: PriceBook | None = None,
         attribution: AttributionStore | None = None,
+        metering: MeteringLedger | None = None,  # verified-run evidence:
+        # personal runs through a node's own function record here, so a
+        # built node can verify LOCALLY instead of waiting for a
+        # marketplace binding that personal use never creates
         contract_executors: dict[str, ActionExecutor] | None = None,
         trace_store: TraceStore | None = None,
         rng: random.Random | None = None,
@@ -430,6 +436,7 @@ class GatewayApp:
         self._market = market
         self._price_book = price_book
         self._attribution = attribution
+        self._metering = metering
         self._contract_runner = (
             DagRouteRunner(contract_executors) if contract_executors else None
         )
@@ -1398,6 +1405,19 @@ class GatewayApp:
                 "approve it on the task card."
             )
         say = self._describe_run_failure(say, run, autobuild_hint=False)
+        # The loop actually closes: a completed run through the node's own
+        # function IS its verification, and the account says so.
+        function = self._resolve_node_function(session, goal)
+        account = (
+            self._desk.account_for(function["node_id"])
+            if function is not None and self._desk is not None
+            else None
+        )
+        if account is not None and account.status.value == "live":
+            say += (
+                " That run also VERIFIED the node — it is live now, and you "
+                "can publish it to the nodeplace whenever you're ready."
+            )
         return ChatTurn(say=say, source="tool", actions=actions), run
 
     def _build_function_node(
@@ -1641,6 +1661,7 @@ class GatewayApp:
             # about this machine, not a server crash.
             raise GatewayError(422, "cannot_execute", str(exc)) from exc
         self._metrics["runs_submitted"] += 1
+        self._record_function_verification(state)
         return self._run_dict(state)
 
     def _submit_run(self, request, session, params) -> Response:
@@ -1699,6 +1720,7 @@ class GatewayApp:
                 # cannot execute is a 422 with the reason, not a 500.
                 raise GatewayError(422, "cannot_execute", str(exc)) from exc
             self._metrics["runs_submitted"] += 1
+            self._record_function_verification(state)
             result = self._run_dict(state)
             if entry is not None:
                 cleared = self._price_book.clear(
@@ -4557,9 +4579,54 @@ class GatewayApp:
     def _resume(self, run_id: str, session: Session, resume: ResumeInput) -> RunState:
         self._load(run_id, session)  # tenant guard before mutating
         try:
-            return self._durable.resume(run_id, resume)
+            state = self._durable.resume(run_id, resume)
         except OrchestratorError as exc:
             raise GatewayError(409, "conflict", str(exc)) from exc
+        # A resumed run (e.g. the human confirmed model-written code) may
+        # complete HERE — the verification evidence must not depend on
+        # which door the run finished behind.
+        self._record_function_verification(state)
+        return state
+
+    def _record_function_verification(self, state: RunState) -> None:
+        """A COMPLETED run through a node's own function IS a verified run.
+
+        The engine executed the node's stored code end to end — sandboxed,
+        audited, through the same pipeline as any run — so the node earns
+        real verification evidence from local use: a metering event keyed
+        to its version (idempotent per run), and the account's one honest
+        promotion, needs_verification -> live. This is the door out of
+        'stuck at needs-verification forever': marketplace bindings only
+        ever verified PAID runs, which personal nodes never get.
+
+        The event carries NO consumer principal (the deriver's no-binding
+        shape): a self-run proves the function works, but it must never
+        unlock rating your own node."""
+        if self._metering is None or self._nodeplace is None:
+            return
+        if state.phase is not Phase.COMPLETED:
+            return
+        function = (state.contract.metadata or {}).get("node_function")
+        if not isinstance(function, dict) or not function.get("node_id"):
+            return
+        node_id = str(function["node_id"])
+        version = self._nodeplace.latest_version(node_id)
+        if version is None:
+            return
+        records = self._durable.audit.records(run_id=state.run_id)
+        last = records[-1] if records else None
+        recorded = self._metering.record(
+            MeteringEvent(
+                idempotency_key=f"node-verify:{state.run_id}",
+                run_id=state.run_id,
+                version_id=version.version_id,
+                outcome="succeeded",
+                audit_seq=last.seq if last else 0,
+                occurred_at=last.at if last else datetime.now(UTC),
+            )
+        )
+        if recorded and self._desk is not None:
+            self._desk.mark_verified(node_id)
 
     def _run_dict(self, state: RunState) -> dict:
         return {

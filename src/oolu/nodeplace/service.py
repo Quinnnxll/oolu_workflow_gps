@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ast
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 from pydantic import BaseModel, ConfigDict
@@ -32,12 +34,81 @@ class ContributionResult(BaseModel):
     policy: PricingPolicy
 
 
+# Universal script plumbing carries no meaning about what a node does.
+_CAPABILITY_NOISE = frozenset({"_oolu_runtime", "emit_result", "emit_error", "print"})
+_CAPABILITY_CAP = 24
+
+
+def _script_tokens(script: str) -> set[str]:
+    """The function words INSIDE a script: imported modules, defined
+    functions, and called names — parsed, not guessed. An unparseable
+    script contributes nothing (honesty over reconstruction)."""
+    tokens: set[str] = set()
+    try:
+        tree = ast.parse(script)
+    except SyntaxError:
+        return tokens
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            tokens.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            tokens.add(node.module.split(".")[0])
+        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            tokens.add(node.name)
+        elif isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name):
+                tokens.add(func.id)
+            elif isinstance(func, ast.Attribute):
+                tokens.add(func.attr)
+    return {
+        token.lower()
+        for token in tokens
+        if token and token.lower() not in _CAPABILITY_NOISE
+    }
+
+
+def function_capabilities(
+    skill: ReusableSkill,
+    consumes: list[Slot] | None = None,
+    produces: list[Slot] | None = None,
+) -> list[str]:
+    """Searchable tokens for what a node actually DOES — derived from its
+    function, never from its title. Adapter/operation words, the script's
+    own imports/definitions/calls, and the slot vocabulary. Search matches
+    these alongside the name, so substance is findable and a flattering
+    name over an empty shell adds nothing to the index."""
+    tokens: set[str] = set()
+    for action in skill.actions:
+        tokens.add(f"fn:{action.adapter}")
+        if action.operation:
+            tokens.add(f"fn:{action.adapter}.{action.operation}")
+        script = str((action.parameters or {}).get("script") or "")
+        if script:
+            tokens.update(
+                f"fn:{word}" for word in sorted(_script_tokens(script))[:_CAPABILITY_CAP]
+            )
+    for slot in list(consumes or []) + list(produces or []):
+        tokens.add(f"io:{slot.name}")
+    return sorted(tokens)
+
+
 class NodeplaceService:
     def __init__(
-        self, store: RegistryStore, *, safety_gate: NodeSafetyGate | None = None
+        self,
+        store: RegistryStore,
+        *,
+        safety_gate: NodeSafetyGate | None = None,
+        # (version_id) -> bool: has this version at least one VERIFIED run?
+        # When wired, publish refuses an unverified version — the node must
+        # prove itself by execution (locally, in the sandbox) before it
+        # reaches the global nodeplace. None keeps publish ungated for
+        # installs without a verification source.
+        verified: Callable[[str], bool] | None = None,
     ) -> None:
         self._store = store
         self._safety = safety_gate or NodeSafetyGate()
+        self._verified = verified
 
     def contribute(
         self,
@@ -135,6 +206,9 @@ class NodeplaceService:
             title=title,
             summary=summary,
             tags=tags or [],
+            # Derived from the function itself, never author-supplied: the
+            # search index matches what the node DOES, not what it's called.
+            capabilities=function_capabilities(skill, consumes, produces),
             consumes=list(consumes),
             produces=list(produces),
             inputs=list(inputs or []),
@@ -189,6 +263,25 @@ class NodeplaceService:
             raise ContributionError("no such listing")
         self._assert_owns_version(listing.version_id, noder_principal, tenant_id)
         self._gate_version(listing.version_id)
+        # A name is not a capability: nothing reaches the global nodeplace
+        # without a real function inside...
+        version = self._store.get_version(listing.version_id)
+        assert version is not None  # _gate_version already resolved it
+        skill = ReusableSkill.model_validate_json(version.sanitized_skill_json)
+        if not skill.actions:
+            raise ContributionError(
+                "this node has no execution function yet — a name is not a "
+                "capability; give it its function, verify a run, then publish"
+            )
+        # ...and without having PROVED that function by execution: at least
+        # one verified run (a local run through the node's own function
+        # counts) before the online community can find it.
+        if self._verified is not None and not self._verified(listing.version_id):
+            raise ContributionError(
+                "publish needs verification first: run the node until its "
+                "own function completes a verified run — every verified "
+                "success also moves it from needs-verification toward live"
+            )
         active = listing.model_copy(
             update={"status": ListingStatus.ACTIVE, "updated_at": datetime.now(UTC)}
         )

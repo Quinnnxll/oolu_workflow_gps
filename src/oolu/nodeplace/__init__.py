@@ -118,7 +118,7 @@ from .rewards import (
 )
 from .safety import NodeSafetyGate, SafetyReport
 from .sanitize import sanitize_skill
-from .service import ContributionResult, NodeplaceService
+from .service import ContributionResult, NodeplaceService, function_capabilities
 from .store import RegistryStore
 
 __all__ = [
@@ -165,6 +165,7 @@ __all__ = [
     "NodeVersion",
     "NodeplaceError",
     "NodeplaceService",
+    "function_capabilities",
     "OwnershipError",
     "PayoutPreview",
     "NodeAccount",

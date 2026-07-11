@@ -4,6 +4,47 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Substance over names, and verification that actually happens:
+
+- **Search reads what the node DOES.** Contributing a node now derives
+  capability tokens from the function's own code — parsed, not guessed:
+  imported modules, defined functions, called names, adapter/operation
+  words, and the slot vocabulary — and stores them on the listing AND in
+  the search index. Discovery matches them alongside the title, so a
+  node is findable by `normalize_rows` or `csv` even when the author
+  named it something else — and a flattering name over an empty shell
+  adds nothing to the index. The node's semantic VALUE keeps accruing
+  the way it always did: verified runs, which rank above any wording.
+- **A name is not a capability.** A node with no executable function
+  inside is never a candidate — the assembler skips it for routes,
+  ranking, AND paid bindings even if its listing somehow went active —
+  and it cannot be published at all: publish now refuses an actionless
+  version in words.
+- **The verification dead-end is fixed.** Verified stats only ever came
+  from marketplace bindings, which personal runs never create — so every
+  built node sat at needs-verification forever, unpublishable and
+  unranked. Now a COMPLETED run through the node's own function IS a
+  verified run: the gateway records it in the metering ledger
+  (idempotent per run, keyed to the node's version) and promotes the
+  account needs_verification → live — one honest transition; error and
+  restricted states are never healed by a passing run. The event carries
+  NO consumer principal, so a self-run never unlocks rating your own
+  node. Runs that complete after a resume (the human confirming
+  model-written code) verify too.
+- **Publish is gated on proof.** A listing reaches the global nodeplace
+  only after at least one verified run — a local, sandboxed run through
+  the node's own function counts; that IS the safe test environment —
+  so nothing the online community can find is running on reputation it
+  never earned. The growth trigger's reply now closes the loop out
+  loud: "That run also VERIFIED the node — it is live now."
+- Tests: capabilities derived from code (never the name), discovery by
+  the function's own words, the empty-active listing excluded from
+  candidacy and paid binding, publish refusals (no function / no
+  verified run) and the door opening once proof exists, the full
+  build → run → verified → live → publishable loop at the gateway, and
+  mark_verified touching only needs_verification. Entire backend suite
+  green (1082 passed).
+
 A failure that asks, instead of a wall that repeats — and a model that
 knows it can search:
 

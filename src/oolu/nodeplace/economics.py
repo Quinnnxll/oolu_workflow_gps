@@ -261,6 +261,17 @@ class CandidateAssembler:
                 continue
             if self._restricted is not None and self._restricted(node.node_id):
                 continue  # restricted under the Node Policy: out of ranking
+            try:
+                skill = ReusableSkill.model_validate_json(
+                    version.sanitized_skill_json
+                )
+            except ValueError:
+                continue
+            if not skill.actions:
+                # A name is not a capability: a node with no executable
+                # function inside is never a candidate — not for routes,
+                # not for ranking, not for a paying run.
+                continue
             policy = self._registry.get_pricing(listing.version_id)
             ask = gross_from_policy(policy) if policy is not None else 0.0
             stats = self._stats.version_stats(listing.version_id)
