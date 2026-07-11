@@ -345,14 +345,43 @@ class _TokenBucket:
         return True
 
 
+# The file types the drawer speaks natively — the formats developers,
+# creators, and engineers actually exchange. Text stays text; everything
+# else rides as a data URL and is typed honestly by extension so viewers,
+# players, and the download door all know what they are holding.
+_MEDIA_TYPES: dict[str, str] = {
+    ".csv": "text/csv",
+    ".tsv": "text/csv",
+    ".json": "application/json",
+    ".txt": "text/plain",
+    ".md": "text/markdown",
+    ".pdf": "application/pdf",
+    ".docx": (
+        "application/vnd.openxmlformats-officedocument"
+        ".wordprocessingml.document"
+    ),
+    ".xlsx": (
+        "application/vnd.openxmlformats-officedocument"
+        ".spreadsheetml.sheet"
+    ),
+    ".pptx": (
+        "application/vnd.openxmlformats-officedocument"
+        ".presentationml.presentation"
+    ),
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".mp4": "video/mp4",
+    ".mp3": "audio/mpeg",
+}
+
+
 def _media_type_for(name: str) -> str:
     lowered = name.lower()
-    if lowered.endswith((".csv", ".tsv")):
-        return "text/csv"
-    if lowered.endswith(".json"):
-        return "application/json"
-    if lowered.endswith(".txt"):
-        return "text/plain"
+    for suffix, media_type in _MEDIA_TYPES.items():
+        if lowered.endswith(suffix):
+            return media_type
     return "text/markdown"
 
 

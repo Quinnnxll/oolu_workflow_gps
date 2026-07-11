@@ -112,3 +112,53 @@ describe("fileToDrawerContent — the real reading path", () => {
     );
   });
 });
+
+// The download door: the drawer's stored shapes turn back into REAL
+// files — true bytes, true type — on their way to the device.
+describe("the download door", () => {
+  it("a base64 data URL becomes its true bytes and type", async () => {
+    const { contentToBlob } = await import("./device");
+    const bytes = new Uint8Array([37, 80, 68, 70]); // "%PDF"
+    const payload = btoa(String.fromCharCode(...bytes));
+    const blob = contentToBlob(
+      `data:application/pdf;base64,${payload}`,
+      "application/pdf",
+    );
+    expect(blob.type).toBe("application/pdf");
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(bytes);
+  });
+
+  it("plain text downloads as the text it is", async () => {
+    const { contentToBlob } = await import("./device");
+    const blob = contentToBlob("hello", "text/markdown");
+    expect(blob.type).toBe("text/markdown");
+    expect(await blob.text()).toBe("hello");
+  });
+
+  it("saveToDevice hands the file to the device's own save flow", async () => {
+    const { contentToBlob, saveToDevice } = await import("./device");
+    const clicked: { download: string; href: string }[] = [];
+    const realCreate = document.createElement.bind(document);
+    vi.spyOn(document, "createElement").mockImplementation(((tag: string) => {
+      const el = realCreate(tag);
+      if (tag === "a") {
+        (el as HTMLAnchorElement).click = () => {
+          const a = el as HTMLAnchorElement;
+          clicked.push({ download: a.download, href: a.href });
+        };
+      }
+      return el;
+    }) as typeof document.createElement);
+    vi.stubGlobal("URL", {
+      ...URL,
+      createObjectURL: () => "blob:fake",
+      revokeObjectURL: () => undefined,
+    });
+    try {
+      saveToDevice("report.pdf", contentToBlob("x", "application/pdf"));
+      expect(clicked).toEqual([{ download: "report.pdf", href: "blob:fake" }]);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+});

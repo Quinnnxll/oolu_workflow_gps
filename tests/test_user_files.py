@@ -225,3 +225,32 @@ def test_folders_organize_a_drawer(tmp_path):
         assert refused.status == 400
     finally:
         conn.close()
+
+
+def test_the_drawer_speaks_real_file_types():
+    """The formats developers, creators, and engineers exchange are typed
+    honestly by extension — so viewers, players, and the download door
+    all know what they are holding."""
+    from oolu.gateway.app import _media_type_for
+
+    assert _media_type_for("paper.PDF") == "application/pdf"
+    assert _media_type_for("report.docx") == (
+        "application/vnd.openxmlformats-officedocument"
+        ".wordprocessingml.document"
+    )
+    assert _media_type_for("books.XLSX") == (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    assert _media_type_for("deck.pptx") == (
+        "application/vnd.openxmlformats-officedocument"
+        ".presentationml.presentation"
+    )
+    assert _media_type_for("shot.JPG") == "image/jpeg"
+    assert _media_type_for("shot.jpeg") == "image/jpeg"
+    assert _media_type_for("logo.png") == "image/png"
+    assert _media_type_for("loop.gif") == "image/gif"
+    assert _media_type_for("clip.mp4") == "video/mp4"
+    assert _media_type_for("song.MP3") == "audio/mpeg"
+    # The old floor still stands.
+    assert _media_type_for("rows.csv") == "text/csv"
+    assert _media_type_for("notes") == "text/markdown"

@@ -170,3 +170,29 @@ export function photoName(now = new Date()): string {
     `-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.jpg`
   );
 }
+
+// ---- the download door: cloud drawer -> this device -----------------------
+// The drawer stores text as text and everything else as a data URL; the
+// download door turns either back into the REAL file — true bytes, true
+// type — and hands it to the device's own save flow.
+export function contentToBlob(content: string, mediaType: string): Blob {
+  if (content.startsWith("data:")) {
+    const [head, payload = ""] = content.split(",", 2);
+    const type = head.slice(5).split(";")[0] || mediaType || "application/octet-stream";
+    if (head.includes(";base64")) {
+      const bytes = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0));
+      return new Blob([bytes], { type });
+    }
+    return new Blob([decodeURIComponent(payload)], { type });
+  }
+  return new Blob([content], { type: mediaType || "text/plain" });
+}
+
+export function saveToDevice(name: string, blob: Blob): void {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = name;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}

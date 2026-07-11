@@ -145,3 +145,63 @@ describe("FileView — sheets", () => {
     expect(screen.getByLabelText("cell 3:1")).toBeTruthy();
   });
 });
+
+describe("FileView — real file types", () => {
+  it("an Office file gets an honest card and the download door, never base64 prose", async () => {
+    routes["GET /v1/files/f1"] = {
+      status: 200,
+      body: doc({
+        name: "report.docx",
+        media_type:
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        content: "data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,UEsDBA==",
+        size: 4,
+      }),
+    };
+    render(<FileView fileId="f1" onChanged={vi.fn()} onDeleted={vi.fn()} />);
+
+    expect(await screen.findByText(/A Word document/)).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Download to this device" }),
+    ).toBeTruthy();
+    // The raw base64 never masquerades as a readable page.
+    expect(screen.queryByText(/UEsDBA/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+  });
+
+  it("a PDF shows in place; audio and video get their players", async () => {
+    routes["GET /v1/files/f1"] = {
+      status: 200,
+      body: doc({
+        name: "paper.pdf",
+        media_type: "application/pdf",
+        content: "data:application/pdf;base64,JVBERg==",
+      }),
+    };
+    const pdf = render(
+      <FileView fileId="f1" onChanged={vi.fn()} onDeleted={vi.fn()} />,
+    );
+    expect(await screen.findByTitle("paper.pdf")).toBeTruthy(); // the iframe
+    pdf.unmount();
+
+    routes["GET /v1/files/f1"] = {
+      status: 200,
+      body: doc({
+        name: "memo.mp3",
+        media_type: "audio/mpeg",
+        content: "data:audio/mpeg;base64,SUQz",
+      }),
+    };
+    const { container } = render(
+      <FileView fileId="f1" onChanged={vi.fn()} onDeleted={vi.fn()} />,
+    );
+    await screen.findByText("download");
+    expect(container.querySelector("audio")).toBeTruthy();
+  });
+
+  it("every file carries the download door in its head", async () => {
+    routes["GET /v1/files/f1"] = { status: 200, body: doc() };
+    render(<FileView fileId="f1" onChanged={vi.fn()} onDeleted={vi.fn()} />);
+    expect(await screen.findByRole("button", { name: "download" })).toBeTruthy();
+  });
+});

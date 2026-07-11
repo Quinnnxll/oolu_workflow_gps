@@ -4,6 +4,33 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The drawer speaks real file types — and files come back OUT:
+
+- **Real types, typed honestly.** The drawer's media map now covers the
+  formats developers, creators, and engineers actually exchange: PDF,
+  DOCX, XLSX, PPTX, JPG/JPEG, PNG, GIF, MP4, MP3 — files named that way
+  (created by OoLu, uploaded, or delivered by a node) carry their true
+  MIME type instead of defaulting to markdown, so viewers, players, and
+  the download door all know what they are holding.
+- **Shown where showable, honest where not.** A PDF renders in place;
+  MP4 and MP3 get the app's own players; pictures were already
+  pictures. Word/Excel/PowerPoint (and any other binary) get an honest
+  card naming their kind and size with a download button — never a page
+  of base64 masquerading as a document, and never an "Edit" that would
+  corrupt real bytes.
+- **Download to the device.** Every file's head now carries a download
+  door: the drawer's stored shape (text, or a data URL) turns back into
+  the REAL file — true bytes, true type — and lands through the
+  device's own save flow. Cloud-side files reach the machine the user
+  is sitting at.
+- Tiles name their kind (PDF, Word, Excel, PowerPoint, picture, video,
+  audio, sheet, document) instead of calling everything a document.
+- Tests: the media map (case-proof, old floor intact), the Office card
+  with no base64 prose and no Edit, the PDF frame and media players,
+  the download door on every file, base64→true-bytes round-trip, and
+  the device save flow. 204 vitest and the entire backend suite green
+  (1097 passed); shell rebuilt; ruff clean.
+
 The Noder view is a record, not a control panel:
 
 - **The "Run again" button is gone.** A button-made rerun submitted the

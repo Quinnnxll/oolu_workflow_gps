@@ -16,6 +16,26 @@ function isSheetName(name: string): boolean {
   return /\.(csv|tsv)$/i.test(name);
 }
 
+// The tile names its real kind — the formats developers, creators, and
+// engineers actually exchange, not just "document".
+const TILE_KINDS: [RegExp, string][] = [
+  [/\.(csv|tsv)$/i, "sheet"],
+  [/\.pdf$/i, "PDF"],
+  [/\.docx$/i, "Word"],
+  [/\.xlsx$/i, "Excel"],
+  [/\.pptx$/i, "PowerPoint"],
+  [/\.(jpg|jpeg|png|gif)$/i, "picture"],
+  [/\.mp4$/i, "video"],
+  [/\.mp3$/i, "audio"],
+];
+
+function tileKind(name: string): string {
+  for (const [pattern, words] of TILE_KINDS) {
+    if (pattern.test(name)) return words;
+  }
+  return "document";
+}
+
 // The immediate child folders of `cwd`, derived from every file's folder
 // path ("a/b/c" seen from "a" contributes "b").
 export function childFolders(files: FileMeta[], cwd: string): string[] {
@@ -396,8 +416,7 @@ export function FilesPane({ nodeId }: { nodeId?: string }) {
             </span>
             <span className="file-tile-name">{f.name}</span>
             <span className="file-tile-sub">
-              {isSheetName(f.name) ? "sheet" : "document"} ·{" "}
-              {(f.size / 1024).toFixed(1)} kB
+              {tileKind(f.name)} · {(f.size / 1024).toFixed(1)} kB
             </span>
           </button>
         ))}

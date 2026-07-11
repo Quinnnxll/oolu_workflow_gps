@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import type { FileDoc } from "../api";
 import { parseCsv, serializeCsv } from "../csv";
+import { contentToBlob, saveToDevice } from "../device";
 import { forwardFile, forwardTargets } from "../forward";
 import type { ForwardTarget } from "../forward";
 
@@ -22,6 +23,52 @@ function isImage(file: FileDoc): boolean {
     file.media_type.startsWith("image/") ||
     file.content.startsWith("data:image/")
   );
+}
+
+// The drawer speaks real file types: what it can show, it shows (images,
+// video, audio, PDF); what needs its own tool (Word, Excel, PowerPoint,
+// anything else binary) gets an honest card and the download door —
+// never a page of base64 pretending to be a document.
+function isVideo(file: FileDoc): boolean {
+  return (
+    file.media_type.startsWith("video/") ||
+    file.content.startsWith("data:video/")
+  );
+}
+
+function isAudio(file: FileDoc): boolean {
+  return (
+    file.media_type.startsWith("audio/") ||
+    file.content.startsWith("data:audio/")
+  );
+}
+
+function isPdf(file: FileDoc): boolean {
+  return (
+    file.media_type === "application/pdf" ||
+    file.content.startsWith("data:application/pdf")
+  );
+}
+
+function isBinary(file: FileDoc): boolean {
+  return file.content.startsWith("data:");
+}
+
+const KIND_WORDS: [string, string][] = [
+  ["application/pdf", "PDF document"],
+  ["wordprocessingml", "Word document"],
+  ["spreadsheetml", "Excel workbook"],
+  ["presentationml", "PowerPoint deck"],
+  ["video/", "video"],
+  ["audio/", "audio"],
+  ["image/", "picture"],
+];
+
+export function fileKindWords(file: FileDoc): string {
+  for (const [marker, words] of KIND_WORDS) {
+    if (file.media_type.includes(marker)) return words;
+  }
+  return "binary file";
 }
 
 export function FileView({
@@ -92,6 +139,18 @@ export function FileView({
         <ForwardFileMenu fileId={file.file_id} />
         <button
           className="linklike"
+          title="save this file to the device — true bytes, true type"
+          onClick={() =>
+            saveToDevice(
+              file.name,
+              contentToBlob(file.content, file.media_type),
+            )
+          }
+        >
+          download
+        </button>
+        <button
+          className="linklike"
           onClick={async () => {
             await api.deleteFile(file.file_id);
             onDeleted();
@@ -102,6 +161,35 @@ export function FileView({
       </div>
       {isImage(file) ? (
         <img className="file-image" src={file.content} alt={file.name} />
+      ) : isVideo(file) ? (
+        <video className="file-media" controls src={file.content} />
+      ) : isAudio(file) ? (
+        <audio className="file-media" controls src={file.content} />
+      ) : isPdf(file) ? (
+        <iframe className="file-frame" title={file.name} src={file.content} />
+      ) : isBinary(file) ? (
+        <div className="doc-page binary-card">
+          <p>
+            A {fileKindWords(file)} ({(file.size / 1024).toFixed(1)} kB) —
+            the app doesn't render this format in place yet.
+          </p>
+          <p>
+            <button
+              onClick={() =>
+                saveToDevice(
+                  file.name,
+                  contentToBlob(file.content, file.media_type),
+                )
+              }
+            >
+              Download to this device
+            </button>
+          </p>
+          <p className="muted">
+            It opens in its own tool there — and OoLu can still read,
+            convert, or pass this file along right here.
+          </p>
+        </div>
       ) : isSheet(file) ? (
         <Sheet key={file.updated_at} file={file} onSave={saveContent} />
       ) : (
