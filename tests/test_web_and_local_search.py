@@ -74,6 +74,74 @@ def test_the_catalog_carries_the_web_search_knob():
     assert field.default is True and field.group == "model"
 
 
+def test_web_search_ready_names_the_answering_path(tmp_path):
+    # A keyed Anthropic path with the door open: ready.
+    conn, router, transport = _router(tmp_path, web_search=True)
+    assert router.web_search_ready()
+    conn.close()
+    # The setting closes it.
+    conn, router, transport = _router(tmp_path, web_search=False)
+    assert not router.web_search_ready()
+    conn.close()
+
+
+def test_a_local_model_never_reports_web_search(tmp_path):
+    conn = DurableConnection(tmp_path / "durable.db")
+    keyring = ModelKeyring(conn, key_path=tmp_path / "machine.key")
+    router = ChatModelRouter(
+        keyring,
+        "t1",
+        transport=FakeTransport(),
+        source=lambda: "local",
+        local_url=lambda: "http://localhost:11434",
+        local_model=lambda: "llama3.2",
+        web_search=lambda: True,
+    )
+    assert not router.web_search_ready()  # local means local
+    conn.close()
+
+
+def test_the_chat_turn_tells_the_model_it_can_search(tmp_path):
+    """The note is the fix for 'OoLu can't even do a basic web search':
+    without it a keyed install claims it can't browse — or hands the
+    search to the engine, whose network-severed sandbox can only fail."""
+    from test_http_gateway import _app, _req
+    from oolu.chat import WEB_SEARCH_NOTE
+
+    class _SearchingModel:
+        def __init__(self):
+            self.calls: list[list[dict]] = []
+
+        def web_search_ready(self) -> bool:
+            return True
+
+        def reply(self, messages):
+            self.calls.append(messages)
+            return '{"say": "It\'s sunny in Lilongwe today.", "task": null}'
+
+    app, conn, ident = _app(tmp_path)
+    model = _SearchingModel()
+    app._tenant_model = lambda tenant: model
+    try:
+        response = app.handle(
+            _req(
+                "POST",
+                "/v1/chat",
+                token=ident.token("user-1", "t1"),
+                body={"message": "what's the weather in Lilongwe?", "history": []},
+            )
+        )
+        assert response.status == 200, response.body
+        assert response.body["run_id"] is None
+        [messages] = model.calls
+        notes = [
+            m["content"] for m in messages if m.get("role") == "system"
+        ]
+        assert any(WEB_SEARCH_NOTE in note for note in notes)
+    finally:
+        conn.close()
+
+
 # --------------------------------------------------------------------------- #
 # The desktop's own disk.                                                      #
 # --------------------------------------------------------------------------- #

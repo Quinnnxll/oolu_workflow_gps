@@ -139,6 +139,32 @@ class ChatModelRouter:
         self._adapters: dict[tuple[str, str], Any] = {}
 
     # ------------------------------------------------------------------ #
+    def web_search_ready(self) -> bool:
+        """Whether a reply on this router carries the provider's server-side
+        web-search tool — the setting is on AND the path that will answer is
+        an Anthropic one. A local model never searches (local means local),
+        and only the Anthropic adapter speaks the tool today, so a router
+        that would answer through another provider reports False."""
+        if not self._web_search():
+            return False
+        source = self._source()
+        if source == "local":
+            return False
+        if (
+            source == "subscription"
+            and self._subscription is not None
+            and self._subscription.configured()
+        ):
+            # The plan's order is Claude first: search rides whenever the
+            # platform holds an Anthropic key.
+            return self._subscription.secret_for("anthropic") is not None
+        for provider in self._order():
+            if self._keyring.secret_for(self._tenant, provider) is None:
+                continue
+            # The first keyed provider answers — search only if it's Claude.
+            return provider == "anthropic"
+        return False
+
     def reply(self, messages: list[dict]) -> str:
         self._check_budget()
         source = self._source()

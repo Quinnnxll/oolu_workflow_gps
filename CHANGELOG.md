@@ -4,6 +4,50 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+A failure that asks, instead of a wall that repeats — and a model that
+knows it can search:
+
+- **The growth trigger (borrowed from n8n's editor).** When a workflow
+  is missing the node it needs, the answer is a proposal to ADD that
+  node — never the same "I can't do that" again. A chat task the engine
+  cannot execute (or that fails at a node) now ends with a consent
+  question in the conversation itself: "want me to build a node for
+  '<goal>' and run it?". The user's plain "yes" on the very next message
+  IS the consent — scoped to that one goal, one build, no trip to
+  Settings — and it builds the node through the SAME gated path as the
+  interact window's build (executable-work judgement, the
+  actually-written function, the contribute screen), then re-fires the
+  task through the node's own function. A "no" — or any other message —
+  withdraws the offer: consent detached from the question it answered is
+  not consent. No model to write the function means no offer (the old
+  Settings hint stays as the fallback), and model-written code still
+  re-earns the human's confirmation before it runs. The global
+  "Auto-build nodes on my paths" switch is unchanged for people who want
+  no question at all.
+- **The model now KNOWS it can search.** A keyed install carried the
+  provider's server-side web-search tool since Issue 13 — but the chat
+  prompt never said so, so the model answered "I can't browse the
+  internet", or worse, handed the search to the engine, whose
+  network-severed sandbox can only fail it (the "OoLu can't even do a
+  basic web search" symptom). The router now reports whether the path
+  that will answer really carries the tool (`web_search_ready`: the
+  setting is on AND an Anthropic path answers — a local model never
+  searches), and the chat turn injects a context note telling the model
+  to answer current-facts questions directly in words and never make a
+  web search a task.
+- One shared node-building core behind both doors: the interact window's
+  `build` and the growth trigger now call the same
+  `_build_function_node` — one goal one node, the declared IO interface,
+  the supernode placement, and every refusal in words, identical
+  everywhere.
+- Tests: the narrow consent matcher, a stuck task ending in an offer,
+  "yes" building the node and re-firing the task through its own
+  function on the script hand, "no" and subject-changes withdrawing the
+  offer, no offer without a model, offers keyed to the person asked,
+  `web_search_ready` across keyed/closed/local paths, and the web note
+  reaching the model's context. Entire backend suite green (1075
+  passed).
+
 Developers bring their own functions — and the gate holds:
 
 - **Upload a function when creating a node.** The Create-a-node form now

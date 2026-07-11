@@ -187,6 +187,15 @@ needs an "and", split the node and let the subgraph compose them.
   the consenting user's account (the Work sidebar consent), with
   `provenance: "synthesized"`, and the user answers for them like any other
   node they own.
+- **Consent has two doors, and the generator opens neither.** The standing
+  door is the tenant's `account.autobuild_consent` switch ("Auto-build
+  nodes on my paths"). The per-goal door is the **growth trigger**
+  (borrowed from n8n's editor): when a task fails for want of a working
+  function, the conversation *asks* — "want me to build a node for
+  '<goal>'?" — and the user's plain "yes" on the very next message is
+  consent for that one goal, one build. Either way the generator is
+  *called and asked, never assumed*, and its written code still re-earns
+  the human's confirmation before it runs.
 
 ---
 

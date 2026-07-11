@@ -893,6 +893,87 @@ def _run_log_say(run: dict, steps: list[dict]) -> str:
     )
 
 
+# --------------------------------------------------------------------------- #
+# The growth trigger: a failure that asks, instead of a wall that repeats.      #
+# --------------------------------------------------------------------------- #
+# Borrowed from n8n's editor: when a workflow is missing the node it needs,
+# the answer is a proposal to ADD that node — not the same refusal again.
+# When a chat task fails for want of a working function, the gateway records
+# a standing offer and appends this question; the user's plain "yes" on the
+# very next message IS the consent (scoped to this one goal, one build) —
+# no trip to Settings required. Anything that isn't a yes or a no withdraws
+# the offer: consent detached from the question it answered is not consent.
+GROWTH_OFFER = (
+    " I can grow that missing piece myself: say “yes” and I'll build a node "
+    "for “{goal}” — with its own written-and-verified function — then run "
+    "it. Say “no” to leave things as they are."
+)
+
+_CONSENT_YES = frozenset(
+    {
+        "yes",
+        "yes please",
+        "yes build it",
+        "yes do it",
+        "yes go ahead",
+        "build it",
+        "do it",
+        "go ahead",
+        "go for it",
+        "sure",
+        "ok",
+        "okay",
+        "yep",
+        "yeah",
+        "please do",
+    }
+)
+_CONSENT_NO = frozenset(
+    {
+        "no",
+        "no thanks",
+        "no thank you",
+        "nope",
+        "nah",
+        "not now",
+        "don't",
+        "do not",
+        "leave it",
+        "skip it",
+        "cancel",
+        "stop",
+    }
+)
+
+
+def consent_answer(text: str) -> str | None:
+    """``"yes"``, ``"no"``, or None for a standing growth offer.
+
+    Narrow on purpose: only an unmistakable yes or no counts, so an
+    unrelated message never spends consent the user did not give."""
+    normal = (text or "").strip().casefold().replace(",", " ")
+    normal = re.sub(r"\s+", " ", normal).rstrip(".!?").strip()
+    if normal in _CONSENT_YES:
+        return "yes"
+    if normal in _CONSENT_NO:
+        return "no"
+    return None
+
+
+# Appended to the model's context when the active router really can search
+# (an Anthropic path with model.web_search on). Without it a keyed install
+# answers "I can't browse the internet" — or worse, hands the search to the
+# engine, whose sandbox has no network, so the task can only ever fail.
+WEB_SEARCH_NOTE = (
+    "You HAVE live web search in this conversation — it runs inside your own "
+    "reply, on the provider's servers. Questions about current facts (news, "
+    "weather, prices, scores, anything on today's web) you answer DIRECTLY "
+    'in "say", searching as needed. Never set "task" for a web search or '
+    "lookup: the engine's sandbox has no network access, so a searching task "
+    "can only fail."
+)
+
+
 # What a file's content preview in chat is capped at.
 _READ_CAP = 4_000
 

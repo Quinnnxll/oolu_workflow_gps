@@ -36,12 +36,16 @@ from ..billing import (
 from ..billing.launch import LaunchGuard
 from ..billing.subscription import SubscriptionError, SubscriptionService
 from ..chat import (
+    GROWTH_OFFER,
+    WEB_SEARCH_NOTE,
     ChatAssistant,
+    ChatTurn,
     GatewayChatTools,
     ModelBudgetExceeded,
     ModelUnavailable,
     NodeChatTools,
     author_node_function,
+    consent_answer,
     mood_directive,
     obviously_chat,
 )
@@ -485,6 +489,11 @@ class GatewayApp:
         self._model_usage = model_usage
         self._stripe_webhooks = stripe_webhooks
         self._model_routers: dict[str, ChatModelRouter] = {}
+        # Standing growth offers (the n8n-style trigger): a chat task that
+        # failed for want of a working function asks, in the conversation,
+        # whether to build the missing node. One goal per person, and it
+        # stands for exactly one message — the very next turn answers it.
+        self._growth_offers: dict[tuple[str, str], str] = {}
         self._google = google_signin
         self._identity_links = identity_links
         self._mail = mail
@@ -903,19 +912,51 @@ class GatewayApp:
                     settings=self._settings,
                     local_root=self._local_files_root,
                 )
+        router = self._tenant_model(session.tenant_id)
+        # When the model really can search (an Anthropic path with the
+        # web-search door open), the turn says so — otherwise a keyed
+        # install claims it "can't browse", or hands the search to the
+        # engine, whose network-severed sandbox can only fail it.
+        searches = getattr(router, "web_search_ready", None)
+        search_note = WEB_SEARCH_NOTE if searches is not None and searches() else None
         # OoLu's voice follows its mood: the client sends the avatar's
         # current mood, and the turn is coloured to match the face.
         mood_note = mood_directive(body.get("mood"))
-        context_note = "\n".join(n for n in (context_note, mood_note) if n) or None
-        turn = self._chat.respond(
-            message,
-            history=[h for h in history if isinstance(h, dict)][-20:],
-            sender=session.principal_id,
-            tools=tools,
-            model=self._tenant_model(session.tenant_id),
-            context=context_note,
+        context_note = (
+            "\n".join(n for n in (context_note, search_note, mood_note) if n)
+            or None
         )
         run = None
+        turn = None
+        in_node = bool(body.get("node_id"))
+        if not in_node:
+            # A standing growth offer is answered BEFORE anything else:
+            # the user's plain yes IS the consent it asked for — scoped to
+            # that one goal, one build. It stands for exactly one message;
+            # any other reply withdraws it, because consent detached from
+            # the question it answered is not consent.
+            offered_goal = self._growth_offers.pop(
+                (session.tenant_id, session.principal_id), None
+            )
+            if offered_goal is not None:
+                answer = consent_answer(message)
+                if answer == "yes":
+                    turn, run = self._grow_node_and_run(session, offered_goal)
+                elif answer == "no":
+                    turn = ChatTurn(
+                        say="Okay — leaving it as is. Ask me again whenever "
+                        "you want it built.",
+                        source="tool",
+                    )
+        if turn is None:
+            turn = self._chat.respond(
+                message,
+                history=[h for h in history if isinstance(h, dict)][-20:],
+                sender=session.principal_id,
+                tools=tools,
+                model=router,
+                context=context_note,
+            )
         say = turn.say
         if turn.task:
             try:
@@ -923,23 +964,26 @@ class GatewayApp:
                 self._metrics["chat_runs"] += 1
                 # The run may have already failed DURING execution (submit
                 # runs synchronously to the first pause or terminal phase).
-                # The auto-build check must fire here too — not only on the
+                # The growth check must fire here too — not only on the
                 # planning-time refusal below — so a failed execution names
-                # the failing node and the consent switch that would let
-                # OoLu plan and write code itself.
-                say = self._describe_run_failure(say, run)
+                # the failing node and offers to grow what's missing.
+                say = self._describe_run_failure(
+                    say, run, autobuild_hint=in_node
+                )
+                if not in_node:
+                    say = self._offer_growth(say, session, turn.task, run=run)
             except GatewayError as exc:
                 if exc.code != "cannot_execute":
                     raise
                 # The engine refused the plan: the assistant says so in the
                 # conversation instead of the client showing a raw error —
-                # and when auto-build could close the gap, it asks for the
-                # consent switch instead of silently building.
+                # and when growing a node could close the gap, it asks for
+                # the user's consent instead of silently building.
                 say = f"I can't run that on this machine yet — {exc.message}."
-                if self._settings is not None and not bool(
-                    self._settings.effective(session.tenant_id).get(
-                        AUTOBUILD_CONSENT_KEY, False
-                    )
+                if not in_node:
+                    say = self._offer_growth(say, session, turn.task, run=None)
+                elif self._settings is not None and not self._autobuild_consented(
+                    session.tenant_id
                 ):
                     say += f" If you want me to auto-build what's missing: {AUTOBUILD_HINT}"
         # The conversation survives the device: turns land in the per-
@@ -1174,140 +1218,10 @@ class GatewayApp:
             goal = (goal or "").strip()
             if not goal:
                 return "error: tell me what the node should do"
-            if self._settings is None or not bool(
-                self._settings.effective(session.tenant_id).get(
-                    AUTOBUILD_CONSENT_KEY, False
-                )
-            ):
+            if not self._autobuild_consented(session.tenant_id):
                 return f"error: auto-build is off — {AUTOBUILD_HINT}"
-            # A node IS its function: the sentence must first read as
-            # executable work, and the model must actually write the
-            # execution function — otherwise nothing is created, because
-            # an empty node called by the global machinery is unnecessary.
-            if obviously_chat(goal):
-                return (
-                    "error: that reads as conversation, not an executable "
-                    "task — a node is its function, so there is nothing "
-                    "to build"
-                )
-            nodeplace = self._require_nodeplace()
-            # ONE node per goal, forever: the skill id derives from the
-            # goal itself, so rebuilding the same sentence finds the node
-            # that already answers for it — every execution then lands in
-            # THAT node's log instead of minting a twin.
-            skill_id = self._function_skill_id(session.tenant_id, goal)
-            existing = next(
-                (
-                    n
-                    for n in nodeplace.list_own_nodes(
-                        noder_principal=session.principal_id,
-                        tenant_id=session.tenant_id,
-                    )
-                    if n.skill_id == skill_id
-                ),
-                None,
-            )
-            if existing is not None:
-                return (
-                    f"That node already exists — “{concise_name(goal)}” "
-                    f"({existing.node_id[:8]}). No copy was made: running "
-                    "it again lands every execution in its own log."
-                )
-            author = self._node_function_author(session.tenant_id)
-            if author is None:
-                return (
-                    "error: building a node means writing its execution "
-                    "function, and no model is configured to write it — "
-                    "add a model key (or a local model) in Settings"
-                )
-            script, io, refusal = author_node_function(author, goal)
-            if script is None:
-                return f"error: {refusal}"
-            name = concise_name(goal)
-            skill = ReusableSkill.model_validate(
-                {
-                    "id": skill_id,
-                    "name": name,
-                    "description": goal,
-                    "signature": {"application": "script", "adapter": "script"},
-                    # The node's declared interface: what it consumes, as
-                    # induced parameters — the same vocabulary the route
-                    # assembler chains on.
-                    "parameters": [
-                        {
-                            "name": item["name"],
-                            "value_type": item["type"],
-                            "required": True,
-                        }
-                        for item in io.get("inputs", [])
-                    ],
-                    # The node's OWN function: a script action the script
-                    # runtime executes (verified before trusted, per node).
-                    "actions": [
-                        {
-                            "correlation_id": "function",
-                            "adapter": "script",
-                            "operation": "run",
-                            "parameters": {
-                                "goal": goal,
-                                "script": script,
-                                "node_key": f"node:{skill_id}",
-                            },
-                        }
-                    ],
-                }
-            )
-            consumes = [
-                Slot(name=item["name"], value_type=item["type"], role="input")
-                for item in io.get("inputs", [])
-            ]
-            produces = [
-                Slot(name=item["name"], value_type=item["type"], role="result")
-                for item in io.get("outputs", [])
-            ]
-            try:
-                result = nodeplace.contribute(
-                    noder_principal=session.principal_id,
-                    tenant_id=session.tenant_id,
-                    skill=skill,
-                    semver="1.0.0",
-                    title=name,
-                    summary=goal,
-                    consumes=consumes or None,
-                    produces=produces or None,
-                )
-                under = entry.account.is_supernode
-                desk.create_account(
-                    result.node.node_id,
-                    principal=session.principal_id,
-                    tenant=session.tenant_id,
-                    supernode_id=node_id if under else None,
-                    authority_level=1 if under else None,
-                    policy_version=NODE_POLICY_VERSION,
-                )
-            except (ContributionError, OwnershipError, ValueError) as exc:
-                return f"error: {exc}"
-            new_id = result.node.node_id
-            placing = (
-                "under this Supernode — it starts UNCLAIMED: share its node "
-                "id only with the person who should onboard it"
-                if under
-                else "on your desk, with you as its responsible"
-            )
-            interface = (
-                "consumes "
-                + (", ".join(f"{c.name}:{c.value_type}" for c in consumes) or "nothing")
-                + " → produces "
-                + ", ".join(f"{p.name}:{p.value_type}" for p in produces)
-            )
-            return (
-                f"Built a NEW node “{name}” ({new_id[:8]}) WITH its own "
-                f"execution function ({interface}), {placing}. This node "
-                f"“{entry.title}” is unchanged — for public safety, build "
-                "never edits an existing node's code; it adds a fresh node "
-                "that expands the path. It starts needs-verification and "
-                "becomes a callable, routable step as its runs verify; once "
-                "proven, the two can be merged into one throughout solution."
+            return self._build_function_node(
+                session, goal, under_entry=entry, under_node_id=node_id
             )
 
         health = entry.health
@@ -1358,10 +1272,14 @@ class GatewayApp:
         return tools, context_note
 
     @staticmethod
-    def _describe_run_failure(say: str, run: dict | None) -> str:
+    def _describe_run_failure(
+        say: str, run: dict | None, *, autobuild_hint: bool = True
+    ) -> str:
         """Fold an execution failure into the assistant's reply: the exact
         failing node, then the auto-build hint the run view already carries
-        when consent is off (or the rebuild's own refusal when it ran)."""
+        when consent is off (or the rebuild's own refusal when it ran).
+        The main conversation passes ``autobuild_hint=False`` because the
+        growth offer that follows is the better door to the same room."""
         if not run:
             return say
         if run.get("phase") != "failed" and run.get("awaiting") != "incident":
@@ -1382,9 +1300,258 @@ class GatewayApp:
         if failure.get("rebuild_refusal"):
             say += f" {failure['rebuild_refusal']}"
         autobuild = run.get("autobuild") or {}
-        if autobuild.get("hint"):
+        if autobuild_hint and autobuild.get("hint"):
             say += f" {autobuild['hint']}"
         return say
+
+    def _autobuild_consented(self, tenant: str) -> bool:
+        """The tenant's 'Auto-build nodes on my paths' switch, honestly
+        defaulted: no settings node means no consent was ever given."""
+        if self._settings is None:
+            return False
+        return bool(
+            self._settings.effective(tenant).get(AUTOBUILD_CONSENT_KEY, False)
+        )
+
+    def _offer_growth(
+        self, say: str, session, goal: str, *, run: dict | None
+    ) -> str:
+        """The growth trigger, borrowed from n8n's editor: a workflow
+        missing the node it needs proposes ADDING that node, instead of
+        repeating the same refusal. A chat task that failed for want of a
+        working function records a standing offer and asks in the
+        conversation; the user's "yes" on the next message is the consent
+        (one goal, one build). When nothing can be offered — no model to
+        write the function, the goal is conversation, or its node already
+        exists — the old Settings hint stays as the fallback."""
+        if (
+            run is not None
+            and run.get("phase") != "failed"
+            and run.get("awaiting") != "incident"
+        ):
+            return say
+        goal = (goal or "").strip()
+        can_offer = (
+            bool(goal)
+            and not obviously_chat(goal)
+            and self._nodeplace is not None
+            and self._desk is not None
+            and self._tenant_model(session.tenant_id) is not None
+            and self._resolve_node_function(session, goal) is None
+        )
+        if can_offer:
+            self._growth_offers[(session.tenant_id, session.principal_id)] = (
+                goal
+            )
+            return say + GROWTH_OFFER.format(goal=goal)
+        hint = (
+            (run.get("autobuild") or {}).get("hint")
+            if run is not None
+            else (
+                AUTOBUILD_HINT
+                if self._settings is not None
+                and not self._autobuild_consented(session.tenant_id)
+                else None
+            )
+        )
+        if hint:
+            say += f" If you want me to auto-build what's missing: {hint}"
+        return say
+
+    def _grow_node_and_run(self, session, goal: str) -> tuple[ChatTurn, dict | None]:
+        """The consented half of the growth trigger: the user said yes, so
+        build the node — the SAME gated path as the interact window's build
+        (executable-work judgement, the written function, the contribute
+        screen) — and immediately re-fire the task, which now routes through
+        the node's own function."""
+        result = self._build_function_node(session, goal)
+        if result.startswith("error:"):
+            return (
+                ChatTurn(
+                    say=f"I couldn't build it: {result[7:].strip()}",
+                    source="tool",
+                ),
+                None,
+            )
+        actions = [{"tool": "build_node"}]
+        try:
+            run = self._start_intent_run(session, goal)
+        except GatewayError as exc:
+            if exc.code != "cannot_execute":
+                raise
+            return (
+                ChatTurn(
+                    say=f"{result} But running it still failed — {exc.message}.",
+                    source="tool",
+                    actions=actions,
+                ),
+                None,
+            )
+        self._metrics["chat_runs"] += 1
+        say = result
+        if run.get("awaiting") == "confirmation":
+            # The standing wall, unchanged: model-written code re-earns the
+            # human's confirmation before it runs.
+            say += (
+                " The run is queued and waiting on you — model-written code "
+                "always re-earns your confirmation before it runs, so "
+                "approve it on the task card."
+            )
+        say = self._describe_run_failure(say, run, autobuild_hint=False)
+        return ChatTurn(say=say, source="tool", actions=actions), run
+
+    def _build_function_node(
+        self, session, goal: str, *, under_entry=None, under_node_id=None
+    ) -> str:
+        """Create ONE node born WITH its own execution function — the shared
+        core behind the interact window's ``build`` and the chat's growth
+        trigger. Consent belongs to the CALLER (the settings switch there,
+        the user's explicit yes here); every other gate — the executable-work
+        judgement, the actually-written function, the contribute screen — is
+        this one path, identical for both doors.
+
+        Returns words: an ``error: …`` prefix means refusal."""
+        goal = (goal or "").strip()
+        if not goal:
+            return "error: tell me what the node should do"
+        # A node IS its function: the sentence must first read as
+        # executable work, and the model must actually write the
+        # execution function — otherwise nothing is created, because
+        # an empty node called by the global machinery is unnecessary.
+        if obviously_chat(goal):
+            return (
+                "error: that reads as conversation, not an executable "
+                "task — a node is its function, so there is nothing "
+                "to build"
+            )
+        if self._nodeplace is None or self._desk is None:
+            return "error: nodes are not enabled on this host"
+        nodeplace = self._nodeplace
+        # ONE node per goal, forever: the skill id derives from the
+        # goal itself, so rebuilding the same sentence finds the node
+        # that already answers for it — every execution then lands in
+        # THAT node's log instead of minting a twin.
+        skill_id = self._function_skill_id(session.tenant_id, goal)
+        existing = next(
+            (
+                n
+                for n in nodeplace.list_own_nodes(
+                    noder_principal=session.principal_id,
+                    tenant_id=session.tenant_id,
+                )
+                if n.skill_id == skill_id
+            ),
+            None,
+        )
+        if existing is not None:
+            return (
+                f"That node already exists — “{concise_name(goal)}” "
+                f"({existing.node_id[:8]}). No copy was made: running "
+                "it again lands every execution in its own log."
+            )
+        author = self._node_function_author(session.tenant_id)
+        if author is None:
+            return (
+                "error: building a node means writing its execution "
+                "function, and no model is configured to write it — "
+                "add a model key (or a local model) in Settings"
+            )
+        script, io, refusal = author_node_function(author, goal)
+        if script is None:
+            return f"error: {refusal}"
+        name = concise_name(goal)
+        skill = ReusableSkill.model_validate(
+            {
+                "id": skill_id,
+                "name": name,
+                "description": goal,
+                "signature": {"application": "script", "adapter": "script"},
+                # The node's declared interface: what it consumes, as
+                # induced parameters — the same vocabulary the route
+                # assembler chains on.
+                "parameters": [
+                    {
+                        "name": item["name"],
+                        "value_type": item["type"],
+                        "required": True,
+                    }
+                    for item in io.get("inputs", [])
+                ],
+                # The node's OWN function: a script action the script
+                # runtime executes (verified before trusted, per node).
+                "actions": [
+                    {
+                        "correlation_id": "function",
+                        "adapter": "script",
+                        "operation": "run",
+                        "parameters": {
+                            "goal": goal,
+                            "script": script,
+                            "node_key": f"node:{skill_id}",
+                        },
+                    }
+                ],
+            }
+        )
+        consumes = [
+            Slot(name=item["name"], value_type=item["type"], role="input")
+            for item in io.get("inputs", [])
+        ]
+        produces = [
+            Slot(name=item["name"], value_type=item["type"], role="result")
+            for item in io.get("outputs", [])
+        ]
+        under = under_entry is not None and under_entry.account.is_supernode
+        try:
+            result = nodeplace.contribute(
+                noder_principal=session.principal_id,
+                tenant_id=session.tenant_id,
+                skill=skill,
+                semver="1.0.0",
+                title=name,
+                summary=goal,
+                consumes=consumes or None,
+                produces=produces or None,
+            )
+            self._desk.create_account(
+                result.node.node_id,
+                principal=session.principal_id,
+                tenant=session.tenant_id,
+                supernode_id=under_node_id if under else None,
+                authority_level=1 if under else None,
+                policy_version=NODE_POLICY_VERSION,
+            )
+        except (ContributionError, OwnershipError, ValueError) as exc:
+            return f"error: {exc}"
+        new_id = result.node.node_id
+        placing = (
+            "under this Supernode — it starts UNCLAIMED: share its node "
+            "id only with the person who should onboard it"
+            if under
+            else "on your desk, with you as its responsible"
+        )
+        interface = (
+            "consumes "
+            + (", ".join(f"{c.name}:{c.value_type}" for c in consumes) or "nothing")
+            + " → produces "
+            + ", ".join(f"{p.name}:{p.value_type}" for p in produces)
+        )
+        if under_entry is not None:
+            return (
+                f"Built a NEW node “{name}” ({new_id[:8]}) WITH its own "
+                f"execution function ({interface}), {placing}. This node "
+                f"“{under_entry.title}” is unchanged — for public safety, build "
+                "never edits an existing node's code; it adds a fresh node "
+                "that expands the path. It starts needs-verification and "
+                "becomes a callable, routable step as its runs verify; once "
+                "proven, the two can be merged into one throughout solution."
+            )
+        return (
+            f"Built a NEW node “{name}” ({new_id[:8]}) WITH its own "
+            f"execution function ({interface}), {placing}. It starts "
+            "needs-verification and becomes a callable, routable step as "
+            "its runs verify."
+        )
 
     @staticmethod
     def _function_goal_key(text: str) -> str:
