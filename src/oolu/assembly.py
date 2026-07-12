@@ -282,6 +282,40 @@ def build_intake_model(
     )
 
 
+def blob_store_from_env(data_dir: str | Path, env: dict | None = None):
+    """Where the blob layer lives: Cloudflare R2 / S3 when the bucket is
+    named in the environment, the local filesystem otherwise. One
+    selector for every artifact site (the file drawer's blobs and the
+    CAD hand's exports), so a hosted install moves its bytes to object
+    storage with four variables and no code:
+
+        OOLU_BLOB_S3_BUCKET             the bucket name (turns S3 on)
+        OOLU_BLOB_S3_ENDPOINT           https://<account>.r2.cloudflarestorage.com
+        OOLU_BLOB_S3_ACCESS_KEY_ID      the R2/S3 access key
+        OOLU_BLOB_S3_SECRET_ACCESS_KEY  its secret
+        OOLU_BLOB_S3_PREFIX             optional key prefix (multi-install)
+        OOLU_BLOB_S3_REGION             optional (default "auto", right for R2)
+    """
+    import os as _os
+
+    from .durable.artifacts import FilesystemArtifactStore
+
+    env = env if env is not None else dict(_os.environ)
+    bucket = env.get("OOLU_BLOB_S3_BUCKET", "").strip()
+    if not bucket:
+        return FilesystemArtifactStore(Path(data_dir) / "file-blobs")
+    from .durable.artifacts_s3 import S3ArtifactStore
+
+    return S3ArtifactStore(
+        bucket=bucket,
+        endpoint_url=env.get("OOLU_BLOB_S3_ENDPOINT", "").strip(),
+        access_key_id=env.get("OOLU_BLOB_S3_ACCESS_KEY_ID", "").strip(),
+        secret_access_key=env.get("OOLU_BLOB_S3_SECRET_ACCESS_KEY", "").strip(),
+        region=env.get("OOLU_BLOB_S3_REGION", "auto").strip() or "auto",
+        prefix=env.get("OOLU_BLOB_S3_PREFIX", "").strip(),
+    )
+
+
 def build_desktop_hands(
     *,
     data_dir: str | Path,
@@ -327,13 +361,10 @@ def build_desktop_hands(
         try:
             import cadquery  # noqa: F401, PLC0415 - availability probe
 
-            from .durable.artifacts import FilesystemArtifactStore
             from .skills.cad_adapter import CadActionExecutor
 
             executor = CadActionExecutor(
-                artifacts=FilesystemArtifactStore(
-                    Path(data_dir) / "file-blobs"
-                )
+                artifacts=blob_store_from_env(data_dir, env)
             )
             hands[executor.name] = executor
         except ImportError:
@@ -511,7 +542,6 @@ def build_host_runtime(
         PaymentProfileStore,
         SubscriptionService,
     )
-    from .durable.artifacts import FilesystemArtifactStore
     from .durable.files import UserFileStore
     from .gateway import GatewayApp
     from .gateway.asgi import GatewayASGI
@@ -877,9 +907,7 @@ def build_host_runtime(
         # The drawer with its blob door: inline documents in the database,
         # real binaries (PDF/DOCX/MP4/...) as content-addressed files on
         # disk — the database never swallows a video.
-        files=UserFileStore(
-            conn, artifacts=FilesystemArtifactStore(data / "file-blobs")
-        ),
+        files=UserFileStore(conn, artifacts=blob_store_from_env(data)),
         settings_node=settings_node,
         # The brain behind chat: the same keyring/meter planning uses —
         # pasted keys survive restarts encrypted, every consultation is

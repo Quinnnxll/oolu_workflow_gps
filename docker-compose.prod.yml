@@ -1,0 +1,74 @@
+# The production stack: Caddy (TLS) -> OoLu -> PostgreSQL, blobs on
+# Cloudflare R2. The full walkthrough — Cloudflare DNS, the DigitalOcean
+# droplet, R2, model keys, backups — lives in docs/deploy-production.md.
+#
+#   cp .env.production.example .env    # fill in every value
+#   docker compose -f docker-compose.prod.yml up -d --build
+#   docker compose -f docker-compose.prod.yml logs oolu   # admin sign-in
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      OOLU_DOMAIN: ${OOLU_DOMAIN:?the public hostname, e.g. app.example.com}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - oolu
+
+  oolu:
+    build: .
+    restart: unless-stopped
+    expose:
+      - "8765"
+    environment:
+      OOLU_HOST_SECRET: ${OOLU_HOST_SECRET:?set a long random secret (openssl rand -base64 48)}
+      OOLU_ADMIN_PASSWORD: ${OOLU_ADMIN_PASSWORD:-}
+      # PostgreSQL: the production durable adapter (tenant-walled stores,
+      # money-grade invariants ride this connection).
+      DATABASE_URL: postgresql://oolu:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/oolu
+      # Cloudflare R2 (S3-compatible): the blob layer for the file
+      # drawer and the CAD hand's STEP/STL exports. Leave BUCKET empty
+      # to keep blobs on the local volume instead.
+      OOLU_BLOB_S3_BUCKET: ${OOLU_BLOB_S3_BUCKET:-}
+      OOLU_BLOB_S3_ENDPOINT: ${OOLU_BLOB_S3_ENDPOINT:-}
+      OOLU_BLOB_S3_ACCESS_KEY_ID: ${OOLU_BLOB_S3_ACCESS_KEY_ID:-}
+      OOLU_BLOB_S3_SECRET_ACCESS_KEY: ${OOLU_BLOB_S3_SECRET_ACCESS_KEY:-}
+      OOLU_BLOB_S3_PREFIX: ${OOLU_BLOB_S3_PREFIX:-}
+      # The hosted plan's model keys (optional): set these and tenants
+      # on paid plans get the subscription brain; leave unset and every
+      # user brings their own key in Settings (own-api) — both are real
+      # APIs through the same router.
+      OOLU_PLATFORM_ANTHROPIC_KEY: ${OOLU_PLATFORM_ANTHROPIC_KEY:-}
+      OOLU_PLATFORM_OPENAI_KEY: ${OOLU_PLATFORM_OPENAI_KEY:-}
+    volumes:
+      - oolu-data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: oolu
+      POSTGRES_USER: oolu
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oolu -d oolu"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  caddy-data:
+  caddy-config:
+  oolu-data:
+  postgres-data:

@@ -4,6 +4,30 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The production launch kit: Cloudflare + DigitalOcean + Docker + R2:
+
+- **Blobs go to object storage with four variables.** The new
+  `S3ArtifactStore` (behind the `s3` extra) speaks any S3-compatible
+  bucket — Cloudflare R2 first — with the exact contract of the
+  filesystem store: content-addressed `sha256:` refs, idempotent
+  dedup, prune by age. `blob_store_from_env` selects it wherever
+  `OOLU_BLOB_S3_BUCKET` is named (endpoint, key id, secret; optional
+  prefix and region) and keeps the local filesystem otherwise — the
+  file drawer's blobs and the CAD hand's exports move to R2 with no
+  code changes above the port.
+- **The stack in one compose file.** `docker-compose.prod.yml`: Caddy
+  (automatic HTTPS) → OoLu (`oolu host`, tenant-walled multi-user
+  gateway) → PostgreSQL (the production durable adapter via
+  DATABASE_URL, never published), blobs on R2, platform model keys
+  optional. `deploy/Caddyfile`, `.env.production.example`, and a
+  Dockerfile extras build-arg (default `serve,http,oidc,postgres,s3`;
+  add `,cad` for the geometry hand).
+- **The walkthrough.** `docs/deploy-production.md`: Cloudflare DNS
+  (proxied, SSL Full-strict), the DigitalOcean droplet, R2 bucket and
+  scoped token, launch, real model APIs both ways (per-user own-api
+  keys and platform subscription keys), what the tenant_id walls
+  actually guarantee, backups, updates, hardening.
+
 The live audition rig: a real brain, the real router, measured cost:
 
 - **One command from key to verdict.**

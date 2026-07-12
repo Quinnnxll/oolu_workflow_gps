@@ -12,10 +12,16 @@
 # back up. Sign in at POST /v1/auth/login (or the browser page at /).
 FROM python:3.11-slim
 
+# Which extras this image carries. The production default covers the
+# hosted stack (uvicorn, real HTTP, OIDC, PostgreSQL, S3/R2 blobs);
+# add ",cad" for the geometry hand (heavy binary wheels):
+#   docker build --build-arg OOLU_EXTRAS=serve,http,oidc,postgres,s3,cad .
+ARG OOLU_EXTRAS=serve,http,oidc,postgres,s3
+
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
-RUN pip install --no-cache-dir ".[serve]"
+RUN pip install --no-cache-dir ".[${OOLU_EXTRAS}]"
 
 VOLUME ["/data"]
 EXPOSE 8765

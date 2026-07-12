@@ -1,0 +1,8 @@
+# The TLS front door. Caddy provisions and renews certificates itself
+# (Let's Encrypt) — with Cloudflare DNS in front, keep the proxy cloud
+# ON and set SSL/TLS mode to "Full (strict)" so the orange cloud speaks
+# HTTPS to this box, never plain HTTP.
+{$OOLU_DOMAIN} {
+	encode gzip
+	reverse_proxy oolu:8765
+}
