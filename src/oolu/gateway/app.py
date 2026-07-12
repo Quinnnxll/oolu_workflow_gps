@@ -771,6 +771,11 @@ class GatewayApp:
             "/v1/representative/drafts/{draft_id}",
             self._representative_decide,
         )
+        r.add(
+            "PUT",
+            "/v1/representative/peers/{peer}",
+            self._representative_peer_rule,
+        )
         r.add("POST", "/v1/runs", self._submit_run)
         r.add("GET", "/v1/runs", self._list_runs)
         r.add("GET", "/v1/runs/{run_id}", self._get_run)
@@ -1424,6 +1429,22 @@ class GatewayApp:
         except ModelUnavailable as exc:
             raise GatewayError(503, "model_unavailable", str(exc)) from exc
         return json_response(201, draft.model_dump())
+
+    def _representative_peer_rule(self, request, session, params) -> Response:
+        """Per-peer autonomy: "never auto-reply to my boss." Muting only
+        forbids auto-send to that peer — drafting stays available, and the
+        earned-autonomy gate still governs everyone else."""
+        rep = self._require_representative()
+        allowed = (request.body or {}).get("auto")
+        if not isinstance(allowed, bool):
+            raise GatewayError(400, "invalid_request", "auto must be true or false")
+        try:
+            status = rep.set_peer_auto(
+                self._representative_scope(session), params["peer"], allowed=allowed
+            )
+        except ValueError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(200, status)
 
     def _representative_decide(self, request, session, params) -> Response:
         """The user's word on a draft: send it, send it edited, or discard.

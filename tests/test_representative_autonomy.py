@@ -133,6 +133,30 @@ def test_edits_erode_the_accept_rate_below_the_bar():
     assert draft.status == "pending"
 
 
+def test_a_muted_peer_never_gets_an_auto_reply():
+    engine = _engine(model=_Parrot("yep, around all day"))
+    engine.configure("s1", mode="auto")
+    _ground(engine, "s1")
+    _earn(engine, "s1")
+    status = engine.set_peer_auto("s1", "boss", allowed=False)
+    assert status["muted_peers"] == ["boss"]
+
+    ask = {"inbound_text": "are you around tomorrow morning?", "display_name": "a"}
+    muted = engine.auto_reply("s1", conversation_id="boss", **ask)
+    assert muted.status == "pending"  # drafted, never sent
+    open_peer = engine.auto_reply("s1", conversation_id="bob", **ask)
+    assert open_peer.status == "auto_sent"
+
+    # Un-muting restores the normal earned path; erasure clears rules too.
+    engine.set_peer_auto("s1", "boss", allowed=True)
+    assert engine.auto_reply("s1", conversation_id="boss", **ask).status == (
+        "auto_sent"
+    )
+    engine.set_peer_auto("s1", "boss", allowed=False)
+    engine.erase("s1")
+    assert engine.peer_auto("s1", "boss") is True
+
+
 def test_the_fallback_speaks_only_when_the_engine_signed_off():
     from oolu.replies import MessageEnvelope as Envelope
 
@@ -296,6 +320,33 @@ def test_a_friend_message_gets_an_earned_auto_reply(tmp_path):
         _req("GET", "/v1/friends/bob/messages", token=alice)
     ).body["items"]
     assert bobs_thread[-1]["text"] == "ok!"
+
+    # Alice mutes bob: his next message drafts instead of auto-replying.
+    muted = gateway.handle(
+        _req("PUT", "/v1/representative/peers/bob", token=alice,
+             body={"auto": False})
+    )
+    assert muted.status == 200 and muted.body["muted_peers"] == ["bob"]
+    assert gateway.handle(
+        _req("PUT", "/v1/representative/peers/bob", token=alice,
+             body={"auto": "yes"})
+    ).status == 400
+    before = len(
+        gateway.handle(
+            _req("GET", "/v1/friends/alice/messages", token=bob)
+        ).body["items"]
+    )
+    gateway.handle(
+        _req("POST", "/v1/friends/alice/messages", token=bob,
+             body={"text": "are you around tomorrow morning?"})
+    )
+    thread = gateway.handle(
+        _req("GET", "/v1/friends/alice/messages", token=bob)
+    ).body["items"]
+    assert len(thread) == before + 1  # no auto-reply arrived
+    assert gateway.handle(
+        _req("GET", "/v1/representative", token=alice)
+    ).body["drafts_pending"] >= 1
     conn.close()
 
 

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { FriendThread } from "./Life";
+import { DraftsInbox, FriendThread } from "./Life";
 import { RepresentativeSection } from "./SettingsPane";
 
 // The representative in the UI: a settings section that speaks plainly,
@@ -49,6 +49,7 @@ const STATUS = {
   auto_sent: 0,
   accept_rate: 0.75,
   auto_earned: false,
+  muted_peers: [] as string[],
   adapter: "base",
 };
 
@@ -171,6 +172,91 @@ describe("FriendThread with a representative", () => {
     expect(
       calls.some((c) => c.path === "/v1/friends/bob/messages" && c.method === "POST"),
     ).toBe(false);
+  });
+});
+
+describe("DraftsInbox", () => {
+  it("lists pending drafts and deciding one refreshes the list", async () => {
+    routes["GET /v1/representative/drafts"] = {
+      status: 200,
+      body: { items: [SUGGESTION] },
+    };
+    routes["POST /v1/representative/drafts/d1"] = {
+      status: 200,
+      body: { ...SUGGESTION, status: "sent" },
+    };
+    const activity = vi.fn();
+    render(<DraftsInbox onActivity={activity} onOpenThread={() => {}} />);
+    expect(await screen.findByText("on it — will look today")).toBeTruthy();
+    expect(screen.getByText(/can you review my PR\?/)).toBeTruthy();
+
+    routes["GET /v1/representative/drafts"] = {
+      status: 200,
+      body: { items: [] },
+    };
+    fireEvent.click(screen.getByRole("button", { name: "Send draft to bob" }));
+    expect(await screen.findByText("Nothing waiting.")).toBeTruthy();
+    expect(activity).toHaveBeenCalled();
+    const decision = calls.find(
+      (c) => c.path === "/v1/representative/drafts/d1",
+    );
+    expect((decision?.body as { action: string }).action).toBe("send");
+  });
+
+  it("editing in place routes through the decision", async () => {
+    routes["GET /v1/representative/drafts"] = {
+      status: 200,
+      body: { items: [SUGGESTION] },
+    };
+    routes["POST /v1/representative/drafts/d1"] = {
+      status: 200,
+      body: { ...SUGGESTION, status: "edited" },
+    };
+    render(<DraftsInbox onActivity={() => {}} onOpenThread={() => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByLabelText("Edit draft to bob"), {
+      target: { value: "on it — tomorrow" },
+    });
+    routes["GET /v1/representative/drafts"] = {
+      status: 200,
+      body: { items: [] },
+    };
+    fireEvent.click(screen.getByRole("button", { name: "Send edited" }));
+    await screen.findByText("Nothing waiting.");
+    const decision = calls.find(
+      (c) => c.path === "/v1/representative/drafts/d1",
+    );
+    expect(decision?.body).toEqual({
+      action: "edit",
+      text: "on it — tomorrow",
+    });
+  });
+});
+
+describe("FriendThread peer autonomy toggle", () => {
+  it("mutes and unmutes auto-replies for this peer", async () => {
+    routes["GET /v1/representative"] = {
+      status: 200,
+      body: { ...STATUS, mode: "auto" },
+    };
+    routes["GET /v1/friends/bob/messages"] = { status: 200, body: THREAD };
+    routes["PUT /v1/representative/peers/bob"] = {
+      status: 200,
+      body: { ...STATUS, mode: "auto", muted_peers: ["bob"] },
+    };
+    render(<FriendThread peer="bob" onActivity={() => {}} />);
+    const toggle = (await screen.findByLabelText(
+      "Auto-replies to bob",
+    )) as HTMLInputElement;
+    expect(toggle.checked).toBe(true);
+
+    fireEvent.click(toggle);
+    const put = calls.find(
+      (c) => c.method === "PUT" && c.path === "/v1/representative/peers/bob",
+    );
+    expect(put?.body).toEqual({ auto: false });
+    // The server's answer (bob muted) is what the box now shows.
+    await vi.waitFor(() => expect(toggle.checked).toBe(false));
   });
 });
 

@@ -202,6 +202,7 @@ def test_erasing_a_scope_removes_the_whole_representative():
         "auto_sent": 0,
         "accept_rate": None,
         "auto_earned": False,
+        "muted_peers": [],
         "adapter": "base",
     }
 

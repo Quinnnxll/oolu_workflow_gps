@@ -4,6 +4,7 @@ import type {
   FriendConversation,
   FriendMessage,
   RepresentativeDraft,
+  RepresentativeStatus,
 } from "../api";
 import { identityHue, updateAvatarSignals } from "../avatar";
 import { useT } from "../ui";
@@ -25,6 +26,7 @@ type Selection =
   | { kind: "oolu" }
   | { kind: "files" }
   | { kind: "settings" }
+  | { kind: "drafts" } // the representative's inbox
   | { kind: "friends" } // the start-a-conversation pane
   | { kind: "friend"; peer: string }
   | { kind: "noder"; run: RunSummary };
@@ -48,6 +50,8 @@ export function Life() {
   const [runs, setRuns] = useState<RunSummary[]>([]);
   // null = this host has no friends door (no server); [] = nobody yet.
   const [friends, setFriends] = useState<FriendConversation[] | null>(null);
+  // null = no representative door (or it's off); the Drafts entry follows.
+  const [rep, setRep] = useState<RepresentativeStatus | null>(null);
   // Long lists fold away for a clear view; the choice survives restarts.
   const [groups, setGroups] = useState(loadGroups);
 
@@ -74,6 +78,11 @@ export function Life() {
       setFriends((await api.friends()).items ?? []);
     } catch {
       setFriends(null); // no server door here: the group says so instead
+    }
+    try {
+      setRep(await api.representative());
+    } catch {
+      setRep(null); // no representative on this host: no Drafts entry
     }
   }, []);
 
@@ -129,6 +138,22 @@ export function Life() {
             <span className="convo-sub">{tr("settingsSub")}</span>
           </span>
         </button>
+
+        {rep !== null && rep.mode !== "off" && (
+          <button
+            className={`convo ${selected.kind === "drafts" ? "on" : ""}`}
+            onClick={() => setSelected({ kind: "drafts" })}
+          >
+            <span className="convo-avatar file">✍</span>
+            <span className="convo-body">
+              <span className="convo-name">
+                Drafts
+                {rep.drafts_pending > 0 ? ` · ${rep.drafts_pending} new` : ""}
+              </span>
+              <span className="convo-sub">replies in your voice, awaiting you</span>
+            </span>
+          </button>
+        )}
 
         <button
           className="convo-group toggle"
@@ -267,7 +292,145 @@ export function Life() {
         )}
         {selected.kind === "files" && <FilesPane />}
         {selected.kind === "settings" && <SettingsPane />}
+        {selected.kind === "drafts" && (
+          <DraftsInbox
+            onActivity={refreshRuns}
+            onOpenThread={(peer) => setSelected({ kind: "friend", peer })}
+          />
+        )}
       </section>
+    </div>
+  );
+}
+
+// The representative's inbox: every pending draft across conversations —
+// including ones auto mode filed while unearned or gated. Each card is
+// decided in place; deciding is the same door the thread's ✍ uses, so
+// send delivers and an edit teaches.
+export function DraftsInbox({
+  onActivity,
+  onOpenThread,
+}: {
+  onActivity: () => void;
+  onOpenThread: (peer: string) => void;
+}) {
+  const [drafts, setDrafts] = useState<RepresentativeDraft[] | null>(null);
+  const [editing, setEditing] = useState<{ id: string; text: string } | null>(
+    null,
+  );
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const refresh = useCallback(async () => {
+    try {
+      setDrafts((await api.representativeDrafts()).items);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  async function decide(draftId: string, action: string, text?: string) {
+    setError("");
+    setBusy(true);
+    try {
+      await api.decideRepresentativeDraft(draftId, action, text);
+      setEditing(null);
+      await refresh();
+      onActivity();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="drafts-inbox">
+      <div className="convo-group">Drafts awaiting your word</div>
+      {error && <div className="error">{error}</div>}
+      {drafts === null && <div className="muted">Loading…</div>}
+      {drafts !== null && drafts.length === 0 && (
+        <div className="pane-empty">
+          <p>Nothing waiting.</p>
+          <p className="muted">
+            When your representative drafts a reply — from ✍ in a thread, or
+            on its own in auto mode — it lands here for your decision.
+          </p>
+        </div>
+      )}
+      {drafts?.map((d) => (
+        <div key={d.draft_id} className="settings-group draft-card">
+          <div className="muted">
+            To{" "}
+            <button
+              className="linklike"
+              onClick={() => onOpenThread(d.conversation_id)}
+            >
+              {d.conversation_id}
+            </button>
+            , answering: “{d.inbound_text}”
+          </div>
+          {editing?.id === d.draft_id ? (
+            <>
+              <textarea
+                aria-label={`Edit draft to ${d.conversation_id}`}
+                value={editing.text}
+                rows={3}
+                onChange={(e) =>
+                  setEditing({ id: d.draft_id, text: e.target.value })
+                }
+              />
+              <div className="setting-control row">
+                <button
+                  disabled={busy || !editing.text.trim()}
+                  onClick={() => void decide(d.draft_id, "edit", editing.text)}
+                >
+                  Send edited
+                </button>
+                <button
+                  className="linklike"
+                  disabled={busy}
+                  onClick={() => setEditing(null)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="bubble user">{d.generated_text}</div>
+              <div className="setting-control row">
+                <button
+                  aria-label={`Send draft to ${d.conversation_id}`}
+                  disabled={busy}
+                  onClick={() => void decide(d.draft_id, "send")}
+                >
+                  Send
+                </button>
+                <button
+                  disabled={busy}
+                  onClick={() =>
+                    setEditing({ id: d.draft_id, text: d.generated_text })
+                  }
+                >
+                  Edit
+                </button>
+                <button
+                  className="linklike"
+                  disabled={busy}
+                  onClick={() => void decide(d.draft_id, "discard")}
+                >
+                  Discard
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
@@ -404,7 +567,7 @@ export function FriendThread({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   // The representative: ✍ appears only when the account turned it on.
-  const [repOn, setRepOn] = useState(false);
+  const [rep, setRep] = useState<RepresentativeStatus | null>(null);
   const [suggestion, setSuggestion] = useState<RepresentativeDraft | null>(
     null,
   );
@@ -412,13 +575,23 @@ export function FriendThread({
   // then decides the draft (recording the edit) instead of a plain send.
   const [editingDraft, setEditingDraft] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
+  const repOn = rep !== null && rep.mode !== "off";
 
   useEffect(() => {
     api
       .representative()
-      .then((s) => setRepOn(s.mode !== "off"))
-      .catch(() => setRepOn(false)); // no door on this host: no button
+      .then(setRep)
+      .catch(() => setRep(null)); // no door on this host: no button
   }, []);
+
+  async function setPeerAuto(allowed: boolean) {
+    setError("");
+    try {
+      setRep(await api.setRepresentativePeerAuto(peer, allowed));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
 
   const refresh = useCallback(async () => {
     try {
@@ -554,6 +727,18 @@ export function FriendThread({
         <div className="muted">
           Editing the drafted reply — Send records your version.
         </div>
+      )}
+      {rep !== null && rep.mode === "auto" && (
+        <label className="muted rep-peer-toggle">
+          <input
+            type="checkbox"
+            aria-label={`Auto-replies to ${peer}`}
+            checked={!rep.muted_peers.includes(peer)}
+            onChange={(e) => void setPeerAuto(e.target.checked)}
+          />{" "}
+          Auto-replies to {peer} (earned replies only; commitments always
+          wait for you)
+        </label>
       )}
       <div className="chat-composer">
         <textarea

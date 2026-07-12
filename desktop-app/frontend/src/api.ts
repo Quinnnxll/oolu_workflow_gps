@@ -499,6 +499,7 @@ export interface RepresentativeStatus {
   auto_sent: number;
   accept_rate: number | null;
   auto_earned: boolean;
+  muted_peers: string[];
   adapter: string;
 }
 
@@ -731,6 +732,14 @@ export const api = {
     req<RepresentativeStatus>("PUT", "/v1/representative", change),
   representativeDraft: (peer: string) =>
     req<RepresentativeDraft>("POST", "/v1/representative/drafts", { peer }),
+  representativeDrafts: () =>
+    req<{ items: RepresentativeDraft[] }>("GET", "/v1/representative/drafts"),
+  setRepresentativePeerAuto: (peer: string, auto: boolean) =>
+    req<RepresentativeStatus>(
+      "PUT",
+      `/v1/representative/peers/${encodeURIComponent(peer)}`,
+      { auto },
+    ),
   decideRepresentativeDraft: (draftId: string, action: string, text?: string) =>
     req<RepresentativeDraft>(
       "POST",

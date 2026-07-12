@@ -110,8 +110,18 @@ class RepresentativeEngine:
             "auto_sent": outcomes.get("auto_sent", 0),
             "accept_rate": self.accept_rate(scope),
             "auto_earned": self.auto_allowed(scope),
+            "muted_peers": self._store.muted_peers(scope),
             "adapter": self._adapters.model_for(scope) or "base",
         }
+
+    def set_peer_auto(self, scope: str, peer: str, *, allowed: bool) -> dict:
+        """Per-peer override: auto-send may never address a muted peer,
+        whatever the record says. Drafting is unaffected."""
+        self._store.set_peer_auto(scope, peer, allowed=allowed)
+        return self.status(scope)
+
+    def peer_auto(self, scope: str, peer: str) -> bool:
+        return self._store.peer_auto_allowed(scope, peer)
 
     # -------------------------------------------------------------- #
     # Earned autonomy.                                                #
@@ -232,6 +242,7 @@ class RepresentativeEngine:
         if (
             self._store.mode(scope) == "auto"
             and self.auto_allowed(scope)
+            and self._store.peer_auto_allowed(scope, conversation_id)
             and draft.gate.auto_ok
         ):
             decided = self._store.decide_draft(

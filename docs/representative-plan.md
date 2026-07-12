@@ -9,7 +9,10 @@
 > --dpo`; the gateway serves trained voices when
 > `OOLU_REPRESENTATIVE_VLLM` names that server. Auto mode is a setting,
 > but autonomy is earned per message: enough human verdicts at a high
-> sent-as-written rate, plus the gate — commitments always draft.
+> sent-as-written rate, plus the gate — commitments always draft. The
+> shell carries a Drafts inbox (every pending draft, decided in place)
+> and per-peer overrides ("never auto-reply to my boss": mute a peer in
+> their thread, or `PUT /v1/representative/peers/{peer}`).
 
 A working plan for **representative mode** — the toggle in the chat window
 that lets OoLu draft and (eventually) send replies that sound like *you*,

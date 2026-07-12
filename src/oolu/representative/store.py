@@ -88,10 +88,29 @@ def _drop_adapter_versions(conn: sqlite3.Connection) -> None:
     conn.executescript("DROP TABLE IF EXISTS adapter_versions;")
 
 
+def _create_peer_rules(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS peer_rules (
+            scope TEXT NOT NULL,
+            peer TEXT NOT NULL,
+            auto_allowed INTEGER NOT NULL DEFAULT 1,
+            updated_at REAL NOT NULL,
+            PRIMARY KEY (scope, peer)
+        );
+        """
+    )
+
+
+def _drop_peer_rules(conn: sqlite3.Connection) -> None:
+    conn.executescript("DROP TABLE IF EXISTS peer_rules;")
+
+
 # Ordered schema history. Append-only.
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(up=_create_representative_tables, down=_drop_representative_tables),
     Migration(up=_create_adapter_versions, down=_drop_adapter_versions),
+    Migration(up=_create_peer_rules, down=_drop_peer_rules),
 )
 
 # An adapter's life: pending -> trained -> active -> retired, or failed.
@@ -365,6 +384,42 @@ class RepresentativeStore:
                 (scope,),
             ).fetchall()
 
+    # -------------------------------------------------------------- #
+    # Per-peer rules: "never auto-reply to my boss."                  #
+    # -------------------------------------------------------------- #
+    def set_peer_auto(self, scope: str, peer: str, *, allowed: bool) -> None:
+        peer = peer.strip()
+        if not peer:
+            raise ValueError("a peer rule needs a peer")
+        with self._lock, self._db:
+            self._db.execute(
+                """INSERT INTO peer_rules (scope, peer, auto_allowed, updated_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(scope, peer) DO UPDATE SET
+                       auto_allowed = excluded.auto_allowed,
+                       updated_at = excluded.updated_at""",
+                (scope, peer, int(allowed), self._clock()),
+            )
+
+    def peer_auto_allowed(self, scope: str, peer: str) -> bool:
+        """Whether auto-send may address this peer. Absent rule = allowed —
+        the earned-autonomy and gate checks still stand either way."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT auto_allowed FROM peer_rules WHERE scope = ? AND peer = ?",
+                (scope, peer),
+            ).fetchone()
+        return bool(row["auto_allowed"]) if row is not None else True
+
+    def muted_peers(self, scope: str) -> list[str]:
+        with self._lock:
+            rows = self._db.execute(
+                """SELECT peer FROM peer_rules
+                   WHERE scope = ? AND auto_allowed = 0 ORDER BY peer""",
+                (scope,),
+            ).fetchall()
+        return [str(row["peer"]) for row in rows]
+
     def scopes(self) -> list[str]:
         """Every scope with the representative turned on — the sweep list."""
         with self._lock:
@@ -382,6 +437,7 @@ class RepresentativeStore:
         with self._lock, self._db:
             erased = 0
             for statement in (
+                "DELETE FROM peer_rules WHERE scope = ?",
                 "DELETE FROM adapter_versions WHERE scope = ?",
                 "DELETE FROM drafts WHERE scope = ?",
                 "DELETE FROM exchanges WHERE scope = ?",
