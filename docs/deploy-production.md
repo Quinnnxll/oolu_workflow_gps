@@ -199,7 +199,7 @@ file is removed before the first connection. The droplet needs its
 clone to be able to `git fetch origin main` (a public repo just
 works; a private one needs its own read-only deploy key or token on
 the droplet). If your checkout lives somewhere other than
-`~/oolu_workflow_gps` or you SSH as a non-root user, adjust `APP_DIR`
+`/opt/oolu_workflow_gps` or you SSH as a non-root user, adjust `APP_DIR`
 / `DEPLOY_USER` at the top of the workflow file.
 
 ## 8. Hardening notes

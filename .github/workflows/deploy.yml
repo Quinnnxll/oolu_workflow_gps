@@ -27,9 +27,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Where the droplet keeps its clone (the walkthrough in
-  # docs/deploy-production.md clones to the deploy user's home).
-  APP_DIR: oolu_workflow_gps
+  # Where the droplet keeps its clone.
+  APP_DIR: /opt/oolu_workflow_gps
   DEPLOY_USER: root
 
 jobs:
