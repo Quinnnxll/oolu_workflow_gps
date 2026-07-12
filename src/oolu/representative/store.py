@@ -65,9 +65,43 @@ def _drop_representative_tables(conn: sqlite3.Connection) -> None:
     )
 
 
-# Ordered schema history. Append-only; Phase 1 appends adapter_versions.
+def _create_adapter_versions(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS adapter_versions (
+            scope TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            base_model TEXT NOT NULL,
+            artifact_ref TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending',
+            message_count INTEGER NOT NULL DEFAULT 0,
+            holdout_ppl REAL,
+            trained_at REAL,
+            created_at REAL NOT NULL,
+            PRIMARY KEY (scope, version)
+        );
+        """
+    )
+
+
+def _drop_adapter_versions(conn: sqlite3.Connection) -> None:
+    conn.executescript("DROP TABLE IF EXISTS adapter_versions;")
+
+
+# Ordered schema history. Append-only.
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(up=_create_representative_tables, down=_drop_representative_tables),
+    Migration(up=_create_adapter_versions, down=_drop_adapter_versions),
+)
+
+# An adapter's life: pending -> trained -> active -> retired, or failed.
+# Exactly one row per scope is ever 'active' — that's the voice in use.
+ADAPTER_STATUSES: tuple[str, ...] = (
+    "pending",
+    "trained",
+    "active",
+    "retired",
+    "failed",
 )
 
 _REASON_SEP = ""  # unit separator: reasons are prose, never structured
@@ -224,6 +258,98 @@ class RepresentativeStore:
         return {str(row["status"]): int(row["n"]) for row in rows}
 
     # -------------------------------------------------------------- #
+    # The adapter registry (Phase 1): which trained voice is live.    #
+    # -------------------------------------------------------------- #
+    def begin_adapter(self, scope: str, *, base_model: str, message_count: int) -> int:
+        """Open the next adapter version as pending; returns its number."""
+        with self._lock, self._db:
+            row = self._db.execute(
+                "SELECT COALESCE(MAX(version), 0) AS top FROM adapter_versions"
+                " WHERE scope = ?",
+                (scope,),
+            ).fetchone()
+            version = int(row["top"]) + 1
+            self._db.execute(
+                """INSERT INTO adapter_versions
+                       (scope, version, base_model, status, message_count, created_at)
+                   VALUES (?, ?, ?, 'pending', ?, ?)""",
+                (scope, version, base_model, int(message_count), self._clock()),
+            )
+        return version
+
+    def finish_adapter(
+        self,
+        scope: str,
+        version: int,
+        *,
+        artifact_ref: str,
+        holdout_ppl: float | None = None,
+    ) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                """UPDATE adapter_versions
+                   SET status = 'trained', artifact_ref = ?, holdout_ppl = ?,
+                       trained_at = ?
+                   WHERE scope = ? AND version = ? AND status = 'pending'""",
+                (artifact_ref, holdout_ppl, self._clock(), scope, version),
+            )
+
+    def activate_adapter(self, scope: str, version: int) -> bool:
+        """Make one trained version the live voice; the previous active
+        version retires in the same transaction — never two voices, and
+        never zero because a bad candidate was offered. Returns whether
+        the switch happened (only trained versions activate)."""
+        with self._lock, self._db:
+            row = self._db.execute(
+                "SELECT status FROM adapter_versions WHERE scope = ? AND version = ?",
+                (scope, version),
+            ).fetchone()
+            if row is None or str(row["status"]) != "trained":
+                return False
+            self._db.execute(
+                """UPDATE adapter_versions SET status = 'retired'
+                   WHERE scope = ? AND status = 'active'""",
+                (scope,),
+            )
+            self._db.execute(
+                """UPDATE adapter_versions SET status = 'active'
+                   WHERE scope = ? AND version = ?""",
+                (scope, version),
+            )
+        return True
+
+    def fail_adapter(self, scope: str, version: int) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                """UPDATE adapter_versions SET status = 'failed'
+                   WHERE scope = ? AND version = ? AND status = 'pending'""",
+                (scope, version),
+            )
+
+    def active_adapter(self, scope: str) -> sqlite3.Row | None:
+        with self._lock:
+            return self._db.execute(
+                "SELECT * FROM adapter_versions WHERE scope = ? AND status = 'active'",
+                (scope,),
+            ).fetchone()
+
+    def adapter_history(self, scope: str) -> list[sqlite3.Row]:
+        with self._lock:
+            return self._db.execute(
+                """SELECT * FROM adapter_versions WHERE scope = ?
+                   ORDER BY version DESC""",
+                (scope,),
+            ).fetchall()
+
+    def scopes(self) -> list[str]:
+        """Every scope with the representative turned on — the sweep list."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT scope FROM representative_settings WHERE mode != 'off'"
+            ).fetchall()
+        return [str(row["scope"]) for row in rows]
+
+    # -------------------------------------------------------------- #
     # Lifecycle.                                                      #
     # -------------------------------------------------------------- #
     def erase(self, scope: str) -> int:
@@ -232,6 +358,7 @@ class RepresentativeStore:
         with self._lock, self._db:
             erased = 0
             for statement in (
+                "DELETE FROM adapter_versions WHERE scope = ?",
                 "DELETE FROM drafts WHERE scope = ?",
                 "DELETE FROM exchanges WHERE scope = ?",
                 "DELETE FROM representative_settings WHERE scope = ?",

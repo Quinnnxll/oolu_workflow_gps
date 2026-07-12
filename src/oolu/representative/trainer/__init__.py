@@ -1,0 +1,22 @@
+"""The adapter pipeline (Phase 1): jobs, the worker, and the SFT runner.
+
+The heavy lifting (torch/transformers/peft/trl) lives behind the
+``oolu[representative-train]`` extra and a subprocess boundary — the base
+install drafts and serves without ever importing it.
+"""
+
+from .jobs import TRAIN_TASK_KIND, refresh_reason, sweep
+from .sft import SftConfig, SubprocessTrainer, TrainedAdapter, Trainer, TrainingError
+from .worker import TrainerWorker
+
+__all__ = [
+    "SftConfig",
+    "SubprocessTrainer",
+    "TRAIN_TASK_KIND",
+    "TrainedAdapter",
+    "Trainer",
+    "TrainerWorker",
+    "TrainingError",
+    "refresh_reason",
+    "sweep",
+]

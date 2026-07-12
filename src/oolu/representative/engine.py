@@ -130,14 +130,36 @@ class RepresentativeEngine:
         inbound_text = inbound_text.strip()
         if not inbound_text:
             raise ValueError("nothing to reply to")
-        active = model or self._model
-        if active is None:
+        # The user's own trained voice outranks every shared model, but a
+        # dead adapter server degrades to the per-call router (then the
+        # constructor default) — never to a dead conversation. The draft
+        # records which voice actually spoke.
+        chat_model = getattr(self._adapters, "chat_model", None)
+        personal = chat_model(scope) if chat_model is not None else None
+        voices: list[tuple[str, ChatModel]] = [
+            (label, candidate)
+            for label, candidate in (
+                (self._adapters.model_for(scope) or "base", personal),
+                ("base", model),
+                ("base", self._model),
+            )
+            if candidate is not None
+        ]
+        if not voices:
             raise ModelUnavailable("no model is configured to draft with")
         hits = self._memory.recall(scope, inbound_text, k=self._few_shot_k)
         card = PersonaCard(display_name=display_name, about=self._store.about(scope))
-        generated = active.reply(
-            build_messages(card, hits, inbound_text, history=history)
-        ).strip()
+        messages = build_messages(card, hits, inbound_text, history=history)
+        generated = spoke = None
+        failure: ModelUnavailable | None = None
+        for label, candidate in voices:
+            try:
+                generated, spoke = candidate.reply(messages).strip(), label
+                break
+            except ModelUnavailable as exc:
+                failure = exc
+        if generated is None:
+            raise failure or ModelUnavailable("no model answered")
         if not generated:
             raise ModelUnavailable("the model returned an empty draft")
         draft = Draft(
@@ -147,7 +169,7 @@ class RepresentativeEngine:
             inbound_text=inbound_text,
             generated_text=generated,
             gate=judge(generated, hits, similarity_min=self._similarity_min),
-            adapter_version=self._adapters.model_for(scope) or "base",
+            adapter_version=spoke or "base",
             created_at=self._clock(),
         )
         self._store.add_draft(draft)

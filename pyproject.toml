@@ -31,6 +31,16 @@ cad = ["cadquery>=2.4"]
 # S3-compatible blob storage (Cloudflare R2, AWS S3, MinIO) for the
 # file drawer's blobs and the CAD hand's exports.
 s3 = ["boto3>=1.34"]
+# The representative's training stack (docs/representative-plan.md, Phase 1):
+# QLoRA SFT on a CUDA box, run by the trainer worker through a subprocess —
+# the base install drafts and serves adapters without ever importing torch.
+representative-train = [
+    "torch>=2.3",
+    "transformers>=4.45",
+    "datasets>=2.19",
+    "peft>=0.13",
+    "trl>=0.12",
+]
 # P2 (v0.5.0) money movement: the Stripe Connect PayoutAdapter reuses the injected
 # HttpTransport (the `http` extra) instead of the Stripe SDK, so it is mockable in
 # tests and never touches raw card data. No separate payments dependency is needed.

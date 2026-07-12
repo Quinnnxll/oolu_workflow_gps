@@ -543,6 +543,8 @@ def build_host_runtime(
     data.mkdir(parents=True, exist_ok=True)
 
     # Imported lazily so shells without the gateway never pay for it.
+    import os as _os
+
     from .billing import (
         FakeCardVault,
         LaunchGuard,
@@ -581,7 +583,12 @@ def build_host_runtime(
         WorkDesk,
     )
     from .providers.keyring import ModelKeyring
-    from .representative import RepresentativeEngine, RepresentativeStore
+    from .representative import (
+        RepresentativeEngine,
+        RepresentativeStore,
+        StoreAdapterServer,
+        VllmAdapterServer,
+    )
     from .settings_node import SettingsNode, SettingsStore
     from .social import AssistantHistoryStore, DirectMessageStore
 
@@ -784,6 +791,9 @@ def build_host_runtime(
     )
     price_book = PriceBook(data / "prices.db")
     traces = TraceStore(data / "traces.db")
+    # One representative store serves both the gateway (drafting, status)
+    # and the trainer worker's registry writes — same file, same schema.
+    _representative_store = RepresentativeStore(data / "representative.db")
 
     # Publish is gated on proof: at least one verified run (local runs
     # through the node's own function count) before a listing can go
@@ -940,11 +950,22 @@ def build_host_runtime(
         direct_messages=DirectMessageStore(conn),
         assistant_history=AssistantHistoryStore(conn),
         # The representative: replies drafted in each account's own voice
-        # (drafts only — Phase 0 of docs/representative-plan.md). Local
-        # SQLite like every learned store; the per-tenant chat router is
-        # handed in per call by the gateway.
+        # (docs/representative-plan.md). Local SQLite like every learned
+        # store; the per-tenant chat router is handed in per call by the
+        # gateway. When OOLU_REPRESENTATIVE_VLLM names the multi-LoRA
+        # server (api_base, /v1 included), accounts with a trained adapter
+        # draft through their OWN voice — the trainer worker (Phase 1)
+        # writes the registry this reads.
         representative=RepresentativeEngine(
-            RepresentativeStore(data / "representative.db")
+            _representative_store,
+            adapters=(
+                VllmAdapterServer(
+                    _representative_store,
+                    api_base=_os.environ["OOLU_REPRESENTATIVE_VLLM"],
+                )
+                if _os.environ.get("OOLU_REPRESENTATIVE_VLLM")
+                else StoreAdapterServer(_representative_store)
+            ),
         ),
         # The operator's legal documents; marked templates answer until
         # terms.md / privacy.md exist here.
