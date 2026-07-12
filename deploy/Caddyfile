@@ -2,7 +2,21 @@
 # (Let's Encrypt) — with Cloudflare DNS in front, keep the proxy cloud
 # ON and set SSL/TLS mode to "Full (strict)" so the orange cloud speaks
 # HTTPS to this box, never plain HTTP.
+#
+# Two doors, one gateway: the app domain(s) serve the user shell (the
+# chat), the admin domain serves the operator console. The gateway picks
+# the face by the Host header Caddy forwards, so both blocks proxy to
+# the same container.
+
+# The user-facing app. OOLU_DOMAIN may list several hostnames separated
+# by ", " (e.g. "app.example.com, www.app.example.com").
 {$OOLU_DOMAIN} {
+	encode gzip
+	reverse_proxy oolu:8765
+}
+
+# The operator's admin console — same gateway, the admin face.
+{$OOLU_ADMIN_DOMAIN} {
 	encode gzip
 	reverse_proxy oolu:8765
 }

@@ -1485,12 +1485,23 @@ def _cmd_host(args, out) -> int:
         "anthropic": os.environ.get("OOLU_PLATFORM_ANTHROPIC_KEY", ""),
         "openai": os.environ.get("OOLU_PLATFORM_OPENAI_KEY", ""),
     }
+    # Two doors, one gateway: OOLU_ADMIN_HOST names the hostname(s) —
+    # comma-separated — whose requests get the operator's admin page;
+    # every other Host serves the product shell (the messenger users
+    # chat in). Unset keeps the classic single-face admin host.
+    admin_hosts = tuple(
+        h.strip()
+        for h in os.environ.get("OOLU_ADMIN_HOST", "").split(",")
+        if h.strip()
+    )
     try:
         runtime = build_host_runtime(
             Settings.load(args.config),
             data_dir=args.data,
             secret=secret,
             database_url=args.database_url,
+            frontend="shell" if admin_hosts else "host",
+            admin_hosts=admin_hosts,
             config=config,
             google_client_id=os.environ.get("OOLU_GOOGLE_CLIENT_ID"),
             google_client_secret=os.environ.get("OOLU_GOOGLE_CLIENT_SECRET", ""),
@@ -1530,7 +1541,13 @@ def _cmd_host(args, out) -> int:
         f"OoLu multi-user host is starting on {args.host}:{args.port}.\n"
         f"  data    : {args.data}\n"
         f"  database: {database}\n"
-        f"  sign in : POST http://{shown}:{args.port}/v1/auth/login "
+        + (
+            f"  faces   : the app shell everywhere; the admin console at "
+            f"{', '.join(admin_hosts)}\n"
+            if admin_hosts
+            else ""
+        )
+        + f"  sign in : POST http://{shown}:{args.port}/v1/auth/login "
         '{"username": "%s", "password": "..."}\n' % args.admin
     )
     if created and generated_password:

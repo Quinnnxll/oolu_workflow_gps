@@ -186,6 +186,7 @@ def test_every_workflow_can_be_dispatched_by_hand():
     assert [w.name for w in workflows] == [
         "build-installers.yml",
         "ci.yml",
+        "deploy.yml",
         "desktop-windows.yml",
     ]
     for workflow in workflows:

@@ -4,6 +4,30 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Two doors and a deploy button:
+
+- **The app domain shows users the app.** One public gateway now wears
+  a different face per hostname: `GatewayASGI` gained `admin_hosts`,
+  and requests whose Host header names an admin host get the operator
+  console while every other hostname serves the product shell (the
+  chat). `oolu host` reads `OOLU_ADMIN_HOST` (comma-separated
+  hostnames) to turn this on; unset keeps the classic single-face
+  host. The production stack wires it end to end: the Caddyfile serves
+  `OOLU_DOMAIN` (the app — may list several names, e.g. `app.` and
+  `www.app.`) and `OOLU_ADMIN_DOMAIN` (the console) to the same
+  container, and the compose file hands the admin hostname to the
+  gateway. Sign in and manage users at `admin.your-domain`; chat at
+  `app.your-domain` — same accounts, same tenant walls.
+- **Push to main, the droplet rebuilds.** `.github/workflows/deploy.yml`:
+  every push to `main` SSHes into the droplet (secrets `DROPLET_IP`,
+  `SSH_PRIVATE_KEY`, `SSH_PASSPHRASE` — the key is loaded into a
+  transient ssh-agent, never written to disk unencrypted on the
+  runner), resets the checkout to `origin/main`, rebuilds the compose
+  stack, and fails loudly (with the gateway's log tail) if any
+  container is not running afterwards. One deploy at a time by
+  concurrency group; the setup walkthrough (mint the key, authorize
+  it, store the three secrets) is in `docs/deploy-production.md` §7.
+
 The production launch kit: Cloudflare + DigitalOcean + Docker + R2:
 
 - **Blobs go to object storage with four variables.** The new

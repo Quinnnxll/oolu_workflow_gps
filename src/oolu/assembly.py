@@ -483,6 +483,10 @@ def build_host_runtime(
     config: Any = None,  # gateway.GatewayConfig
     database_url: str | None = None,
     frontend: str = "host",
+    # Hostnames whose requests get the operator's admin page instead of
+    # ``frontend`` — how one public deployment serves the product shell at
+    # app.example.com and the admin console at admin.example.com.
+    admin_hosts: tuple[str, ...] = (),
     google_client_id: str | None = None,
     google_client_secret: str = "",
     google_default_tenant: str = "main",
@@ -968,6 +972,7 @@ def build_host_runtime(
         asgi=GatewayASGI(
             gateway,
             frontend=frontend,
+            admin_hosts=admin_hosts,
             connect_src=(paired,) if paired else (),
         ),
         accounts=accounts,

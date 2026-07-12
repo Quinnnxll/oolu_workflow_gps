@@ -88,6 +88,46 @@ def test_desktop_shell_serves_the_built_react_app(tmp_path):
         conn.close()
 
 
+def test_admin_hosts_pick_the_face_by_host_header(tmp_path):
+    """One public gateway, two doors: requests whose Host header names an
+    admin host get the operator console; every other hostname — including
+    no Host at all — gets the product shell. Ports and case never leak
+    users onto the wrong face."""
+    app, conn, _ = _app(tmp_path)
+    try:
+        asgi = GatewayASGI(
+            app, frontend="shell", admin_hosts=("admin.example.com",)
+        )
+
+        # The app domain (any non-admin Host) serves the built shell.
+        for host in ("app.example.com", "www.app.example.com", None):
+            headers = {"Host": host} if host else None
+            status, _, body = _call(asgi, "GET", "/", headers=headers)
+            assert status == 200
+            assert b"/assets/" in body, f"{host}: not the built shell"
+
+        # The admin domain serves the hand-written operator page —
+        # case-insensitively, with or without an explicit port.
+        for host in (
+            "admin.example.com",
+            "Admin.Example.COM",
+            "admin.example.com:443",
+        ):
+            status, _, body = _call(asgi, "GET", "/", headers={"Host": host})
+            assert status == 200
+            assert b"/assets/" not in body, f"{host}: served the shell"
+            assert b"OoLu" in body
+
+        # Without admin_hosts nothing changes: one face everywhere.
+        plain = GatewayASGI(app, frontend="shell")
+        _, _, body = _call(
+            plain, "GET", "/", headers={"Host": "admin.example.com"}
+        )
+        assert b"/assets/" in body
+    finally:
+        conn.close()
+
+
 def test_paired_server_widens_the_csp_to_exactly_that_origin(tmp_path):
     """OOLU_SERVER_URL must be callable from the shell: connect-src gains
     the paired origin (and only the origin — path stripped), nothing else."""

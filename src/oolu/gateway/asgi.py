@@ -73,6 +73,21 @@ def _load_index(frontend: str) -> bytes:
     return _FRONTEND_INDEX.read_bytes()
 
 
+def _request_host(scope: dict) -> str:
+    """The request's Host header, lowercased, without the port.
+
+    This is what a reverse proxy forwards untouched, so one gateway can
+    wear a different face per public hostname.
+    """
+    for key, value in scope.get("headers", []):
+        if key == b"host":
+            host = value.decode("latin1").strip().lower()
+            if host.startswith("["):  # bracketed IPv6 literal
+                return host.partition("]")[0].lstrip("[")
+            return host.rsplit(":", 1)[0] if ":" in host else host
+    return ""
+
+
 def _extract_token(scope: dict) -> tuple[str | None, str | None]:
     """Pull a bearer token from a WebSocket handshake.
 
@@ -106,6 +121,7 @@ class GatewayASGI:
         *,
         serve_frontend: bool = True,
         frontend: str = "host",
+        admin_hosts: tuple[str, ...] = (),
         connect_src: tuple[str, ...] = (),
         poll_interval: float = 0.5,
     ) -> None:
@@ -117,6 +133,16 @@ class GatewayASGI:
         self._frontend_headers = _frontend_headers(connect_src)
         self._shell_dir = _SHELL_DIR.resolve()
         self._index = _load_index(frontend) if serve_frontend else b""
+        # Both faces from one process: requests whose Host header names an
+        # admin host get the operator page; every other hostname gets
+        # ``frontend``. A deployment points app.example.com and
+        # admin.example.com at the same gateway and each door is right.
+        self._admin_hosts = frozenset(
+            h.strip().lower() for h in admin_hosts if h.strip()
+        )
+        self._admin_index = (
+            _load_index("host") if serve_frontend and self._admin_hosts else b""
+        )
         # How long the live stream waits for a client frame before polling the
         # durable audit log for new events. A production push seam would replace
         # this poll with a durable subscription; the loop shape stays the same.
@@ -136,7 +162,10 @@ class GatewayASGI:
         path = scope["path"]
         if self._serve_frontend and method == "GET":
             if path in ("/", "/index.html"):
-                await self._respond(send, 200, self._frontend_headers, self._index)
+                index = self._index
+                if self._admin_hosts and _request_host(scope) in self._admin_hosts:
+                    index = self._admin_index
+                await self._respond(send, 200, self._frontend_headers, index)
                 return
             if path == "/account":
                 await self._respond(

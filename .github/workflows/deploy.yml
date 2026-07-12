@@ -1,0 +1,96 @@
+# Continuous deployment: every push to main SSHes into the production
+# droplet, fast-forwards its checkout, and rebuilds the Docker stack
+# (docker-compose.prod.yml). Also runnable on demand from the Actions tab.
+#
+# Repository secrets this workflow needs (Settings → Secrets and
+# variables → Actions):
+#   DROPLET_IP       the droplet's public IPv4 (the DNS records at
+#                    Cloudflare stay proxied; this is the origin address)
+#   SSH_PRIVATE_KEY  a passphrase-protected private key whose PUBLIC half
+#                    is in the droplet user's ~/.ssh/authorized_keys
+#                    (generate: ssh-keygen -t ed25519 -a 100 -f deploy_key)
+#   SSH_PASSPHRASE   that key's passphrase
+#
+# The key never touches disk unencrypted on the runner: it is loaded into
+# a transient ssh-agent (the passphrase supplied via SSH_ASKPASS) and the
+# key file is shredded before any connection is made.
+name: deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+
+# One deploy at a time; a newer push waits instead of racing the rebuild.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  # Where the droplet keeps its clone (the walkthrough in
+  # docs/deploy-production.md clones to the deploy user's home).
+  APP_DIR: oolu_workflow_gps
+  DEPLOY_USER: root
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Load the deploy key into a transient ssh-agent
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_PASSPHRASE: ${{ secrets.SSH_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          eval "$(ssh-agent -s)"
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+          key="$RUNNER_TEMP/deploy_key"
+          install -m 600 /dev/null "$key"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key"
+          askpass="$RUNNER_TEMP/askpass.sh"
+          install -m 700 /dev/null "$askpass"
+          printf '#!/bin/sh\nprintf %%s "$SSH_PASSPHRASE"\n' > "$askpass"
+          SSH_ASKPASS="$askpass" SSH_ASKPASS_REQUIRE=force \
+            ssh-add "$key" < /dev/null
+          rm -f "$key" "$askpass"
+
+      - name: Rebuild the stack on the droplet
+        env:
+          DROPLET_IP: ${{ secrets.DROPLET_IP }}
+        run: |
+          set -euo pipefail
+          ssh -o StrictHostKeyChecking=accept-new \
+              "$DEPLOY_USER@$DROPLET_IP" bash -s -- "$APP_DIR" <<'REMOTE'
+          set -euo pipefail
+          cd "${1:?app directory}"
+          git fetch origin main
+          git reset --hard origin/main
+          docker compose -f docker-compose.prod.yml up -d --build
+          docker image prune -f
+          docker compose -f docker-compose.prod.yml ps
+          REMOTE
+
+      - name: Verify the containers came up
+        env:
+          DROPLET_IP: ${{ secrets.DROPLET_IP }}
+        run: |
+          set -euo pipefail
+          ssh -o StrictHostKeyChecking=accept-new \
+              "$DEPLOY_USER@$DROPLET_IP" bash -s -- "$APP_DIR" <<'REMOTE'
+          set -euo pipefail
+          cd "${1:?app directory}"
+          for attempt in 1 2 3 4 5 6; do
+            state="$(docker compose -f docker-compose.prod.yml ps \
+                       --format '{{.Service}} {{.State}}' | sort)"
+            echo "$state"
+            if [ -n "$state" ] && ! echo "$state" | grep -vq ' running'; then
+              echo "deploy healthy: every service is running"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "deploy FAILED: a service is not running" >&2
+          docker compose -f docker-compose.prod.yml logs --tail 50 oolu >&2
+          exit 1
+          REMOTE

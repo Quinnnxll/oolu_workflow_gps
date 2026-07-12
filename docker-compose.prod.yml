@@ -13,7 +13,8 @@ services:
       - "80:80"
       - "443:443"
     environment:
-      OOLU_DOMAIN: ${OOLU_DOMAIN:?the public hostname, e.g. app.example.com}
+      OOLU_DOMAIN: ${OOLU_DOMAIN:?the app hostname users visit, e.g. app.example.com}
+      OOLU_ADMIN_DOMAIN: ${OOLU_ADMIN_DOMAIN:?the operator console hostname, e.g. admin.example.com}
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
@@ -29,6 +30,9 @@ services:
     environment:
       OOLU_HOST_SECRET: ${OOLU_HOST_SECRET:?set a long random secret (openssl rand -base64 48)}
       OOLU_ADMIN_PASSWORD: ${OOLU_ADMIN_PASSWORD:-}
+      # Which Host header gets the operator's admin console; every other
+      # hostname (the app domain) serves the user shell.
+      OOLU_ADMIN_HOST: ${OOLU_ADMIN_DOMAIN:?the operator console hostname, e.g. admin.example.com}
       # PostgreSQL: the production durable adapter (tenant-walled stores,
       # money-grade invariants ride this connection).
       DATABASE_URL: postgresql://oolu:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/oolu

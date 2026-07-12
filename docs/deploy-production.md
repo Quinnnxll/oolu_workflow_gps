@@ -48,8 +48,18 @@ git clone <your-repo-url> oolu && cd oolu
 
 In the Cloudflare dashboard for your domain:
 
-1. **DNS → Add record**: type `A`, name `app` (or whatever subdomain),
-   content = the droplet's IP, proxy status **Proxied** (orange cloud).
+1. **DNS → Add record**, once per hostname — the deployment has two
+   doors, so create (at least) two `A` records, both content = the
+   droplet's IP, proxy status **Proxied** (orange cloud):
+   - `app` — the user-facing chat shell (`OOLU_DOMAIN`). Add `www.app`
+     too if you want that spelling to work, and list both in
+     `OOLU_DOMAIN` separated by `", "`. Caveat: Cloudflare's free
+     universal certificate covers `*.example.com` but NOT deeper names
+     like `www.app.example.com` — make that record **DNS only** (grey
+     cloud, Caddy's own certificate serves it directly) or buy
+     Advanced Certificate Manager.
+   - `admin` — the operator console (`OOLU_ADMIN_DOMAIN`): sign-in,
+     users, health, runs.
 2. **SSL/TLS → Overview**: set the mode to **Full (strict)**. This is
    the one setting people miss: it makes Cloudflare speak HTTPS to
    Caddy's real certificate instead of plain HTTP to your box.
@@ -83,8 +93,11 @@ docker compose -f docker-compose.prod.yml logs oolu   # first admin sign-in
 
 That's the whole launch. What each service is doing:
 
-- **caddy** answers `https://$OOLU_DOMAIN`, renews certificates, and
-  proxies to the gateway.
+- **caddy** answers `https://$OOLU_DOMAIN` (the app) and
+  `https://$OOLU_ADMIN_DOMAIN` (the operator console), renews
+  certificates for both, and proxies each to the same gateway — which
+  picks the face by the Host header: the app domain serves the chat
+  shell, the admin domain serves the operator page.
 - **oolu** runs `oolu host` — the multi-user gateway with local
   accounts. `DATABASE_URL` switches the durable layer to the
   PostgreSQL adapter (the production substrate; money-grade invariants
@@ -92,9 +105,10 @@ That's the whole launch. What each service is doing:
 - **postgres** holds every tenant's truth. The compose file keeps it
   off the public network entirely.
 
-Sign in at `https://app.example.com` with the admin credentials from
+Sign in at `https://admin.example.com` with the admin credentials from
 the log, then create user accounts (or wire Google sign-in / OIDC —
-the gateway supports both; see the `oolu host --help` flags).
+the gateway supports both; see the `oolu host --help` flags). Users
+chat at `https://app.example.com` — same accounts, the product face.
 
 ## 5. Real model APIs
 
@@ -142,7 +156,7 @@ docker compose -f docker-compose.prod.yml exec postgres \
 # R2 already IS the off-box copy for blobs; version the bucket if you
 # want point-in-time recovery.
 
-# Updating OoLu:
+# Updating OoLu by hand:
 git pull
 docker compose -f docker-compose.prod.yml up -d --build
 ```
@@ -150,6 +164,43 @@ docker compose -f docker-compose.prod.yml up -d --build
 The durable schema migrates itself forward on boot (versioned,
 append-only migrations); a database newer than the code refuses to
 open rather than corrupt.
+
+### Continuous deployment from GitHub
+
+`.github/workflows/deploy.yml` automates the update: every push to
+`main` (or a manual run from the Actions tab) SSHes into the droplet,
+resets its checkout to `origin/main`, rebuilds the stack, and fails
+the workflow if any container is not running afterwards. One-time
+setup:
+
+```bash
+# 1. On your own machine, mint a dedicated deploy key (pick a real
+#    passphrase — the workflow needs all three values below):
+ssh-keygen -t ed25519 -a 100 -f deploy_key -C "github-deploy"
+
+# 2. Authorize its PUBLIC half on the droplet:
+ssh root@<droplet-ip> "cat >> ~/.ssh/authorized_keys" < deploy_key.pub
+```
+
+Then in the repository: **Settings → Secrets and variables → Actions
+→ New repository secret**, three times:
+
+| Secret            | Value                                          |
+| ----------------- | ---------------------------------------------- |
+| `DROPLET_IP`      | the droplet's public IP (the DNS origin)       |
+| `SSH_PRIVATE_KEY` | the full contents of `deploy_key` (the file    |
+|                   | without `.pub`), BEGIN/END lines included      |
+| `SSH_PASSPHRASE`  | the passphrase you chose                       |
+
+Delete the local `deploy_key` file once the secret is stored. The
+workflow keeps the key encrypted at rest everywhere: on the runner it
+is loaded straight into a transient `ssh-agent` and the temporary key
+file is removed before the first connection. The droplet needs its
+clone to be able to `git fetch origin main` (a public repo just
+works; a private one needs its own read-only deploy key or token on
+the droplet). If your checkout lives somewhere other than
+`~/oolu_workflow_gps` or you SSH as a non-root user, adjust `APP_DIR`
+/ `DEPLOY_USER` at the top of the workflow file.
 
 ## 8. Hardening notes
 
