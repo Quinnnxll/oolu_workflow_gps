@@ -103,3 +103,29 @@ def build_sft_dataset(
 
 def to_jsonl(examples: list[dict]) -> str:
     return "".join(json.dumps(example, ensure_ascii=False) + "\n" for example in examples)
+
+
+# Below this many edit pairs a preference pass learns the noise in a
+# handful of rewrites, not the user's taste.
+DPO_FLOOR = 300
+
+
+def build_dpo_dataset(
+    store: RepresentativeStore, scope: str, *, max_pairs: int = 20_000
+) -> list[dict]:
+    """Preference pairs from every draft the user rewrote before sending:
+    the edit IS the label — (context, chosen=the user's words,
+    rejected=what the model offered). Scrubbed like everything that can
+    reach a training file; pairs where the edit was cosmetic-to-none
+    (identical after scrubbing) teach nothing and are dropped."""
+    pairs: list[dict] = []
+    for row in store.edited_pairs(scope, limit=max_pairs):
+        prompt = scrub(str(row["inbound_text"]))
+        chosen = scrub(str(row["final_text"]))
+        rejected = scrub(str(row["generated_text"]))
+        if not (prompt.strip() and chosen.strip() and rejected.strip()):
+            continue
+        if normalize_message(chosen) == normalize_message(rejected):
+            continue
+        pairs.append({"prompt": prompt, "chosen": chosen, "rejected": rejected})
+    return pairs

@@ -487,6 +487,34 @@ export interface FriendMessage {
   read: boolean;
 }
 
+// ---- representative wire shapes ---------------------------------------------
+// The account's representative: its mode, its record, its live voice.
+export interface RepresentativeStatus {
+  mode: "off" | "draft" | "auto";
+  about: string;
+  exchanges: number;
+  drafts_pending: number;
+  drafts_decided: number;
+  sent_unedited: number;
+  auto_sent: number;
+  accept_rate: number | null;
+  auto_earned: boolean;
+  adapter: string;
+}
+
+// One generated reply awaiting (or past) the user's decision. A decide
+// response carries `delivered` when send/edit actually delivered words.
+export interface RepresentativeDraft {
+  draft_id: string;
+  conversation_id: string;
+  inbound_text: string;
+  generated_text: string;
+  status: string;
+  final_text: string | null;
+  adapter_version: string;
+  delivered?: { message_id: string; at: string } | null;
+}
+
 // ---- payments wire shapes --------------------------------------------------
 export interface SavedCard {
   pm_ref: string;
@@ -694,6 +722,20 @@ export const api = {
       "POST",
       `/v1/friends/${encodeURIComponent(peer)}/messages`,
       { text, ...(fileId ? { file_id: fileId } : {}) },
+    ),
+  // The representative: your own voice on drafts. Status + mode/persona,
+  // propose a draft reply in a friend thread, and decide what it becomes —
+  // nothing sends without the user's word (or an earned auto pass).
+  representative: () => req<RepresentativeStatus>("GET", "/v1/representative"),
+  configureRepresentative: (change: { mode?: string; about?: string }) =>
+    req<RepresentativeStatus>("PUT", "/v1/representative", change),
+  representativeDraft: (peer: string) =>
+    req<RepresentativeDraft>("POST", "/v1/representative/drafts", { peer }),
+  decideRepresentativeDraft: (draftId: string, action: string, text?: string) =>
+    req<RepresentativeDraft>(
+      "POST",
+      `/v1/representative/drafts/${encodeURIComponent(draftId)}`,
+      { action, ...(text !== undefined ? { text } : {}) },
     ),
   submitTask: (intent: string) => mutateRun("POST", "/v1/runs", { intent }),
   task: async (id: string) =>

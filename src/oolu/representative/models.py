@@ -11,12 +11,16 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-# "auto" exists in the design but is not accepted yet — auto-send is earned
-# in Phase 2, behind the gate and a per-user accept-rate record.
-RepresentativeMode = Literal["off", "draft"]
-MODES: tuple[str, ...] = ("off", "draft")
+# "auto" can be switched on any time, but autonomy is EARNED per message:
+# an auto-send needs the gate (grounded, no commitment) AND a proven
+# accept-rate record — until then "auto" behaves exactly like "draft".
+RepresentativeMode = Literal["off", "draft", "auto"]
+MODES: tuple[str, ...] = ("off", "draft", "auto")
 
-DraftStatus = Literal["pending", "sent", "edited", "discarded"]
+# "auto_sent" is the representative speaking for the user; the four human
+# statuses are the user speaking about the representative — only those
+# count toward the accept-rate that earns autonomy.
+DraftStatus = Literal["pending", "sent", "edited", "discarded", "auto_sent"]
 
 # A short standing self-description, not a biography.
 MAX_ABOUT_CHARS = 2_000

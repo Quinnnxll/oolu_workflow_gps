@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, TERMINAL_PHASES } from "../api";
-import type { FriendConversation, FriendMessage } from "../api";
+import type {
+  FriendConversation,
+  FriendMessage,
+  RepresentativeDraft,
+} from "../api";
 import { identityHue, updateAvatarSignals } from "../avatar";
 import { useT } from "../ui";
 import { conciseName } from "../naming";
@@ -399,7 +403,22 @@ export function FriendThread({
   const [draft, setDraft] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  // The representative: ✍ appears only when the account turned it on.
+  const [repOn, setRepOn] = useState(false);
+  const [suggestion, setSuggestion] = useState<RepresentativeDraft | null>(
+    null,
+  );
+  // Set while the composer holds a draft being edited: the send button
+  // then decides the draft (recording the edit) instead of a plain send.
+  const [editingDraft, setEditingDraft] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    api
+      .representative()
+      .then((s) => setRepOn(s.mode !== "off"))
+      .catch(() => setRepOn(false)); // no door on this host: no button
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -425,10 +444,49 @@ export function FriendThread({
     setError("");
     setBusy(true);
     try {
-      const sent = await api.sendFriendMessage(peer, text);
-      setMessages((m) => [...(m ?? []), sent]);
+      if (editingDraft) {
+        // An edited suggestion goes through its decision — the outcome
+        // (and the rewrite itself) is what teaches the representative.
+        await api.decideRepresentativeDraft(editingDraft, "edit", text);
+        setEditingDraft(null);
+        setSuggestion(null);
+        await refresh();
+      } else {
+        const sent = await api.sendFriendMessage(peer, text);
+        setMessages((m) => [...(m ?? []), sent]);
+      }
       setDraft("");
       onActivity();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function suggest() {
+    setError("");
+    setBusy(true);
+    try {
+      setSuggestion(await api.representativeDraft(peer));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function decide(action: "send" | "discard") {
+    if (!suggestion) return;
+    setError("");
+    setBusy(true);
+    try {
+      await api.decideRepresentativeDraft(suggestion.draft_id, action);
+      setSuggestion(null);
+      if (action === "send") {
+        await refresh();
+        onActivity();
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -461,6 +519,42 @@ export function FriendThread({
         <div ref={endRef} />
       </div>
       {error && <div className="error">{error}</div>}
+      {suggestion && !editingDraft && (
+        <div className="rep-suggestion">
+          <div className="muted">Your representative drafted:</div>
+          <div className="bubble user">{suggestion.generated_text}</div>
+          <div className="setting-control row">
+            <button
+              aria-label="Send drafted reply"
+              disabled={busy}
+              onClick={() => void decide("send")}
+            >
+              Send
+            </button>
+            <button
+              disabled={busy}
+              onClick={() => {
+                setDraft(suggestion.generated_text);
+                setEditingDraft(suggestion.draft_id);
+              }}
+            >
+              Edit
+            </button>
+            <button
+              className="linklike"
+              disabled={busy}
+              onClick={() => void decide("discard")}
+            >
+              Discard
+            </button>
+          </div>
+        </div>
+      )}
+      {editingDraft && (
+        <div className="muted">
+          Editing the drafted reply — Send records your version.
+        </div>
+      )}
       <div className="chat-composer">
         <textarea
           aria-label={`Message ${peer}`}
@@ -475,8 +569,18 @@ export function FriendThread({
             }
           }}
         />
+        {repOn && !suggestion && !editingDraft && (
+          <button
+            title="Draft a reply in your voice"
+            aria-label="Draft a reply in your voice"
+            disabled={busy || messages === null || messages.length === 0}
+            onClick={() => void suggest()}
+          >
+            ✍
+          </button>
+        )}
         <button disabled={busy || !draft.trim()} onClick={() => void send()}>
-          {busy ? "…" : "Send"}
+          {busy ? "…" : editingDraft ? "Send edited" : "Send"}
         </button>
       </div>
     </div>

@@ -90,6 +90,46 @@ ADAPTER_MARKER = "adapter_config.json"
 METRICS_FILE = "metrics.json"
 
 
+def run_training_command(
+    command_template: list[str], config, *, timeout_s: float
+) -> TrainedAdapter:
+    """Run one training subprocess against the shared contract: the config
+    (anything with ``dump`` and ``output_dir``) goes in as JSON, adapter
+    files plus optional metrics come out of output_dir — or TrainingError
+    says exactly what didn't."""
+    output_dir = Path(config.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    config_path = config.dump(output_dir / "train-config.json")
+    command = [part.replace("{config}", str(config_path)) for part in command_template]
+    try:
+        run = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise TrainingError(f"training timed out after {timeout_s:.0f}s") from exc
+    if run.returncode != 0:
+        tail = (run.stderr or run.stdout or "").strip()[-2000:]
+        raise TrainingError(f"training exited {run.returncode}: {tail or 'no output'}")
+    if not (output_dir / ADAPTER_MARKER).exists():
+        raise TrainingError(
+            f"training finished but left no {ADAPTER_MARKER} in {output_dir}"
+        )
+    holdout_ppl = None
+    metrics_path = output_dir / METRICS_FILE
+    if metrics_path.exists():
+        try:
+            value = json.loads(metrics_path.read_text(encoding="utf-8")).get(
+                "holdout_ppl"
+            )
+            holdout_ppl = float(value) if value is not None else None
+        except (ValueError, TypeError) as exc:
+            raise TrainingError(f"unreadable {METRICS_FILE}: {exc}") from exc
+    return TrainedAdapter(adapter_dir=output_dir, holdout_ppl=holdout_ppl)
+
+
 class SubprocessTrainer:
     """Runs the configured training command with ``{config}`` substituted.
 
@@ -112,38 +152,4 @@ class SubprocessTrainer:
         self._timeout_s = timeout_s
 
     def train(self, config: SftConfig) -> TrainedAdapter:
-        output_dir = Path(config.output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        config_path = config.dump(output_dir / "sft-config.json")
-        command = [part.replace("{config}", str(config_path)) for part in self._command]
-        try:
-            run = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=self._timeout_s,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise TrainingError(
-                f"training timed out after {self._timeout_s:.0f}s"
-            ) from exc
-        if run.returncode != 0:
-            tail = (run.stderr or run.stdout or "").strip()[-2000:]
-            raise TrainingError(
-                f"training exited {run.returncode}: {tail or 'no output'}"
-            )
-        if not (output_dir / ADAPTER_MARKER).exists():
-            raise TrainingError(
-                f"training finished but left no {ADAPTER_MARKER} in {output_dir}"
-            )
-        holdout_ppl = None
-        metrics_path = output_dir / METRICS_FILE
-        if metrics_path.exists():
-            try:
-                value = json.loads(metrics_path.read_text(encoding="utf-8")).get(
-                    "holdout_ppl"
-                )
-                holdout_ppl = float(value) if value is not None else None
-            except (ValueError, TypeError) as exc:
-                raise TrainingError(f"unreadable {METRICS_FILE}: {exc}") from exc
-        return TrainedAdapter(adapter_dir=output_dir, holdout_ppl=holdout_ppl)
+        return run_training_command(self._command, config, timeout_s=self._timeout_s)

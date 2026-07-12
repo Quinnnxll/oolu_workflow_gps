@@ -1,14 +1,15 @@
 # The representative: a personal language model for every user
 
-> **Status.** Phase 0 (drafts, retrieval + persona few-shot) and Phase 1
-> (the adapter pipeline) are built: `src/oolu/representative/` plus the
-> `/v1/representative` routes. The trainer worker runs on a GPU box with
-> `pip install 'oolu[representative-train]'` and
+> **Status.** All three phases are built: `src/oolu/representative/`
+> plus the `/v1/representative` routes, the settings-pane section, and
+> in-thread drafting (✍) in the shell. The trainer worker runs on a GPU
+> box with `pip install 'oolu[representative-train]'` and
 > `python -m oolu.representative.trainer.worker --data ~/.oolu
-> --base-model Qwen/Qwen3-4B-Instruct --vllm http://localhost:8000/v1`;
-> the gateway serves trained voices when `OOLU_REPRESENTATIVE_VLLM`
-> names that server. Phase 2 (DPO on edits, earned auto-send) and the
-> chat-window toggle UI are next.
+> --base-model Qwen/Qwen3-4B-Instruct --vllm http://localhost:8000/v1
+> --dpo`; the gateway serves trained voices when
+> `OOLU_REPRESENTATIVE_VLLM` names that server. Auto mode is a setting,
+> but autonomy is earned per message: enough human verdicts at a high
+> sent-as-written rate, plus the gate — commitments always draft.
 
 A working plan for **representative mode** — the toggle in the chat window
 that lets OoLu draft and (eventually) send replies that sound like *you*,

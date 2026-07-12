@@ -9,7 +9,14 @@ training stack itself stays behind ``pip install 'oolu[representative-train]'``
 and a subprocess boundary — nothing here imports torch.
 """
 
-from .dataset import COLD_START_FLOOR, DatasetStats, build_sft_dataset, to_jsonl
+from .dataset import (
+    COLD_START_FLOOR,
+    DPO_FLOOR,
+    DatasetStats,
+    build_dpo_dataset,
+    build_sft_dataset,
+    to_jsonl,
+)
 from .engine import RepresentativeEngine, RepresentativeFallback, pair_exchanges
 from .gate import commitment_marker, judge
 from .memory import ExchangeMemory, StoreExchangeMemory
@@ -27,6 +34,7 @@ from .store import RepresentativeStore
 __all__ = [
     "AdapterServer",
     "COLD_START_FLOOR",
+    "DPO_FLOOR",
     "DatasetStats",
     "Draft",
     "ExchangeMemory",
@@ -41,6 +49,7 @@ __all__ = [
     "StoreExchangeMemory",
     "VllmAdapterServer",
     "adapter_name",
+    "build_dpo_dataset",
     "build_sft_dataset",
     "commitment_marker",
     "judge",

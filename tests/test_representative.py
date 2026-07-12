@@ -163,8 +163,8 @@ def test_deciding_a_draft_records_the_outcome_and_feeds_memory():
 
 def test_the_engine_refuses_what_it_should():
     engine = _engine(model=_Parrot())
-    with pytest.raises(ValueError, match="auto-send"):
-        engine.configure("s1", mode="auto")
+    with pytest.raises(ValueError, match="mode must be one of"):
+        engine.configure("s1", mode="firehose")
     engine.configure("s1", mode="draft")
     with pytest.raises(ValueError, match="nothing to reply to"):
         engine.draft("s1", conversation_id="b", inbound_text="  ", display_name="a")
@@ -199,6 +199,9 @@ def test_erasing_a_scope_removes_the_whole_representative():
         "drafts_pending": 0,
         "drafts_decided": 0,
         "sent_unedited": 0,
+        "auto_sent": 0,
+        "accept_rate": None,
+        "auto_earned": False,
         "adapter": "base",
     }
 
@@ -265,7 +268,7 @@ def test_the_representative_flow_end_to_end(tmp_path):
 
     # Toggle on, with a persona note. Junk modes are refused.
     assert gateway.handle(
-        _req("PUT", "/v1/representative", token=alice, body={"mode": "auto"})
+        _req("PUT", "/v1/representative", token=alice, body={"mode": "firehose"})
     ).status == 400
     configured = gateway.handle(
         _req("PUT", "/v1/representative", token=alice,

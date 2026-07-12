@@ -249,6 +249,30 @@ class RepresentativeStore:
                 return None
         return self.get_draft(draft_id)
 
+    def recent_decisions(self, scope: str, *, limit: int = 50) -> list[str]:
+        """The user's latest verdicts (sent/edited/discarded), newest first.
+        Auto-sends are excluded — the representative grading itself would
+        make autonomy self-reinforcing."""
+        with self._lock:
+            rows = self._db.execute(
+                """SELECT status FROM drafts
+                   WHERE scope = ? AND status IN ('sent', 'edited', 'discarded')
+                   ORDER BY decided_at DESC, draft_id DESC LIMIT ?""",
+                (scope, int(limit)),
+            ).fetchall()
+        return [str(row["status"]) for row in rows]
+
+    def edited_pairs(self, scope: str, *, limit: int = 20_000) -> list[sqlite3.Row]:
+        """Every draft the user rewrote before sending: (context, what the
+        model said, what the user actually said) — the DPO dataset."""
+        with self._lock:
+            return self._db.execute(
+                """SELECT inbound_text, generated_text, final_text FROM drafts
+                   WHERE scope = ? AND status = 'edited' AND final_text IS NOT NULL
+                   ORDER BY decided_at ASC LIMIT ?""",
+                (scope, int(limit)),
+            ).fetchall()
+
     def outcome_counts(self, scope: str) -> dict[str, int]:
         with self._lock:
             rows = self._db.execute(

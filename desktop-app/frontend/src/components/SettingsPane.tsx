@@ -14,6 +14,7 @@ import type {
   ModelKeyView,
   PaymentProfileView,
   PaymentsStatus,
+  RepresentativeStatus,
   SettingItem,
 } from "../api";
 
@@ -105,9 +106,113 @@ export function SettingsPane() {
           {group === "model" && <ModelKeysSection />}
         </section>
       ))}
+      <RepresentativeSection />
       <PaymentSection />
       <PrivacySection />
     </div>
+  );
+}
+
+// Your representative: OoLu drafting replies in YOUR voice. Draft mode
+// files suggestions for your approval; auto mode may send routine,
+// grounded replies by itself — but only after your accept-rate record
+// earns it, and never a commitment. Off is really off.
+export function RepresentativeSection() {
+  const [status, setStatus] = useState<RepresentativeStatus | null>(null);
+  const [about, setAbout] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  // null = this host has no representative door; loading until first fetch.
+  const [absent, setAbsent] = useState(false);
+
+  useEffect(() => {
+    api
+      .representative()
+      .then((s) => {
+        setStatus(s);
+        setAbout(s.about);
+      })
+      .catch(() => setAbsent(true));
+  }, []);
+
+  async function save(change: { mode?: string; about?: string }) {
+    setError("");
+    setBusy(true);
+    try {
+      setStatus(await api.configureRepresentative(change));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (absent || status === null) return null;
+
+  return (
+    <section className="settings-group representative">
+      <h3>Representative</h3>
+      <p className="muted">
+        OoLu can draft replies in your voice, from how you actually write.
+        Drafts wait for your word; auto only ever sends routine, grounded
+        replies — commitments always come back to you — and switches on
+        only after your approvals earn it.
+      </p>
+      <div className="setting-row">
+        <div className="setting-label">
+          <span>Mode</span>
+          <span className="setting-desc">
+            {status.mode === "auto" && !status.auto_earned
+              ? "Auto is on but not yet earned — it drafts until your record qualifies."
+              : "Off, draft suggestions, or earned auto-replies."}
+          </span>
+        </div>
+        <div className="setting-control">
+          <select
+            aria-label="Representative mode"
+            value={status.mode}
+            disabled={busy}
+            onChange={(e) => void save({ mode: e.target.value })}
+          >
+            <option value="off">off</option>
+            <option value="draft">draft</option>
+            <option value="auto">auto</option>
+          </select>
+        </div>
+      </div>
+      <div className="setting-row">
+        <div className="setting-label">
+          <span>About you</span>
+          <span className="setting-desc">
+            A short standing note the drafts lean on (role, tone, facts).
+          </span>
+        </div>
+        <div className="setting-control row">
+          <input
+            aria-label="About you"
+            placeholder="e.g. engineer; keeps replies short"
+            value={about}
+            onChange={(e) => setAbout(e.target.value)}
+          />
+          <button
+            disabled={busy || about === status.about}
+            onClick={() => void save({ about })}
+          >
+            Save
+          </button>
+        </div>
+      </div>
+      <p className="muted">
+        {status.exchanges} exchanges learned · {status.drafts_pending} draft
+        {status.drafts_pending === 1 ? "" : "s"} waiting ·{" "}
+        {status.accept_rate === null
+          ? "no verdicts yet"
+          : `${Math.round(status.accept_rate * 100)}% sent as written`}
+        {status.auto_sent > 0 ? ` · ${status.auto_sent} auto-sent` : ""} ·
+        voice: {status.adapter}
+      </p>
+      {error && <div className="error">{error}</div>}
+    </section>
   );
 }
 

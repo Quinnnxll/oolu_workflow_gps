@@ -25,9 +25,16 @@ import tarfile
 import time
 from pathlib import Path
 
-from ..dataset import COLD_START_FLOOR, build_sft_dataset, to_jsonl
+from ..dataset import (
+    COLD_START_FLOOR,
+    DPO_FLOOR,
+    build_dpo_dataset,
+    build_sft_dataset,
+    to_jsonl,
+)
 from ..serving import adapter_name, scope_digest
 from ..store import RepresentativeStore
+from .dpo import DpoConfig, PreferenceTrainer
 from .jobs import TRAIN_TASK_KIND, sweep
 from .sft import Trainer, derive_config
 
@@ -62,9 +69,11 @@ class TrainerWorker:
         work_root: str | Path,
         adapters_root: str | Path | None = None,
         serving=None,
+        preference_trainer: PreferenceTrainer | None = None,
         owner: str = "representative-trainer",
         lease_seconds: float = DEFAULT_LEASE_S,
         floor: int = COLD_START_FLOOR,
+        dpo_floor: int = DPO_FLOOR,
     ):
         self._store = store
         self._queue = queue
@@ -74,9 +83,11 @@ class TrainerWorker:
         self._work_root = Path(work_root)
         self._adapters_root = Path(adapters_root) if adapters_root else None
         self._serving = serving
+        self._preference_trainer = preference_trainer
         self._owner = owner
         self._lease_seconds = lease_seconds
         self._floor = floor
+        self._dpo_floor = dpo_floor
 
     def run_once(self) -> dict | None:
         """Lease and finish one task; None when the queue is quiet."""
@@ -137,8 +148,27 @@ class TrainerWorker:
                 output_dir=work_dir / "adapter",
             )
         )
+        # The preference pass (Phase 2): once the user has rewritten enough
+        # drafts, their edits tune the fresh SFT adapter's judgment. The
+        # SFT stage's perplexity stays the registry metric either way.
+        final_dir, dpo_pairs = trained.adapter_dir, 0
+        if self._preference_trainer is not None:
+            pairs = build_dpo_dataset(self._store, scope)
+            if len(pairs) >= self._dpo_floor:
+                pairs_path = work_dir / "dpo-pairs.jsonl"
+                pairs_path.write_text(to_jsonl(pairs), encoding="utf-8")
+                tuned = self._preference_trainer.tune(
+                    DpoConfig(
+                        base_model=self._base_model,
+                        adapter_dir=str(trained.adapter_dir),
+                        pairs_path=str(pairs_path),
+                        output_dir=str(work_dir / "adapter-dpo"),
+                    )
+                )
+                final_dir, dpo_pairs = tuned.adapter_dir, len(pairs)
+
         artifact_ref = self._artifacts.put(
-            name, _pack(trained.adapter_dir), media_type="application/gzip"
+            name, _pack(final_dir), media_type="application/gzip"
         )
         self._store.finish_adapter(
             scope, version, artifact_ref=artifact_ref, holdout_ppl=trained.holdout_ppl
@@ -146,7 +176,7 @@ class TrainerWorker:
 
         activated = self._may_activate(previous, trained.holdout_ppl)
         if activated:
-            self._install(name, trained.adapter_dir)
+            self._install(name, final_dir)
             self._store.activate_adapter(scope, version)
         return {
             "scope": scope,
@@ -158,6 +188,7 @@ class TrainerWorker:
             "examples": stats.examples,
             "deduped": stats.deduped,
             "scrubbed": stats.scrubbed,
+            "dpo_pairs": dpo_pairs,
         }
 
     @staticmethod
@@ -197,14 +228,20 @@ def main() -> None:  # pragma: no cover - the ops entry point
     from ...durable.connection import DurableConnection
     from ...durable.queue import DurableTaskQueue
     from ..serving import VllmAdapterServer
+    from .dpo import SubprocessPreferenceTrainer
     from .sft import SubprocessTrainer
 
     parser = argparse.ArgumentParser(
-        description="OoLu representative trainer worker (Phase 1)"
+        description="OoLu representative trainer worker (Phases 1-2)"
     )
     parser.add_argument("--data", default="~/.oolu", help="the host's data dir")
     parser.add_argument("--base-model", required=True)
     parser.add_argument("--vllm", default=None, help="vLLM api_base for live loads")
+    parser.add_argument(
+        "--dpo",
+        action="store_true",
+        help="stack the preference pass on scopes with enough edit pairs",
+    )
     parser.add_argument("--poll", type=float, default=30.0)
     args = parser.parse_args()
 
@@ -223,6 +260,7 @@ def main() -> None:  # pragma: no cover - the ops entry point
         work_root=data / "adapters" / "work",
         adapters_root=data / "adapters" / "live",
         serving=serving,
+        preference_trainer=SubprocessPreferenceTrainer() if args.dpo else None,
     ).run_forever(poll_s=args.poll)
 
 

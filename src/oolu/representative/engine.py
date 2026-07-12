@@ -21,6 +21,12 @@ from .persona import build_messages
 from .serving import AdapterServer, NoopAdapterServer
 from .store import RepresentativeStore
 
+# Autonomy is earned over the trailing window of the user's own verdicts:
+# at least this many decisions, and at least this share sent as written.
+AUTO_WINDOW = 50
+AUTO_MIN_DECIDED = 20
+AUTO_ACCEPT_RATE = 0.8
+
 
 def pair_exchanges(
     turns: Sequence[tuple[str, str, str]], *, me: str
@@ -81,10 +87,7 @@ class RepresentativeEngine:
         self, scope: str, *, mode: str | None = None, about: str | None = None
     ) -> dict:
         if mode is not None and mode not in MODES:
-            raise ValueError(
-                f"mode must be one of {', '.join(MODES)} — auto-send is not"
-                " available yet"
-            )
+            raise ValueError(f"mode must be one of {', '.join(MODES)}")
         if about is not None and len(about) > MAX_ABOUT_CHARS:
             raise ValueError("about is a short standing note, not a biography")
         self._store.configure(scope, mode=mode, about=about)
@@ -92,7 +95,11 @@ class RepresentativeEngine:
 
     def status(self, scope: str) -> dict:
         outcomes = self._store.outcome_counts(scope)
-        decided = sum(n for status, n in outcomes.items() if status != "pending")
+        decided = sum(
+            n
+            for status, n in outcomes.items()
+            if status in ("sent", "edited", "discarded")
+        )
         return {
             "mode": self._store.mode(scope),
             "about": self._store.about(scope),
@@ -100,8 +107,30 @@ class RepresentativeEngine:
             "drafts_pending": outcomes.get("pending", 0),
             "drafts_decided": decided,
             "sent_unedited": outcomes.get("sent", 0),
+            "auto_sent": outcomes.get("auto_sent", 0),
+            "accept_rate": self.accept_rate(scope),
+            "auto_earned": self.auto_allowed(scope),
             "adapter": self._adapters.model_for(scope) or "base",
         }
+
+    # -------------------------------------------------------------- #
+    # Earned autonomy.                                                #
+    # -------------------------------------------------------------- #
+    def accept_rate(self, scope: str) -> float | None:
+        """Sent-unedited over the trailing window of the user's own
+        verdicts; None until there are any."""
+        decisions = self._store.recent_decisions(scope, limit=AUTO_WINDOW)
+        if not decisions:
+            return None
+        return round(decisions.count("sent") / len(decisions), 3)
+
+    def auto_allowed(self, scope: str) -> bool:
+        """Autonomy is earned, never configured: enough verdicts, and
+        almost all of them 'sent as written'."""
+        decisions = self._store.recent_decisions(scope, limit=AUTO_WINDOW)
+        if len(decisions) < AUTO_MIN_DECIDED:
+            return False
+        return decisions.count("sent") / len(decisions) >= AUTO_ACCEPT_RATE
 
     # -------------------------------------------------------------- #
     # Memory.                                                         #
@@ -175,6 +204,45 @@ class RepresentativeEngine:
         self._store.add_draft(draft)
         return draft
 
+    def auto_reply(
+        self,
+        scope: str,
+        *,
+        conversation_id: str,
+        inbound_text: str,
+        display_name: str,
+        history: list[dict] | None = None,
+        model: ChatModel | None = None,
+    ) -> Draft:
+        """Draft, then send only what is both earned and gated: mode
+        "auto", a proven accept-rate, a grounded reply, no commitment.
+        Anything less stays a pending draft for the inbox. Status
+        "auto_sent" on the returned draft is the caller's cue to deliver
+        ``final_text`` — the engine itself still never sends. Auto-sent
+        words never feed memory: the representative doesn't grade itself.
+        """
+        draft = self.draft(
+            scope,
+            conversation_id=conversation_id,
+            inbound_text=inbound_text,
+            display_name=display_name,
+            history=history,
+            model=model,
+        )
+        if (
+            self._store.mode(scope) == "auto"
+            and self.auto_allowed(scope)
+            and draft.gate.auto_ok
+        ):
+            decided = self._store.decide_draft(
+                draft.draft_id,
+                status="auto_sent",
+                final_text=draft.generated_text,
+            )
+            if decided is not None:
+                return decided
+        return draft
+
     def pending(self, scope: str) -> list[Draft]:
         return self._store.pending_drafts(scope)
 
@@ -241,9 +309,11 @@ class RepresentativeEngine:
 class RepresentativeFallback:
     """The replies engine's fallback port, representative-shaped.
 
-    Phase 0 never auto-sends: an inbound message the rules couldn't answer
-    becomes a pending draft (mode permitting) and the bot stays silent —
-    returning None keeps the learned store's pairing behavior intact.
+    Draft mode never speaks: an inbound message the rules couldn't answer
+    becomes a pending draft and the bot stays silent — returning None
+    keeps the learned store's pairing behavior intact. Auto mode returns
+    words ONLY when the engine's earned-autonomy path signed off; every
+    ungated message still just files a draft.
     """
 
     def __init__(
@@ -259,10 +329,11 @@ class RepresentativeFallback:
 
     def reply(self, message: MessageEnvelope, context: dict[str, str]) -> str | None:
         scope = str(message.metadata.get("reply_scope") or message.channel)
-        if self._engine.mode(scope) != "draft":
+        mode = self._engine.mode(scope)
+        if mode not in ("draft", "auto"):
             return None
         try:
-            self._engine.draft(
+            draft = self._engine.auto_reply(
                 scope,
                 conversation_id=message.conversation_id,
                 inbound_text=message.text,
@@ -273,4 +344,6 @@ class RepresentativeFallback:
             # A dead model (or an empty message) must never break the bot's
             # polling loop; the message simply stays unanswered.
             return None
+        if draft.status == "auto_sent" and draft.final_text:
+            return draft.final_text
         return None

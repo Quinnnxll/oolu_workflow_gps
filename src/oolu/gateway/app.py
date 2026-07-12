@@ -1267,6 +1267,7 @@ class GatewayApp:
             )
         except ValueError as exc:
             raise GatewayError(400, "invalid_request", str(exc)) from exc
+        self._representative_auto_reply(session, peer, message.body)
         return json_response(
             201,
             {
@@ -1280,7 +1281,54 @@ class GatewayApp:
             },
         )
 
-# ------------------------------------------------------------------ #
+    def _representative_auto_reply(self, session, peer: str, inbound: str) -> None:
+        """The RECIPIENT's representative may answer a friend message on
+        its own — only in auto mode, only past the engine's earned-autonomy
+        gate, and never in a way that can break the sender's request (an
+        auto-reply is a bonus, not a step of delivery). The sender sees it
+        on the next poll like any reply."""
+        rep, store = self._representative, self._direct_messages
+        if rep is None or store is None:
+            return
+        scope = f"{session.tenant_id}:{peer}"
+        try:
+            if rep.mode(scope) != "auto":
+                return
+            thread = store.between(
+                tenant=session.tenant_id, me=peer, peer=session.principal_id
+            )
+            rep.ingest(
+                scope,
+                pair_representative_exchanges(
+                    [(m.message_id, m.sender, m.body) for m in thread], me=peer
+                ),
+            )
+            history = [
+                {
+                    "role": "assistant" if m.sender == peer else "user",
+                    "content": m.body,
+                }
+                for m in thread[:-1][-12:]
+            ]
+            draft = rep.auto_reply(
+                scope,
+                conversation_id=session.principal_id,
+                inbound_text=inbound,
+                display_name=peer,
+                history=history,
+                model=self._tenant_model(session.tenant_id),
+            )
+            if draft.status == "auto_sent" and draft.final_text:
+                store.send(
+                    tenant=session.tenant_id,
+                    sender=peer,
+                    recipient=session.principal_id,
+                    body=draft.final_text,
+                )
+        except Exception:  # noqa: BLE001 — see docstring: a bonus, not a step
+            return
+
+    # ------------------------------------------------------------------ #
     # The representative: replies drafted in the account's own voice.    #
     # Phase 0 of docs/representative-plan.md — retrieval + persona few-  #
     # shot over the shared model, drafts only. Nothing on these routes   #
