@@ -54,6 +54,8 @@ fi
 echo "Installing OoLu (first run can take a few minutes) ..."
 .venv/bin/python -m pip install --quiet --upgrade pip
 .venv/bin/python -m pip install --quiet -e ".[serve]"
+# Optional: the CAD geometry hand (heavy download, only if you want it):
+#   .venv/bin/python -m pip install -e ".[serve,cad]"
 
 echo
 echo "Starting the OoLu shell ... your browser will open shortly."

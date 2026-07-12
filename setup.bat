@@ -58,6 +58,8 @@ if not %errorlevel%==0 (
 echo Installing OoLu ^(first run can take a few minutes^) ...
 ".venv\Scripts\python.exe" -m pip install --quiet --upgrade pip || goto :fail
 ".venv\Scripts\python.exe" -m pip install --quiet -e ".[serve]" || goto :fail
+rem Optional: the CAD geometry hand (heavy download, only if you want it):
+rem   .venv\Scripts\python.exe -m pip install -e ".[serve,cad]"
 
 echo.
 echo Starting the OoLu shell ... your browser will open shortly.
