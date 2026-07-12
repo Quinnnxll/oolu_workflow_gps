@@ -429,6 +429,68 @@ def build_parser() -> argparse.ArgumentParser:
         default="backups",
         help="where backup folders are created (default: ./backups)",
     )
+    # The representative, locally: your voice trains on YOUR machine —
+    # messages and adapters never leave it. One-shot by default (train
+    # what's due, report, exit); --watch keeps the sweep going.
+    rep_status = sub.add_parser(
+        "representative-status",
+        help="who has a representative here, and whether a refresh is due",
+    )
+    rep_status.add_argument(
+        "--data",
+        default=".oolu/unified",
+        metavar="DIR",
+        help="the install's data directory (desktop default: .oolu/unified;"
+        " a host uses .oolu/host)",
+    )
+
+    rep_train = sub.add_parser(
+        "representative-train",
+        help="train due representatives on this machine (nothing leaves it)",
+    )
+    rep_train.add_argument(
+        "--data",
+        default=".oolu/unified",
+        metavar="DIR",
+        help="the install's data directory (desktop default: .oolu/unified;"
+        " a host uses .oolu/host)",
+    )
+    rep_train.add_argument(
+        "--base-model",
+        default="Qwen/Qwen3-4B-Instruct",
+        help="the shared base the LoRA trains on (downloads from the Hub"
+        " on first use)",
+    )
+    rep_train.add_argument(
+        "--dpo",
+        action="store_true",
+        help="stack the preference pass where enough edit pairs exist",
+    )
+    rep_train.add_argument(
+        "--vllm",
+        metavar="API_BASE",
+        help="local vLLM (/v1 included) to hot-load finished adapters into",
+    )
+    rep_train.add_argument(
+        "--watch",
+        action="store_true",
+        help="keep sweeping instead of one pass",
+    )
+    rep_train.add_argument("--poll", type=float, default=30.0, metavar="SECONDS")
+    rep_train.add_argument(
+        "--floor",
+        type=int,
+        default=None,
+        metavar="N",
+        help="override the cold-start floor (exchanges needed to train)",
+    )
+    rep_train.add_argument(
+        "--trainer-command",
+        metavar="CMD",
+        help="advanced: a custom training command honoring the config/output"
+        " contract; {config} is replaced with the config path",
+    )
+
     sub.add_parser("version", help="print the version")
     return parser
 
@@ -866,6 +928,132 @@ def _cmd_reply_teach(args, out) -> int:
         store.close()
     out.write(f"learned reply in scope '{args.scope}'\n")
     return 0
+
+
+def _representative_store(data: str):
+    from pathlib import Path
+
+    from .representative import RepresentativeStore
+
+    path = Path(data).expanduser() / "representative.db"
+    if not path.exists():
+        raise _CliError(
+            f"no representative data at {path} — is --data pointing at the"
+            " install's directory, and has anyone turned the mode on?"
+        )
+    return RepresentativeStore(path)
+
+
+def _cmd_representative_status(args, out) -> int:
+    from .representative import COLD_START_FLOOR
+    from .representative.trainer import refresh_reason
+
+    store = _representative_store(args.data)
+    try:
+        scopes = store.scopes()
+        if not scopes:
+            out.write("no representatives are turned on here\n")
+            return 0
+        for scope in scopes:
+            active = store.active_adapter(scope)
+            count = store.exchange_count(scope)
+            voice = (
+                f"v{active['version']} (ppl {active['holdout_ppl']})"
+                if active is not None
+                else "base — no adapter yet"
+            )
+            due = refresh_reason(store, scope)
+            if due:
+                tail = f"due: {due}"
+            elif active is None and count < COLD_START_FLOOR:
+                tail = f"gathering voice ({count}/{COLD_START_FLOOR} exchanges)"
+            else:
+                tail = "up to date"
+            out.write(
+                f"{scope}: mode={store.mode(scope)}"
+                f" exchanges={count} voice={voice} — {tail}\n"
+            )
+    finally:
+        store.close()
+    return 0
+
+
+def _cmd_representative_train(args, out) -> int:
+    """Local training, whole and offline: sweep what's due onto the
+    dedicated queue and drain it — dataset, QLoRA from base, artifact,
+    registry, (optionally) a live vLLM load. The same worker a GPU host
+    runs; here it simply runs where the messages already live."""
+    import shlex
+    from pathlib import Path
+
+    from .durable.artifacts import FilesystemArtifactStore
+    from .durable.connection import DurableConnection
+    from .durable.queue import DurableTaskQueue
+    from .representative import COLD_START_FLOOR, VllmAdapterServer
+    from .representative.trainer import (
+        SubprocessPreferenceTrainer,
+        SubprocessTrainer,
+        TrainerWorker,
+        sweep,
+    )
+
+    store = _representative_store(args.data)
+    data = Path(args.data).expanduser()
+    queue = DurableTaskQueue(DurableConnection(data / "representative-queue.db"))
+    trainer = (
+        SubprocessTrainer(shlex.split(args.trainer_command))
+        if args.trainer_command
+        else SubprocessTrainer()
+    )
+    floor = args.floor if args.floor is not None else COLD_START_FLOOR
+    worker = TrainerWorker(
+        store,
+        queue,
+        trainer,
+        FilesystemArtifactStore(data / "adapters" / "artifacts"),
+        base_model=args.base_model,
+        work_root=data / "adapters" / "work",
+        adapters_root=data / "adapters" / "live",
+        serving=(
+            VllmAdapterServer(store, api_base=args.vllm) if args.vllm else None
+        ),
+        preference_trainer=SubprocessPreferenceTrainer() if args.dpo else None,
+        floor=floor,
+    )
+    try:
+        if args.watch:
+            out.write("watching for due representatives — Ctrl+C stops\n")
+            worker.run_forever(poll_s=args.poll)
+            return 0  # pragma: no cover - run_forever never returns
+        due = sweep(store, queue, floor=floor)
+        out.write(f"{len(due)} scope(s) due\n")
+        failures = 0
+        while (result := worker.run_once()) is not None:
+            scope = result.get("scope", "?")
+            if "error" in result:
+                failures += 1
+                out.write(f"{scope}: FAILED — {result['error']}\n")
+            elif result.get("skipped"):
+                out.write(
+                    f"{scope}: skipped — {result['examples']} usable exchanges,"
+                    f" the floor is {result['floor']}\n"
+                )
+            else:
+                out.write(
+                    f"{scope}: v{result['version']} trained"
+                    f" ({result['examples']} examples"
+                    f", ppl {result['holdout_ppl']}"
+                    f", dpo pairs {result['dpo_pairs']}) — "
+                    + (
+                        "ACTIVE — this voice now drafts"
+                        if result["activated"]
+                        else "shelved (worse than the live voice)"
+                    )
+                    + "\n"
+                )
+        return 1 if failures else 0
+    finally:
+        store.close()
 
 
 def _cmd_skill_list(args, out) -> int:
@@ -1631,6 +1819,10 @@ def main(argv: list[str] | None = None, *, builder=None, out=None) -> int:
             return _cmd_workflow_list(args, out)
         if args.command == "workflow-status":
             return _cmd_workflow_status(args, out)
+        if args.command == "representative-status":
+            return _cmd_representative_status(args, out)
+        if args.command == "representative-train":
+            return _cmd_representative_train(args, out)
         if args.command == "version":
             out.write(f"oolu {_version()}\n")
             return 0

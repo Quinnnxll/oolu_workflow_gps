@@ -12,7 +12,11 @@
 > sent-as-written rate, plus the gate — commitments always draft. The
 > shell carries a Drafts inbox (every pending draft, decided in place)
 > and per-peer overrides ("never auto-reply to my boss": mute a peer in
-> their thread, or `PUT /v1/representative/peers/{peer}`).
+> their thread, or `PUT /v1/representative/peers/{peer}`). Local-first
+> training is one command on the user's own machine —
+> `oolu representative-train --data .oolu/unified` (with
+> `representative-status` to see what's due) — messages and adapters
+> never leave it.
 
 A working plan for **representative mode** — the toggle in the chat window
 that lets OoLu draft and (eventually) send replies that sound like *you*,
