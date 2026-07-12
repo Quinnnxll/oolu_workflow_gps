@@ -130,10 +130,17 @@ speculative:
    gate. A model-backed planner auditions by implementing one
    function.)*
 
-All six steps are built. The next occupants of this plan: wiring a
-model-backed planner into the Level B seat, Blender/animation (spec
-Phase 3), and cross-object constraint references for dependency-wide
-regression protection.
+All six steps are built — and the model-backed planner is wired:
+`projectgraph/planner.py` puts any `model.reply` brain (the desktop's
+configured router, a local server, a scripted stand-in) into the Level
+B seat behind a strict step protocol (read / propose / run_cad / done,
+one fenced JSON per turn). The model proposes, never commits: every
+step goes through the kernel and the judged CAD hand, rejections
+return in words for diagnosis and repair, babble is cut off honestly,
+and the same §23 gate decides fitness. Next occupants of this plan:
+a live frontier model auditioned through the router, Blender/animation
+(spec Phase 3), and cross-object constraint references for
+dependency-wide regression protection.
 
 Steps 1–2 are the spine (a graph without the kernel is a database; a
 kernel without the graph has nothing to guard). Blender/SOLIDWORKS come

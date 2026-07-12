@@ -4,6 +4,31 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+A model takes the planner's seat — proposing, never committing:
+
+- **The seat speaks one protocol.** `projectgraph/planner.py`:
+  `ModelPlanner` puts any `model.reply(messages)` brain — the
+  desktop's configured router, a local server, a scripted stand-in —
+  into the Level B seat. One fenced JSON step per turn (read /
+  propose / run_cad / done); everything the model offers goes through
+  the SAME doors as anyone else's work: the transaction kernel for
+  truth, the judged CAD hand for geometry. It cannot commit, cannot
+  skip the evaluator, cannot reach past the bench.
+- **Failure is feedback.** Rejections return in words — "stale",
+  the wall, the exact broken postcondition — and the tests prove a
+  model that reads them REPAIRS: a stale-revision proposal is
+  diagnosed and corrected mid-audition (fail → diagnose → repair →
+  verify, the spec's most valuable trajectory, produced live).
+  Babble is told the protocol once and then cut off — an honest
+  "not fit", never a crash — and an out-of-protocol verb changes
+  nothing at all.
+- **The audition is two lines.** `level_b.model_planner(model)`
+  enters the seat; the same §23 gate that passed the scripted
+  careful-engineer decides. A scripted protocol-speaking brain earns
+  FIT through the whole vertical (kernel patches, real geometry,
+  filed evidence, advancement) in 5 counted steps — so when a live
+  frontier model auditions, the bar and the bench are already set.
+
 Level B: the whole vertical, benchmarked under one budget (step 6):
 
 - **A subsystem change is the exam.** `benchmarks/level_b.py`: the

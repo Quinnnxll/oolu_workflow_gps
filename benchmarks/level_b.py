@@ -464,6 +464,47 @@ def reckless_intern(bench: Bench) -> None:
     )
 
 
+# The task brief a MODEL-BACKED planner receives — ids, walls, and the
+# finish line, in words. Wire the desktop's configured brain into the
+# seat with two lines:
+#
+#     from oolu.projectgraph import ModelPlanner
+#     report = run(model_planner(model), name="frontier")
+#
+# where ``model`` is anything speaking ``model.reply(messages) -> str``
+# (the ChatModelRouter the gateway already builds, a local server, or a
+# scripted stand-in). The audition is then decided by the same gate as
+# every other contender — the foundation-model question stays
+# evidence-gated.
+LEVEL_B_BRIEF = f"""\
+Task: the suspension shaft (object 'shaft-1') has grown to \
+{SHAFT_D_AFTER:.0f}mm. Update the bracket (object 'bracket-1') so its \
+bore clears the shaft by {RADIAL_CLEARANCE_MM:.0f}mm radially (bore \
+diameter >= shaft diameter + {2 * RADIAL_CLEARANCE_MM:.0f}mm), keeping \
+the bore manufacturable (<= {MAX_BORE_MM:.0f}mm) and the aluminium \
+bracket ({ALUMINIUM:.0f} kg/m^3) within {MASS_BUDGET_KG} kg. Rebuild \
+and measure with run_cad (a 'build' of the bracket features and an \
+'assemble' of bracket plus shaft — bracket features are a box of \
+x_mm/y_mm/z_mm with a hole of bore_d_mm; the shaft is a cylinder of \
+d_mm/h_mm; both at position [0,0,0]). File the measurements onto \
+'bracket-1' as appended evidence including shaft_d_mm, bore_d_mm, \
+mass_kg, and interference_count, then advance its status to \
+'approved' and reply done. Proposals and CAD runs spend a budget of \
+{DEFAULT_BUDGET}; reads are free."""
+
+
+def model_planner(model, *, max_turns: int = 24) -> Callable[[Bench], None]:
+    """The Level B seat for any ``model.reply`` brain."""
+    from oolu.projectgraph import ModelPlanner
+
+    return ModelPlanner(
+        model,
+        brief=LEVEL_B_BRIEF,
+        bootstrap_ids=("shaft-1", "bracket-1"),
+        max_turns=max_turns,
+    )
+
+
 CONTENDERS: dict[str, Callable[[Bench], None]] = {
     "careful-engineer": careful_engineer,
     "reckless-intern": reckless_intern,
