@@ -128,6 +128,40 @@ def test_admin_hosts_pick_the_face_by_host_header(tmp_path):
         conn.close()
 
 
+def test_a_hosted_shell_is_told_it_faces_a_remote_server(tmp_path):
+    """The packaged desktop app learns "remote" from its Tauri wrapper; a
+    browser visiting the hosted app domain has no wrapper, so the gateway
+    must inject the flag — otherwise the shell skips the sign-in gate
+    (Settings 401s with "missing bearer token") and aims auth at a paired
+    server instead of its own origin ("Failed to fetch")."""
+    app, conn, _ = _app(tmp_path)
+    flag = b"window.__OOLU_REMOTE__ = true"
+    try:
+        hosted = GatewayASGI(
+            app,
+            frontend="shell",
+            shell_remote=True,
+            admin_hosts=("admin.example.com",),
+        )
+        _, _, body = _call(
+            hosted, "GET", "/", headers={"Host": "app.example.com"}
+        )
+        assert flag in body
+
+        # The admin console is not the shell; no flag there.
+        _, _, body = _call(
+            hosted, "GET", "/", headers={"Host": "admin.example.com"}
+        )
+        assert flag not in body
+
+        # The loopback desktop keeps its wrapper-driven default.
+        desktop = GatewayASGI(app, frontend="shell")
+        _, _, body = _call(desktop, "GET", "/")
+        assert flag not in body
+    finally:
+        conn.close()
+
+
 def test_paired_server_widens_the_csp_to_exactly_that_origin(tmp_path):
     """OOLU_SERVER_URL must be callable from the shell: connect-src gains
     the paired origin (and only the origin — path stripped), nothing else."""

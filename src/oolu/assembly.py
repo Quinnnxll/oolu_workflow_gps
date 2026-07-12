@@ -483,6 +483,11 @@ def build_host_runtime(
     config: Any = None,  # gateway.GatewayConfig
     database_url: str | None = None,
     frontend: str = "host",
+    # True on a public multi-user host serving the shell: the shell is
+    # told it faces a remote server (sign-in required, same-origin auth)
+    # instead of assuming the loopback desktop. `oolu host` sets this;
+    # `oolu desktop` never does.
+    shell_remote: bool = False,
     # Hostnames whose requests get the operator's admin page instead of
     # ``frontend`` — how one public deployment serves the product shell at
     # app.example.com and the admin console at admin.example.com.
@@ -972,6 +977,7 @@ def build_host_runtime(
         asgi=GatewayASGI(
             gateway,
             frontend=frontend,
+            shell_remote=shell_remote,
             admin_hosts=admin_hosts,
             connect_src=(paired,) if paired else (),
         ),

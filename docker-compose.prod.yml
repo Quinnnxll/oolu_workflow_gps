@@ -50,6 +50,10 @@ services:
       # APIs through the same router.
       OOLU_PLATFORM_ANTHROPIC_KEY: ${OOLU_PLATFORM_ANTHROPIC_KEY:-}
       OOLU_PLATFORM_OPENAI_KEY: ${OOLU_PLATFORM_OPENAI_KEY:-}
+      # "Continue with Google" (optional): a Web-application OAuth client
+      # from Google Cloud Console — setup in docs/deploy-production.md.
+      OOLU_GOOGLE_CLIENT_ID: ${OOLU_GOOGLE_CLIENT_ID:-}
+      OOLU_GOOGLE_CLIENT_SECRET: ${OOLU_GOOGLE_CLIENT_SECRET:-}
     volumes:
       - oolu-data:/data
     depends_on:

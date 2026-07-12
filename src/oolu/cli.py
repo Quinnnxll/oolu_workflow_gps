@@ -1501,6 +1501,7 @@ def _cmd_host(args, out) -> int:
             secret=secret,
             database_url=args.database_url,
             frontend="shell" if admin_hosts else "host",
+            shell_remote=True,
             admin_hosts=admin_hosts,
             config=config,
             google_client_id=os.environ.get("OOLU_GOOGLE_CLIENT_ID"),

@@ -4,6 +4,33 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The hosted app signs people in:
+
+- **The shell now knows when it is hosted.** The packaged desktop app
+  learns "remote host, sign-in required" from its Tauri wrapper; a
+  browser visiting the hosted app domain has no wrapper, so the shell
+  believed it was the loopback desktop — Settings hit naked 401s
+  ("missing bearer token") and the sign-in form aimed at a paired
+  online server that doesn't exist ("Failed to fetch"). `oolu host`
+  now serves the shell with an injected `window.__OOLU_REMOTE__`
+  flag (`GatewayASGI(shell_remote=True)`): the sign-in gate appears,
+  username/password posts to the app's own origin, and accounts
+  created from the admin console sign straight in. No shell rebuild —
+  the built bundle already honored the flag.
+- **"Continue with Google", hosted.** The compose file now passes
+  `OOLU_GOOGLE_CLIENT_ID` / `OOLU_GOOGLE_CLIENT_SECRET` through to the
+  gateway, and the deploy guide gained the Google Cloud Console
+  walkthrough (Web-application OAuth client; redirect URI
+  `https://<app domain>/v1/auth/google/callback`). Leave the id empty
+  and the button stays hidden.
+- **The deploy workflow tells the truth about a bad key.** Both first
+  runs failed at `ssh-add` with "error in libcrypto" — a
+  `SSH_PRIVATE_KEY` secret whose line breaks didn't survive the paste.
+  The workflow now strips CR characters and fails early with words
+  ("re-create the secret with the entire key file; safest:
+  `gh secret set SSH_PRIVATE_KEY < deploy_key`") instead of a
+  libcrypto stack whisper.
+
 Two doors and a deploy button:
 
 - **The app domain shows users the app.** One public gateway now wears

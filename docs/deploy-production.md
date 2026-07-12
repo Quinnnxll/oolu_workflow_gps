@@ -126,6 +126,41 @@ Two doors, both real, both metered:
   keys follow the environment on every boot — set is stored encrypted,
   unset is removed.
 
+### "Continue with Google" on the app domain
+
+The button appears on the sign-in screen as soon as a Google OAuth
+client is configured; without one, username/password (accounts you
+create from the admin console, or self-serve registration if you
+enabled it) is the only door. Setup, once, in the
+[Google Cloud Console](https://console.cloud.google.com/):
+
+1. Pick (or create) a project → **APIs & Services → OAuth consent
+   screen**: External, fill in the app name and your domain, publish.
+   No extra scopes needed — OoLu asks only for the basic profile.
+2. **APIs & Services → Credentials → Create Credentials → OAuth
+   client ID**, application type **Web application**. Under
+   **Authorized redirect URIs** add one per app hostname you serve:
+
+   ```
+   https://app.example.com/v1/auth/google/callback
+   ```
+
+   (add `https://www.app.example.com/...` too if that name serves).
+3. Put the client id and secret in `.env` and restart:
+
+   ```
+   OOLU_GOOGLE_CLIENT_ID=<...>.apps.googleusercontent.com
+   OOLU_GOOGLE_CLIENT_SECRET=GOCSPX-...
+   ```
+   ```bash
+   docker compose -f docker-compose.prod.yml up -d
+   ```
+
+The flow is the RFC 8252 shape: the shell opens Google's consent page
+in a new tab, Google redirects back to the gateway's own
+`/v1/auth/google/callback`, and the shell collects the session on its
+own channel — the token never rides the redirect.
+
 ## 6. Tenant isolation — what you're relying on
 
 `tenant_id` is not a column convention here; it is a wall enforced in
@@ -192,7 +227,17 @@ Then in the repository: **Settings → Secrets and variables → Actions
 |                   | without `.pub`), BEGIN/END lines included      |
 | `SSH_PASSPHRASE`  | the passphrase you chose                       |
 
-Delete the local `deploy_key` file once the secret is stored. The
+`SSH_PRIVATE_KEY` must keep its line breaks — a paste that collapses
+the key onto one line fails at `ssh-add` with "error in libcrypto".
+The safe way is the CLI, which preserves the file byte for byte:
+
+```bash
+gh secret set SSH_PRIVATE_KEY < deploy_key
+```
+
+(pasting into the web form also works IF every line survives, BEGIN
+and END lines included). Delete the local `deploy_key` file once the
+secret is stored. The
 workflow keeps the key encrypted at rest everywhere: on the runner it
 is loaded straight into a transient `ssh-agent` and the temporary key
 file is removed before the first connection. The droplet needs its

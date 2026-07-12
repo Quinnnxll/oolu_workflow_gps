@@ -121,6 +121,7 @@ class GatewayASGI:
         *,
         serve_frontend: bool = True,
         frontend: str = "host",
+        shell_remote: bool = False,
         admin_hosts: tuple[str, ...] = (),
         connect_src: tuple[str, ...] = (),
         poll_interval: float = 0.5,
@@ -133,6 +134,18 @@ class GatewayASGI:
         self._frontend_headers = _frontend_headers(connect_src)
         self._shell_dir = _SHELL_DIR.resolve()
         self._index = _load_index(frontend) if serve_frontend else b""
+        if serve_frontend and shell_remote and frontend == "shell":
+            # A multi-user host serving the shell must tell it so: the
+            # packaged desktop app learns "remote" from its Tauri wrapper,
+            # but a browser visiting the hosted app domain has no wrapper —
+            # without this flag the shell believes it is the loopback
+            # desktop (no sign-in gate, auth aimed at a paired server).
+            # Remote means: gate on sign-in, authenticate same-origin.
+            self._index = self._index.replace(
+                b"<head>",
+                b"<head><script>window.__OOLU_REMOTE__ = true;</script>",
+                1,
+            )
         # Both faces from one process: requests whose Host header names an
         # admin host get the operator page; every other hostname gets
         # ``frontend``. A deployment points app.example.com and

@@ -46,7 +46,16 @@ jobs:
           echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
           key="$RUNNER_TEMP/deploy_key"
           install -m 600 /dev/null "$key"
-          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key"
+          # Windows line endings would corrupt the PEM ("error in libcrypto").
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$key"
+          if ! grep -q -- "-----BEGIN .*PRIVATE KEY-----" "$key" \
+             || [ "$(wc -l < "$key")" -lt 3 ]; then
+            echo "::error::The SSH_PRIVATE_KEY secret is not a valid multi-line" \
+                 "private key. Re-create it with the ENTIRE key file — every" \
+                 "line, BEGIN/END included. Safest: gh secret set" \
+                 "SSH_PRIVATE_KEY < deploy_key" >&2
+            exit 1
+          fi
           askpass="$RUNNER_TEMP/askpass.sh"
           install -m 700 /dev/null "$askpass"
           printf '#!/bin/sh\nprintf %%s "$SSH_PASSPHRASE"\n' > "$askpass"
