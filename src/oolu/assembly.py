@@ -581,6 +581,7 @@ def build_host_runtime(
         WorkDesk,
     )
     from .providers.keyring import ModelKeyring
+    from .representative import RepresentativeEngine, RepresentativeStore
     from .settings_node import SettingsNode, SettingsStore
     from .social import AssistantHistoryStore, DirectMessageStore
 
@@ -938,6 +939,13 @@ def build_host_runtime(
         # every signed-in device shares.
         direct_messages=DirectMessageStore(conn),
         assistant_history=AssistantHistoryStore(conn),
+        # The representative: replies drafted in each account's own voice
+        # (drafts only — Phase 0 of docs/representative-plan.md). Local
+        # SQLite like every learned store; the per-tenant chat router is
+        # handed in per call by the gateway.
+        representative=RepresentativeEngine(
+            RepresentativeStore(data / "representative.db")
+        ),
         # The operator's legal documents; marked templates answer until
         # terms.md / privacy.md exist here.
         legal_dir=data / "legal",

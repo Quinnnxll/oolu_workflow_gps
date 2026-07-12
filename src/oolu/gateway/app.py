@@ -142,11 +142,13 @@ from ..projectgraph import (
 from ..providers.chatmodel import ChatModelRouter
 from ..providers.keyring import PROVIDERS, ModelKeyring
 from ..providers.vault import SecretVault
+from ..representative import pair_exchanges as pair_representative_exchanges
 from ..settings_node import SettingError, SettingsNode
 from ..skills.contract import NodeContract, Slot, SubgraphBody
 from ..skills.inputs import bind_inputs, inputs_manifest
 from ..skills.models import ExecutionStatus, ReusableSkill
 from ..skills.ports import ActionExecutor
+from ..social import MAX_MESSAGE_CHARS
 from .errors import GatewayError, WebhookError
 from .http import (
     Request,
@@ -460,6 +462,8 @@ class GatewayApp:
         direct_messages=None,  # social.DirectMessageStore: friends talking
         assistant_history=None,  # social.AssistantHistoryStore: one OoLu
         # thread per account, shared by every signed-in device
+        representative=None,  # representative.RepresentativeEngine: drafts
+        # replies in the account's own voice — never sends on its own
         legal_dir=None,  # where the operator's terms.md/privacy.md live;
         # marked templates answer until those files exist
         local_files_root=None,  # the DESKTOP's own disk for the chat's
@@ -565,6 +569,7 @@ class GatewayApp:
         self._mail_codes = mail_codes
         self._direct_messages = direct_messages
         self._assistant_history = assistant_history
+        self._representative = representative
         self._legal_dir = legal_dir
         self._local_files_root = local_files_root
         # What may run where, per trust level — rendered by the shell's
@@ -754,6 +759,18 @@ class GatewayApp:
         r.add("POST", "/v1/friends/lookup", self._friends_lookup)
         r.add("GET", "/v1/friends/{peer}/messages", self._friend_messages)
         r.add("POST", "/v1/friends/{peer}/messages", self._friend_send)
+        # The representative: drafts in the account's own voice. Drafts
+        # are proposed, listed, and decided — nothing sends without the
+        # user's word (docs/representative-plan.md, Phase 0).
+        r.add("GET", "/v1/representative", self._representative_status)
+        r.add("PUT", "/v1/representative", self._representative_configure)
+        r.add("GET", "/v1/representative/drafts", self._representative_drafts)
+        r.add("POST", "/v1/representative/drafts", self._representative_draft)
+        r.add(
+            "POST",
+            "/v1/representative/drafts/{draft_id}",
+            self._representative_decide,
+        )
         r.add("POST", "/v1/runs", self._submit_run)
         r.add("GET", "/v1/runs", self._list_runs)
         r.add("GET", "/v1/runs/{run_id}", self._get_run)
@@ -1262,6 +1279,148 @@ class GatewayApp:
                 "read": False,
             },
         )
+
+# ------------------------------------------------------------------ #
+    # The representative: replies drafted in the account's own voice.    #
+    # Phase 0 of docs/representative-plan.md — retrieval + persona few-  #
+    # shot over the shared model, drafts only. Nothing on these routes   #
+    # sends a message except the user's explicit send/edit decision.     #
+    # ------------------------------------------------------------------ #
+    def _require_representative(self):
+        if self._representative is None:
+            raise GatewayError(
+                404, "not_found", "representative mode is not enabled on this host"
+            )
+        return self._representative
+
+    @staticmethod
+    def _representative_scope(session) -> str:
+        return f"{session.tenant_id}:{session.principal_id}"
+
+    def _representative_status(self, request, session, params) -> Response:
+        rep = self._require_representative()
+        return json_response(200, rep.status(self._representative_scope(session)))
+
+    def _representative_configure(self, request, session, params) -> Response:
+        rep = self._require_representative()
+        body = request.body or {}
+        mode, about = body.get("mode"), body.get("about")
+        if mode is not None and not isinstance(mode, str):
+            raise GatewayError(400, "invalid_request", "mode must be a string")
+        if about is not None and not isinstance(about, str):
+            raise GatewayError(400, "invalid_request", "about must be a string")
+        try:
+            status = rep.configure(
+                self._representative_scope(session), mode=mode, about=about
+            )
+        except ValueError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(200, status)
+
+    def _representative_drafts(self, request, session, params) -> Response:
+        rep = self._require_representative()
+        scope = self._representative_scope(session)
+        return json_response(
+            200, {"items": [draft.model_dump() for draft in rep.pending(scope)]}
+        )
+
+    def _representative_draft(self, request, session, params) -> Response:
+        """Draft a reply to the latest unanswered message from a friend.
+
+        The thread is folded into the account's exchange memory on the way
+        (idempotent by message id), so recall grows exactly as fast as the
+        user's real conversations do — no separate ingestion pipeline.
+        """
+        rep = self._require_representative()
+        store = self._require_direct_messages()
+        scope = self._representative_scope(session)
+        if rep.mode(scope) != "draft":
+            raise GatewayError(
+                409, "representative_off", "turn representative mode on first"
+            )
+        peer = self._friend_or_404(session, (request.body or {}).get("peer"))
+        thread = store.between(
+            tenant=session.tenant_id, me=session.principal_id, peer=peer
+        )
+        rep.ingest(
+            scope,
+            pair_representative_exchanges(
+                [(m.message_id, m.sender, m.body) for m in thread],
+                me=session.principal_id,
+            ),
+        )
+        if not thread or thread[-1].sender != peer:
+            raise GatewayError(
+                409,
+                "nothing_to_answer",
+                "the last word in that thread is yours — nothing to reply to",
+            )
+        history = [
+            {
+                "role": "assistant" if m.sender == session.principal_id else "user",
+                "content": m.body,
+            }
+            for m in thread[:-1][-12:]
+        ]
+        try:
+            draft = rep.draft(
+                scope,
+                conversation_id=peer,
+                inbound_text=thread[-1].body,
+                display_name=session.principal_id,
+                history=history,
+                model=self._tenant_model(session.tenant_id),
+            )
+        except ModelBudgetExceeded as exc:
+            raise GatewayError(402, "model_budget", str(exc)) from exc
+        except ModelUnavailable as exc:
+            raise GatewayError(503, "model_unavailable", str(exc)) from exc
+        return json_response(201, draft.model_dump())
+
+    def _representative_decide(self, request, session, params) -> Response:
+        """The user's word on a draft: send it, send it edited, or discard.
+
+        Delivery is validated BEFORE the decision is recorded — a draft
+        that can't reach its peer stays pending instead of being spent."""
+        rep = self._require_representative()
+        scope = self._representative_scope(session)
+        body = request.body or {}
+        action = str(body.get("action") or "")
+        text = body.get("text")
+        if text is not None and not isinstance(text, str):
+            raise GatewayError(400, "invalid_request", "text must be a string")
+        try:
+            draft = rep.get(scope, params["draft_id"])
+        except KeyError:
+            raise GatewayError(404, "not_found", "no such draft") from None
+        delivers = action in ("send", "edit")
+        if delivers:
+            store = self._require_direct_messages()
+            self._friend_or_404(session, draft.conversation_id)
+            outgoing = draft.generated_text if action == "send" else str(text or "")
+            if len(outgoing) > MAX_MESSAGE_CHARS:
+                raise GatewayError(
+                    400, "invalid_request", "that message is too long to send"
+                )
+        try:
+            draft = rep.decide(scope, draft.draft_id, action=action, text=text)
+        except KeyError:
+            raise GatewayError(404, "not_found", "no such draft") from None
+        except ValueError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        delivered = None
+        if delivers and draft.final_text:
+            message = store.send(
+                tenant=session.tenant_id,
+                sender=session.principal_id,
+                recipient=draft.conversation_id,
+                body=draft.final_text,
+            )
+            delivered = {
+                "message_id": message.message_id,
+                "at": message.sent_at.isoformat(),
+            }
+        return json_response(200, {**draft.model_dump(), "delivered": delivered})
 
     def _node_chat_tools(self, request, session, node_id: str):
         """The interact window's hands: one node's desk, gateway-walled.
@@ -2402,6 +2561,12 @@ class GatewayApp:
         if self._assistant_history is not None:
             erased["chat_turns"] = self._assistant_history.erase(
                 tenant=tenant, principal=principal
+            )
+        if self._representative is not None:
+            # The voice goes with the account: settings, remembered
+            # exchanges, and every draft — one per-user artifact chain.
+            erased["representative"] = self._representative.erase(
+                self._representative_scope(session)
             )
         if self._identity_links is not None:
             erased["identity_links"] = self._identity_links.unlink_all(principal)
