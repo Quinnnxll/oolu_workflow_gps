@@ -4,6 +4,28 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The live audition rig: a real brain, the real router, measured cost:
+
+- **One command from key to verdict.**
+  `python benchmarks/level_b_audition.py` puts a live model in the
+  Level B seat through OoLu's OWN provider stack — ChatModelRouter,
+  the Anthropic/OpenAI adapters, the secret vault, the call meter.
+  `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` enter as own-api;
+  `OOLU_LOCAL_URL` + `OOLU_LOCAL_MODEL` is the no-cloud door;
+  `--tier reasoning` picks the heavier tier. The scripted
+  careful-engineer runs alongside as the incumbent, and the table ends
+  with the §22 number the spec says to decide by: what fitness COST
+  (metered dollars per audition, measured, not estimated). No brain
+  configured = a refusal in words and exit 2 — the seat is not
+  pretended into.
+- **Wire-true in CI.** The audition path is tested through the REAL
+  adapter code with only the HTTP wire scripted: a provider-shaped
+  brain earns FIT through the whole vertical, every model call enters
+  the books (six charges, five steps plus the closing "done"), the
+  planner's protocol prompt rides as Anthropic's system PARAMETER
+  with the key in its one header, and the kernel's committed/rejected
+  feedback demonstrably reached the model as conversation turns.
+
 A model takes the planner's seat — proposing, never committing:
 
 - **The seat speaks one protocol.** `projectgraph/planner.py`:
