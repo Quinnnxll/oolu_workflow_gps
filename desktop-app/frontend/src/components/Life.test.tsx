@@ -159,9 +159,10 @@ describe("Life", () => {
 
   it("starts a conversation by exact name — no directory to browse", async () => {
     routes["GET /v1/friends"] = { status: 200, body: { items: [] } };
+    routes["GET /v1/friends/requests"] = { status: 200, body: { items: [] } };
     routes["POST /v1/friends/lookup"] = {
       status: 200,
-      body: { username: "carol" },
+      body: { username: "carol", relationship: "friends" },
     };
     routes["GET /v1/friends/carol/messages"] = {
       status: 200,
@@ -171,12 +172,13 @@ describe("Life", () => {
 
     fireEvent.click(await screen.findByText("Start a conversation"));
     expect(await screen.findByText(/no directory to browse/i)).toBeTruthy();
-    fireEvent.change(screen.getByLabelText("Username or e-mail"), {
+    fireEvent.change(screen.getByLabelText("username or e-mail"), {
       target: { value: "carol@mphepo.io" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Find" }));
 
-    // The thread opens on the found account.
+    // An existing friend: Open chat leads into the thread.
+    fireEvent.click(await screen.findByRole("button", { name: "Open chat" }));
     expect(
       await screen.findByPlaceholderText("Message carol…"),
     ).toBeTruthy();
@@ -276,5 +278,69 @@ describe("the foldable list and the one-pane phone flow", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     expect(life.className).not.toContain("pane-open");
+  });
+});
+
+describe("StartConversation: friend requests, not messages", () => {
+  it("finds someone and sends a request instead of a message", async () => {
+    const { StartConversation } = await import("./Life");
+    routes["GET /v1/friends/requests"] = { status: 200, body: { items: [] } };
+    routes["POST /v1/friends/lookup"] = {
+      status: 200,
+      body: { username: "bob", relationship: "none" },
+    };
+    routes["POST /v1/friends/requests"] = {
+      status: 200,
+      body: { username: "bob", relationship: "pending_out" },
+    };
+    render(<StartConversation onOpen={() => {}} />);
+
+    fireEvent.change(screen.getByLabelText("username or e-mail"), {
+      target: { value: "bob" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Find" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Send friend request" }),
+    );
+    await vi.waitFor(() =>
+      expect(
+        calls.find(
+          (c) => c.method === "POST" && c.path === "/v1/friends/requests",
+        ),
+      ).toBeTruthy(),
+    );
+    const sent = calls.find(
+      (c) => c.method === "POST" && c.path === "/v1/friends/requests",
+    );
+    expect((sent?.body as { username: string }).username).toBe("bob");
+    // A request, never a message: no thread was opened.
+    expect(
+      calls.some((c) => c.path.includes("/messages")),
+    ).toBe(false);
+  });
+
+  it("shows incoming requests and accepts one", async () => {
+    const { StartConversation } = await import("./Life");
+    routes["GET /v1/friends/requests"] = {
+      status: 200,
+      body: { items: ["carol"] },
+    };
+    routes["POST /v1/friends/requests/carol"] = {
+      status: 200,
+      body: { username: "carol", relationship: "friends" },
+    };
+    render(<StartConversation onOpen={() => {}} />);
+
+    expect(await screen.findByText("carol")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Accept" }));
+    await vi.waitFor(() =>
+      expect(
+        calls.find((c) => c.path === "/v1/friends/requests/carol"),
+      ).toBeTruthy(),
+    );
+    const decided = calls.find(
+      (c) => c.path === "/v1/friends/requests/carol",
+    );
+    expect((decided?.body as { action: string }).action).toBe("accept");
   });
 });

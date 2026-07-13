@@ -285,3 +285,204 @@ class AssistantHistoryStore:
             }
             for row in reversed(rows)
         ]
+
+
+# --------------------------------------------------------------------------- #
+# Friendship: requests, acceptance, blocks, and who may message whom.         #
+# --------------------------------------------------------------------------- #
+# A directed edge per (owner -> peer). "accepted" is written BOTH ways when a
+# request is accepted, so friendship reads the same from either side; "blocked"
+# and "pending" are one-directional by nature. A per-account preference decides
+# whether strangers may message at all.
+_FRIENDS_SCHEMA = """CREATE TABLE IF NOT EXISTS friendships (
+    tenant_id TEXT NOT NULL,
+    owner TEXT NOT NULL,
+    peer TEXT NOT NULL,
+    status TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, owner, peer)
+)"""
+
+_MSG_PREFS_SCHEMA = """CREATE TABLE IF NOT EXISTS message_prefs (
+    tenant_id TEXT NOT NULL,
+    principal TEXT NOT NULL,
+    allow_nonfriend INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (tenant_id, principal)
+)"""
+
+
+class FriendshipError(ValueError):
+    """A refused social move — blocked, or nothing to accept."""
+
+
+class FriendshipStore:
+    """Requests, acceptance, blocks, and the stranger-message preference.
+
+    Discovery still happens elsewhere (exact lookup by name or e-mail);
+    this is what a found account becomes — a request the other person
+    decides, never an unsolicited message that just appears."""
+
+    def __init__(self, conn, *, clock: Callable[[], datetime] | None = None) -> None:
+        self._conn = conn
+        self._clock = clock or (lambda: datetime.now(UTC))
+        with self._conn.transaction() as db:
+            db.execute(_FRIENDS_SCHEMA)
+            db.execute(_MSG_PREFS_SCHEMA)
+
+    # -- the preference: may strangers message me? --------------------------
+    def allow_nonfriend(self, *, tenant: str, principal: str) -> bool:
+        with self._conn.lock:
+            row = self._conn.db.execute(
+                "SELECT allow_nonfriend FROM message_prefs"
+                " WHERE tenant_id = ? AND principal = ?",
+                (tenant, principal),
+            ).fetchone()
+        return bool(row["allow_nonfriend"]) if row is not None else True
+
+    def set_allow_nonfriend(
+        self, *, tenant: str, principal: str, allow: bool
+    ) -> None:
+        with self._conn.transaction() as db:
+            db.execute(
+                """INSERT INTO message_prefs (tenant_id, principal, allow_nonfriend)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(tenant_id, principal) DO UPDATE SET
+                     allow_nonfriend = excluded.allow_nonfriend""",
+                (tenant, principal, int(bool(allow))),
+            )
+
+    # -- state reads --------------------------------------------------------
+    def _status(self, tenant: str, owner: str, peer: str) -> str | None:
+        with self._conn.lock:
+            row = self._conn.db.execute(
+                "SELECT status FROM friendships"
+                " WHERE tenant_id = ? AND owner = ? AND peer = ?",
+                (tenant, owner, peer),
+            ).fetchone()
+        return row["status"] if row else None
+
+    def are_friends(self, *, tenant: str, a: str, b: str) -> bool:
+        return self._status(tenant, a, b) == "accepted"
+
+    def is_blocked(self, *, tenant: str, by: str, whom: str) -> bool:
+        return self._status(tenant, by, whom) == "blocked"
+
+    def relationship(self, *, tenant: str, me: str, other: str) -> str:
+        """How ``me`` stands to ``other``: friends | pending_out |
+        pending_in | blocked | blocked_by | none."""
+        mine = self._status(tenant, me, other)
+        theirs = self._status(tenant, other, me)
+        if mine == "accepted":
+            return "friends"
+        if mine == "blocked":
+            return "blocked"
+        if theirs == "blocked":
+            return "blocked_by"
+        if mine == "pending":
+            return "pending_out"
+        if theirs == "pending":
+            return "pending_in"
+        return "none"
+
+    def may_message(self, *, tenant: str, sender: str, recipient: str) -> bool:
+        """Whether ``sender`` may message ``recipient``: never if blocked;
+        otherwise friends always may, strangers only if the recipient
+        allows it."""
+        if self.is_blocked(tenant=tenant, by=recipient, whom=sender):
+            return False
+        if self.are_friends(tenant=tenant, a=recipient, b=sender):
+            return True
+        return self.allow_nonfriend(tenant=tenant, principal=recipient)
+
+    # -- moves --------------------------------------------------------------
+    def _set(self, tenant: str, owner: str, peer: str, status: str) -> None:
+        with self._conn.transaction() as db:
+            db.execute(
+                """INSERT INTO friendships (tenant_id, owner, peer, status, updated_at)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(tenant_id, owner, peer) DO UPDATE SET
+                     status = excluded.status, updated_at = excluded.updated_at""",
+                (tenant, owner, peer, status, self._clock().isoformat()),
+            )
+
+    def _clear(self, tenant: str, owner: str, peer: str) -> None:
+        with self._conn.transaction() as db:
+            db.execute(
+                "DELETE FROM friendships"
+                " WHERE tenant_id = ? AND owner = ? AND peer = ?",
+                (tenant, owner, peer),
+            )
+
+    def request(self, *, tenant: str, requester: str, target: str) -> str:
+        """Ask to be friends. Returns the resulting relationship. Refuses
+        if the target blocked the requester; a no-op if already friends or
+        already requested; auto-accepts if the target had already asked
+        (the two requests meet)."""
+        if requester == target:
+            raise FriendshipError("that's you")
+        if self.is_blocked(tenant=tenant, by=target, whom=requester):
+            raise FriendshipError("you can't send a request to this account")
+        if self.is_blocked(tenant=tenant, by=requester, whom=target):
+            raise FriendshipError("unblock this account before adding them")
+        if self.are_friends(tenant=tenant, a=requester, b=target):
+            return "friends"
+        if self._status(tenant, target, requester) == "pending":
+            # They already asked us: meeting in the middle IS acceptance.
+            self._accept_pair(tenant, requester, target)
+            return "friends"
+        self._set(tenant, requester, target, "pending")
+        return "pending_out"
+
+    def _accept_pair(self, tenant: str, a: str, b: str) -> None:
+        self._set(tenant, a, b, "accepted")
+        self._set(tenant, b, a, "accepted")
+
+    def accept(self, *, tenant: str, me: str, requester: str) -> None:
+        """Accept a pending request from ``requester``."""
+        if self._status(tenant, requester, me) != "pending":
+            raise FriendshipError("there is no request from this account")
+        self._accept_pair(tenant, me, requester)
+
+    def decline(self, *, tenant: str, me: str, requester: str) -> None:
+        """Decline a pending request — it simply goes away, no block."""
+        if self._status(tenant, requester, me) != "pending":
+            raise FriendshipError("there is no request from this account")
+        self._clear(tenant, requester, me)
+
+    def block(self, *, tenant: str, me: str, other: str) -> None:
+        """Block an account: they can't message or request me, and any
+        pending request or friendship between us is cleared."""
+        self._clear(tenant, other, me)  # their pending/accepted edge to me
+        self._clear(tenant, me, other)  # my accepted edge to them
+        self._set(tenant, me, other, "blocked")
+
+    def unblock(self, *, tenant: str, me: str, other: str) -> None:
+        if self._status(tenant, me, other) == "blocked":
+            self._clear(tenant, me, other)
+
+    def incoming(self, *, tenant: str, me: str) -> list[str]:
+        """Accounts awaiting my decision — the friend-request inbox."""
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                "SELECT owner FROM friendships"
+                " WHERE tenant_id = ? AND peer = ? AND status = 'pending'"
+                " ORDER BY updated_at DESC",
+                (tenant, me),
+            ).fetchall()
+        return [r["owner"] for r in rows]
+
+    def erase_principal(self, *, tenant: str, principal: str) -> int:
+        """Data-subject erasure: every edge and preference touching them."""
+        with self._conn.transaction() as db:
+            c1 = db.execute(
+                "DELETE FROM friendships WHERE tenant_id = ?"
+                " AND (owner = ? OR peer = ?)",
+                (tenant, principal, principal),
+            )
+            c2 = db.execute(
+                "DELETE FROM message_prefs WHERE tenant_id = ? AND principal = ?",
+                (tenant, principal),
+            )
+        return int(getattr(c1, "rowcount", 0) or 0) + int(
+            getattr(c2, "rowcount", 0) or 0
+        )

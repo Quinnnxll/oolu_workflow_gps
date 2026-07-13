@@ -283,7 +283,23 @@ export async function signInWithGoogle(
   if (!res.ok || !data.auth_url || !data.state) {
     throw new Error(data?.error?.message ?? "could not start Google sign-in");
   }
-  (opts.open ?? ((url: string) => window.open(url, "_blank")))(data.auth_url);
+  // Keep the popup's handle so we can close it ourselves the moment
+  // sign-in completes — the callback page also self-closes, but if the
+  // browser blocked that, closing from here is the fallback.
+  let popup: Window | null = null;
+  const open =
+    opts.open ??
+    ((url: string) => {
+      popup = window.open(url, "_blank");
+    });
+  open(data.auth_url);
+  const closePopup = () => {
+    try {
+      popup?.close();
+    } catch {
+      /* cross-origin or already closed: nothing to do */
+    }
+  };
 
   const deadline = Date.now() + (opts.timeoutMs ?? 120_000);
   while (Date.now() < deadline) {
@@ -300,14 +316,17 @@ export async function signInWithGoogle(
       error?: { message?: string };
     };
     if (!fin.ok) {
+      closePopup();
       throw new Error(body?.error?.message ?? "Google sign-in failed");
     }
     if (body.status === "complete" && body.token && body.principal) {
       session.set(body.token, body.principal, body.tenant ?? "");
+      closePopup();
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, opts.pollMs ?? 1500));
   }
+  closePopup();
   throw new Error("Google sign-in timed out — try again");
 }
 
@@ -739,7 +758,37 @@ export const api = {
   // directory), one thread per person (opening it marks it read), send.
   friends: () => req<{ items: FriendConversation[] }>("GET", "/v1/friends"),
   friendLookup: (query: string) =>
-    req<{ username: string }>("POST", "/v1/friends/lookup", { query }),
+    req<{ username: string; relationship: string }>(
+      "POST",
+      "/v1/friends/lookup",
+      { query },
+    ),
+  // Friend requests: send one, list incoming, decide (accept/decline/
+  // block/unblock), and the stranger-message preference.
+  sendFriendRequest: (username: string) =>
+    req<{ username: string; relationship: string }>(
+      "POST",
+      "/v1/friends/requests",
+      { username },
+    ),
+  friendRequests: () =>
+    req<{ items: string[] }>("GET", "/v1/friends/requests"),
+  decideFriendRequest: (peer: string, action: string) =>
+    req<{ username: string; relationship: string }>(
+      "POST",
+      `/v1/friends/requests/${encodeURIComponent(peer)}`,
+      { action },
+    ),
+  friendSettings: () =>
+    req<{ allow_nonfriend_messages: boolean }>("GET", "/v1/friends/settings"),
+  setFriendSettings: (allow: boolean) =>
+    req<{ allow_nonfriend_messages: boolean }>("PUT", "/v1/friends/settings", {
+      allow_nonfriend_messages: allow,
+    }),
+  setSignInPassword: (password: string) =>
+    req<{ username: string; ok: boolean }>("POST", "/v1/auth/password", {
+      password,
+    }),
   friendMessages: (peer: string) =>
     req<{ peer: string; items: FriendMessage[] }>(
       "GET",

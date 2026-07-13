@@ -464,6 +464,8 @@ class GatewayApp:
         payment_authorizations=None,  # billing.PaymentAuthorizationStore:
         # the order/booking consent gate (amount consent + TOTP)
         direct_messages=None,  # social.DirectMessageStore: friends talking
+        friendships=None,  # social.FriendshipStore: requests, blocks, and
+        # the stranger-message preference
         assistant_history=None,  # social.AssistantHistoryStore: one OoLu
         # thread per account, shared by every signed-in device
         representative=None,  # representative.RepresentativeEngine: drafts
@@ -574,6 +576,7 @@ class GatewayApp:
         self._totp = totp
         self._payment_authorizations = payment_authorizations
         self._direct_messages = direct_messages
+        self._friendships = friendships
         self._assistant_history = assistant_history
         self._representative = representative
         self._legal_dir = legal_dir
@@ -783,6 +786,16 @@ class GatewayApp:
         # host. Lookup is exact (username or e-mail) — never a directory.
         r.add("GET", "/v1/friends", self._friends_list)
         r.add("POST", "/v1/friends/lookup", self._friends_lookup)
+        # Friend requests: finding someone sends a request they decide,
+        # never an unsolicited message. Blocks and the stranger-message
+        # preference live here too.
+        r.add("GET", "/v1/friends/requests", self._friend_requests_list)
+        r.add("POST", "/v1/friends/requests", self._friend_request_send)
+        r.add(
+            "POST", "/v1/friends/requests/{peer}", self._friend_request_decide
+        )
+        r.add("GET", "/v1/friends/settings", self._friend_settings_get)
+        r.add("PUT", "/v1/friends/settings", self._friend_settings_put)
         r.add("GET", "/v1/friends/{peer}/messages", self._friend_messages)
         r.add("POST", "/v1/friends/{peer}/messages", self._friend_send)
         # The representative: drafts in the account's own voice. Drafts
@@ -994,6 +1007,10 @@ class GatewayApp:
         r.add("POST", "/v1/auth/google/finish", self._google_finish, public=True)
         # Attaching Google to the CALLER's account needs the caller.
         r.add("POST", "/v1/auth/google/link", self._google_link)
+        # A signed-in account sets its own sign-in password — the door a
+        # Google-created account uses to ALSO become a username+password
+        # login it can use next time.
+        r.add("POST", "/v1/auth/password", self._auth_set_password)
         r.add(
             "GET",
             "/v1/auth/users",
@@ -1263,12 +1280,122 @@ class GatewayApp:
             raise GatewayError(400, "invalid_request", "who are you looking for?")
         username = query
         if "@" in query and self._identity_links is not None:
-            link = self._identity_links.lookup("email", query.lower())
-            if link is None:
+            # Search the e-mail column, not the email-provider subject, so
+            # accounts that arrived through Google (which links its email
+            # too) are found by address just like e-mail registrations.
+            found = self._identity_links.username_by_email(query)
+            if found is None:
                 raise GatewayError(404, "not_found", "no one by that address here")
-            username = link["username"]
+            username = found
         username = self._friend_or_404(session, username)
-        return json_response(200, {"username": username})
+        # Tell the searcher where they stand with this person, so the UI
+        # can offer the right next step (add / accept / already friends).
+        relationship = "none"
+        if self._friendships is not None:
+            relationship = self._friendships.relationship(
+                tenant=session.tenant_id, me=session.principal_id, other=username
+            )
+        return json_response(
+            200, {"username": username, "relationship": relationship}
+        )
+
+    def _require_friendships(self):
+        if self._friendships is None:
+            raise GatewayError(
+                404, "not_found", "friend requests are not enabled on this host"
+            )
+        return self._friendships
+
+    def _friend_requests_list(self, request, session, params) -> Response:
+        friends = self._require_friendships()
+        return json_response(
+            200,
+            {
+                "items": friends.incoming(
+                    tenant=session.tenant_id, me=session.principal_id
+                )
+            },
+        )
+
+    def _friend_request_send(self, request, session, params) -> Response:
+        from ..social import FriendshipError
+
+        friends = self._require_friendships()
+        target = self._friend_or_404(
+            session, str((request.body or {}).get("username", ""))
+        )
+        try:
+            relationship = friends.request(
+                tenant=session.tenant_id,
+                requester=session.principal_id,
+                target=target,
+            )
+        except FriendshipError as exc:
+            raise GatewayError(400, "cannot_request", str(exc)) from exc
+        return json_response(200, {"username": target, "relationship": relationship})
+
+    def _friend_request_decide(self, request, session, params) -> Response:
+        from ..social import FriendshipError
+
+        friends = self._require_friendships()
+        peer = self._friend_or_404(session, params["peer"])
+        action = str((request.body or {}).get("action") or "")
+        try:
+            if action == "accept":
+                friends.accept(
+                    tenant=session.tenant_id, me=session.principal_id, requester=peer
+                )
+            elif action == "decline":
+                friends.decline(
+                    tenant=session.tenant_id, me=session.principal_id, requester=peer
+                )
+            elif action == "block":
+                friends.block(
+                    tenant=session.tenant_id, me=session.principal_id, other=peer
+                )
+            elif action == "unblock":
+                friends.unblock(
+                    tenant=session.tenant_id, me=session.principal_id, other=peer
+                )
+            else:
+                raise GatewayError(
+                    400, "invalid_request", "action must be accept, decline, block,"
+                    " or unblock"
+                )
+        except FriendshipError as exc:
+            raise GatewayError(400, "cannot_decide", str(exc)) from exc
+        return json_response(
+            200,
+            {
+                "username": peer,
+                "relationship": friends.relationship(
+                    tenant=session.tenant_id, me=session.principal_id, other=peer
+                ),
+            },
+        )
+
+    def _friend_settings_get(self, request, session, params) -> Response:
+        friends = self._require_friendships()
+        return json_response(
+            200,
+            {
+                "allow_nonfriend_messages": friends.allow_nonfriend(
+                    tenant=session.tenant_id, principal=session.principal_id
+                )
+            },
+        )
+
+    def _friend_settings_put(self, request, session, params) -> Response:
+        friends = self._require_friendships()
+        allow = (request.body or {}).get("allow_nonfriend_messages")
+        if not isinstance(allow, bool):
+            raise GatewayError(
+                400, "invalid_request", "allow_nonfriend_messages must be true/false"
+            )
+        friends.set_allow_nonfriend(
+            tenant=session.tenant_id, principal=session.principal_id, allow=allow
+        )
+        return json_response(200, {"allow_nonfriend_messages": allow})
 
     def _friend_messages(self, request, session, params) -> Response:
         """The thread with one person — and opening it reads it."""
@@ -1296,6 +1423,19 @@ class GatewayApp:
     def _friend_send(self, request, session, params) -> Response:
         store = self._require_direct_messages()
         peer = self._friend_or_404(session, params["peer"])
+        # The recipient's gate: a block stops all mail, and a recipient who
+        # only accepts friends turns a stranger's message into a nudge to
+        # send a friend request first. Friends and open recipients are
+        # unaffected — so nothing changes for anyone who leaves it open.
+        if self._friendships is not None and not self._friendships.may_message(
+            tenant=session.tenant_id, sender=session.principal_id, recipient=peer
+        ):
+            raise GatewayError(
+                403,
+                "not_friends",
+                "this person only accepts messages from friends — send a"
+                " friend request first",
+            )
         body = request.body or {}
         file_id = body.get("file_id")
         if file_id is not None:
@@ -2721,6 +2861,10 @@ class GatewayApp:
         )
         if self._direct_messages is not None:
             erased["messages"] = self._direct_messages.erase_principal(
+                tenant=tenant, principal=principal
+            )
+        if self._friendships is not None:
+            erased["friendships"] = self._friendships.erase_principal(
                 tenant=tenant, principal=principal
             )
         if self._assistant_history is not None:
@@ -5530,11 +5674,16 @@ class GatewayApp:
         google = self._require_google()
         try:
             principal = google.callback(request.query)
+            # This window was opened by the app (window.open), so it may
+            # close itself; the app is already polling finish() and will
+            # complete sign-in on its own channel. A brief message shows
+            # first in case the browser blocks the auto-close.
             page = (
                 "<!doctype html><meta charset='utf-8'><title>OoLu</title>"
                 "<body style='font-family:system-ui;margin:3rem'>"
                 f"<h2>Signed in as {_escape(principal)}.</h2>"
-                "<p>You can close this window and return to OoLu.</p>"
+                "<p>Returning you to OoLu — you can close this window.</p>"
+                "<script>setTimeout(function(){window.close();},600);</script>"
             )
             return Response(status=200, body=page, content_type="text/html; charset=utf-8")
         except SignInError as exc:
@@ -5545,6 +5694,23 @@ class GatewayApp:
                 "<p>Close this window and try again from OoLu.</p>"
             )
             return Response(status=400, body=page, content_type="text/html; charset=utf-8")
+
+    def _auth_set_password(self, request, session, params) -> Response:
+        """The signed-in account sets its own sign-in password.
+
+        This is what makes a Google-created account a real username +
+        password login: Google minted the account with an unknowable
+        random password, so the user could never type their way in. Here
+        they choose one, and next time either door works."""
+        accounts = self._require_accounts()
+        password = str((request.body or {}).get("password", ""))
+        if len(password) < 8:
+            raise GatewayError(
+                400, "invalid_request", "passwords need at least 8 characters"
+            )
+        if not accounts.change_password(session.principal_id, password):
+            raise GatewayError(404, "not_found", "no such account")
+        return json_response(200, {"username": session.principal_id, "ok": True})
 
     def _google_finish(self, request, session, params) -> Response:
         """The app's poll: pending until the browser leg lands, then the

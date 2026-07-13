@@ -126,7 +126,7 @@ def test_the_friend_flow_end_to_end(tmp_path):
         _req("POST", "/v1/friends/lookup", token=alice,
              body={"query": "bob@mphepo.io"})
     )
-    assert found.status == 200 and found.body == {"username": "bob"}
+    assert found.status == 200 and found.body["username"] == "bob"
 
     sent = gateway.handle(
         _req("POST", "/v1/friends/bob/messages", token=alice,

@@ -109,10 +109,94 @@ export function SettingsPane() {
         </section>
       ))}
       <RepresentativeSection />
+      <FriendsPrivacySection />
       <SecuritySection />
       <PaymentSection />
       <PrivacySection />
     </div>
+  );
+}
+
+// Friends & sign-in: who may message you, and a password for accounts
+// that arrived through Google (so username + password works next time).
+export function FriendsPrivacySection() {
+  const tr = useT();
+  const [allow, setAllow] = useState<boolean | null>(null);
+  const [password, setPassword] = useState("");
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
+  const [absent, setAbsent] = useState(false);
+
+  useEffect(() => {
+    api
+      .friendSettings()
+      .then((s) => setAllow(s.allow_nonfriend_messages))
+      .catch(() => setAbsent(true));
+  }, []);
+
+  if (absent || allow === null) return null;
+
+  return (
+    <section className="settings-group friends-privacy">
+      <h3>{tr("friends.title")}</h3>
+      <div className="setting-row">
+        <div className="setting-label">
+          <span>{tr("friends.allowNonfriend")}</span>
+          <span className="setting-desc">{tr("friends.allowNonfriendDesc")}</span>
+        </div>
+        <div className="setting-control">
+          <input
+            type="checkbox"
+            aria-label={tr("friends.allowNonfriend")}
+            checked={allow}
+            onChange={async (e) => {
+              const next = e.target.checked;
+              setAllow(next);
+              try {
+                await api.setFriendSettings(next);
+              } catch (err) {
+                setAllow(!next);
+                setError((err as Error).message);
+              }
+            }}
+          />
+        </div>
+      </div>
+      <div className="setting-row">
+        <div className="setting-label">
+          <span>{tr("friends.setPassword")}</span>
+          <span className="setting-desc">{tr("friends.setPasswordDesc")}</span>
+        </div>
+        <div className="setting-control row">
+          <input
+            type="password"
+            aria-label={tr("friends.setPassword")}
+            autoComplete="new-password"
+            placeholder="••••••••"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+          <button
+            disabled={password.length < 8}
+            onClick={async () => {
+              setError("");
+              setNotice("");
+              try {
+                await api.setSignInPassword(password);
+                setPassword("");
+                setNotice(tr("friends.passwordSet"));
+              } catch (e) {
+                setError((e as Error).message);
+              }
+            }}
+          >
+            {tr("friends.save")}
+          </button>
+        </div>
+      </div>
+      {notice && <div className="muted">{notice}</div>}
+      {error && <div className="error">{error}</div>}
+    </section>
   );
 }
 

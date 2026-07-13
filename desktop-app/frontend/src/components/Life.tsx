@@ -591,16 +591,49 @@ export function StartConversation({
 }: {
   onOpen: (peer: string) => void;
 }) {
+  const tr = useT();
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  // The found account and where we stand with them, so the button offers
+  // the right next step — send a request, accept theirs, or open the chat.
+  const [found, setFound] = useState<{ username: string; relationship: string } | null>(
+    null,
+  );
+  const [incoming, setIncoming] = useState<string[]>([]);
+
+  const loadIncoming = useCallback(async () => {
+    try {
+      setIncoming((await api.friendRequests()).items);
+    } catch {
+      setIncoming([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadIncoming();
+  }, [loadIncoming]);
 
   async function find() {
     setError("");
+    setFound(null);
     setBusy(true);
     try {
-      const { username } = await api.friendLookup(query.trim());
-      onOpen(username);
+      setFound(await api.friendLookup(query.trim()));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function act(fn: () => Promise<unknown>) {
+    setError("");
+    setBusy(true);
+    try {
+      await fn();
+      if (found) setFound(await api.friendLookup(found.username));
+      void loadIncoming();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -610,11 +643,8 @@ export function StartConversation({
 
   return (
     <div className="pane-empty start-conversation">
-      <p>Who do you want to talk to?</p>
-      <p className="muted">
-        Enter their exact username or e-mail — there is no directory to
-        browse, so nobody finds you unless you gave them your name.
-      </p>
+      <p>{tr("friends.who")}</p>
+      <p className="muted">{tr("friends.whoHint")}</p>
       <form
         className="setting-control row"
         onSubmit={(e) => {
@@ -623,16 +653,95 @@ export function StartConversation({
         }}
       >
         <input
-          aria-label="Username or e-mail"
-          placeholder="username or e-mail"
+          aria-label={tr("friends.usernameOrEmail")}
+          placeholder={tr("friends.usernameOrEmail")}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
         <button type="submit" disabled={busy || !query.trim()}>
-          {busy ? "Looking…" : "Find"}
+          {busy ? tr("friends.looking") : tr("friends.find")}
         </button>
       </form>
+
+      {found && (
+        <div className="found-account setting-control row">
+          <span className="convo-name">{found.username}</span>
+          {found.relationship === "friends" ? (
+            <button onClick={() => onOpen(found.username)}>
+              {tr("friends.openChat")}
+            </button>
+          ) : found.relationship === "pending_out" ? (
+            <span className="muted">{tr("friends.requestSent")}</span>
+          ) : found.relationship === "pending_in" ? (
+            <button
+              disabled={busy}
+              onClick={() =>
+                void act(() =>
+                  api.decideFriendRequest(found.username, "accept"),
+                )
+              }
+            >
+              {tr("friends.accept")}
+            </button>
+          ) : found.relationship === "blocked" ? (
+            <button
+              disabled={busy}
+              onClick={() =>
+                void act(() =>
+                  api.decideFriendRequest(found.username, "unblock"),
+                )
+              }
+            >
+              {tr("friends.unblock")}
+            </button>
+          ) : (
+            <button
+              disabled={busy}
+              onClick={() => void act(() => api.sendFriendRequest(found.username))}
+            >
+              {tr("friends.sendRequest")}
+            </button>
+          )}
+        </div>
+      )}
       {error && <div className="error">{error}</div>}
+
+      {incoming.length > 0 && (
+        <div className="incoming-requests">
+          <p className="muted">{tr("friends.incoming")}</p>
+          {incoming.map((who) => (
+            <div key={who} className="setting-control row">
+              <span className="convo-name">{who}</span>
+              <button
+                disabled={busy}
+                onClick={() =>
+                  void act(() => api.decideFriendRequest(who, "accept"))
+                }
+              >
+                {tr("friends.accept")}
+              </button>
+              <button
+                className="linklike"
+                disabled={busy}
+                onClick={() =>
+                  void act(() => api.decideFriendRequest(who, "decline"))
+                }
+              >
+                {tr("friends.decline")}
+              </button>
+              <button
+                className="linklike"
+                disabled={busy}
+                onClick={() =>
+                  void act(() => api.decideFriendRequest(who, "block"))
+                }
+              >
+                {tr("friends.block")}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -590,7 +590,11 @@ def build_host_runtime(
         VllmAdapterServer,
     )
     from .settings_node import SettingsNode, SettingsStore
-    from .social import AssistantHistoryStore, DirectMessageStore
+    from .social import (
+        AssistantHistoryStore,
+        DirectMessageStore,
+        FriendshipStore,
+    )
 
     if database_url:
         from .durable.postgres import PostgresDurableConnection
@@ -972,6 +976,7 @@ def build_host_runtime(
         # People talking to people, and one OoLu thread per account that
         # every signed-in device shares.
         direct_messages=DirectMessageStore(conn),
+        friendships=FriendshipStore(conn),
         assistant_history=AssistantHistoryStore(conn),
         # The representative: replies drafted in each account's own voice
         # (docs/representative-plan.md). Local SQLite like every learned

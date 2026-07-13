@@ -111,6 +111,19 @@ class IdentityLinkStore:
             ).fetchone()
         return row["email"] if row else None
 
+    def username_by_email(self, email: str) -> str | None:
+        """The account behind an e-mail, WHATEVER linked it — an e-mail
+        registration or a Google sign-in both fill the email column, so
+        searching it (not the email-provider subject) finds either. This
+        is why a friend search by address reaches Google users too."""
+        with self._conn.lock:
+            row = self._conn.db.execute(
+                "SELECT username FROM identity_links WHERE lower(email) = ?"
+                " ORDER BY provider LIMIT 1",
+                (email.strip().lower(),),
+            ).fetchone()
+        return row["username"] if row else None
+
     def lookup(self, provider: str, subject: str) -> dict | None:
         with self._conn.lock:
             row = self._conn.db.execute(
