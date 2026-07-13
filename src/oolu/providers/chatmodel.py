@@ -230,18 +230,28 @@ class ChatModelRouter:
         """
         brain = self._subscription
         allowance = brain.allowance_for(self._tenant)
+        trial = bool(getattr(brain, "is_trial", lambda _t: False)(self._tenant))
         if allowance <= 0:
             raise ModelUnavailable(
                 "the hosted OoLu brain comes with a paid plan — choose one"
                 " in Settings, add your own API key, or run a local model"
             )
-        if brain.month_spend(self._tenant) >= allowance:
+        spent = getattr(brain, "spend_for", brain.month_spend)(self._tenant)
+        if spent >= allowance:
             from ..currency import format_amount, from_usd
 
             code = self._currency() or "USD"
+            amount = format_amount(from_usd(allowance, code), code)
+            if trial:
+                # The trial is a lifetime total: it ends, it never renews.
+                raise ModelBudgetExceeded(
+                    f"your free {amount} trial of the hosted brain is used"
+                    " up — choose a plan in Settings, add your own API key,"
+                    " or run a local model; your work here isn't going"
+                    " anywhere"
+                )
             raise ModelBudgetExceeded(
-                "this month's included model use "
-                f"({format_amount(from_usd(allowance, code), code)}) is used"
+                f"this month's included model use ({amount}) is used"
                 " up — it renews with the next month; add your own key in"
                 " Settings to keep going meanwhile"
             )

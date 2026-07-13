@@ -1589,6 +1589,25 @@ def _cmd_desktop(args, out) -> int:
         runtime.accounts.change_password("local", password)
     login = runtime.accounts.login("local", password)
 
+    # The machine's own brain, if this machine can host one: pull the
+    # default local model (qwen3:4b — the representative's QLoRA family)
+    # into Ollama in the background. Best-effort by design: no Ollama,
+    # no network, no problem — the shell serves either way, and the user
+    # can point model.local_model anywhere else in Settings.
+    import threading
+
+    from .providers.localmodel import DEFAULT_LOCAL_MODEL, ensure_default_local_model
+
+    def _pull_default_model() -> None:
+        state = ensure_default_local_model()
+        if state in ("pulled", "present"):
+            out.write(
+                f"local model {DEFAULT_LOCAL_MODEL} {state} — set the"
+                " default model to 'local' in Settings to use it\n"
+            )
+
+    threading.Thread(target=_pull_default_model, daemon=True).start()
+
     try:
         import uvicorn
     except ImportError as exc:

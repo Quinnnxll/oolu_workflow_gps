@@ -4,8 +4,9 @@
 the host's operator configures platform keys. Exit gate: tenants on a paid
 plan are answered through the PLATFORM's keys (Claude first, the plan's
 order); every consultation lands in the tenant's durable monthly books; the
-free plan is refused with the ways out named; a spent allowance refuses
-with the renewal spelled out; own-api tenants are untouched; and the usage
+free plan gets a $10 LIFETIME trial (past months count — it never renews);
+a spent allowance refuses with the way out spelled out; own-api tenants
+are untouched; and the usage
 surface shows a tenant their books and their remaining allowance.
 """
 
@@ -18,6 +19,7 @@ from test_chat_model_router import FakeTransport, _anthropic_reply, _openai_repl
 from test_http_gateway import _app, _req
 
 from oolu.billing import (
+    FREE_TRIAL_ALLOWANCE_USD,
     PLAN_MODEL_ALLOWANCE_USD,
     PLATFORM_TENANT,
     ModelCallMeter,
@@ -75,10 +77,47 @@ def test_paid_plans_are_answered_through_the_platform_key(tmp_path):
     conn.close()
 
 
-def test_the_free_plan_names_its_three_doors(tmp_path):
-    conn, keyring, _, brain, plans = _brain(tmp_path)
+def test_the_free_plan_gets_a_ten_dollar_lifetime_trial(tmp_path):
+    conn, keyring, usage, brain, plans = _brain(tmp_path)
     plans["t1"] = "free"
-    router, _ = _router(keyring, brain)
+    assert brain.is_trial("t1") is True
+    assert brain.allowance_for("t1") == FREE_TRIAL_ALLOWANCE_USD == 10.0
+
+    # Inside the trial, the free tenant is answered like anyone else.
+    router, transport = _router(keyring, brain)
+    transport.script("anthropic.com", 200, _anthropic_reply("Welcome aboard."))
+    assert router.reply([{"role": "user", "content": "hi"}]) == "Welcome aboard."
+
+    # The trial is a LIFETIME total: spend booked in past months still
+    # counts (a monthly reading would refill it every calendar flip).
+    june = ModelUsageStore(conn, clock=lambda: datetime(2026, 6, 1, tzinfo=UTC))
+    june.record("t1", source="subscription", cost=9.99)
+    assert brain.month_spend("t1") < 9.0  # this month's books alone
+    assert brain.spend_for("t1") >= 9.99  # what the trial measures
+    usage.record("t1", source="subscription", cost=0.02)
+    router, transport = _router(keyring, brain)
+    transport.script("anthropic.com", 200, _anthropic_reply("never reached"))
+    with pytest.raises(ModelBudgetExceeded, match="trial.*used up"):
+        router.reply([{"role": "user", "content": "hi"}])
+    assert transport.requests == []  # no provider called past the wall
+
+    # A paid plan is untouched by trial semantics: monthly, renewing.
+    plans["t1"] = "plus"
+    assert brain.is_trial("t1") is False
+    assert brain.allowance_for("t1") == PLAN_MODEL_ALLOWANCE_USD["plus"]
+    conn.close()
+
+
+def test_a_host_that_zeroes_the_trial_still_names_the_doors(tmp_path):
+    conn, keyring, usage, _, plans = _brain(tmp_path)
+    plans["t1"] = "free"
+    stingy = SubscriptionBrain(
+        keyring,
+        usage,
+        plan_for=lambda tenant: plans.get(tenant, "free"),
+        trial_usd=0.0,
+    )
+    router, _ = _router(keyring, stingy)
     with pytest.raises(ModelUnavailable, match="paid plan"):
         router.reply([{"role": "user", "content": "hi"}])
     conn.close()

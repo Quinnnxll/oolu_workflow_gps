@@ -45,7 +45,9 @@ services:
       OOLU_BLOB_S3_SECRET_ACCESS_KEY: ${OOLU_BLOB_S3_SECRET_ACCESS_KEY:-}
       OOLU_BLOB_S3_PREFIX: ${OOLU_BLOB_S3_PREFIX:-}
       # The hosted plan's model keys (optional): set these and tenants
-      # on paid plans get the subscription brain; leave unset and every
+      # on paid plans get the subscription brain — and every FREE tenant
+      # gets a one-time $10 trial of it (lifetime, never renews; the
+      # spend rides these keys, so budget for it). Leave unset and every
       # user brings their own key in Settings (own-api) — both are real
       # APIs through the same router.
       OOLU_PLATFORM_ANTHROPIC_KEY: ${OOLU_PLATFORM_ANTHROPIC_KEY:-}

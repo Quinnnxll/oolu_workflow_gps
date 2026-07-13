@@ -25,15 +25,21 @@ from typing import Callable
 # are operator-chosen short names ("main", "t1"); nothing may claim this.
 PLATFORM_TENANT = "oolu-platform"
 
-# What each plan includes per month, in the meter's USD unit. free is 0 by
-# design — the hosted brain is part of the PAID promise; free users bring
-# their own key or a local model (both first-class, never degraded).
+# What each PAID plan includes per month, in the meter's USD unit. The
+# free plan's entry stays 0 here because free is not a monthly allowance —
+# it is the one-time trial below.
 PLAN_MODEL_ALLOWANCE_USD: dict[str, float] = {
     "free": 0.0,
     "plus": 5.0,
     "pro": 20.0,
     "enterprise": 100.0,
 }
+
+# The free tier's taste of the hosted brain: a LIFETIME total across the
+# platform's providers (OpenAI + Anthropic alike — the meter counts USD,
+# not vendors). It never renews; a paid plan or the user's own key is the
+# door onward. Data, not policy: repriced by editing this number.
+FREE_TRIAL_ALLOWANCE_USD = 10.0
 
 _SCHEMA = """CREATE TABLE IF NOT EXISTS model_usage (
     tenant_id TEXT NOT NULL,
@@ -107,6 +113,20 @@ class ModelUsageStore:
             row = self._conn.db.execute(query, args).fetchone()
         return float(row["total"] if row else 0.0)
 
+    def total_cost(self, tenant: str, *, source: str | None = None) -> float:
+        """All-time spend — what a lifetime trial is measured against."""
+        query = (
+            "SELECT COALESCE(SUM(cost_usd), 0) AS total FROM model_usage"
+            " WHERE tenant_id = ?"
+        )
+        args: tuple = (tenant,)
+        if source is not None:
+            query += " AND source = ?"
+            args = (*args, source)
+        with self._conn.lock:
+            row = self._conn.db.execute(query, args).fetchone()
+        return float(row["total"] if row else 0.0)
+
     def view(self, tenant: str, *, month: str | None = None) -> list[dict]:
         with self._conn.lock:
             rows = self._conn.db.execute(
@@ -139,11 +159,13 @@ class SubscriptionBrain:
         *,
         plan_for: Callable[[str], str],
         allowances: dict[str, float] | None = None,
+        trial_usd: float = FREE_TRIAL_ALLOWANCE_USD,
     ) -> None:
         self._keyring = keyring
         self._usage = usage
         self._plan_for = plan_for
         self._allowances = allowances or PLAN_MODEL_ALLOWANCE_USD
+        self._trial_usd = float(trial_usd)
 
     def configured(self) -> bool:
         """Whether this host has ANY platform key — the difference between
@@ -154,11 +176,24 @@ class SubscriptionBrain:
         return self._keyring.secret_for(PLATFORM_TENANT, provider)
 
     def allowance_for(self, tenant: str) -> float:
+        if self.is_trial(tenant):
+            return self._trial_usd
         plan = str(self._plan_for(tenant) or "free")
         return float(self._allowances.get(plan, 0.0))
 
+    def is_trial(self, tenant: str) -> bool:
+        """Free tier drinks from the one-time trial, not a plan allowance."""
+        return str(self._plan_for(tenant) or "free") == "free"
+
     def month_spend(self, tenant: str) -> float:
         return self._usage.month_cost(tenant, source="subscription")
+
+    def spend_for(self, tenant: str) -> float:
+        """What counts against the allowance: the month for a paid plan,
+        ALL TIME for the free trial — a trial never renews."""
+        if self.is_trial(tenant):
+            return self._usage.total_cost(tenant, source="subscription")
+        return self.month_spend(tenant)
 
     def record(self, tenant: str, record, source: str) -> None:
         """Book one consultation (a ``ModelCallRecord``) under the tenant."""

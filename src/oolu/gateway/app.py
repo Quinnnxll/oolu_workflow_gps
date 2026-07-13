@@ -3096,12 +3096,18 @@ class GatewayApp:
         tenant = session.tenant_id
         view: dict = {"items": self._model_usage.view(tenant)}
         if self._subscription is not None and self._subscription.configured():
-            allowance = self._subscription.allowance_for(tenant)
-            spent = self._subscription.month_spend(tenant)
+            brain = self._subscription
+            allowance = brain.allowance_for(tenant)
+            # A paid plan's allowance renews monthly; the free trial is a
+            # lifetime total — the spend basis follows.
+            spent = getattr(brain, "spend_for", brain.month_spend)(tenant)
             view["subscription"] = {
                 "allowance_usd": allowance,
                 "spent_usd": spent,
                 "remaining_usd": max(0.0, allowance - spent),
+                "trial": bool(
+                    getattr(brain, "is_trial", lambda _t: False)(tenant)
+                ),
             }
         return json_response(200, view)
 

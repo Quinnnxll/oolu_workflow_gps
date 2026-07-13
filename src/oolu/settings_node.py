@@ -267,10 +267,15 @@ SETTINGS_CATALOG: tuple[SettingField, ...] = (
         group="model",
         label="Local model name",
         kind=SettingKind.TEXT,
-        default="",
+        # Same family as the representative trainer's QLoRA base
+        # (Qwen/Qwen3-4B-Instruct): the voice you train locally is the
+        # model you chat with. The desktop pulls it at launch when Ollama
+        # is installed; point this anywhere else to use your own.
+        default="qwen3:4b",
         max_length=80,
-        description="The model to request from the local server, e.g. "
-        "llama3.2 or qwen3. Required when the default model is local.",
+        description="The model to request from the local server. The "
+        "default (qwen3:4b) is pulled automatically at launch when Ollama "
+        "is installed; change it to use any other local model.",
     ),
     SettingField(
         key="model.tier",

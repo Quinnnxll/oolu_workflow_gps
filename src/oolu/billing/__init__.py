@@ -22,6 +22,7 @@ from .model_calls import (
     ModelPriceTable,
 )
 from .model_usage import (
+    FREE_TRIAL_ALLOWANCE_USD,
     PLAN_MODEL_ALLOWANCE_USD,
     PLATFORM_TENANT,
     ModelUsageStore,
@@ -122,6 +123,7 @@ __all__ = [
     "ModelCallRecord",
     "ModelPriceTable",
     "ModelUsageStore",
+    "FREE_TRIAL_ALLOWANCE_USD",
     "PLAN_MODEL_ALLOWANCE_USD",
     "PLATFORM_TENANT",
     "SubscriptionBrain",
