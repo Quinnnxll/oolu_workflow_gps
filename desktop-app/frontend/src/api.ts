@@ -359,9 +359,26 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
     throw new Error("signed out");
   }
   const text = await res.text();
-  const data = text ? JSON.parse(text) : {};
+  let data: unknown = {};
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      // A crashed server or a proxy error page answers in prose/HTML —
+      // surface the status plainly, never a JSON parse error.
+      throw new Error(
+        res.ok
+          ? "the server sent an unexpected non-JSON response"
+          : `server error (${res.status}) — the server log has the story`,
+      );
+    }
+  }
   if (!res.ok) {
-    throw new Error(data?.error?.message ?? data?.error ?? `${res.status}`);
+    const err = data as { error?: { message?: string } | string };
+    throw new Error(
+      (typeof err?.error === "object" ? err.error?.message : err?.error) ??
+        `${res.status}`,
+    );
   }
   return data as T;
 }

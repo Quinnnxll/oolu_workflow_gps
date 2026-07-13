@@ -13,6 +13,7 @@ database see one consistent set of runs.
 from __future__ import annotations
 
 import json
+import logging
 import random
 import re
 from collections import defaultdict
@@ -601,6 +602,26 @@ class GatewayApp:
             self._metrics["errors"] += 1
             response = json_response(
                 exc.status, {"error": {"code": exc.code, "message": exc.message}}
+            )
+        except Exception as exc:  # noqa: BLE001 — the last-resort net
+            # A bug must never reach clients as a bare text/plain 500 that
+            # breaks their JSON parsing. The full traceback goes to the
+            # server log (docker compose logs oolu); the body names the
+            # exception class so an operator can find it there.
+            self._metrics["errors"] += 1
+            logging.getLogger("oolu.gateway").exception(
+                "unhandled error on %s %s", request.method, request.path
+            )
+            response = json_response(
+                500,
+                {
+                    "error": {
+                        "code": "internal",
+                        "message": f"the server hit a bug"
+                        f" ({exc.__class__.__name__}) — the server log has"
+                        " the full story",
+                    }
+                },
             )
         return apply_cors(
             with_security_headers(response), request, self._config.allowed_origins

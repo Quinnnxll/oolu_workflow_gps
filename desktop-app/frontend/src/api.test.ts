@@ -531,3 +531,34 @@ describe("auth", () => {
     expect(session.signedIn()).toBe(false);
   });
 });
+
+describe("non-JSON error bodies", () => {
+  // A crashed server (or a proxy error page) answers in prose. The user
+  // must read a plain sentence — never "Unexpected token 'I' ... is not
+  // valid JSON" leaking from the parser.
+  it("a plain-text 500 becomes a plain error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        ({
+          ok: false,
+          status: 500,
+          text: async () => "Internal Server Error",
+        }) as unknown as Response,
+      ),
+    );
+    await expect(api.representative()).rejects.toThrow(
+      /server error \(500\)/,
+    );
+  });
+
+  it("a JSON error body still surfaces its message", async () => {
+    routes["GET /v1/representative"] = {
+      status: 500,
+      body: { error: { code: "internal", message: "the server hit a bug" } },
+    };
+    await expect(api.representative()).rejects.toThrow(
+      /the server hit a bug/,
+    );
+  });
+});

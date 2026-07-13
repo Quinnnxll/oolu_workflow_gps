@@ -25,8 +25,17 @@ from ..chat import ModelBudgetExceeded, ModelUnavailable
 from .apikey import AnthropicAdapter, OpenAiAdapter
 from .base import HttpTransport
 from .errors import ProviderError
-from .keyring import PROVIDERS, ModelKeyring, fingerprint
+from .keyring import PROVIDERS, KeyringError, ModelKeyring, fingerprint
 from .vault import SecretVault
+
+# What the user must hear when a SAVED key can't be decrypted on this
+# machine (the machine key changed under the ciphertext — a moved volume,
+# a rebuilt install). The key is unusable but removable; chat must degrade
+# to these words, never die.
+_UNREADABLE_KEY = (
+    "the saved {provider} key can't be read on this machine (the install's"
+    " encryption key changed) — remove it in Settings and paste it again"
+)
 
 # What each (provider, tier) means concretely. Data, not policy: the tier is
 # the setting users choose; these ids are the current defaults behind it.
@@ -159,8 +168,11 @@ class ChatModelRouter:
             # platform holds an Anthropic key.
             return self._subscription.secret_for("anthropic") is not None
         for provider in self._order():
-            if self._keyring.secret_for(self._tenant, provider) is None:
-                continue
+            try:
+                if self._keyring.secret_for(self._tenant, provider) is None:
+                    continue
+            except KeyringError:
+                continue  # an unreadable key can't answer, let alone search
             # The first keyed provider answers — search only if it's Claude.
             return provider == "anthropic"
         return False
@@ -184,7 +196,11 @@ class ChatModelRouter:
             return self._ask_subscription(messages)
         errors: list[str] = []
         for provider in self._order():
-            secret = self._keyring.secret_for(self._tenant, provider)
+            try:
+                secret = self._keyring.secret_for(self._tenant, provider)
+            except KeyringError:
+                errors.append(_UNREADABLE_KEY.format(provider=provider))
+                continue
             if secret is None:
                 continue
             try:
@@ -231,7 +247,11 @@ class ChatModelRouter:
             )
         errors: list[str] = []
         for provider in PROVIDERS:  # the plan's order, not a preference
-            secret = brain.secret_for(provider)
+            try:
+                secret = brain.secret_for(provider)
+            except KeyringError:
+                errors.append(_UNREADABLE_KEY.format(provider=provider))
+                continue
             if secret is None:
                 continue
             try:
