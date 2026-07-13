@@ -13,6 +13,7 @@ import {
 } from "../ui";
 import type {
   ModelKeyView,
+  PaymentAuthorization,
   PaymentProfileView,
   PaymentsStatus,
   RepresentativeStatus,
@@ -108,9 +109,188 @@ export function SettingsPane() {
         </section>
       ))}
       <RepresentativeSection />
+      <SecuritySection />
       <PaymentSection />
       <PrivacySection />
     </div>
+  );
+}
+
+// Security: the second lock on spending. OoLu can place orders and make
+// bookings, but every one waits here for the exact amount re-confirmed
+// plus a fresh authenticator code. This section sets up that second
+// factor and clears the orders waiting on it.
+export function SecuritySection() {
+  const tr = useT();
+  const [enrolled, setEnrolled] = useState<boolean | null>(null);
+  const [setup, setSetup] = useState<{ secret: string; uri: string } | null>(
+    null,
+  );
+  const [code, setCode] = useState("");
+  const [orders, setOrders] = useState<PaymentAuthorization[]>([]);
+  const [confirmAmt, setConfirmAmt] = useState<Record<string, string>>({});
+  const [authCode, setAuthCode] = useState<Record<string, string>>({});
+  const [error, setError] = useState("");
+  const [absent, setAbsent] = useState(false);
+
+  const refresh = useCallback(async () => {
+    try {
+      setEnrolled(Boolean((await api.twoFactorStatus()).enrolled));
+      setOrders((await api.paymentAuthorizations()).items ?? []);
+    } catch {
+      setAbsent(true); // this host has no 2FA/order door
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  if (absent || enrolled === null) return null;
+
+  return (
+    <section className="settings-group security">
+      <h3>{tr("sec.title")}</h3>
+      <p className="muted">{tr("sec.intro")}</p>
+      {error && <div className="error">{error}</div>}
+
+      <div className="setting-row">
+        <div className="setting-label">
+          <span>{tr("sec.2fa")}</span>
+          <span className="setting-desc">
+            {enrolled ? tr("sec.2faOn") : tr("sec.2faOff")}
+          </span>
+        </div>
+        <div className="setting-control row">
+          {enrolled ? (
+            <button
+              className="linklike"
+              onClick={async () => {
+                await api.twoFactorDisable();
+                void refresh();
+              }}
+            >
+              {tr("sec.disable")}
+            </button>
+          ) : (
+            <button
+              onClick={async () => {
+                setError("");
+                try {
+                  setSetup(await api.twoFactorEnroll());
+                } catch (e) {
+                  setError((e as Error).message);
+                }
+              }}
+            >
+              {tr("sec.setUp")}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {setup && !enrolled && (
+        <div className="setting-row twofa-setup">
+          <div className="setting-label">
+            <span>{tr("sec.scanAdd")}</span>
+            <span className="setting-desc">{tr("sec.scanDesc")}</span>
+            <code className="twofa-secret">{setup.secret}</code>
+          </div>
+          <div className="setting-control row">
+            <input
+              aria-label={tr("sec.enterCode")}
+              inputMode="numeric"
+              placeholder="123456"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+            />
+            <button
+              disabled={code.trim().length < 6}
+              onClick={async () => {
+                setError("");
+                try {
+                  await api.twoFactorConfirm(code.trim());
+                  setSetup(null);
+                  setCode("");
+                  void refresh();
+                } catch (e) {
+                  setError((e as Error).message);
+                }
+              }}
+            >
+              {tr("sec.confirm")}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {orders.length > 0 && (
+        <>
+          <p className="muted">{tr("sec.ordersWaiting")}</p>
+          {orders.map((o) => (
+            <div key={o.auth_id} className="settings-group order-card">
+              <div className="setting-label">
+                <span>{o.merchant}</span>
+                <span className="setting-desc">{o.description}</span>
+                <strong>
+                  {o.currency} {(o.amount_micros / 1_000_000).toFixed(2)}
+                </strong>
+              </div>
+              <div className="setting-control row">
+                <input
+                  aria-label={tr("sec.confirmAmount")}
+                  inputMode="decimal"
+                  placeholder={tr("sec.amount")}
+                  value={confirmAmt[o.auth_id] ?? ""}
+                  onChange={(e) =>
+                    setConfirmAmt({ ...confirmAmt, [o.auth_id]: e.target.value })
+                  }
+                />
+                <input
+                  aria-label={`${tr("sec.enterCode")} — ${o.merchant}`}
+                  inputMode="numeric"
+                  placeholder="123456"
+                  value={authCode[o.auth_id] ?? ""}
+                  onChange={(e) =>
+                    setAuthCode({ ...authCode, [o.auth_id]: e.target.value })
+                  }
+                />
+                <button
+                  disabled={!enrolled}
+                  onClick={async () => {
+                    setError("");
+                    try {
+                      const micros = Math.round(
+                        parseFloat(confirmAmt[o.auth_id] ?? "") * 1_000_000,
+                      );
+                      await api.authorizePayment(
+                        o.auth_id,
+                        micros,
+                        (authCode[o.auth_id] ?? "").trim(),
+                      );
+                      void refresh();
+                    } catch (e) {
+                      setError((e as Error).message);
+                    }
+                  }}
+                >
+                  {tr("sec.authorize")}
+                </button>
+                <button
+                  className="linklike"
+                  onClick={async () => {
+                    await api.cancelPayment(o.auth_id);
+                    void refresh();
+                  }}
+                >
+                  {tr("sec.decline")}
+                </button>
+              </div>
+            </div>
+          ))}
+        </>
+      )}
+    </section>
   );
 }
 

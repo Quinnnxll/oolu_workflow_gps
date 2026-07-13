@@ -6,21 +6,29 @@ afterEach(() => {
 });
 
 describe("location", () => {
-  it("resolves coordinates when the device allows it", async () => {
+  it("asks for a fresh GPS fix, not the coarse cached estimate", async () => {
+    let opts: PositionOptions | undefined;
     vi.stubGlobal("navigator", {
       geolocation: {
         getCurrentPosition: (
           ok: (p: {
             coords: { latitude: number; longitude: number; accuracy: number };
           }) => void,
-        ) =>
+          _fail: unknown,
+          options: PositionOptions,
+        ) => {
+          opts = options;
           ok({
-            coords: { latitude: 52.52, longitude: 13.405, accuracy: 12.4 },
-          }),
+            coords: { latitude: 52.52, longitude: 13.405, accuracy: 8.3 },
+          });
+        },
       },
     });
     const here = await currentPosition();
-    expect(here).toEqual({ lat: 52.52, lon: 13.405, accuracy_m: 12 });
+    expect(here).toEqual({ lat: 52.52, lon: 13.405, accuracy_m: 8 });
+    // The metre-precision knobs: GPS on, no stale cache.
+    expect(opts?.enableHighAccuracy).toBe(true);
+    expect(opts?.maximumAge).toBe(0);
   });
 
   it("says plainly when permission was refused", async () => {

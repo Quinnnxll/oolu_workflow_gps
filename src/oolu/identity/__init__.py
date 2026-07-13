@@ -52,8 +52,10 @@ from .tokens import (
     SignatureVerifier,
     assert_production_identity,
 )
+from .totp_store import TotpStore
 
 __all__ = [
+    "TotpStore",
     "ADMIN_ROLE",
     "IDENTITY_MIGRATIONS",
     "IDENTITY_SCHEMA_VERSION",

@@ -52,3 +52,32 @@ executable or interpreter can still access resources outside its working directo
 its own behavior. Treat recorded commands as trusted local code. Production execution of
 untrusted skills requires the Docker or future restricted-worker composition, and CLI
 output must be treated as potentially sensitive audit data.
+
+## Placing orders and bookings (spending money)
+
+OoLu can act on external sites — order goods, reserve a table, book a room —
+which means it can spend the user's money. Every such action is a RESERVED
+operation whose only release valve is the payment-consent gate
+(`billing/authorization.py`), and that gate has two locks the account holder
+alone controls:
+
+1. **Consent to the exact amount.** The authorization request records the
+   merchant, the amount, the currency, and a plain-language description.
+   Releasing it requires re-stating the amount to the cent — a draft order
+   that silently grew cannot be waved through by habit.
+2. **A second factor.** The consent must carry a fresh RFC-6238 TOTP code
+   from the user's authenticator (`identity/totp.py`, secret sealed at rest
+   in `identity/totp_store.py` with the install's machine key). A stolen
+   session token is not enough to spend money; an account with no confirmed
+   second factor cannot authorize a payment at all.
+
+An order action must not execute until its authorization record reads
+`authorized`; that record is the durable proof of consent. Pre-launch the
+`LaunchGuard` keeps the real transaction port shut, so the whole flow is
+verifiable end to end while no money can move. Orders are account-scoped:
+one person on a shared host can neither see nor release another's.
+
+Out of scope here: the site-automation that actually completes a checkout
+on an arbitrary third-party site. This layer is the *authorization* — the
+guarantee that nothing spends money without the user's amount-consent and
+second factor — not the browser driver that fills the merchant's form.

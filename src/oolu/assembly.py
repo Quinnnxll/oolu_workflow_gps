@@ -605,6 +605,28 @@ def build_host_runtime(
     model_meter = ModelCallMeter()
     settings_node = SettingsNode(SettingsStore(conn))
     _mail_codes = MailCodeStore(conn)
+    # The payment second factor and the order-consent gate: OoLu may spend
+    # money only when the account has TOTP enrolled and re-confirms the
+    # exact amount with a fresh code (docs — Issue 6).
+    import time as _time
+
+    from .billing import PaymentAuthorizationStore
+    from .identity import TotpStore
+
+    # The consent scope is "tenant:principal"; TOTP is keyed by principal.
+    def _principal_of(scope: str) -> str:
+        return scope.split(":", 1)[-1]
+
+    _totp = TotpStore(conn, key_path=data / "machine.key")
+    _payment_auth = PaymentAuthorizationStore(
+        conn,
+        verify_second_factor=lambda scope, code: _totp.verify(
+            _principal_of(scope), code, now=_time.time()
+        ),
+        second_factor_enrolled=lambda scope: _totp.is_enrolled(
+            _principal_of(scope)
+        ),
+    )
     home_tenant = (
         getattr(config, "registration_tenant", None) if config else None
     ) or "main"
@@ -944,6 +966,8 @@ def build_host_runtime(
         # always there so verified marks survive sender changes.
         mail=mail,
         mail_codes=_mail_codes,
+        totp=_totp,
+        payment_authorizations=_payment_auth,
         local_files_root=Path(local_files_root) if local_files_root else None,
         # People talking to people, and one OoLu thread per account that
         # every signed-in device shares.

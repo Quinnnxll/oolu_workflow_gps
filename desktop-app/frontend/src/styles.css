@@ -1931,3 +1931,19 @@ button.ghost {
   overflow-y: auto;
   flex-shrink: 0;
 }
+
+/* Security: 2FA setup + order-consent cards. */
+.twofa-secret {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 4px 8px;
+  background: var(--line);
+  border-radius: 6px;
+  font-size: 13px;
+  letter-spacing: 1px;
+  word-break: break-all;
+}
+
+.order-card .setting-label strong {
+  margin-top: 4px;
+}

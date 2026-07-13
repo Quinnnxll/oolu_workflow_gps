@@ -354,3 +354,77 @@ describe("the OoLu window's quick toggle and filter strip", () => {
     expect(screen.getByText("on it — will look today")).toBeTruthy();
   });
 });
+
+describe("SecuritySection: 2FA and order consent", () => {
+  it("enrolls 2FA and authorizes a waiting order with amount + code", async () => {
+    const { SecuritySection } = await import("./SettingsPane");
+    routes["GET /v1/2fa"] = { status: 200, body: { enrolled: false } };
+    routes["GET /v1/payment-authorizations"] = {
+      status: 200,
+      body: {
+        items: [
+          {
+            auth_id: "o1",
+            merchant: "Kifaru Books",
+            amount_micros: 24990000,
+            currency: "USD",
+            description: "1 book",
+            status: "pending",
+          },
+        ],
+      },
+    };
+    routes["POST /v1/2fa/enroll"] = {
+      status: 200,
+      body: { secret: "ABCD2345", uri: "otpauth://totp/OoLu%3Aalice?..." },
+    };
+    routes["POST /v1/2fa/confirm"] = { status: 200, body: { enrolled: true } };
+    routes["POST /v1/payment-authorizations/o1"] = {
+      status: 200,
+      body: { auth_id: "o1", status: "authorized" },
+    };
+    render(<SecuritySection />);
+
+    expect(await screen.findByText("Kifaru Books")).toBeTruthy();
+    expect(screen.getByText("USD 24.99")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Set up" }));
+    expect(await screen.findByText("ABCD2345")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Authenticator code"), {
+      target: { value: "123456" },
+    });
+    routes["GET /v1/2fa"] = { status: 200, body: { enrolled: true } };
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    const confirm = calls.find((c) => c.path === "/v1/2fa/confirm");
+    expect((confirm?.body as { code: string }).code).toBe("123456");
+    // 2FA now on: the Authorize button enables.
+    await screen.findByText("On — orders can be authorized.");
+
+    fireEvent.change(screen.getByLabelText("Re-enter the exact amount"), {
+      target: { value: "24.99" },
+    });
+    fireEvent.change(
+      screen.getByLabelText("Authenticator code — Kifaru Books"),
+      { target: { value: "654321" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Authorize & pay" }));
+    const authz = calls.find(
+      (c) => c.path === "/v1/payment-authorizations/o1",
+    );
+    expect(authz?.body).toEqual({
+      confirm_amount_micros: 24990000,
+      code: "654321",
+    });
+  });
+
+  it("disappears on a host without the 2FA door", async () => {
+    const { SecuritySection } = await import("./SettingsPane");
+    routes["GET /v1/2fa"] = {
+      status: 404,
+      body: { error: { code: "not_found", message: "no 2fa" } },
+    };
+    const { container } = render(<SecuritySection />);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(container.textContent).toBe("");
+  });
+});

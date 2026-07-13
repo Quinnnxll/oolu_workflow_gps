@@ -330,6 +330,22 @@ def test_cross_tenant_access_is_not_found(tmp_path):
     conn.close()
 
 
+def test_the_run_list_is_scoped_to_the_account_not_the_tenant(tmp_path):
+    # Two people on ONE host (same tenant) must never see each other's
+    # Noder activity — a run belongs to the account that submitted it.
+    app, conn, ident = _app(tmp_path)
+    alice, bob = ident.token("alice", "t1"), ident.token("bob", "t1")
+    app.handle(_req("POST", "/v1/runs", token=alice, body={"intent": "alice's"}))
+    app.handle(_req("POST", "/v1/runs", token=bob, body={"intent": "bob's"}))
+
+    alice_list = app.handle(_req("GET", "/v1/runs", token=alice)).body
+    assert alice_list["total"] == 1
+    assert alice_list["items"][0]["intent"] == "alice's"
+    bob_list = app.handle(_req("GET", "/v1/runs", token=bob)).body
+    assert bob_list["total"] == 1 and bob_list["items"][0]["intent"] == "bob's"
+    conn.close()
+
+
 def test_multi_process_sees_one_consistent_view(tmp_path):
     db = tmp_path / "shared.db"
     ident = _Identity(tmp_path)

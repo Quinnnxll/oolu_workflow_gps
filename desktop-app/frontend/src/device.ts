@@ -18,13 +18,18 @@ export interface DevicePosition {
 }
 
 export function currentPosition(
-  timeoutMs = 15_000,
+  timeoutMs = 20_000,
 ): Promise<DevicePosition> {
   return new Promise((resolve, reject) => {
     if (!("geolocation" in navigator)) {
       reject(new Error("this device offers no location service"));
       return;
     }
+    // enableHighAccuracy asks for the GPS/GNSS fix (metres), not the
+    // coarse wifi/IP estimate (which can be tens of kilometres off); a
+    // longer timeout gives the receiver time to lock, and maximumAge:0
+    // forbids handing back a stale cached position. accuracy_m carries
+    // the fix's real radius so the caller can say how precise it is.
     navigator.geolocation.getCurrentPosition(
       (position) =>
         resolve({
@@ -37,10 +42,12 @@ export function currentPosition(
           new Error(
             error.code === error.PERMISSION_DENIED
               ? "location permission was refused — allow it in the browser/app settings to share where you are"
-              : "the device could not determine its location right now",
+              : error.code === error.TIMEOUT
+                ? "couldn't get a precise fix in time — try again outdoors or near a window"
+                : "the device could not determine its location right now",
           ),
         ),
-      { enableHighAccuracy: false, timeout: timeoutMs, maximumAge: 60_000 },
+      { enableHighAccuracy: true, timeout: timeoutMs, maximumAge: 0 },
     );
   });
 }

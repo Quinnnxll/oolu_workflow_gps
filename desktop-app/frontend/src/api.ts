@@ -533,6 +533,16 @@ export interface RepresentativeDraft {
   delivered?: { message_id: string; at: string } | null;
 }
 
+// One order OoLu wants to place, awaiting the user's amount + code consent.
+export interface PaymentAuthorization {
+  auth_id: string;
+  merchant: string;
+  amount_micros: number;
+  currency: string;
+  description: string;
+  status: string;
+}
+
 // ---- payments wire shapes --------------------------------------------------
 export interface SavedCard {
   pm_ref: string;
@@ -754,6 +764,33 @@ export const api = {
   // The busy person's pass: one call drafts a reply for every waiting
   // friend message (idempotent per message — polling is free until
   // someone says something new).
+  // Two-factor: the second lock on spending money.
+  twoFactorStatus: () => req<{ enrolled: boolean }>("GET", "/v1/2fa"),
+  twoFactorEnroll: () =>
+    req<{ secret: string; uri: string }>("POST", "/v1/2fa/enroll"),
+  twoFactorConfirm: (code: string) =>
+    req<{ enrolled: boolean }>("POST", "/v1/2fa/confirm", { code }),
+  twoFactorDisable: () =>
+    req<{ enrolled: boolean }>("DELETE", "/v1/2fa"),
+  // Order/booking consent: the pending orders OoLu wants to place, and the
+  // amount-plus-code release for one.
+  paymentAuthorizations: () =>
+    req<{ items: PaymentAuthorization[] }>(
+      "GET",
+      "/v1/payment-authorizations",
+    ),
+  authorizePayment: (authId: string, amountMicros: number, code: string) =>
+    req<PaymentAuthorization>(
+      "POST",
+      `/v1/payment-authorizations/${encodeURIComponent(authId)}`,
+      { confirm_amount_micros: amountMicros, code },
+    ),
+  cancelPayment: (authId: string) =>
+    req<PaymentAuthorization>(
+      "POST",
+      `/v1/payment-authorizations/${encodeURIComponent(authId)}`,
+      { action: "cancel" },
+    ),
   representativeSweep: () =>
     req<{
       drafted: RepresentativeDraft[];

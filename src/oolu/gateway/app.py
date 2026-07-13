@@ -460,6 +460,9 @@ class GatewayApp:
         identity_links: IdentityLinkStore | None = None,  # email/IdP -> account
         mail=None,  # mail.MailSender: verification + reset codes go out here
         mail_codes=None,  # mail.MailCodeStore: hashed one-time codes
+        totp=None,  # identity.TotpStore: the payment second factor
+        payment_authorizations=None,  # billing.PaymentAuthorizationStore:
+        # the order/booking consent gate (amount consent + TOTP)
         direct_messages=None,  # social.DirectMessageStore: friends talking
         assistant_history=None,  # social.AssistantHistoryStore: one OoLu
         # thread per account, shared by every signed-in device
@@ -568,6 +571,8 @@ class GatewayApp:
         self._identity_links = identity_links
         self._mail = mail
         self._mail_codes = mail_codes
+        self._totp = totp
+        self._payment_authorizations = payment_authorizations
         self._direct_messages = direct_messages
         self._assistant_history = assistant_history
         self._representative = representative
@@ -876,6 +881,22 @@ class GatewayApp:
         r.add("GET", "/v1/keys/model", self._model_keys_list)
         r.add("POST", "/v1/keys/model", self._model_keys_add)
         r.add("POST", "/v1/keys/model/test", self._model_keys_test)
+        # Two-factor enrollment: the second lock on spending money.
+        r.add("GET", "/v1/2fa", self._totp_status)
+        r.add("POST", "/v1/2fa/enroll", self._totp_enroll)
+        r.add("POST", "/v1/2fa/confirm", self._totp_confirm)
+        r.add("DELETE", "/v1/2fa", self._totp_disable)
+        # Order/booking payment consent: OoLu may spend money only through
+        # this gate — the exact amount, re-confirmed, plus a TOTP code.
+        r.add("GET", "/v1/payment-authorizations", self._payment_auths_list)
+        r.add(
+            "POST", "/v1/payment-authorizations", self._payment_auth_request
+        )
+        r.add(
+            "POST",
+            "/v1/payment-authorizations/{auth_id}",
+            self._payment_auth_decide,
+        )
         r.add("DELETE", "/v1/keys/model/{provider}", self._model_keys_remove)
         # This month's model usage for the caller's tenant, plus the plan's
         # included allowance when a hosted brain exists here.
@@ -2306,10 +2327,15 @@ class GatewayApp:
             self._config.page_size_max,
             max(1, int(request.query.get("size", str(self._config.page_size_default)))),
         )
+        # A run belongs to the ACCOUNT that submitted it, not the whole
+        # tenant: two people on one host must never see each other's Noder
+        # activity. (The run quota below stays tenant-wide — that's a
+        # capacity limit on the host, not a visibility rule.)
         runs = [
             s
             for s in self._durable.runs.list(limit=10_000)
             if s.contract.metadata.get("tenant_id") == session.tenant_id
+            and s.contract.submitted_by == session.principal_id
         ]
         start = (page - 1) * size
         window = runs[start : start + size]
@@ -3268,6 +3294,128 @@ class GatewayApp:
             raise GatewayError(404, "not_found", f"no {provider} key is stored")
         self._model_routers.pop(session.tenant_id, None)
         return json_response(200, {"removed": provider})
+
+# ------------------------------------------------------------------ #
+    # Two-factor authentication: the second lock on spending money.      #
+    # ------------------------------------------------------------------ #
+    def _require_totp(self):
+        if self._totp is None:
+            raise GatewayError(
+                404, "not_found", "two-factor authentication is not enabled here"
+            )
+        return self._totp
+
+    def _totp_status(self, request, session, params) -> Response:
+        totp = self._require_totp()
+        return json_response(
+            200, {"enrolled": totp.is_enrolled(session.principal_id)}
+        )
+
+    def _totp_enroll(self, request, session, params) -> Response:
+        """Begin enrollment: hand back the secret + otpauth URI for a QR.
+        Provisional until a code confirms the authenticator works."""
+        totp = self._require_totp()
+        enrolled = totp.begin_enroll(session.principal_id)
+        return json_response(
+            200, {"secret": enrolled["secret"], "uri": enrolled["uri"]}
+        )
+
+    def _totp_confirm(self, request, session, params) -> Response:
+        totp = self._require_totp()
+        code = str((request.body or {}).get("code") or "")
+        ok = totp.confirm_enroll(
+            session.principal_id, code, now=(request.now or self._clock()).timestamp()
+        )
+        if not ok:
+            raise GatewayError(
+                400, "invalid_code", "that code didn't match — enter the current one"
+            )
+        return json_response(200, {"enrolled": True})
+
+    def _totp_disable(self, request, session, params) -> Response:
+        totp = self._require_totp()
+        totp.disable(session.principal_id)
+        return json_response(200, {"enrolled": False})
+
+    # ------------------------------------------------------------------ #
+    # Order/booking payment consent: the release valve for spending.     #
+    # OoLu may place an order only through this gate — the exact amount, #
+    # re-confirmed by the user, plus a fresh authenticator code.         #
+    # ------------------------------------------------------------------ #
+    def _require_payment_auth(self):
+        if self._payment_authorizations is None:
+            raise GatewayError(
+                404, "not_found", "payment authorization is not enabled here"
+            )
+        return self._payment_authorizations
+
+    def _payment_auths_list(self, request, session, params) -> Response:
+        store = self._require_payment_auth()
+        scope = self._representative_scope(session)
+        return json_response(
+            200, {"items": [a.model_dump() for a in store.pending(scope)]}
+        )
+
+    def _payment_auth_request(self, request, session, params) -> Response:
+        """Record an intended order awaiting the user's consent — what OoLu
+        (or a node it built) files when it wants to place an order or make
+        a booking. The order does not execute until the user authorizes."""
+        from ..billing import OrderRequest, PaymentAuthorizationError
+
+        store = self._require_payment_auth()
+        body = request.body or {}
+        try:
+            order = OrderRequest(
+                merchant=str(body.get("merchant") or ""),
+                amount_micros=int(body.get("amount_micros")),
+                currency=str(body.get("currency") or "USD"),
+                description=str(body.get("description") or ""),
+            )
+        except (TypeError, ValueError):
+            raise GatewayError(
+                400, "invalid_request", "an order needs a merchant and an amount"
+            ) from None
+        try:
+            record = store.request(
+                self._representative_scope(session),
+                order,
+                run_id=body.get("run_id"),
+            )
+        except PaymentAuthorizationError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(201, record.model_dump())
+
+    def _payment_auth_decide(self, request, session, params) -> Response:
+        """Authorize or cancel a pending order. Authorize demands both the
+        exact amount (re-confirmed) and a valid TOTP code; either lock
+        failing leaves the order pending, unspent."""
+        from ..billing import PaymentAuthorizationError
+
+        store = self._require_payment_auth()
+        scope = self._representative_scope(session)
+        body = request.body or {}
+        action = str(body.get("action") or "authorize")
+        if action == "cancel":
+            record = store.cancel(scope, params["auth_id"])
+            if record is None:
+                raise GatewayError(404, "not_found", "no such order")
+            return json_response(200, record.model_dump())
+        try:
+            amount = int(body.get("confirm_amount_micros"))
+        except (TypeError, ValueError):
+            raise GatewayError(
+                400, "invalid_request", "confirm the exact order amount"
+            ) from None
+        try:
+            record = store.authorize(
+                scope,
+                params["auth_id"],
+                confirm_amount_micros=amount,
+                code=str(body.get("code") or ""),
+            )
+        except PaymentAuthorizationError as exc:
+            raise GatewayError(400, "authorization_refused", str(exc)) from exc
+        return json_response(200, record.model_dump())
 
     # ------------------------------------------------------------------ #
     # The subscription lifecycle (the account console's backend).         #

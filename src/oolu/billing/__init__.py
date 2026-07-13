@@ -1,4 +1,10 @@
 from .accounts import PayoutStore
+from .authorization import (
+    OrderRequest,
+    PaymentAuthorization,
+    PaymentAuthorizationError,
+    PaymentAuthorizationStore,
+)
 from .cards import (
     TEST_CARDS,
     CardSummary,
@@ -70,6 +76,10 @@ from .subscription import (
 )
 
 __all__ = [
+    "OrderRequest",
+    "PaymentAuthorization",
+    "PaymentAuthorizationError",
+    "PaymentAuthorizationStore",
     "TEST_CARDS",
     "CardSummary",
     "CardVault",
