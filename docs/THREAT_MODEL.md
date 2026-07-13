@@ -77,7 +77,16 @@ An order action must not execute until its authorization record reads
 verifiable end to end while no money can move. Orders are account-scoped:
 one person on a shared host can neither see nor release another's.
 
-Out of scope here: the site-automation that actually completes a checkout
-on an arbitrary third-party site. This layer is the *authorization* — the
-guarantee that nothing spends money without the user's amount-consent and
-second factor — not the browser driver that fills the merchant's form.
+The site-automation that completes a checkout is the executor layer
+(`skills/commerce.py`): a general `SiteDriverExecutor` that drives any
+storefront through a browser, and per-site adapters (`AmazonExecutor` the
+first) that place an order in one structured call. The engine routes
+between them as a road network — the optimizer excludes any road whose
+adapter isn't installed and, among the rest, picks the cheapest, so a
+per-site adapter wins when present and the general driver is the fallback
+that always works (`test_commerce_routing.py` proves the planning,
+routing, and scoring end to end). Crucially, every order executor gates
+on the same authorization: it refuses to place an order unless the action
+carries an `authorization_id` the payment gate released. So the
+consent + 2FA guarantee holds whichever road the route takes — the
+security layer is not bypassed by adding a faster adapter.

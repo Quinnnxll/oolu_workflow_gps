@@ -77,6 +77,33 @@ def build_cli_executor(
     return {executor.name: executor}
 
 
+def build_commerce_executors(
+    *,
+    amazon_client: Any = None,
+    site_driver: Any = None,
+    is_authorized: Callable[[str], bool] | None = None,
+) -> dict[str, ActionExecutor]:
+    """The order-placing hands: a general site driver and per-site adapters.
+
+    Each is registered only when its real driver is provided — the general
+    ``web`` executor needs a browser (Playwright, the ``browser`` extra),
+    the ``amazon`` executor needs an Amazon client. The route optimizer
+    then scores whichever roads are actually drivable here and picks the
+    cheapest; ``is_authorized`` ties every order to the payment-consent +
+    2FA gate, so no road spends without the user's release.
+    """
+    from .skills.commerce import AmazonExecutor, SiteDriverExecutor
+
+    executors: dict[str, ActionExecutor] = {}
+    if site_driver is not None:
+        web = SiteDriverExecutor(site_driver, is_authorized=is_authorized)
+        executors[web.name] = web
+    if amazon_client is not None:
+        amazon = AmazonExecutor(amazon_client, is_authorized=is_authorized)
+        executors[amazon.name] = amazon
+    return executors
+
+
 def build_http_executor(
     *,
     allow_hosts: list[str] | tuple[str, ...] = (),
