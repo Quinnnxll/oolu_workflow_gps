@@ -243,3 +243,38 @@ describe("NoderThread", () => {
     );
   });
 });
+
+describe("the foldable list and the one-pane phone flow", () => {
+  it("folds the list for a wide conversation window, and remembers", async () => {
+    routes["GET /v1/work/nodes"] = { status: 200, body: { items: [] } };
+    const { container } = render(<Life />);
+    const life = container.querySelector(".life")!;
+    expect(life.className).not.toContain("sidebar-folded");
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide the list" }));
+    expect(life.className).toContain("sidebar-folded");
+    expect(localStorage.getItem("oolu_sidebar_folded")).toBe("1");
+
+    // ☰ brings it back.
+    fireEvent.click(screen.getByRole("button", { name: "Show the list" }));
+    expect(life.className).not.toContain("sidebar-folded");
+
+    // The choice survives a remount.
+    localStorage.setItem("oolu_sidebar_folded", "1");
+    cleanup();
+    const again = render(<Life />).container.querySelector(".life")!;
+    expect(again.className).toContain("sidebar-folded");
+  });
+
+  it("opening a conversation opens the pane; back returns to the list", async () => {
+    const { container } = render(<Life />);
+    const life = container.querySelector(".life")!;
+    expect(life.className).not.toContain("pane-open");
+
+    fireEvent.click(screen.getByRole("button", { name: /Files/ }));
+    expect(life.className).toContain("pane-open");
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(life.className).not.toContain("pane-open");
+  });
+});

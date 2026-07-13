@@ -88,6 +88,26 @@ export function applyLanguage(lang: string): void {
   if (changed) notify();
 }
 
+// The folded/unfolded state of the conversation list — one choice shared
+// by Life and Work, surviving restarts like theme and language do.
+const SIDEBAR_KEY = "oolu_sidebar_folded";
+
+export function loadSidebarFolded(): boolean {
+  try {
+    return localStorage.getItem(SIDEBAR_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function saveSidebarFolded(folded: boolean): void {
+  try {
+    localStorage.setItem(SIDEBAR_KEY, folded ? "1" : "0");
+  } catch {
+    /* storage unavailable: the fold still applied for this session */
+  }
+}
+
 // Paint the cached choices before any settings request returns. With no
 // stored choice yet (a first run — the SIGN-IN screen included), the
 // device's own language decides, never a hardcoded English.
@@ -1131,6 +1151,21 @@ const STRINGS: Record<string, Entry> = {
     fr: "dans votre devise",
   },
 
+  // ---- layout: the foldable list and the phone's one-pane flow ---------
+  "nav.back": { en: "Back", zh: "返回", es: "Atrás", fr: "Retour" },
+  "nav.hideList": {
+    en: "Hide the list",
+    zh: "收起列表",
+    es: "Ocultar la lista",
+    fr: "Masquer la liste",
+  },
+  "nav.showList": {
+    en: "Show the list",
+    zh: "展开列表",
+    es: "Mostrar la lista",
+    fr: "Afficher la liste",
+  },
+
   // ---- sign-in screen -------------------------------------------------
   "login.edgeIntro": {
     en: "Edge keeps everything on your side: this device, or a private server on your own network.",
@@ -2035,7 +2070,7 @@ const ZH_HANT: Record<string, string> = {
   "files": "檔案",
   "filesSub": "文件與表格",
   "settings": "設定",
-  "settingsSub": "應用、帳戶、模型、預算",
+  "settingsSub": "應用、賬戶、模型、預算",
   "friends": "好友",
   "noder": "節點",
   "startConversation": "發起對話",
@@ -2050,23 +2085,23 @@ const ZH_HANT: Record<string, string> = {
   "newFileInFiles": "存為新檔案",
   "noMatches": "沒有匹配項",
   "groupApp": "應用",
-  "groupAccount": "帳戶",
+  "groupAccount": "賬戶",
   "groupSubscription": "訂閱",
   "groupModel": "模型",
   "groupBudget": "預算",
   "privacyData": "隱私與資料",
-  "subscriptionNote": "套餐是一項承諾，而非偏好設定——此處僅展示，管理請前往帳戶中心（先取消當前套餐才能更改條款）。",
+  "subscriptionNote": "套餐是一項承諾，而非偏好設定——此處僅展示，管理請前往賬戶中心（先取消當前套餐才能更改條款）。",
   "modelNote": "OoLu 的大腦所在。訂閱模式跟隨你的 OoLu 套餐（優先 Claude）。在下方新增自己的 API 金鑰並把預設模型切換為自有 API，即可用你的金鑰覆蓋套餐——或在本機執行本地模型伺服器並選擇本地：無需金鑰，不上雲。",
   "managePlan": "管理套餐",
   "managePlanDesc": "升級（抵扣餘額）、取消，或切換按月/按年。",
-  "openConsole": "開啟帳戶中心",
+  "openConsole": "開啟賬戶中心",
   "regionSuggests": "根據你的地區建議使用",
   "use": "使用",
   "downloadData": "下載我的資料",
   "downloadDataDesc": "此主機上與你相關的全部資料，匯出為一個 JSON 文件。",
   "download": "下載",
-  "deleteAccount": "刪除我的帳戶",
-  "deleteAccountDesc": "刪除你的訊息、對話、登入身份和銀行卡資訊，並永久停用帳戶。共享抽屜中的檔案會保留——請先在“檔案”中刪除屬於你的檔案。",
+  "deleteAccount": "刪除我的賬戶",
+  "deleteAccountDesc": "刪除你的訊息、對話、登入身份和銀行卡資訊，並永久停用賬戶。共享抽屜中的檔案會保留——請先在“檔案”中刪除屬於你的檔案。",
   "legal": "法律條款",
   "legalDesc": "此主機在其公開法律連結上提供的條款內容。",
   "chat.welcome": "嘿！⚡ 我是 OoLu，你的幹活搭檔。我們先從什麼開始？",
@@ -2181,7 +2216,7 @@ const ZH_HANT: Record<string, string> = {
   "work.underSupernode": "隸屬超級節點",
   "work.noneStandalone": "（無——獨立節點，無許可權級別）",
   "work.authority": "許可權級別",
-  "work.claimNote": "在超級節點下建立的節點開始時沒有負責人帳戶。節點 id 就是認領憑證：只交給應當接管的人，切勿公開發布——接管的使用者帳戶將成為節點上顯示的負責人。",
+  "work.claimNote": "在超級節點下建立的節點開始時沒有負責人賬戶。節點 id 就是認領憑證：只交給應當接管的人，切勿公開發布——接管的使用者賬戶將成為節點上顯示的負責人。",
   "work.auditCheck": "審計節點——每個請求都必須人工確認",
   "work.autogrowCheck": "自動生長——經過此節點的資料可用於新的開發",
   "work.policyCheck": "我同意節點政策——克隆、欺詐和殭屍節點會被檢測，平臺可對其限制或移除",
@@ -2194,7 +2229,7 @@ const ZH_HANT: Record<string, string> = {
   "work.responsible": "負責人",
   "work.admin": "管理組",
   "work.notOnboarded": "尚未接管",
-  "work.unclaimedNote": "此節點尚無負責人帳戶。不要公開展示其節點 id——憑它接管的人將成為負責人。只把它交給應當負責的人；對方接管後，其使用者 ID 會顯示在這裡。",
+  "work.unclaimedNote": "此節點尚無負責人賬戶。不要公開展示其節點 id——憑它接管的人將成為負責人。只把它交給應當負責的人；對方接管後，其使用者 ID 會顯示在這裡。",
   "work.under": "隸屬",
   "work.memberNodes": "成員節點",
   "work.keepIdPrivate": "未接管——請保密其 id",
@@ -2272,10 +2307,13 @@ const ZH_HANT: Record<string, string> = {
   "file.copiedTo": "已複製到 {name}",
   "unit.days": "天",
   "unit.currency": "以你的貨幣計",
+  "nav.back": "返回",
+  "nav.hideList": "收起列表",
+  "nav.showList": "展開列表",
   "login.edgeIntro": "Edge 讓一切留在你這邊：這臺裝置，或你自己網路中的私有伺服器。",
   "login.thisDevice": "這臺裝置",
   "login.privateNetwork": "私有網路",
-  "login.deviceIntro": "你的帳戶、你的引擎，以及你教給 OoLu 的一切都留在這臺機器上。",
+  "login.deviceIntro": "你的賬戶、你的引擎，以及你教給 OoLu 的一切都留在這臺機器上。",
   "login.continueEdge": "在 Edge 上繼續",
   "login.networkIntro": "你的團隊在自己網路中執行的私有伺服器（一個大家都能訪問的固定地址）。你仍需用使用者名稱和密碼登入——在超級節點下建立的節點必須對應一個真實的人。",
   "login.serverAddress": "私有伺服器地址",
@@ -2284,9 +2322,9 @@ const ZH_HANT: Record<string, string> = {
   "login.resetEnterCode": "輸入郵件中的驗證碼並設定新密碼。",
   "login.resetEnterEmail": "輸入你的郵箱，我們將傳送重置驗證碼。",
   "login.signInEdge": "登入你的私有網路伺服器。",
-  "login.registerEdge": "在私有網路伺服器上建立你的帳戶。",
+  "login.registerEdge": "在私有網路伺服器上建立你的賬戶。",
   "login.signInGlobal": "登入 OoLu Global。",
-  "login.registerGlobal": "建立你的 OoLu Global 帳戶。",
+  "login.registerGlobal": "建立你的 OoLu Global 賬戶。",
   "login.username": "使用者名稱",
   "login.email": "郵箱",
   "login.code": "6 位驗證碼",
@@ -2294,8 +2332,8 @@ const ZH_HANT: Record<string, string> = {
   "login.newPassword": "新密碼",
   "login.signIn": "登入",
   "login.signingIn": "登入中…",
-  "login.createAccount": "建立帳戶",
-  "login.creatingAccount": "建立帳戶中…",
+  "login.createAccount": "建立賬戶",
+  "login.creatingAccount": "建立賬戶中…",
   "login.verify": "驗證",
   "login.verifying": "驗證中…",
   "login.changePassword": "修改密碼",
@@ -2305,17 +2343,17 @@ const ZH_HANT: Record<string, string> = {
   "login.google": "使用 Google 繼續",
   "login.phone": "使用手機號繼續",
   "login.comingSoon": "即將推出",
-  "login.noAccount": "還沒有帳戶？",
+  "login.noAccount": "還沒有賬戶？",
   "login.createOne": "建立一個",
   "login.forgot": "忘記密碼？",
   "login.wrongAddress": "地址填錯了？",
   "login.startOver": "重新開始",
-  "login.haveAccount": "已有帳戶？",
+  "login.haveAccount": "已有賬戶？",
   "login.googleFailed": "Google 登入失敗",
   "login.signInFailed": "登入失敗",
   "login.registerFailed": "註冊失敗",
   "login.codeSent": "我們已向 {mail} 傳送了 6 位驗證碼——在此輸入以完成。",
-  "login.resetSent": "如果 {mail} 有帳戶，6 位驗證碼已在路上。",
+  "login.resetSent": "如果 {mail} 有賬戶，6 位驗證碼已在路上。",
   "login.passwordChanged": "密碼已修改——請用新密碼登入。",
   "keys.none": "還沒有模型金鑰——OoLu 目前用內建規則回答。貼上 Anthropic 或 OpenAI 的 API 金鑰，給它一個真正的大腦。金鑰在本機加密儲存且不再顯示；只有下方的指紋證明它已錄入。",
   "keys.providerKey": "{provider} 金鑰",

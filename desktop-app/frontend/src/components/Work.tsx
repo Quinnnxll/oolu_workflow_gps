@@ -11,7 +11,14 @@ import type {
 import { identityHue } from "../avatar";
 import { pickLocalFiles } from "../device";
 import { humanizeEvent } from "../humanize";
-import { t, tf, useT, displayNodeName } from "../ui";
+import {
+  displayNodeName,
+  loadSidebarFolded,
+  saveSidebarFolded,
+  t,
+  tf,
+  useT,
+} from "../ui";
 import { FilesPane } from "./FilesPane";
 import { NodeInteract, reliabilityLine } from "./NodeInteract";
 
@@ -28,6 +35,14 @@ export function Work({ onLife }: { onLife: () => void }) {
   const tr = useT();
   const [nodes, setNodes] = useState<WorkNode[]>([]);
   const [selected, setSelected] = useState<string | "add" | null>(null);
+  // Same fold + one-pane-on-a-phone behavior as Life — one shared choice.
+  const [folded, setFolded] = useState(loadSidebarFolded);
+  const [paneOpen, setPaneOpen] = useState(false);
+
+  function open(next: string | "add") {
+    setSelected(next);
+    setPaneOpen(true);
+  }
 
   const refresh = useCallback(async () => {
     try {
@@ -46,7 +61,11 @@ export function Work({ onLife }: { onLife: () => void }) {
   const active = nodes.find((n) => n.node_id === selected);
 
   return (
-    <div className="life">
+    <div
+      className={`life${folded ? " sidebar-folded" : ""}${
+        paneOpen ? " pane-open" : ""
+      }`}
+    >
       <aside className="convo-list">
         <div className="mode-tabs">
           <button onClick={onLife}>{tr("life")}</button>
@@ -58,7 +77,7 @@ export function Work({ onLife }: { onLife: () => void }) {
           <button
             className="add-node"
             title={tr("work.addNodeTitle")}
-            onClick={() => setSelected("add")}
+            onClick={() => open("add")}
           >
             +
           </button>
@@ -71,7 +90,7 @@ export function Work({ onLife }: { onLife: () => void }) {
           <button
             key={n.node_id}
             className={`convo ${selected === n.node_id ? "on" : ""}`}
-            onClick={() => setSelected(n.node_id)}
+            onClick={() => open(n.node_id)}
           >
             <span
               className="convo-avatar node"
@@ -94,6 +113,30 @@ export function Work({ onLife }: { onLife: () => void }) {
       </aside>
 
       <section className="convo-pane">
+        <div className="pane-bar">
+          <button
+            type="button"
+            className="pane-back"
+            aria-label={tr("nav.back")}
+            onClick={() => setPaneOpen(false)}
+          >
+            ‹ {tr("nav.back")}
+          </button>
+          <button
+            type="button"
+            className="sidebar-toggle"
+            aria-label={folded ? tr("nav.showList") : tr("nav.hideList")}
+            title={folded ? tr("nav.showList") : tr("nav.hideList")}
+            onClick={() => {
+              setFolded((f) => {
+                saveSidebarFolded(!f);
+                return !f;
+              });
+            }}
+          >
+            {folded ? "☰" : "«"}
+          </button>
+        </div>
         {selected === "add" && (
           <AddNode
             supernodes={nodes.filter((n) => n.account.is_supernode)}

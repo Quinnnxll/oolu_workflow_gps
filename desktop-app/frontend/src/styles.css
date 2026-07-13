@@ -1833,3 +1833,83 @@ button.ghost {
   padding: 0;
   font: inherit;
 }
+
+/* ---- the foldable list and the phone's one-pane flow ---- */
+/* A slim bar at the top of the open pane: ‹ back on a phone, «/☰ fold on
+   a wide screen. It never crowds the conversation. */
+.pane-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 0;
+}
+
+.pane-bar button {
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  border-radius: 8px;
+  padding: 2px 10px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* Folding the list gives the conversation the whole window. */
+.life.sidebar-folded > .convo-list {
+  display: none;
+}
+
+.pane-back {
+  display: none; /* the back button belongs to the one-pane phone flow */
+}
+
+/* Portrait phones and narrow windows: one pane at a time. The list is
+   the home screen; opening anything shows it full-width with ‹ back. */
+@media (max-width: 700px) {
+  .life > .convo-list {
+    display: flex;
+    width: 100%;
+    border-right: none;
+  }
+
+  .life.sidebar-folded > .convo-list {
+    display: flex; /* folding is a wide-screen tool; here the list IS home */
+  }
+
+  .life > .convo-pane {
+    display: none;
+  }
+
+  .life.pane-open > .convo-list {
+    display: none;
+  }
+
+  .life.pane-open > .convo-pane {
+    display: flex;
+  }
+
+  .pane-back {
+    display: inline-block;
+  }
+
+  .sidebar-toggle {
+    display: none;
+  }
+
+  /* Thumb-sized targets, and 16px inputs so phone browsers don't zoom. */
+  .chat-composer textarea,
+  .login-card input,
+  .setting-control input,
+  .setting-control select {
+    font-size: 16px;
+  }
+
+  .bubble {
+    max-width: 88%;
+  }
+
+  .login-card {
+    width: min(94vw, 380px);
+  }
+}

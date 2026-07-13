@@ -7,7 +7,7 @@ import type {
   RepresentativeStatus,
 } from "../api";
 import { identityHue, updateAvatarSignals } from "../avatar";
-import { tf, useT } from "../ui";
+import { loadSidebarFolded, saveSidebarFolded, tf, useT } from "../ui";
 import { conciseName } from "../naming";
 import type { RunSummary, TimelineEvent } from "../types";
 import { ForwardMenu } from "./ForwardMenu";
@@ -54,6 +54,16 @@ export function Life() {
   const [rep, setRep] = useState<RepresentativeStatus | null>(null);
   // Long lists fold away for a clear view; the choice survives restarts.
   const [groups, setGroups] = useState(loadGroups);
+  // The whole list folds away too — a wide, clear conversation window on
+  // demand (persisted). On a phone the layout is one pane at a time:
+  // paneOpen decides whether the list or the open conversation shows.
+  const [folded, setFolded] = useState(loadSidebarFolded);
+  const [paneOpen, setPaneOpen] = useState(false);
+
+  function open(next: Selection) {
+    setSelected(next);
+    setPaneOpen(true);
+  }
 
   function toggleGroup(name: "friends" | "noder") {
     setGroups((g) => {
@@ -97,7 +107,11 @@ export function Life() {
   }
 
   return (
-    <div className="life">
+    <div
+      className={`life${folded ? " sidebar-folded" : ""}${
+        paneOpen ? " pane-open" : ""
+      }`}
+    >
       <aside className="convo-list">
         <div className="mode-tabs">
           <button className="on">{tr("life")}</button>
@@ -106,7 +120,7 @@ export function Life() {
 
         <button
           className={`convo ${selected.kind === "oolu" ? "on" : ""}`}
-          onClick={() => setSelected({ kind: "oolu" })}
+          onClick={() => open({ kind: "oolu" })}
         >
           <span className="convo-avatar oolu">O</span>
           <span className="convo-body">
@@ -117,7 +131,7 @@ export function Life() {
 
         <button
           className={`convo ${selected.kind === "files" ? "on" : ""}`}
-          onClick={() => setSelected({ kind: "files" })}
+          onClick={() => open({ kind: "files" })}
         >
           <span className="convo-avatar file">≡</span>
           <span className="convo-body">
@@ -130,7 +144,7 @@ export function Life() {
             long Friends/Noder list must never hide it below the fold. */}
         <button
           className={`convo ${selected.kind === "settings" ? "on" : ""}`}
-          onClick={() => setSelected({ kind: "settings" })}
+          onClick={() => open({ kind: "settings" })}
         >
           <span className="convo-avatar file">⚙</span>
           <span className="convo-body">
@@ -142,7 +156,7 @@ export function Life() {
         {rep !== null && rep.mode !== "off" && (
           <button
             className={`convo ${selected.kind === "drafts" ? "on" : ""}`}
-            onClick={() => setSelected({ kind: "drafts" })}
+            onClick={() => open({ kind: "drafts" })}
           >
             <span className="convo-avatar file">✍</span>
             <span className="convo-body">
@@ -175,7 +189,7 @@ export function Life() {
                   ? "on"
                   : ""
               }`}
-              onClick={() => setSelected({ kind: "friend", peer: f.peer })}
+              onClick={() => open({ kind: "friend", peer: f.peer })}
             >
               <span
                 className="convo-avatar"
@@ -202,7 +216,7 @@ export function Life() {
         {groups.friends && (
           <button
             className={`convo ${selected.kind === "friends" ? "on" : ""}`}
-            onClick={() => setSelected({ kind: "friends" })}
+            onClick={() => open({ kind: "friends" })}
           >
             <span className="convo-avatar">+</span>
             <span className="convo-body">
@@ -238,7 +252,7 @@ export function Life() {
                 : ""
             }`}
             title={r.intent}
-            onClick={() => setSelected({ kind: "noder", run: r })}
+            onClick={() => open({ kind: "noder", run: r })}
           >
             <span
               className="convo-avatar node"
@@ -263,6 +277,30 @@ export function Life() {
       </aside>
 
       <section className="convo-pane">
+        <div className="pane-bar">
+          <button
+            type="button"
+            className="pane-back"
+            aria-label={tr("nav.back")}
+            onClick={() => setPaneOpen(false)}
+          >
+            ‹ {tr("nav.back")}
+          </button>
+          <button
+            type="button"
+            className="sidebar-toggle"
+            aria-label={folded ? tr("nav.showList") : tr("nav.hideList")}
+            title={folded ? tr("nav.showList") : tr("nav.hideList")}
+            onClick={() => {
+              setFolded((f) => {
+                saveSidebarFolded(!f);
+                return !f;
+              });
+            }}
+          >
+            {folded ? "☰" : "«"}
+          </button>
+        </div>
         {selected.kind === "oolu" && <Chat />}
         {selected.kind === "friends" &&
           (friends === null ? (
@@ -276,7 +314,7 @@ export function Life() {
           ) : (
             <StartConversation
               onOpen={(peer) => {
-                setSelected({ kind: "friend", peer });
+                open({ kind: "friend", peer });
                 void refreshRuns();
               }}
             />
@@ -296,7 +334,7 @@ export function Life() {
         {selected.kind === "drafts" && (
           <DraftsInbox
             onActivity={refreshRuns}
-            onOpenThread={(peer) => setSelected({ kind: "friend", peer })}
+            onOpenThread={(peer) => open({ kind: "friend", peer })}
           />
         )}
       </section>
