@@ -390,6 +390,12 @@ const STRINGS: Record<string, Entry> = {
   "run.approve": { en: "Approve", zh: "批准", es: "Aprobar", fr: "Approuver" },
   "run.reject": { en: "Reject", zh: "拒绝", es: "Rechazar", fr: "Refuser" },
   "run.retry": { en: "Retry", zh: "重试", es: "Reintentar", fr: "Réessayer" },
+  "run.runAgain": {
+    en: "Run again",
+    zh: "再次运行",
+    es: "Ejecutar de nuevo",
+    fr: "Relancer",
+  },
   "run.retrying": { en: "Retrying…", zh: "重试中…", es: "Reintentando…", fr: "Nouvel essai…" },
   "run.abort": { en: "Abort", zh: "中止", es: "Abortar", fr: "Abandonner" },
   "run.showSteps": { en: "what I did", zh: "我做了什么", es: "qué hice", fr: "ce que j'ai fait" },

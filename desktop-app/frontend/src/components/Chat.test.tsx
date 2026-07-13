@@ -670,6 +670,39 @@ describe("RunCard", () => {
     expect(screen.getByText("no mail account")).toBeTruthy();
   });
 
+  it("a dead run offers Run again and the card follows the new attempt", async () => {
+    routes["GET /v1/runs/r1"] = {
+      status: 200,
+      body: baseRun({ phase: "failed", failure_reason: "no viable route" }),
+    };
+    routes["POST /v1/runs"] = {
+      status: 202,
+      body: baseRun({ run_id: "r2", phase: "running" }),
+    };
+    routes["GET /v1/runs/r2"] = {
+      status: 200,
+      body: baseRun({ run_id: "r2", phase: "completed", result: { ok: 1 } }),
+    };
+    render(<RunCard runId="r1" />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Run again" }));
+    const resubmit = calls.find(
+      (c) => c.method === "POST" && c.path.endsWith("/v1/runs"),
+    );
+    expect((resubmit?.body as { intent: string }).intent).toBe(
+      baseRun({}).intent,
+    );
+    // A completed run never shows the button — done is done.
+    routes["GET /v1/runs/r1"] = {
+      status: 200,
+      body: baseRun({ phase: "completed" }),
+    };
+    cleanup();
+    render(<RunCard runId="r1" />);
+    await screen.findByText("done");
+    expect(screen.queryByRole("button", { name: "Run again" })).toBeNull();
+  });
+
   it("a pressed Retry shows it was pressed and posts the decision", async () => {
     routes["GET /v1/runs/r1"] = {
       status: 200,

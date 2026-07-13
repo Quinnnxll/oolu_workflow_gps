@@ -603,8 +603,11 @@ export function Chat() {
 
 // One piece of work, living inside the conversation. Polls while active;
 // pauses surface as questions/decisions the user answers in place.
-export function RunCard({ runId }: { runId: string }) {
+export function RunCard({ runId: initialRunId }: { runId: string }) {
   const tr = useT(); // the card's chrome follows app.language live
+  // "Run again" resubmits the SAME intent as a fresh run and the card
+  // follows the new attempt in place — one card, the latest truth.
+  const [runId, setRunId] = useState(initialRunId);
   const [task, setTask] = useState<TaskView | null>(null);
   const [gone, setGone] = useState(false);
   const [steps, setSteps] = useState<TimelineEvent[] | null>(null);
@@ -770,6 +773,33 @@ export function RunCard({ runId }: { runId: string }) {
             onClick={async () => setTask(await api.cancel(task.run_id))}
           >
             {tr("cancel")}
+          </button>
+        )}
+        {terminal && task.phase !== "completed" && (
+          <button
+            className="linklike"
+            disabled={acting}
+            onClick={async () => {
+              // A dead run has nothing to resolve — resubmit the same
+              // intent and let the engine re-plan (a node may exist now,
+              // a dependency may have healed).
+              setActing(true);
+              setActError("");
+              try {
+                const fresh = await api.submitTask(task.intent);
+                lastTaskJson.current = JSON.stringify(fresh);
+                setTask(fresh);
+                setRunId(fresh.run_id);
+                setSteps(null);
+                setShowSteps(false);
+              } catch (e) {
+                setActError((e as Error).message);
+              } finally {
+                setActing(false);
+              }
+            }}
+          >
+            {acting ? tr("run.retrying") : tr("run.runAgain")}
           </button>
         )}
       </div>

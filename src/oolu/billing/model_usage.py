@@ -83,11 +83,13 @@ class ModelUsageStore:
                       completion_tokens, cost_usd)
                    VALUES (?, ?, ?, 1, ?, ?, ?)
                    ON CONFLICT(tenant_id, month, source) DO UPDATE SET
-                     calls = calls + 1,
-                     prompt_tokens = prompt_tokens + excluded.prompt_tokens,
+                     calls = model_usage.calls + 1,
+                     prompt_tokens =
+                       model_usage.prompt_tokens + excluded.prompt_tokens,
                      completion_tokens =
-                       completion_tokens + excluded.completion_tokens,
-                     cost_usd = cost_usd + excluded.cost_usd""",
+                       model_usage.completion_tokens
+                         + excluded.completion_tokens,
+                     cost_usd = model_usage.cost_usd + excluded.cost_usd""",
                 (
                     tenant,
                     self._month(),
