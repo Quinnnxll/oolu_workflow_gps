@@ -127,7 +127,7 @@ SETTINGS_CATALOG: tuple[SettingField, ...] = (
         label="Language",
         kind=SettingKind.CHOICE,
         default="en",
-        choices=("en", "zh", "es", "fr"),
+        choices=("en", "zh", "zh-hant", "es", "fr"),
         description="Interface language.",
     ),
     SettingField(

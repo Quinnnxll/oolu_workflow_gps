@@ -408,3 +408,14 @@ describe("Login", () => {
     });
   });
 });
+
+describe("the sign-in screen speaks the chosen language", () => {
+  it("renders Traditional Chinese after applyLanguage", async () => {
+    const { applyLanguage } = await import("../ui");
+    applyLanguage("zh-hant");
+    render(<Login onSignedIn={() => {}} />);
+    expect(await screen.findByText("登入")).toBeTruthy();
+    expect(screen.getByText("使用 Google 繼續")).toBeTruthy();
+    applyLanguage("en");
+  });
+});

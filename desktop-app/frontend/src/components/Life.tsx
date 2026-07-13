@@ -7,7 +7,7 @@ import type {
   RepresentativeStatus,
 } from "../api";
 import { identityHue, updateAvatarSignals } from "../avatar";
-import { useT } from "../ui";
+import { tf, useT } from "../ui";
 import { conciseName } from "../naming";
 import type { RunSummary, TimelineEvent } from "../types";
 import { ForwardMenu } from "./ForwardMenu";
@@ -147,10 +147,11 @@ export function Life() {
             <span className="convo-avatar file">✍</span>
             <span className="convo-body">
               <span className="convo-name">
-                Drafts
-                {rep.drafts_pending > 0 ? ` · ${rep.drafts_pending} new` : ""}
+                {rep.drafts_pending > 0
+                  ? tf("rep.draftsNew", { n: rep.drafts_pending })
+                  : tr("rep.drafts")}
               </span>
-              <span className="convo-sub">replies in your voice, awaiting you</span>
+              <span className="convo-sub">{tr("rep.draftsSub")}</span>
             </span>
           </button>
         )}
@@ -314,6 +315,7 @@ export function DraftsInbox({
   onActivity: () => void;
   onOpenThread: (peer: string) => void;
 }) {
+  const tr = useT();
   const [drafts, setDrafts] = useState<RepresentativeDraft[] | null>(null);
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(
     null,
@@ -350,29 +352,27 @@ export function DraftsInbox({
 
   return (
     <div className="drafts-inbox">
-      <div className="convo-group">Drafts awaiting your word</div>
+      <div className="convo-group">{tr("rep.inboxTitle")}</div>
       {error && <div className="error">{error}</div>}
       {drafts === null && <div className="muted">Loading…</div>}
       {drafts !== null && drafts.length === 0 && (
         <div className="pane-empty">
-          <p>Nothing waiting.</p>
-          <p className="muted">
-            When your representative drafts a reply — from ✍ in a thread, or
-            on its own in auto mode — it lands here for your decision.
-          </p>
+          <p>{tr("rep.nothingWaiting")}</p>
+          <p className="muted">{tr("rep.inboxIntro")}</p>
         </div>
       )}
       {drafts?.map((d) => (
         <div key={d.draft_id} className="settings-group draft-card">
           <div className="muted">
-            To{" "}
             <button
               className="linklike"
               onClick={() => onOpenThread(d.conversation_id)}
             >
-              {d.conversation_id}
+              {tf("rep.answering", {
+                peer: d.conversation_id,
+                text: d.inbound_text,
+              })}
             </button>
-            , answering: “{d.inbound_text}”
           </div>
           {editing?.id === d.draft_id ? (
             <>
@@ -389,14 +389,14 @@ export function DraftsInbox({
                   disabled={busy || !editing.text.trim()}
                   onClick={() => void decide(d.draft_id, "edit", editing.text)}
                 >
-                  Send edited
+                  {tr("rep.sendEdited")}
                 </button>
                 <button
                   className="linklike"
                   disabled={busy}
                   onClick={() => setEditing(null)}
                 >
-                  Cancel
+                  {tr("rep.cancel")}
                 </button>
               </div>
             </>
@@ -409,7 +409,7 @@ export function DraftsInbox({
                   disabled={busy}
                   onClick={() => void decide(d.draft_id, "send")}
                 >
-                  Send
+                  {tr("rep.send")}
                 </button>
                 <button
                   disabled={busy}
@@ -417,14 +417,14 @@ export function DraftsInbox({
                     setEditing({ id: d.draft_id, text: d.generated_text })
                   }
                 >
-                  Edit
+                  {tr("rep.edit")}
                 </button>
                 <button
                   className="linklike"
                   disabled={busy}
                   onClick={() => void decide(d.draft_id, "discard")}
                 >
-                  Discard
+                  {tr("rep.discard")}
                 </button>
               </div>
             </>
@@ -562,6 +562,7 @@ export function FriendThread({
   peer: string;
   onActivity: () => void;
 }) {
+  const tr = useT();
   const [messages, setMessages] = useState<FriendMessage[] | null>(null);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState("");
@@ -694,7 +695,7 @@ export function FriendThread({
       {error && <div className="error">{error}</div>}
       {suggestion && !editingDraft && (
         <div className="rep-suggestion">
-          <div className="muted">Your representative drafted:</div>
+          <div className="muted">{tr("rep.drafted")}</div>
           <div className="bubble user">{suggestion.generated_text}</div>
           <div className="setting-control row">
             <button
@@ -702,7 +703,7 @@ export function FriendThread({
               disabled={busy}
               onClick={() => void decide("send")}
             >
-              Send
+              {tr("rep.send")}
             </button>
             <button
               disabled={busy}
@@ -711,22 +712,20 @@ export function FriendThread({
                 setEditingDraft(suggestion.draft_id);
               }}
             >
-              Edit
+              {tr("rep.edit")}
             </button>
             <button
               className="linklike"
               disabled={busy}
               onClick={() => void decide("discard")}
             >
-              Discard
+              {tr("rep.discard")}
             </button>
           </div>
         </div>
       )}
       {editingDraft && (
-        <div className="muted">
-          Editing the drafted reply — Send records your version.
-        </div>
+        <div className="muted">{tr("rep.editing")}</div>
       )}
       {rep !== null && rep.mode === "auto" && (
         <label className="muted rep-peer-toggle">
@@ -736,8 +735,7 @@ export function FriendThread({
             checked={!rep.muted_peers.includes(peer)}
             onChange={(e) => void setPeerAuto(e.target.checked)}
           />{" "}
-          Auto-replies to {peer} (earned replies only; commitments always
-          wait for you)
+          {tf("rep.autoToPeer", { peer })}
         </label>
       )}
       <div className="chat-composer">
@@ -756,7 +754,7 @@ export function FriendThread({
         />
         {repOn && !suggestion && !editingDraft && (
           <button
-            title="Draft a reply in your voice"
+            title={tr("rep.draftButton")}
             aria-label="Draft a reply in your voice"
             disabled={busy || messages === null || messages.length === 0}
             onClick={() => void suggest()}
@@ -765,7 +763,7 @@ export function FriendThread({
           </button>
         )}
         <button disabled={busy || !draft.trim()} onClick={() => void send()}>
-          {busy ? "…" : editingDraft ? "Send edited" : "Send"}
+          {busy ? "…" : editingDraft ? tr("rep.sendEdited") : tr("rep.send")}
         </button>
       </div>
     </div>

@@ -11,7 +11,7 @@ import type {
 import { identityHue } from "../avatar";
 import { pickLocalFiles } from "../device";
 import { humanizeEvent } from "../humanize";
-import { t, tf, useT } from "../ui";
+import { t, tf, useT, displayNodeName } from "../ui";
 import { FilesPane } from "./FilesPane";
 import { NodeInteract, reliabilityLine } from "./NodeInteract";
 
@@ -84,7 +84,7 @@ export function Work({ onLife }: { onLife: () => void }) {
               {n.account.is_supernode ? "◆" : n.title.slice(0, 1).toUpperCase()}
             </span>
             <span className="convo-body">
-              <span className="convo-name">{n.title}</span>
+              <span className="convo-name">{displayNodeName(n.title)}</span>
               <span className="convo-sub">
                 {money(n.earnings_micros)} · {healthLabel(n)}
               </span>
@@ -292,7 +292,7 @@ export function AddNode({
                 <option value="">{tr("work.noneStandalone")}</option>
                 {supernodes.map((s) => (
                   <option key={s.node_id} value={s.node_id}>
-                    {s.title}
+                    {displayNodeName(s.title)}
                   </option>
                 ))}
               </select>
@@ -430,7 +430,7 @@ export function NodeThread({
         <div>
           <div className="run-card-intent">
             {account.is_supernode ? "◆ " : ""}
-            {node.title}
+            {displayNodeName(node.title)}
           </div>
           <div className="muted">
             {node.node_id} ·{" "}
@@ -482,7 +482,7 @@ export function NodeThread({
             members.map((m) => (
               <div key={m.node_id} className="commit-row">
                 <span>
-                  {m.title} ·{" "}
+                  {displayNodeName(m.title)} ·{" "}
                   {m.account.responsible || tr("work.keepIdPrivate")}
                 </span>
                 {/* Fixed at creation, authority included: display only. */}

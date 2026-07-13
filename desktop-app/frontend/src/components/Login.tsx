@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { tf, useT } from "../ui";
 import {
   DEFAULT_GLOBAL_SERVER,
   clientConfig,
@@ -33,6 +34,7 @@ export function Login({
   // offer, not a wall, and Edge is the way back to it.
   onStayLocal?: () => void;
 }) {
+  const tr = useT(); // the sign-in screen speaks the device's language
   const [view, setView] = useState<View>("signin");
   const [scope, setScope] = useState<Scope>("global");
   const [edgeMode, setEdgeMode] = useState<EdgeMode>("device");
@@ -60,7 +62,7 @@ export function Login({
   const authTarget = (): string | undefined => {
     if (onEdgeNetwork) {
       const url = edgeServer.trim().replace(/\/+$/, "");
-      if (!url) throw new Error("enter your private server's address");
+      if (!url) throw new Error(tr("login.enterServer"));
       session.setEdgeServer(url);
       return url;
     }
@@ -85,7 +87,7 @@ export function Login({
       await signInWithGoogle(authTarget());
       onSignedIn();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Google sign-in failed");
+      setError(err instanceof Error ? err.message : tr("login.googleFailed"));
     } finally {
       setBusy(false);
     }
@@ -103,7 +105,7 @@ export function Login({
         const result = await register(username, password, authTarget());
         if (result.verificationRequired) {
           setNotice(
-            `We sent a 6-digit code to ${username.trim()} — enter it here to finish.`,
+            tf("login.codeSent", { mail: username.trim() }),
           );
           setView("verify");
         } else {
@@ -116,14 +118,14 @@ export function Login({
         await requestReset(username, authTarget());
         setResetSent(true);
         setNotice(
-          `If ${username.trim()} has an account, a 6-digit code is on its way.`,
+          tf("login.resetSent", { mail: username.trim() }),
         );
       } else {
         await confirmReset(username, code, password, authTarget());
         setCode("");
         setPassword("");
         setResetSent(false);
-        setNotice("Password changed — sign in with the new one.");
+        setNotice(tr("login.passwordChanged"));
         setView("signin");
       }
     } catch (err) {
@@ -131,8 +133,8 @@ export function Login({
         err instanceof Error
           ? err.message
           : view === "signin"
-            ? "sign-in failed"
-            : "registration failed",
+            ? tr("login.signInFailed")
+            : tr("login.registerFailed"),
       );
     } finally {
       setBusy(false);
@@ -166,8 +168,7 @@ export function Login({
         {showScope && scope === "edge" ? (
           <>
             <p className="muted">
-              Edge keeps everything on your side: this device, or a private
-              server on your own network.
+              {tr("login.edgeIntro")}
             </p>
             <div className="mode-tabs scope-tabs">
               <button
@@ -175,35 +176,31 @@ export function Login({
                 className={edgeMode === "device" ? "on" : ""}
                 onClick={() => setEdgeMode("device")}
               >
-                This device
+                {tr("login.thisDevice")}
               </button>
               <button
                 type="button"
                 className={edgeMode === "network" ? "on" : ""}
                 onClick={() => setEdgeMode("network")}
               >
-                Private network
+                {tr("login.privateNetwork")}
               </button>
             </div>
             {edgeMode === "device" ? (
               <>
                 <p className="muted">
-                  Your account, your engine, and everything you teach OoLu
-                  stay on this machine.
+                  {tr("login.deviceIntro")}
                 </p>
                 <button type="button" onClick={onStayLocal}>
-                  Continue on Edge
+                  {tr("login.continueEdge")}
                 </button>
               </>
             ) : (
               <>
                 <p className="muted">
-                  A private server your group runs on its own network (a
-                  static address everyone can reach). You still sign in with
-                  a username and password — onboarding a node created under
-                  a Supernode has to name an actual person.
+                  {tr("login.networkIntro")}
                 </p>
-                <label htmlFor="edge-server">Private server address</label>
+                <label htmlFor="edge-server">{tr("login.serverAddress")}</label>
                 <input
                   id="edge-server"
                   placeholder="http://192.168.1.20:8787"
@@ -219,24 +216,24 @@ export function Login({
           <>
             <p className="muted">
               {view === "verify"
-                ? "Check your inbox — enter the 6-digit code to finish."
+                ? tr("login.checkInbox")
                 : view === "reset"
                   ? resetSent
-                    ? "Enter the e-mailed code and pick a new password."
-                    : "Enter your e-mail and we'll send a reset code."
+                    ? tr("login.resetEnterCode")
+                    : tr("login.resetEnterEmail")
                   : onEdgeNetwork
                     ? view === "signin"
-                      ? "Sign in to your private network server."
-                      : "Create your account on the private network server."
+                      ? tr("login.signInEdge")
+                      : tr("login.registerEdge")
                     : view === "signin"
-                      ? "Sign in to OoLu Global."
-                      : "Create your OoLu Global account."}
+                      ? tr("login.signInGlobal")
+                      : tr("login.registerGlobal")}
             </p>
 
             {view === "verify" ? null : (
               <>
                 <label htmlFor="username">
-                  {view === "signin" ? "Username" : "E-mail"}
+                  {view === "signin" ? tr("login.username") : tr("login.email")}
                 </label>
                 <input
                   id="username"
@@ -248,7 +245,7 @@ export function Login({
             )}
             {view === "verify" || (view === "reset" && resetSent) ? (
               <>
-                <label htmlFor="mail-code">6-digit code</label>
+                <label htmlFor="mail-code">{tr("login.code")}</label>
                 <input
                   id="mail-code"
                   inputMode="numeric"
@@ -262,7 +259,7 @@ export function Login({
             {view === "verify" || (view === "reset" && !resetSent) ? null : (
               <>
                 <label htmlFor="password">
-                  {view === "reset" ? "New password" : "Password"}
+                  {view === "reset" ? tr("login.newPassword") : tr("login.password")}
                 </label>
                 <input
                   id="password"
@@ -278,23 +275,23 @@ export function Login({
             <button type="submit" disabled={busy}>
               {view === "signin"
                 ? busy
-                  ? "Signing in…"
-                  : "Sign in"
+                  ? tr("login.signingIn")
+                  : tr("login.signIn")
                 : view === "register"
                   ? busy
-                    ? "Creating account…"
-                    : "Create account"
+                    ? tr("login.creatingAccount")
+                    : tr("login.createAccount")
                   : view === "verify"
                     ? busy
-                      ? "Verifying…"
-                      : "Verify"
+                      ? tr("login.verifying")
+                      : tr("login.verify")
                     : resetSent
                       ? busy
-                        ? "Changing password…"
-                        : "Change password"
+                        ? tr("login.changingPassword")
+                        : tr("login.changePassword")
                       : busy
-                        ? "Sending code…"
-                        : "Send reset code"}
+                        ? tr("login.sendingCode")
+                        : tr("login.sendCode")}
             </button>
 
             {view === "signin" || view === "register" ? (
@@ -304,11 +301,11 @@ export function Login({
                   disabled={busy}
                   onClick={() => void google()}
                 >
-                  Continue with Google
+                  {tr("login.google")}
                 </button>
                 {view === "register" ? (
-                  <button type="button" disabled title="Coming soon">
-                    Continue with phone
+                  <button type="button" disabled title={tr("login.comingSoon")}>
+                    {tr("login.phone")}
                   </button>
                 ) : null}
               </div>
@@ -320,42 +317,42 @@ export function Login({
             <div className="login-switch">
               {view === "signin" ? (
                 <>
-                  No account?{" "}
+                  {tr("login.noAccount")}{" "}
                   <button
                     type="button"
                     className="linklike"
                     onClick={() => switchView("register")}
                   >
-                    Create one
+                    {tr("login.createOne")}
                   </button>{" "}
                   <button
                     type="button"
                     className="linklike"
                     onClick={() => switchView("reset")}
                   >
-                    Forgot password?
+                    {tr("login.forgot")}
                   </button>
                 </>
               ) : view === "verify" ? (
                 <>
-                  Wrong address?{" "}
+                  {tr("login.wrongAddress")}{" "}
                   <button
                     type="button"
                     className="linklike"
                     onClick={() => switchView("register")}
                   >
-                    Start over
+                    {tr("login.startOver")}
                   </button>
                 </>
               ) : (
                 <>
-                  Have an account?{" "}
+                  {tr("login.haveAccount")}{" "}
                   <button
                     type="button"
                     className="linklike"
                     onClick={() => switchView("signin")}
                   >
-                    Sign in
+                    {tr("login.signIn")}
                   </button>
                 </>
               )}

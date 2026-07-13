@@ -7,6 +7,7 @@ import {
   settingDesc,
   settingLabel,
   t,
+  tf,
   unitLabel,
   useT,
 } from "../ui";
@@ -118,6 +119,7 @@ export function SettingsPane() {
 // grounded replies by itself — but only after your accept-rate record
 // earns it, and never a commitment. Off is really off.
 export function RepresentativeSection() {
+  const tr = useT();
   const [status, setStatus] = useState<RepresentativeStatus | null>(null);
   const [about, setAbout] = useState("");
   const [error, setError] = useState("");
@@ -151,20 +153,15 @@ export function RepresentativeSection() {
 
   return (
     <section className="settings-group representative">
-      <h3>Representative</h3>
-      <p className="muted">
-        OoLu can draft replies in your voice, from how you actually write.
-        Drafts wait for your word; auto only ever sends routine, grounded
-        replies — commitments always come back to you — and switches on
-        only after your approvals earn it.
-      </p>
+      <h3>{tr("rep.title")}</h3>
+      <p className="muted">{tr("rep.intro")}</p>
       <div className="setting-row">
         <div className="setting-label">
-          <span>Mode</span>
+          <span>{tr("rep.mode")}</span>
           <span className="setting-desc">
             {status.mode === "auto" && !status.auto_earned
-              ? "Auto is on but not yet earned — it drafts until your record qualifies."
-              : "Off, draft suggestions, or earned auto-replies."}
+              ? tr("rep.modeUnearned")
+              : tr("rep.modeDesc")}
           </span>
         </div>
         <div className="setting-control">
@@ -174,23 +171,21 @@ export function RepresentativeSection() {
             disabled={busy}
             onChange={(e) => void save({ mode: e.target.value })}
           >
-            <option value="off">off</option>
-            <option value="draft">draft</option>
-            <option value="auto">auto</option>
+            <option value="off">{tr("rep.modeOff")}</option>
+            <option value="draft">{tr("rep.modeDraft")}</option>
+            <option value="auto">{tr("rep.modeAuto")}</option>
           </select>
         </div>
       </div>
       <div className="setting-row">
         <div className="setting-label">
-          <span>About you</span>
-          <span className="setting-desc">
-            A short standing note the drafts lean on (role, tone, facts).
-          </span>
+          <span>{tr("rep.aboutYou")}</span>
+          <span className="setting-desc">{tr("rep.aboutDesc")}</span>
         </div>
         <div className="setting-control row">
           <input
             aria-label="About you"
-            placeholder="e.g. engineer; keeps replies short"
+            placeholder={tr("rep.aboutPlaceholder")}
             value={about}
             onChange={(e) => setAbout(e.target.value)}
           />
@@ -198,18 +193,25 @@ export function RepresentativeSection() {
             disabled={busy || about === status.about}
             onClick={() => void save({ about })}
           >
-            Save
+            {tr("rep.save")}
           </button>
         </div>
       </div>
       <p className="muted">
-        {status.exchanges} exchanges learned · {status.drafts_pending} draft
-        {status.drafts_pending === 1 ? "" : "s"} waiting ·{" "}
-        {status.accept_rate === null
-          ? "no verdicts yet"
-          : `${Math.round(status.accept_rate * 100)}% sent as written`}
-        {status.auto_sent > 0 ? ` · ${status.auto_sent} auto-sent` : ""} ·
-        voice: {status.adapter}
+        {tf("rep.stats", {
+          exchanges: status.exchanges,
+          pending: status.drafts_pending,
+          verdict:
+            (status.accept_rate === null
+              ? tr("rep.noVerdicts")
+              : tf("rep.sentAsWritten", {
+                  pct: Math.round(status.accept_rate * 100),
+                })) +
+            (status.auto_sent > 0
+              ? " · " + tf("rep.autoSentCount", { n: status.auto_sent })
+              : ""),
+          adapter: status.adapter,
+        })}
       </p>
       {error && <div className="error">{error}</div>}
     </section>
@@ -352,6 +354,7 @@ export function PrivacySection() {
 const KEY_PROVIDERS = ["anthropic", "openai"];
 
 function ModelKeysSection() {
+  const tr = useT();
   const [keys, setKeys] = useState<ModelKeyView[] | null>(null);
   const [provider, setProvider] = useState("anthropic");
   const [draft, setDraft] = useState("");
@@ -366,8 +369,8 @@ function ModelKeysSection() {
       const r = await api.testModelKey();
       setTest(
         r.ok
-          ? `✓ working — the model answered (${r.source ?? "model"}).`
-          : `✗ ${r.error ?? "the model did not answer"}`,
+          ? tf("keys.working", { source: r.source ?? "model" })
+          : tf("keys.notWorking", { error: r.error ?? "" }),
       );
     } catch (e) {
       setTest(`✗ ${(e as Error).message}`);
@@ -396,20 +399,17 @@ function ModelKeysSection() {
   return (
     <>
       {keys.length === 0 && (
-        <p className="muted">
-          No model key yet — OoLu answers with its built-in rules. Paste an
-          Anthropic or OpenAI API key to give it a real mind. The key is
-          encrypted on this machine and never shown again; only the
-          fingerprint below proves it's in.
-        </p>
+        <p className="muted">{tr("keys.none")}</p>
       )}
       {error && <div className="error">{error}</div>}
 
       {keys.map((k) => (
         <div key={k.provider} className="setting-row">
           <div className="setting-label">
-            <span>{k.provider} key</span>
-            <span className="setting-desc">fingerprint {k.fingerprint}</span>
+            <span>{tf("keys.providerKey", { provider: k.provider })}</span>
+            <span className="setting-desc">
+              {tf("keys.fingerprint", { mark: k.fingerprint })}
+            </span>
           </div>
           <div className="setting-control">
             <button
@@ -419,7 +419,7 @@ function ModelKeysSection() {
                 void refresh();
               }}
             >
-              remove
+              {tr("keys.remove")}
             </button>
           </div>
         </div>
@@ -427,11 +427,8 @@ function ModelKeysSection() {
 
       <div className="setting-row">
         <div className="setting-label">
-          <span>Add a model key</span>
-          <span className="setting-desc">
-            Stored encrypted on this machine only — it never syncs, never
-            appears in settings, and never comes back out.
-          </span>
+          <span>{tr("keys.add")}</span>
+          <span className="setting-desc">{tr("keys.addDesc")}</span>
         </div>
         <div className="setting-control row">
           <select
@@ -448,7 +445,7 @@ function ModelKeysSection() {
           <input
             type="password"
             aria-label="API key"
-            placeholder="paste key"
+            placeholder={tr("keys.paste")}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
           />
@@ -467,7 +464,7 @@ function ModelKeysSection() {
                 if (r.source_switched) {
                   setTest(
                     (t) =>
-                      `${t} Your ${provider} key is now the default model.`,
+                      `${t} ${tf("keys.nowDefault", { provider })}`,
                   );
                 }
               } catch (e) {
@@ -475,7 +472,7 @@ function ModelKeysSection() {
               }
             }}
           >
-            Add
+            {tr("keys.addButton")}
           </button>
         </div>
       </div>
@@ -483,16 +480,13 @@ function ModelKeysSection() {
       {keys.length > 0 && (
         <div className="setting-row">
           <div className="setting-label">
-            <span>Test the model</span>
-            <span className="setting-desc">
-              Make one real call and confirm the model answers — the sure
-              way to tell a working key from a silent one.
-            </span>
+            <span>{tr("keys.test")}</span>
+            <span className="setting-desc">{tr("keys.testDesc")}</span>
             {test && <span className="setting-desc">{test}</span>}
           </div>
           <div className="setting-control">
             <button disabled={testing} onClick={() => void runTest()}>
-              {testing ? "Testing…" : "Test connection"}
+              {testing ? tr("keys.testing") : tr("keys.testButton")}
             </button>
           </div>
         </div>
@@ -505,6 +499,7 @@ function ModelKeysSection() {
 const TEST_BRANDS = ["visa", "mastercard", "amex", "unionpay"];
 
 function PaymentSection() {
+  const tr = useT();
   const [profile, setProfile] = useState<PaymentProfileView | null>(null);
   const [status, setStatus] = useState<PaymentsStatus | null>(null);
   const [brand, setBrand] = useState("visa");
@@ -529,22 +524,19 @@ function PaymentSection() {
 
   return (
     <section className="settings-group">
-      <h3>Payment methods</h3>
+      <h3>{tr("pay.title")}</h3>
       {profile.mode === "test" && (
-        <p className="test-banner">
-          Pre-launch test mode — the real transaction port is closed. Cards
-          here are named test cards; no money can move.
-        </p>
+        <p className="test-banner">{tr("pay.testBanner")}</p>
       )}
       {status && !status.open && (
         <p className="muted">
-          Charging opens when: {status.reasons.join("; ")}.
+          {tf("pay.chargingWhen", { reasons: status.reasons.join("; ") })}
         </p>
       )}
       {error && <div className="error">{error}</div>}
 
       {profile.cards.length === 0 && (
-        <p className="muted">No saved cards yet.</p>
+        <p className="muted">{tr("pay.noCards")}</p>
       )}
       {profile.cards.map((card) => (
         <div key={card.pm_ref} className="setting-row">
@@ -554,7 +546,7 @@ function PaymentSection() {
               {profile.default_pm === card.pm_ref ? "  (default)" : ""}
             </span>
             <span className="setting-desc">
-              expires {card.exp_month}/{card.exp_year}
+              {tf("pay.expires", { m: card.exp_month, y: card.exp_year })}
             </span>
           </div>
           <div className="setting-control row">
@@ -566,7 +558,7 @@ function PaymentSection() {
                   void refresh();
                 }}
               >
-                make default
+                {tr("pay.makeDefault")}
               </button>
             )}
             <button
@@ -576,7 +568,7 @@ function PaymentSection() {
                 void refresh();
               }}
             >
-              remove
+              {tr("pay.remove")}
             </button>
           </div>
         </div>
@@ -584,7 +576,7 @@ function PaymentSection() {
 
       <div className="setting-row">
         <div className="setting-label">
-          <span>Add a test card</span>
+          <span>{tr("pay.addTestCard")}</span>
           <span className="setting-desc">
             Live mode will confirm real cards with Stripe in your browser —
             card numbers never touch OoLu's servers.
@@ -613,7 +605,7 @@ function PaymentSection() {
               }
             }}
           >
-            Add
+            {tr("pay.addButton")}
           </button>
         </div>
       </div>

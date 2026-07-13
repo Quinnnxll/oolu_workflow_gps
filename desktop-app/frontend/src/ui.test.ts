@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyLanguage,
   applyTheme,
@@ -102,5 +102,51 @@ describe("chrome beyond Settings", () => {
     expect(tf("work.healthy", { pct: 90 })).toBe("健康度 90%");
     applyLanguage("en");
     expect(tf("work.healthy", { pct: 90 })).toBe("90% healthy");
+  });
+});
+
+describe("Traditional Chinese and the device language", () => {
+  it("maps device locales onto the languages the chrome speaks", async () => {
+    const { deviceLanguage } = await import("./ui");
+    expect(deviceLanguage("zh-TW")).toBe("zh-hant");
+    expect(deviceLanguage("zh-Hant-HK")).toBe("zh-hant");
+    expect(deviceLanguage("zh-CN")).toBe("zh");
+    expect(deviceLanguage("fr-CA")).toBe("fr");
+    expect(deviceLanguage("es-MX")).toBe("es");
+    expect(deviceLanguage("de-DE")).toBe("en"); // unsupported: English
+  });
+
+  it("zh-hant reads the generated table, then Simplified, then English", async () => {
+    const { applyLanguage, t, tf, LANGUAGE_NAMES, displayNodeName } =
+      await import("./ui");
+    applyLanguage("zh-hant");
+    expect(t("settings")).toBe("設定");
+    expect(t("files")).toBe("檔案");
+    expect(t("rep.title")).toBe("個人代表");
+    expect(tf("keys.providerKey", { provider: "openai" })).toBe(
+      "openai 金鑰",
+    );
+    // The seeded starter node's name is chrome and follows the language.
+    expect(displayNodeName("Handiwork")).toBe("手工坊");
+    expect(displayNodeName("my own node")).toBe("my own node");
+    expect(LANGUAGE_NAMES["zh-hant"]).toBe("中文（繁體）");
+    applyLanguage("en");
+    expect(displayNodeName("Handiwork")).toBe("Handiwork");
+  });
+
+  it("a first run boots in the device's language, a choice sticks", async () => {
+    const { bootAppearance, currentLanguage, applyLanguage } = await import(
+      "./ui"
+    );
+    localStorage.clear();
+    vi.stubGlobal("navigator", { ...window.navigator, language: "zh-TW" });
+    bootAppearance();
+    expect(currentLanguage()).toBe("zh-hant");
+    // An explicit choice outranks the device forever after.
+    applyLanguage("fr");
+    bootAppearance();
+    expect(currentLanguage()).toBe("fr");
+    vi.unstubAllGlobals();
+    applyLanguage("en");
   });
 });
