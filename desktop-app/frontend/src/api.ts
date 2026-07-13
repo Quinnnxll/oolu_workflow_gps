@@ -488,6 +488,9 @@ export interface ChatTurnReply {
   reply: string;
   source: string;
   actions?: ChatAction[];
+  // The model's own thinking when it showed it (reasoning models emit a
+  // <think> block) — rendered dimmed, as proof of work, never spoken.
+  reasoning?: string | null;
   // OoLu asking for one of THIS device's senses: "location" | "camera" |
   // "file". The client renders a grant button — the user decides.
   device?: string | null;

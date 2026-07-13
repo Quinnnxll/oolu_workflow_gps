@@ -1,6 +1,18 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from .models import AttributionRecord, RunBinding
+
+
+def _chronology(binding: RunBinding) -> tuple[bool, str, str]:
+    """Oldest-first sort key. Rows persisted before ``bound_at`` existed
+    have None and sort first — they really are the oldest."""
+    return (
+        binding.bound_at is not None,
+        binding.bound_at.isoformat() if binding.bound_at else "",
+        binding.run_id,
+    )
 
 _SCHEMA = (
     """CREATE TABLE IF NOT EXISTS run_bindings (
@@ -39,6 +51,8 @@ class AttributionStore:
                 db.execute(statement)
 
     def bind(self, binding: RunBinding) -> bool:
+        if binding.bound_at is None:
+            binding = binding.model_copy(update={"bound_at": datetime.now(UTC)})
         with self._conn.transaction() as db:
             cursor = db.execute(
                 """INSERT OR IGNORE INTO run_bindings
@@ -95,11 +109,14 @@ class AttributionStore:
                        OR b.run_id IN (
                             SELECT run_id FROM binding_versions
                             WHERE version_id IN ({marks})
-                       )
-                    ORDER BY b.rowid ASC""",
+                       )""",
                 tuple(version_ids) * 2,
             ).fetchall()
-        return [RunBinding.model_validate_json(row["payload_json"]) for row in rows]
+        bindings = [
+            RunBinding.model_validate_json(row["payload_json"]) for row in rows
+        ]
+        bindings.sort(key=_chronology)
+        return bindings
 
     def consumer_spend(
         self,
@@ -118,13 +135,15 @@ class AttributionStore:
         """
         with self._conn.lock:
             rows = self._conn.db.execute(
-                "SELECT payload_json FROM run_bindings WHERE consumer_tenant = ?"
-                " ORDER BY rowid DESC",
+                "SELECT payload_json FROM run_bindings WHERE consumer_tenant = ?",
                 (tenant,),
             ).fetchall()
+        bindings = [
+            RunBinding.model_validate_json(row["payload_json"]) for row in rows
+        ]
+        bindings.sort(key=_chronology, reverse=True)  # most recent first
         grosses: list[float] = []
-        for row in rows:
-            binding = RunBinding.model_validate_json(row["payload_json"])
+        for binding in bindings:
             if principal is not None and binding.consumer_principal != principal:
                 continue
             if goal_class is not None and binding.goal_class != goal_class:

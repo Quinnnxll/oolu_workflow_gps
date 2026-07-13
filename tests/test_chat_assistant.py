@@ -120,6 +120,33 @@ def test_model_task_without_say_gets_the_ack():
     assert turn.task == "fetch the report"
 
 
+def test_a_think_block_is_split_off_never_spoken():
+    """Reasoning models prefix the answer with <think>…</think>: the
+    monologue rides the turn separately (the UI dims it), and the spoken
+    reply parses cleanly even though the thinking contains braces."""
+    model = _FakeModel(
+        [
+            '<think>The user wants a resize. {"say": "not this"} — I should'
+            ' use the task field.</think>\n'
+            '{"say": "Working on it.", "task": "resize photo.png"}'
+        ]
+    )
+    turn = ChatAssistant(model=model).respond("make the photo smaller")
+    assert turn.say == "Working on it."
+    assert turn.task == "resize photo.png"
+    assert "resize" in (turn.reasoning or "")
+    assert "<think>" not in turn.say and "not this" not in turn.say
+
+
+def test_an_unclosed_think_block_still_counts_as_thinking():
+    # The model ran out of budget mid-thought: everything after the tag is
+    # monologue, and the spoken turn degrades to the ellipsis, not a leak.
+    model = _FakeModel(["<think>hmm, first I should check the file"])
+    turn = ChatAssistant(model=model).respond("check disk usage please")
+    assert "first I should check" in (turn.reasoning or "")
+    assert "hmm" not in turn.say
+
+
 # --------------------------------------------------------------------------- #
 # The /v1/chat route.                                                          #
 # --------------------------------------------------------------------------- #

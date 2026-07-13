@@ -41,7 +41,13 @@ import { ForwardMenu } from "./ForwardMenu";
 
 type Msg =
   | { kind: "user"; text: string }
-  | { kind: "assistant"; text: string; actions?: ChatAction[] }
+  | {
+      kind: "assistant";
+      text: string;
+      actions?: ChatAction[];
+      // The model's own thinking behind this reply, when it showed it.
+      reasoning?: string;
+    }
   // The chat's own nudge about unfinished work — not a model turn, so it
   // never enters the history sent to the assistant. Each mentioned task
   // rides along as an arrow pointing back to its action window.
@@ -279,7 +285,9 @@ export function Chat() {
     // earns one fresh look at the open work — posted after the reply.
     const wasAway = returnedFromAway(clockRef.current, Date.now());
     clockRef.current.lastActivityAt = Date.now();
-    updateAvatarSignals({ userMood: deriveUserMood(text) });
+    // The face glows and breathes while the model reasons — the user
+    // knows OoLu is still working on it, not hung.
+    updateAvatarSignals({ userMood: deriveUserMood(text), thinking: true });
     setThread((t) => [...t, { kind: "user", text }]);
     try {
       const history = thread
@@ -304,7 +312,12 @@ export function Chat() {
       setThread((t) => {
         const next: Msg[] = [
           ...t,
-          { kind: "assistant", text: turn.reply, actions: turn.actions },
+          {
+            kind: "assistant",
+            text: turn.reply,
+            actions: turn.actions,
+            reasoning: turn.reasoning || undefined,
+          },
         ];
         // OoLu asked for a device sense: the request lands as grant
         // buttons right under its words — the user decides.
@@ -346,6 +359,7 @@ export function Chat() {
       ]);
     } finally {
       setBusy(false);
+      updateAvatarSignals({ thinking: false });
     }
   }
 
@@ -546,6 +560,9 @@ export function Chat() {
             </div>
           ) : (
             <div key={i} className={`bubble ${m.kind}`}>
+              {m.kind === "assistant" && m.reasoning && (
+                <Reasoning text={m.reasoning} />
+              )}
               {m.text}
               {m.kind === "assistant" && m.actions && m.actions.length > 0 && (
                 <div className="tool-chips">
@@ -562,6 +579,12 @@ export function Chat() {
               />
             </div>
           ),
+        )}
+        {busy && (
+          <div className="bubble assistant thinking-bubble">
+            <span className="thinking-dot" aria-hidden="true" />
+            <span className="thinking-note">{tr("interact.thinking")}</span>
+          </div>
         )}
         <div ref={endRef} />
       </div>
@@ -822,6 +845,21 @@ export function RunCard({ runId: initialRunId }: { runId: string }) {
         </div>
       )}
     </div>
+  );
+}
+
+// The model's thinking behind a reply, dimmed and folded: one brief line
+// by default (the "brief reasoning process"), the full monologue a tap
+// away. Proof of work, never mistaken for the answer.
+export function Reasoning({ text }: { text: string }) {
+  const brief = text.replace(/\s+/g, " ").trim();
+  return (
+    <details className="reasoning">
+      <summary className="reasoning-brief">
+        {brief.length > 140 ? `${brief.slice(0, 140)}…` : brief}
+      </summary>
+      <div className="reasoning-full">{text}</div>
+    </details>
   );
 }
 

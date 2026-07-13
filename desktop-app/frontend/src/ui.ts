@@ -1019,6 +1019,12 @@ const STRINGS: Record<string, Entry> = {
     es: "Mensaje a OoLu sobre {name}…",
     fr: "Message à OoLu au sujet de {name}…",
   },
+  "interact.thinking": {
+    en: "Thinking — the reply lands when the reasoning is done.",
+    zh: "正在思考——推理完成后回复就来。",
+    es: "Pensando — la respuesta llega cuando termine el razonamiento.",
+    fr: "Réflexion en cours — la réponse arrive une fois le raisonnement terminé.",
+  },
   // ---- Files chrome: the drawer, tiles, and the open file.
   "files.yours": { en: "Your files", zh: "你的文件", es: "Tus archivos", fr: "Vos fichiers" },
   "files.nodes": {
@@ -2452,6 +2458,7 @@ const ZH_HANT: Record<string, string> = {
   "interact.runOne": "次",
   "interact.runMany": "次",
   "interact.messageAbout": "就 {name} 給 OoLu 發訊息…",
+  "interact.thinking": "正在思考——推理完成後回覆就來。",
   "files.yours": "你的檔案",
   "files.nodes": "此節點的檔案",
   "files.select": "選擇",

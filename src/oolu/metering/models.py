@@ -61,6 +61,11 @@ class RunBinding(BaseModel):
     # budget layer learn spending behavior per class of goal — lavish in
     # one class never loosens (or tightens) another.
     goal_class: str | None = None
+    # When the binding was written — the chronological order the reads
+    # need (rowid ordering was SQLite-only). None on rows persisted before
+    # this field existed; they sort as the oldest, which they are. The
+    # store stamps it on bind, so a None default never masquerades as now.
+    bound_at: datetime | None = None
 
 
 class AttributionRecord(BaseModel):

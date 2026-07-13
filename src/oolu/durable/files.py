@@ -167,11 +167,13 @@ class UserFileStore:
         node's own files — never a mixed listing."""
         with self._conn.lock:
             rows = self._conn.db.execute(
-                "SELECT payload_json FROM user_files WHERE tenant_id = ?"
-                " ORDER BY rowid ASC",
+                "SELECT payload_json FROM user_files WHERE tenant_id = ?",
                 (tenant,),
             ).fetchall()
         files = [UserFile.model_validate_json(r["payload_json"]) for r in rows]
+        # Oldest-first by the record's own clock — rowid is SQLite-only
+        # and would be an UndefinedColumn on the PostgreSQL backend.
+        files.sort(key=lambda f: (f.created_at.isoformat(), f.file_id))
         return [f for f in files if f.node_id == node_id]
 
     def delete(self, file_id: str, *, tenant: str) -> bool:

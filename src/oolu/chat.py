@@ -201,6 +201,10 @@ class ChatTurn:
     # | "file"): the app renders the request as a grant button — the user
     # decides, and only a grant runs the sense.
     device: str | None = None
+    # The model's own thinking, when it showed it (reasoning models emit a
+    # <think> block before the answer). Split off so the spoken turn stays
+    # clean; the UI shows it dimmed, as proof the assistant is working.
+    reasoning: str | None = None
 
 
 @dataclass(frozen=True)
@@ -211,6 +215,24 @@ class _ToolCall:
 
 # The model may use at most this many tools per turn; then it must speak.
 MAX_TOOL_ROUNDS = 4
+
+# Reasoning models (qwen3 and friends) prefix the answer with their
+# monologue. It is split off — never spoken, never parsed as the turn.
+_THINK_RE = re.compile(r"<think>(.*?)(?:</think>|\Z)", re.S | re.I)
+
+
+def _split_reasoning(raw: str) -> tuple[str, str | None]:
+    """(clean reply, the model's thinking or None).
+
+    The <think> block must come off BEFORE turn parsing: it is prose, so
+    leaving it in would leak the monologue into the spoken reply — and a
+    brace inside it could even be mistaken for the turn's JSON. An
+    unclosed block (the model ran out of budget mid-thought) still counts
+    as thinking, with everything after the tag treated as monologue."""
+    thoughts = [m.group(1).strip() for m in _THINK_RE.finditer(raw)]
+    cleaned = _THINK_RE.sub("", raw).strip()
+    reasoning = "\n\n".join(t for t in thoughts if t) or None
+    return cleaned, reasoning
 
 
 def _parse_model_reply(raw: str) -> "ChatTurn | _ToolCall":
@@ -1781,9 +1803,15 @@ class ChatAssistant:
                 messages.append({"role": role, "content": content})
         messages.append({"role": "user", "content": message})
         actions: list[dict] = []
+        thoughts: list[str] = []
         for _ in range(MAX_TOOL_ROUNDS):
             raw = model.reply(messages)
-            parsed = _parse_model_reply(raw)
+            # Thinking accumulates across tool rounds — the whole chain of
+            # thought behind the final answer, not just its last step.
+            cleaned, reasoning = _split_reasoning(raw)
+            if reasoning:
+                thoughts.append(reasoning)
+            parsed = _parse_model_reply(cleaned)
             if isinstance(parsed, _ToolCall):
                 if tools is None:
                     return ChatTurn(
@@ -1794,7 +1822,7 @@ class ChatAssistant:
                 result, action = _run_tool(tools, parsed)
                 if action is not None:
                     actions.append(action)
-                messages.append({"role": "assistant", "content": raw})
+                messages.append({"role": "assistant", "content": cleaned})
                 messages.append(
                     {"role": "user", "content": f"[tool result]\n{result}"}
                 )
@@ -1805,9 +1833,11 @@ class ChatAssistant:
                 source="model",
                 actions=actions,
                 device=parsed.device,
+                reasoning="\n\n".join(thoughts) or None,
             )
         return ChatTurn(
             say="I got tangled up in my tools — tell me exactly what you need.",
             source="model",
             actions=actions,
+            reasoning="\n\n".join(thoughts) or None,
         )

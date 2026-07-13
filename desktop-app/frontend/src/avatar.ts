@@ -11,6 +11,9 @@ export type Mood = "calm" | "happy" | "thinking" | "worried" | "excited";
 export interface AvatarSignals {
   listening: boolean;
   speaking: boolean;
+  // A model turn is in flight — the face glows while it reasons, so the
+  // user knows OoLu is still working on it.
+  thinking?: boolean;
   workload: number; // active (non-terminal) runs
   tone: "neutral" | "good" | "bad" | "asking";
   userMood: "neutral" | "positive" | "negative" | "urgent";
@@ -32,6 +35,7 @@ export interface MoodState {
 export const DEFAULT_SIGNALS: AvatarSignals = {
   listening: false,
   speaking: false,
+  thinking: false,
   workload: 0,
   tone: "neutral",
   userMood: "neutral",
@@ -77,6 +81,7 @@ const _HUES: Record<Mood, [number, number]> = {
 export function moodOf(signals: AvatarSignals): MoodState {
   let mood: Mood = "calm";
   if (signals.listening) mood = "excited";
+  else if (signals.thinking) mood = "thinking";
   else if (signals.tone === "bad" || signals.userMood === "negative") {
     mood = "worried";
   } else if (signals.workload >= 2 || signals.userMood === "urgent") {
@@ -91,6 +96,7 @@ export function moodOf(signals: AvatarSignals): MoodState {
       0.12 * Math.min(signals.workload, 4) +
       (signals.speaking ? 0.3 : 0) +
       (signals.listening ? 0.28 : 0) +
+      (signals.thinking ? 0.22 : 0) +
       (signals.userMood === "urgent" ? 0.15 : 0),
   );
   const eyeOpen =

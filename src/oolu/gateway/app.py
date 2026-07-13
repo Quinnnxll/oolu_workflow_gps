@@ -1205,6 +1205,9 @@ class GatewayApp:
                 "reply": say,
                 "source": turn.source,
                 "actions": turn.actions,
+                # The model's own thinking, when it showed it — the UI
+                # renders it dimmed so the user sees the work, not noise.
+                "reasoning": turn.reasoning,
                 # OoLu asking for one of the DEVICE's senses (location /
                 # camera / file): the client renders a grant button — the
                 # user decides, never a silent sensor read.

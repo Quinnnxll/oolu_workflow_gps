@@ -1947,3 +1947,86 @@ button.ghost {
 .order-card .setting-label strong {
   margin-top: 4px;
 }
+
+/* Thinking: the profile photo breathes with a glowing light while the
+   model reasons, so the user knows OoLu is still working on it. */
+@keyframes breathe-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 4px 1px hsl(265 85% 65% / 0.35);
+  }
+  50% {
+    box-shadow: 0 0 14px 5px hsl(265 85% 65% / 0.8);
+  }
+}
+
+.node-face.thinking {
+  animation: breathe-glow 1.8s ease-in-out infinite;
+}
+
+/* OoLu's own face while a turn is in flight (SVG glows via drop-shadow). */
+@keyframes breathe-glow-svg {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 3px hsl(265 85% 65% / 0.35));
+  }
+  50% {
+    filter: drop-shadow(0 0 10px hsl(265 85% 65% / 0.85));
+  }
+}
+
+.oolu-avatar[data-thinking] {
+  animation: breathe-glow-svg 1.8s ease-in-out infinite;
+}
+
+.thinking-bubble {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.thinking-bubble .thinking-note {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.thinking-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: hsl(265 70% 55%);
+  animation: breathe-glow 1.8s ease-in-out infinite;
+}
+
+/* The model's thinking behind a reply: one dim, brief line folded shut —
+   the full monologue a tap away, never mistaken for the answer. */
+.reasoning {
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.reasoning-brief {
+  cursor: pointer;
+  list-style: none;
+  opacity: 0.8;
+  font-style: italic;
+}
+
+.reasoning-brief::before {
+  content: "\1F4AD  ";
+}
+
+.reasoning-full {
+  margin-top: 6px;
+  white-space: pre-wrap;
+  opacity: 0.9;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .node-face.thinking,
+  .oolu-avatar[data-thinking],
+  .thinking-dot {
+    animation: none;
+  }
+}

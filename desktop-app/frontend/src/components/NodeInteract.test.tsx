@@ -111,6 +111,49 @@ describe("NodeInteract", () => {
     ).toBeTruthy();
   });
 
+  it("glows while the model reasons, and shows the thinking dimmed", async () => {
+    // A slow turn: the promise resolves only when the test lets it.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    fetchMock.mockImplementationOnce(async () => {
+      await gate;
+      return {
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            reply: "Ordered. Anything else?",
+            source: "model",
+            reasoning: "The user wants an order node; checking the desk first.",
+            actions: [],
+            run_id: null,
+          }),
+        json: async () => ({}),
+      } as unknown as Response;
+    });
+    render(<NodeInteract node={node()} />);
+
+    fireEvent.change(
+      screen.getByPlaceholderText("Message OoLu about Invoice Cleaner…"),
+      { target: { value: "build an order node" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    // In flight: the node's profile photo breathes with the glow, and the
+    // thinking note tells the user OoLu is still working on it.
+    const face = await screen.findByRole("img", { name: /Thinking/ });
+    expect(face.className).toContain("thinking");
+    expect(screen.getByText(/reply lands when the reasoning is done/)).toBeTruthy();
+
+    release();
+    // Landed: the glow is gone, the reply speaks, and the model's brief
+    // reasoning rides above it — dimmed, folded, never the answer.
+    expect(await screen.findByText("Ordered. Anything else?")).toBeTruthy();
+    expect(screen.queryByRole("img", { name: /Thinking/ })).toBeNull();
+    // Twice: the folded one-line brief, and the full monologue behind it.
+    expect(screen.getAllByText(/checking the desk first/).length).toBe(2);
+  });
+
   it("typed commands still drive the desk", async () => {
     routes["POST /v1/chat"] = {
       status: 200,

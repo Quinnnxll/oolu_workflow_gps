@@ -123,11 +123,14 @@ class ApiKeyService:
     def list(self, *, tenant: str) -> list[ApiKeyRecord]:
         with self._conn.lock:
             rows = self._conn.db.execute(
-                "SELECT payload_json FROM api_keys WHERE tenant_id = ?"
-                " ORDER BY rowid ASC",
+                "SELECT payload_json FROM api_keys WHERE tenant_id = ?",
                 (tenant,),
             ).fetchall()
-        return [ApiKeyRecord.model_validate_json(r["payload_json"]) for r in rows]
+        records = [ApiKeyRecord.model_validate_json(r["payload_json"]) for r in rows]
+        # Oldest-first by the record's clock — rowid is SQLite-only and an
+        # UndefinedColumn on the PostgreSQL backend.
+        records.sort(key=lambda r: (r.created_at.isoformat(), r.key_id))
+        return records
 
     def revoke(self, key_id: str, *, tenant: str) -> bool:
         with self._conn.lock:

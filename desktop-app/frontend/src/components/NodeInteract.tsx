@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { ChatAction, WorkNode } from "../api";
-import { actionLabel } from "./Chat";
+import { identityHue } from "../avatar";
+import { actionLabel, Reasoning } from "./Chat";
 import { ForwardMenu } from "./ForwardMenu";
 import { t, tf, useT } from "../ui";
 
@@ -17,7 +18,35 @@ import { t, tf, useT } from "../ui";
 
 type Msg =
   | { kind: "user"; text: string }
-  | { kind: "assistant"; text: string; actions?: ChatAction[] };
+  | {
+      kind: "assistant";
+      text: string;
+      actions?: ChatAction[];
+      // The model's own thinking behind this reply, when it showed it.
+      reasoning?: string;
+    };
+
+// The node's profile photo: its stable identity color and initial. While
+// the model reasons it breathes with a glowing light — the user sees the
+// node is still working on it, not hung.
+export function NodeFace({
+  title,
+  thinking,
+}: {
+  title: string;
+  thinking?: boolean;
+}) {
+  return (
+    <span
+      className={`convo-avatar node-face${thinking ? " thinking" : ""}`}
+      style={{ background: `hsl(${identityHue(title)} 45% 34%)` }}
+      role="img"
+      aria-label={thinking ? t("interact.thinking") : title}
+    >
+      {(title.trim()[0] || "?").toUpperCase()}
+    </span>
+  );
+}
 
 export function reliabilityLine(node: WorkNode): string {
   const health = node.health;
@@ -67,7 +96,12 @@ export function NodeInteract({ node }: { node: WorkNode }) {
       const turn = await api.chat(text, history, node.node_id);
       setThread((t) => [
         ...t,
-        { kind: "assistant", text: turn.reply, actions: turn.actions },
+        {
+          kind: "assistant",
+          text: turn.reply,
+          actions: turn.actions,
+          reasoning: turn.reasoning || undefined,
+        },
       ]);
     } catch (e) {
       setThread((t) => [
@@ -90,6 +124,9 @@ export function NodeInteract({ node }: { node: WorkNode }) {
         )}
         {thread.map((m, i) => (
           <div key={i} className={`bubble ${m.kind}`}>
+            {m.kind === "assistant" && m.reasoning && (
+              <Reasoning text={m.reasoning} />
+            )}
             {m.text}
             {m.kind === "assistant" && m.actions && m.actions.length > 0 && (
               <div className="tool-chips">
@@ -106,6 +143,12 @@ export function NodeInteract({ node }: { node: WorkNode }) {
             />
           </div>
         ))}
+        {busy && (
+          <div className="bubble assistant thinking-bubble">
+            <NodeFace title={node.title} thinking />
+            <span className="thinking-note">{tr("interact.thinking")}</span>
+          </div>
+        )}
         <div ref={endRef} />
       </div>
 

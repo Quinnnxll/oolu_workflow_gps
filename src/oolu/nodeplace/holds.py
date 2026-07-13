@@ -107,22 +107,28 @@ class PendingContractStore:
         return PendingContractRecord.model_validate_json(row["payload_json"])
 
     def list(self, *, tenant: str | None = None) -> list[PendingContractRecord]:
-        """All holds, or one tenant's — surfaces must scope what they show."""
+        """All holds, or one tenant's — surfaces must scope what they show.
+
+        Ordered oldest-first by the record's own clock, never by SQLite's
+        implicit row-order column: PostgreSQL doesn't have it, and asking
+        for it there is an UndefinedColumn crash."""
         with self._conn.lock:
             if tenant is None:
                 rows = self._conn.db.execute(
-                    "SELECT payload_json FROM pending_contracts ORDER BY rowid"
+                    "SELECT payload_json FROM pending_contracts"
                 ).fetchall()
             else:
                 rows = self._conn.db.execute(
                     "SELECT payload_json FROM pending_contracts"
-                    " WHERE consumer_tenant = ? ORDER BY rowid",
+                    " WHERE consumer_tenant = ?",
                     (tenant,),
                 ).fetchall()
-        return [
+        records = [
             PendingContractRecord.model_validate_json(row["payload_json"])
             for row in rows
         ]
+        records.sort(key=lambda r: (r.created_at.isoformat(), r.pending_id))
+        return records
 
     def sweep_expired(self, now: datetime) -> list[PendingContractRecord]:
         """Remove and return every hold past its ``expires_at``.

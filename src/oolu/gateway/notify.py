@@ -97,15 +97,20 @@ class WebhookEndpointStore:
         with self._conn.lock:
             if tenant is None:
                 rows = self._conn.db.execute(
-                    "SELECT payload_json FROM webhook_endpoints ORDER BY rowid ASC"
+                    "SELECT payload_json FROM webhook_endpoints"
                 ).fetchall()
             else:
                 rows = self._conn.db.execute(
-                    "SELECT payload_json FROM webhook_endpoints WHERE tenant_id = ?"
-                    " ORDER BY rowid ASC",
+                    "SELECT payload_json FROM webhook_endpoints WHERE tenant_id = ?",
                     (tenant,),
                 ).fetchall()
-        return [WebhookEndpoint.model_validate_json(r["payload_json"]) for r in rows]
+        endpoints = [
+            WebhookEndpoint.model_validate_json(r["payload_json"]) for r in rows
+        ]
+        # Oldest-first by the record's clock — rowid is SQLite-only and an
+        # UndefinedColumn on the PostgreSQL backend.
+        endpoints.sort(key=lambda e: (e.created_at.isoformat(), e.endpoint_id))
+        return endpoints
 
     def remove(self, endpoint_id: str, *, tenant: str) -> bool:
         with self._conn.transaction() as db:
@@ -195,9 +200,12 @@ class RunEventNotifier:
     def _deliveries(self, status: str) -> list[Delivery]:
         with self._conn.lock:
             rows = self._conn.db.execute(
-                "SELECT payload_json FROM webhook_deliveries ORDER BY rowid ASC"
+                "SELECT payload_json FROM webhook_deliveries"
             ).fetchall()
         parsed = [Delivery.model_validate_json(r["payload_json"]) for r in rows]
+        # Deliveries follow the audit sequence they were derived from —
+        # a real ordering both backends share, unlike SQLite's rowid.
+        parsed.sort(key=lambda d: (int(d.payload.get("seq") or 0), d.delivery_id))
         return [d for d in parsed if d.status == status]
 
     def pending(self) -> list[Delivery]:

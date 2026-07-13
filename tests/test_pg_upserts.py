@@ -1,15 +1,21 @@
-"""Self-referencing upserts must speak BOTH dialects.
+"""Durable-store SQL must speak BOTH dialects.
 
-The production incident this pins down: ``ON CONFLICT ... DO UPDATE SET
-calls = calls + 1`` is legal SQLite but ambiguous PostgreSQL (the target
-row and ``excluded`` are both in scope), so the usage booking that runs
-after EVERY successful hosted-model reply crashed the whole chat turn —
-on Postgres only, which the SQLite-backed suite could never see. The
-right-hand side must qualify the table (``model_usage.calls + 1``).
+Two production incidents pinned down here, one class: SQL that SQLite
+accepts and PostgreSQL refuses, crashing prod while the SQLite-backed
+suite stays green.
 
-The dialect test needs a real PostgreSQL (OOLU_TEST_PG_DSN or
-DATABASE_URL, same switch as test_durable_postgres); the SQLite half of
-the promise always runs.
+* ``ON CONFLICT ... DO UPDATE SET calls = calls + 1`` — legal SQLite,
+  ambiguous PostgreSQL (the target row and ``excluded`` are both in
+  scope). The usage booking after EVERY hosted-model reply crashed the
+  chat turn. The right-hand side must qualify the table.
+* ``ORDER BY rowid`` — SQLite's implicit column; PostgreSQL has no such
+  thing (UndefinedColumn). Listing holds inside a node's interact chat
+  crashed the turn. Durable stores must order by their own columns or
+  sort the parsed records.
+
+The dialect tests need a real PostgreSQL (OOLU_TEST_PG_DSN or
+DATABASE_URL, same switch as test_durable_postgres); the SQLite halves
+and the static tripwires always run.
 """
 
 from __future__ import annotations
@@ -85,3 +91,56 @@ def test_no_durable_upsert_self_references_without_qualifying():
     assert not offenders, "unqualified upsert self-references:\n" + "\n".join(
         offenders
     )
+
+
+def test_no_source_sql_orders_by_rowid():
+    """The tripwire for the second class: ``rowid`` is SQLite's implicit
+    column, so any SQL naming it is an UndefinedColumn on the PostgreSQL
+    backend. (``cursor.lastrowid`` is a Python DB-API attribute, not SQL,
+    and the PG shim provides it — that one is fine.)"""
+    src = Path(__file__).resolve().parent.parent / "src" / "oolu"
+    offenders = [
+        f"{path.relative_to(src)}:{n}"
+        for path in src.rglob("*.py")
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if re.search(r"(?<!last)rowid", line.split("#", 1)[0], re.I)
+    ]
+    assert not offenders, "SQLite-only rowid in SQL:\n" + "\n".join(offenders)
+
+
+def test_holds_list_and_sweep_speak_postgres(tmp_path):
+    """The exact prod crash: 'pending' inside a node's interact chat lists
+    holds, which swept expired ones with ORDER BY rowid — UndefinedColumn
+    on PostgreSQL. The store must list, in insertion order, on BOTH
+    backends."""
+    from datetime import UTC, datetime, timedelta
+
+    from oolu.nodeplace.holds import PendingContractRecord, PendingContractStore
+
+    def exercise(conn):
+        store = PendingContractStore(conn)
+        with conn.transaction() as db:
+            db.execute("DELETE FROM pending_contracts")
+        base = datetime(2026, 7, 13, 12, 0, tzinfo=UTC)
+        for i in range(3):
+            store.add(
+                PendingContractRecord(
+                    pending_id=f"p{i}",
+                    contract={"name": f"job-{i}"},
+                    consumer_tenant="t1",
+                    created_at=base + timedelta(minutes=i),
+                    expires_at=None if i else base,  # p0 already expired
+                )
+            )
+        assert [r.pending_id for r in store.list(tenant="t1")] == ["p0", "p1", "p2"]
+        swept = store.sweep_expired(base + timedelta(hours=1))
+        assert [r.pending_id for r in swept] == ["p0"]
+        assert [r.pending_id for r in store.list()] == ["p1", "p2"]
+
+    exercise(DurableConnection(tmp_path / "holds.db"))
+    if PG_DSN:
+        from oolu.durable.postgres import PostgresDurableConnection
+
+        conn = PostgresDurableConnection(PG_DSN)
+        exercise(conn)
+        conn.close()

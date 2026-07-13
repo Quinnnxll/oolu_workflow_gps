@@ -59,6 +59,9 @@ export function OoLuAvatar({ size = 56 }: { size?: number }) {
       userMood: "neutral",
     }),
   );
+  // The raw in-flight signal, kept apart from mood: the breathing glow
+  // marks "a model turn is running RIGHT NOW", not general busyness.
+  const [thinking, setThinking] = useState(false);
   const stateRef = useRef(state);
   stateRef.current = state;
 
@@ -70,7 +73,14 @@ export function OoLuAvatar({ size = 56 }: { size?: number }) {
   const rightPupilRef = useRef<SVGCircleElement>(null);
   const blinkRef = useRef({ until: 0, next: 2 });
 
-  useEffect(() => onAvatarSignals((signals) => setState(moodOf(signals))), []);
+  useEffect(
+    () =>
+      onAvatarSignals((signals) => {
+        setState(moodOf(signals));
+        setThinking(Boolean(signals.thinking));
+      }),
+    [],
+  );
 
   useEffect(() => {
     // Reduced motion (or no rAF, e.g. tests): the first frame stands still.
@@ -128,6 +138,7 @@ export function OoLuAvatar({ size = 56 }: { size?: number }) {
       height={size}
       className="oolu-avatar"
       data-mood={mood}
+      data-thinking={thinking ? "true" : undefined}
       role="img"
       aria-label={`OoLu (${mood})`}
     >

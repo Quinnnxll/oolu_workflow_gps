@@ -48,6 +48,11 @@ describe("the avatar's mind", () => {
     expect(moodOf(signals({})).mood).toBe("calm");
     // Trouble outranks busyness: worried wins over workload.
     expect(moodOf(signals({ tone: "bad", workload: 3 })).mood).toBe("worried");
+    // A model turn in flight: the face thinks — and churns harder than idle.
+    expect(moodOf(signals({ thinking: true })).mood).toBe("thinking");
+    expect(
+      moodOf(signals({ thinking: true })).agitation,
+    ).toBeGreaterThan(moodOf(signals({})).agitation);
   });
 
   it("keeps agitation in bounds and voice drives it", () => {
