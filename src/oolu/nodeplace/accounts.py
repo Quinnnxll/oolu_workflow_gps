@@ -167,11 +167,23 @@ class NodeAccountStore:
     def under(self, supernode_id: str) -> list[NodeAccount]:
         """Every account created under one Supernode — the org's members.
         A human-sized scan: a Supernode manages a fleet, not a census."""
+        return [a for a in self._all() if a.supernode_id == supernode_id]
+
+    def answered_by(self, principal: str) -> list[NodeAccount]:
+        """Every account this principal answers for — as the responsible
+        who onboarded it, or as its admin. This is how a node someone ELSE
+        created (a Supernode's humans minting claim tickets) reaches the
+        onboarder's own Work desk: responsibility lives on the account,
+        not in the registry's creator column."""
+        return [
+            a for a in self._all() if principal in {a.responsible, a.admin}
+        ]
+
+    def _all(self) -> list[NodeAccount]:
         with self._conn.lock:
             rows = self._conn.db.execute(
                 "SELECT payload_json FROM node_accounts"
             ).fetchall()
-        accounts = [
+        return [
             NodeAccount.model_validate_json(row["payload_json"]) for row in rows
         ]
-        return [a for a in accounts if a.supernode_id == supernode_id]

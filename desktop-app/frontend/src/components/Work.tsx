@@ -254,7 +254,11 @@ export function AddNode({
   }
 
   return (
-    <form className="add-pane" onSubmit={submit}>
+    // autoComplete off, here and per-field: the browser must not offer
+    // values typed into earlier node forms as recommendations — that
+    // history is machine-global (it ignores which account is signed in),
+    // and every node is created for a different purpose anyway.
+    <form className="add-pane" onSubmit={submit} autoComplete="off">
       <div className="mode-tabs">
         <button
           type="button"
@@ -279,12 +283,14 @@ export function AddNode({
             id="node-title"
             value={title}
             required
+            autoComplete="off"
             onChange={(e) => setTitle(e.target.value)}
           />
           <label htmlFor="node-summary">{tr("work.whatItDoes")}</label>
           <input
             id="node-summary"
             value={summary}
+            autoComplete="off"
             onChange={(e) => setSummary(e.target.value)}
           />
 
@@ -398,6 +404,7 @@ export function AddNode({
             id="node-id"
             value={nodeId}
             required
+            autoComplete="off"
             onChange={(e) => setNodeId(e.target.value)}
           />
         </>
@@ -961,18 +968,21 @@ export function KycSection({ nodeId }: { nodeId: string }) {
               aria-label="Legal entity name"
               placeholder={tr("kyc.legalNamePh")}
               value={legalName}
+              autoComplete="off"
               onChange={(e) => setLegalName(e.target.value)}
             />
             <input
               aria-label="Company email"
               placeholder="you@company.example"
               value={email}
+              autoComplete="off"
               onChange={(e) => setEmail(e.target.value)}
             />
             <input
               aria-label="Registration number"
               placeholder={tr("kyc.regNoPh")}
               value={regNo}
+              autoComplete="off"
               onChange={(e) => setRegNo(e.target.value)}
             />
             <button

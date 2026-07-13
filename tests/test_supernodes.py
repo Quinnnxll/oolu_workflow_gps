@@ -215,6 +215,74 @@ def test_the_route_refuses_fixed_traits_and_onboard_takes_no_choices(tmp_path):
         conn.close()
 
 
+def test_a_claim_ticket_lands_the_node_on_the_claimers_own_desk(tmp_path):
+    """Issue 9: onboarding must work for someone who did NOT create the
+    Supernode. A node created under a Supernode is an unclaimed ticket;
+    whoever presents its id becomes responsible — and from that moment the
+    node appears on THEIR Work desk (overview and activity both), even
+    though the registry's creator column still names the Supernode's
+    human. Before the fix the onboard call returned 200 but the claimer's
+    desk stayed empty, which read as 'onboarding failed'."""
+    app, conn, ident, registry, *_rest, desk, _ = _desk_build(tmp_path)
+    try:
+        super_id, child_id = _two_nodes(app, ident, registry)
+        desk.create_account(
+            super_id, principal="noder-export", tenant="t1", is_supernode=True
+        )
+        child = desk.create_account(
+            child_id,
+            principal="noder-export",
+            tenant="t1",
+            supernode_id=super_id,
+            authority_level=2,
+        )
+        assert child.responsible == ""  # minted unclaimed — the ticket
+
+        # The claimer is another account entirely — NOT the Supernode's
+        # creator. Presenting the node id is the whole ceremony.
+        claimer = ident.token("claimer", "t1")
+        onboarded = app.handle(
+            _req(
+                "POST",
+                f"/v1/work/nodes/{child_id}/account",
+                token=claimer,
+                body={"onboard": True},
+            )
+        )
+        assert onboarded.status == 200
+        assert onboarded.body["responsible"] == "claimer"
+        assert onboarded.body["authority_level"] == 2  # regime untouched
+
+        # The node now lives on the claimer's desk...
+        mine = app.handle(_req("GET", "/v1/work/nodes", token=claimer))
+        assert child_id in [item["node_id"] for item in mine.body["items"]]
+        # ...their activity view opens...
+        feed = app.handle(
+            _req("GET", f"/v1/work/nodes/{child_id}/activity", token=claimer)
+        )
+        assert feed.status == 200
+        # ...and a bystander's desk stays empty: answering for a node is
+        # personal, not tenant-wide.
+        theirs = app.handle(
+            _req("GET", "/v1/work/nodes", token=ident.token("bystander", "t1"))
+        )
+        assert theirs.body["items"] == []
+
+        # A claimed node cannot be onboarded away by the next passer-by.
+        stolen = app.handle(
+            _req(
+                "POST",
+                f"/v1/work/nodes/{child_id}/account",
+                token=ident.token("bystander", "t1"),
+                body={"onboard": True},
+            )
+        )
+        assert stolen.status == 403
+        assert desk.account_for(child_id).responsible == "claimer"
+    finally:
+        conn.close()
+
+
 def test_the_desk_can_sign_and_reply_on_a_held_request(tmp_path):
     app, conn, ident, registry, *_rest, desk, _ = _desk_build(
         tmp_path, executors={"cli": _CliExecutor()}

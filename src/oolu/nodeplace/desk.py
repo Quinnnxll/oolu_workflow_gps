@@ -88,7 +88,20 @@ class WorkDesk:
     # The node account list.                                              #
     # ------------------------------------------------------------------ #
     def overview(self, *, principal: str, tenant: str) -> list[DeskEntry]:
+        """Every node this human ANSWERS FOR: the ones they created in the
+        registry, plus the ones they onboarded (or admin) whose account
+        names them — a claim ticket someone else minted still lands the
+        node on the claimer's own desk, not the creator's."""
         nodes = self._registry.list_nodes(tenant, principal)
+        listed = {node.node_id for node in nodes}
+        for account in self._accounts.answered_by(principal):
+            if account.node_id in listed:
+                continue
+            node = self._registry.get_node(account.node_id)
+            if node is None or node.tenant_id != tenant:
+                continue
+            nodes.append(node)
+            listed.add(account.node_id)
         versions_by_node = {
             node.node_id: [
                 v.version_id for v in self._registry.list_versions(node.node_id)
