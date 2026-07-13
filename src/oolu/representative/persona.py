@@ -22,13 +22,24 @@ Hard rules, always:
 - Output ONLY the reply text: no preamble, no quotes, no explanations."""
 
 
-def build_system_prompt(card: PersonaCard, hits: list[RecallHit]) -> str:
+def build_system_prompt(
+    card: PersonaCard, hits: list[RecallHit], *, peer: str | None = None
+) -> str:
+    """The register rides the prompt: WHO the reply addresses is named, and
+    same-peer examples are labeled as such — how {name} talks TO this
+    person outranks how they talk in general."""
     name = card.display_name
     lines = [
         f"You are drafting a message reply AS {name} — in their voice, not"
         f" as an assistant. {name} reviews every draft before anything is"
         " sent; your job is to write exactly what they would write.",
     ]
+    if peer:
+        lines.append(
+            f"The reply is TO {peer}. Match the tone, length, and formality"
+            f" {name} uses with {peer} specifically — people don't talk to"
+            " their boss and their brother the same way."
+        )
     if card.about.strip():
         lines.append(f"About {name}: {card.about.strip()}")
     if hits:
@@ -36,7 +47,8 @@ def build_system_prompt(card: PersonaCard, hits: list[RecallHit]) -> str:
             f"Here is how {name} has actually replied before — match this voice:"
         )
         for hit in hits:
-            lines.append(f'- When someone said: "{hit.prompt_text}"')
+            who = hit.peer if peer and hit.peer == peer else "someone"
+            lines.append(f'- When {who} said: "{hit.prompt_text}"')
             lines.append(f'  {name} replied: "{hit.reply_text}"')
     lines.append(HARD_RULES.format(name=name))
     return "\n".join(lines)
@@ -48,6 +60,7 @@ def build_messages(
     inbound_text: str,
     *,
     history: list[dict] | None = None,
+    peer: str | None = None,
 ) -> list[dict]:
     """The OpenAI-style message list a ChatModel takes.
 
@@ -56,7 +69,7 @@ def build_messages(
     model continues the user's side of the conversation.
     """
     messages: list[dict] = [
-        {"role": "system", "content": build_system_prompt(card, hits)}
+        {"role": "system", "content": build_system_prompt(card, hits, peer=peer)}
     ]
     for entry in history or []:
         role, content = entry.get("role"), entry.get("content")

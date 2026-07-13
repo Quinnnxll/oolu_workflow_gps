@@ -88,6 +88,14 @@ def _drop_adapter_versions(conn: sqlite3.Connection) -> None:
     conn.executescript("DROP TABLE IF EXISTS adapter_versions;")
 
 
+def _add_exchange_peer(conn: sqlite3.Connection) -> None:
+    # WHO the user was answering: the register signal. Old rows keep '' —
+    # they still teach the average voice, just never a specific register.
+    conn.executescript(
+        "ALTER TABLE exchanges ADD COLUMN peer TEXT NOT NULL DEFAULT '';"
+    )
+
+
 def _create_peer_rules(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
@@ -111,6 +119,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(up=_create_representative_tables, down=_drop_representative_tables),
     Migration(up=_create_adapter_versions, down=_drop_adapter_versions),
     Migration(up=_create_peer_rules, down=_drop_peer_rules),
+    Migration(up=_add_exchange_peer),  # irreversible: a column, kept
 )
 
 # An adapter's life: pending -> trained -> active -> retired, or failed.
@@ -176,26 +185,29 @@ class RepresentativeStore:
     # Exchanges (the memory, and later the training corpus).          #
     # -------------------------------------------------------------- #
     def remember_exchange(
-        self, scope: str, *, key: str, prompt: str, reply: str
+        self, scope: str, *, key: str, prompt: str, reply: str, peer: str = ""
     ) -> None:
         prompt, reply = prompt.strip(), reply.strip()
         if not prompt or not reply:
             return
         with self._lock, self._db:
             self._db.execute(
-                """INSERT INTO exchanges (scope, exchange_key, prompt_text, reply_text, at)
-                   VALUES (?, ?, ?, ?, ?)
+                """INSERT INTO exchanges
+                       (scope, exchange_key, prompt_text, reply_text, peer, at)
+                   VALUES (?, ?, ?, ?, ?, ?)
                    ON CONFLICT(scope, exchange_key) DO UPDATE SET
                        prompt_text = excluded.prompt_text,
-                       reply_text = excluded.reply_text""",
-                (scope, key, prompt, reply, self._clock()),
+                       reply_text = excluded.reply_text,
+                       peer = excluded.peer""",
+                (scope, key, prompt, reply, peer.strip(), self._clock()),
             )
 
     def exchanges(self, scope: str, *, limit: int = 2000) -> list[sqlite3.Row]:
         """The most recent exchanges, newest first — recall's candidates."""
         with self._lock:
             return self._db.execute(
-                """SELECT exchange_key, prompt_text, reply_text, at FROM exchanges
+                """SELECT exchange_key, prompt_text, reply_text, peer, at
+                   FROM exchanges
                    WHERE scope = ? ORDER BY at DESC, exchange_key DESC LIMIT ?""",
                 (scope, int(limit)),
             ).fetchall()
@@ -286,11 +298,27 @@ class RepresentativeStore:
         model said, what the user actually said) — the DPO dataset."""
         with self._lock:
             return self._db.execute(
-                """SELECT inbound_text, generated_text, final_text FROM drafts
+                """SELECT inbound_text, generated_text, final_text,
+                          conversation_id
+                   FROM drafts
                    WHERE scope = ? AND status = 'edited' AND final_text IS NOT NULL
                    ORDER BY decided_at ASC LIMIT ?""",
                 (scope, int(limit)),
             ).fetchall()
+
+    def has_draft_for(
+        self, scope: str, conversation_id: str, inbound_text: str
+    ) -> bool:
+        """Whether this exact message was ever drafted for — the sweep's
+        idempotency: one message, one draft, whatever the user decided."""
+        with self._lock:
+            row = self._db.execute(
+                """SELECT 1 FROM drafts
+                   WHERE scope = ? AND conversation_id = ? AND inbound_text = ?
+                   LIMIT 1""",
+                (scope, conversation_id, inbound_text.strip()),
+            ).fetchone()
+        return row is not None
 
     def outcome_counts(self, scope: str) -> dict[str, int]:
         with self._lock:

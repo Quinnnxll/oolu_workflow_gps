@@ -751,6 +751,15 @@ export const api = {
     req<RepresentativeDraft>("POST", "/v1/representative/drafts", { peer }),
   representativeDrafts: () =>
     req<{ items: RepresentativeDraft[] }>("GET", "/v1/representative/drafts"),
+  // The busy person's pass: one call drafts a reply for every waiting
+  // friend message (idempotent per message — polling is free until
+  // someone says something new).
+  representativeSweep: () =>
+    req<{
+      drafted: RepresentativeDraft[];
+      pending: number;
+      model_error: string | null;
+    }>("POST", "/v1/representative/sweep", {}),
   setRepresentativePeerAuto: (peer: string, auto: boolean) =>
     req<RepresentativeStatus>(
       "PUT",

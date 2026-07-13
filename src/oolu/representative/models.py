@@ -36,13 +36,18 @@ class PersonaCard(BaseModel):
 
 
 class RecallHit(BaseModel):
-    """One remembered exchange, scored against the message being answered."""
+    """One remembered exchange, scored against the message being answered.
+
+    ``peer`` is who the user was answering — the register signal: how you
+    reply to your boss and how you reply to your brother are different
+    voices, and a same-peer exchange is worth more than a similar one."""
 
     model_config = ConfigDict(frozen=True)
 
     prompt_text: str
     reply_text: str
     score: float
+    peer: str = ""
 
 
 class GateVerdict(BaseModel):

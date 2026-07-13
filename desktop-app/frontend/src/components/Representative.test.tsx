@@ -307,3 +307,50 @@ describe("RepresentativeSection", () => {
     expect(container.textContent).toBe("");
   });
 });
+
+describe("the OoLu window's quick toggle and filter strip", () => {
+  it("turns the representative on, sweeps, and filters inline", async () => {
+    routes["GET /v1/representative"] = {
+      status: 200,
+      body: { ...STATUS, mode: "off", drafts_pending: 0 },
+    };
+    routes["PUT /v1/representative"] = {
+      status: 200,
+      body: { ...STATUS, mode: "draft", drafts_pending: 0 },
+    };
+    routes["POST /v1/representative/sweep"] = {
+      status: 200,
+      body: { drafted: [SUGGESTION], pending: 1, model_error: null },
+    };
+    routes["GET /v1/representative/drafts"] = {
+      status: 200,
+      body: { items: [SUGGESTION] },
+    };
+    const { Life } = await import("./Life");
+    render(<Life />);
+
+    // Off: the toggle says so, and no strip crowds the chat.
+    const toggle = await screen.findByRole("button", {
+      name: "✍ Representative: off",
+    });
+    expect(screen.queryByText("Drafts awaiting your word")).toBeNull();
+
+    fireEvent.click(toggle);
+    // On: the PUT went out, the sweep drafted, and the strip appears
+    // inline with the draft ready to filter.
+    expect(
+      await screen.findByRole("button", { name: "✍ Representative: on" }),
+    ).toBeTruthy();
+    const put = calls.find(
+      (c) => c.method === "PUT" && c.path === "/v1/representative",
+    );
+    expect(put?.body).toEqual({ mode: "draft" });
+    expect(
+      calls.some(
+        (c) => c.method === "POST" && c.path === "/v1/representative/sweep",
+      ),
+    ).toBe(true);
+    expect(await screen.findByText("Drafts awaiting your word")).toBeTruthy();
+    expect(screen.getByText("on it — will look today")).toBeTruthy();
+  });
+});

@@ -787,6 +787,7 @@ class GatewayApp:
         r.add("PUT", "/v1/representative", self._representative_configure)
         r.add("GET", "/v1/representative/drafts", self._representative_drafts)
         r.add("POST", "/v1/representative/drafts", self._representative_draft)
+        r.add("POST", "/v1/representative/sweep", self._representative_sweep)
         r.add(
             "POST",
             "/v1/representative/drafts/{draft_id}",
@@ -1328,6 +1329,7 @@ class GatewayApp:
                 pair_representative_exchanges(
                     [(m.message_id, m.sender, m.body) for m in thread], me=peer
                 ),
+                peer=session.principal_id,
             )
             history = [
                 {
@@ -1398,21 +1400,15 @@ class GatewayApp:
             200, {"items": [draft.model_dump() for draft in rep.pending(scope)]}
         )
 
-    def _representative_draft(self, request, session, params) -> Response:
-        """Draft a reply to the latest unanswered message from a friend.
-
-        The thread is folded into the account's exchange memory on the way
-        (idempotent by message id), so recall grows exactly as fast as the
-        user's real conversations do — no separate ingestion pipeline.
-        """
+    def _draft_friend_reply(self, session, peer: str):
+        """The one drafting path: fold the thread into memory (idempotent
+        by message id, register-tagged with the peer), then draft a reply
+        to the latest unanswered message. Raises GatewayError(409) when
+        the last word is already the user's; model errors propagate for
+        the caller to map. Returns the Draft."""
         rep = self._require_representative()
         store = self._require_direct_messages()
         scope = self._representative_scope(session)
-        if rep.mode(scope) != "draft":
-            raise GatewayError(
-                409, "representative_off", "turn representative mode on first"
-            )
-        peer = self._friend_or_404(session, (request.body or {}).get("peer"))
         thread = store.between(
             tenant=session.tenant_id, me=session.principal_id, peer=peer
         )
@@ -1422,6 +1418,7 @@ class GatewayApp:
                 [(m.message_id, m.sender, m.body) for m in thread],
                 me=session.principal_id,
             ),
+            peer=peer,
         )
         if not thread or thread[-1].sender != peer:
             raise GatewayError(
@@ -1436,20 +1433,72 @@ class GatewayApp:
             }
             for m in thread[:-1][-12:]
         ]
-        try:
-            draft = rep.draft(
-                scope,
-                conversation_id=peer,
-                inbound_text=thread[-1].body,
-                display_name=session.principal_id,
-                history=history,
-                model=self._tenant_model(session.tenant_id),
+        return rep.draft(
+            scope,
+            conversation_id=peer,
+            inbound_text=thread[-1].body,
+            display_name=session.principal_id,
+            history=history,
+            model=self._tenant_model(session.tenant_id),
+        )
+
+    def _representative_draft(self, request, session, params) -> Response:
+        """Draft a reply to the latest unanswered message from a friend."""
+        rep = self._require_representative()
+        scope = self._representative_scope(session)
+        if rep.mode(scope) == "off":
+            raise GatewayError(
+                409, "representative_off", "turn representative mode on first"
             )
+        peer = self._friend_or_404(session, (request.body or {}).get("peer"))
+        try:
+            draft = self._draft_friend_reply(session, peer)
         except ModelBudgetExceeded as exc:
             raise GatewayError(402, "model_budget", str(exc)) from exc
         except ModelUnavailable as exc:
             raise GatewayError(503, "model_unavailable", str(exc)) from exc
         return json_response(201, draft.model_dump())
+
+    def _representative_sweep(self, request, session, params) -> Response:
+        """The busy person's pass: draft a reply for EVERY friend whose
+        message is waiting, so the user only filters — send, edit, or
+        discard. Idempotent per message: a message that ever had a draft
+        (whatever its fate) is never drafted again, so polling this route
+        costs nothing until someone actually says something new."""
+        rep = self._require_representative()
+        store = self._require_direct_messages()
+        scope = self._representative_scope(session)
+        if rep.mode(scope) == "off":
+            raise GatewayError(
+                409, "representative_off", "turn representative mode on first"
+            )
+        drafted: list[dict] = []
+        model_error: str | None = None
+        for convo in store.conversations(
+            tenant=session.tenant_id, principal=session.principal_id
+        ):
+            if convo["unread"] <= 0 or convo["last_from"] != convo["peer"]:
+                continue
+            if rep.has_draft_for(scope, str(convo["peer"]), str(convo["last_text"])):
+                continue
+            try:
+                draft = self._draft_friend_reply(session, str(convo["peer"]))
+            except GatewayError:
+                continue  # nothing to answer after all — the sweep moves on
+            except (ModelBudgetExceeded, ModelUnavailable) as exc:
+                # A dead model fails every remaining thread the same way:
+                # stop asking, say so once, keep what was drafted.
+                model_error = str(exc)
+                break
+            drafted.append(draft.model_dump())
+        return json_response(
+            200,
+            {
+                "drafted": drafted,
+                "pending": len(rep.pending(scope)),
+                "model_error": model_error,
+            },
+        )
 
     def _representative_peer_rule(self, request, session, params) -> Response:
         """Per-peer autonomy: "never auto-reply to my boss." Muting only

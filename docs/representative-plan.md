@@ -198,6 +198,37 @@ inbound message
         → otherwise            → Draft into approvals inbox
 ```
 
+## The register: one voice, many registers (who you're talking to)
+
+People don't talk to their boss and their brother the same way, and a
+per-account adapter trained on a flattened corpus learns only the AVERAGE
+voice. The wrong fix is per-peer adapters — most threads never reach the
+cold-start floor, and the fleet explodes. The right fix is
+**conditioning**: one adapter that learns many registers, told at every
+step who the reply addresses.
+
+The peer rides the whole pipeline:
+
+- **Memory** — every exchange records who it was with (`exchanges.peer`,
+  migration 4); recall boosts same-peer memories over equally similar
+  cross-peer ones (`CROSS_PEER_DISCOUNT`).
+- **The prompt** — "The reply is TO {peer}" plus few-shot examples labeled
+  "When {peer} said …" for same-peer history, anonymous otherwise.
+- **Training** — SFT examples open with a `Replying to {peer}.` system
+  line and DPO prompts carry the same prefix, so the adapter learns
+  peer-conditioned registers from ONE corpus: peers with history get
+  their own voice, strangers fall back to the average one, and a new
+  peer needs no retraining — just their name in the prompt.
+
+## The sweep: the busy person's pass
+
+`POST /v1/representative/sweep` drafts a reply for every friend whose
+message is waiting, so the user only filters — send, edit, discard, from
+the OoLu window's inline strip (the ✍ toggle at the top right) or the
+Drafts inbox. Idempotent per message: a message that ever had a draft is
+never drafted again, whatever the user decided, so polling costs nothing
+until someone actually says something new.
+
 ## Build phases
 
 ### Phase 0 — the representative without training (ship first)

@@ -145,11 +145,21 @@ class RepresentativeEngine:
     # -------------------------------------------------------------- #
     # Memory.                                                         #
     # -------------------------------------------------------------- #
-    def ingest(self, scope: str, exchanges: Iterable[tuple[str, str, str]]) -> int:
-        """Upsert (key, prompt, reply) triples into memory; idempotent."""
+    def ingest(
+        self,
+        scope: str,
+        exchanges: Iterable[tuple[str, str, str]],
+        *,
+        peer: str = "",
+    ) -> int:
+        """Upsert (key, prompt, reply) triples into memory; idempotent.
+        ``peer`` names who the exchanges were with — the register signal
+        recall and training both condition on."""
         count = 0
         for key, prompt, reply in exchanges:
-            self._memory.remember(scope, key=key, prompt=prompt, reply=reply)
+            self._memory.remember(
+                scope, key=key, prompt=prompt, reply=reply, peer=peer
+            )
             count += 1
         return count
 
@@ -186,9 +196,13 @@ class RepresentativeEngine:
         ]
         if not voices:
             raise ModelUnavailable("no model is configured to draft with")
-        hits = self._memory.recall(scope, inbound_text, k=self._few_shot_k)
+        hits = self._memory.recall(
+            scope, inbound_text, k=self._few_shot_k, peer=conversation_id
+        )
         card = PersonaCard(display_name=display_name, about=self._store.about(scope))
-        messages = build_messages(card, hits, inbound_text, history=history)
+        messages = build_messages(
+            card, hits, inbound_text, history=history, peer=conversation_id
+        )
         generated = spoke = None
         failure: ModelUnavailable | None = None
         for label, candidate in voices:
@@ -254,6 +268,11 @@ class RepresentativeEngine:
                 return decided
         return draft
 
+    def has_draft_for(
+        self, scope: str, conversation_id: str, inbound_text: str
+    ) -> bool:
+        return self._store.has_draft_for(scope, conversation_id, inbound_text)
+
     def pending(self, scope: str) -> list[Draft]:
         return self._store.pending_drafts(scope)
 
@@ -297,6 +316,7 @@ class RepresentativeEngine:
                 key=f"draft:{draft_id}",
                 prompt=draft.inbound_text,
                 reply=final,
+                peer=draft.conversation_id,
             )
         return decided
 

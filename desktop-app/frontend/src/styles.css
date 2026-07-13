@@ -1913,3 +1913,21 @@ button.ghost {
     width: min(94vw, 380px);
   }
 }
+
+/* The representative's quick toggle (top right of the OoLu pane) and the
+   inline filter strip its sweep fills. */
+.pane-bar .rep-quick {
+  margin-left: auto;
+}
+
+.pane-bar .rep-quick.on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.rep-sweep {
+  border-bottom: 1px solid var(--line);
+  max-height: 45%;
+  overflow-y: auto;
+  flex-shrink: 0;
+}

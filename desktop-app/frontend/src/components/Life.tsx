@@ -90,7 +90,16 @@ export function Life() {
       setFriends(null); // no server door here: the group says so instead
     }
     try {
-      setRep(await api.representative());
+      const status = await api.representative();
+      setRep(status);
+      if (status.mode !== "off") {
+        // The busy person's pass: draft a reply for every waiting friend
+        // message. Idempotent per message — free until something is new.
+        const swept = await api.representativeSweep();
+        if (swept.drafted.length > 0) {
+          setRep({ ...status, drafts_pending: swept.pending });
+        }
+      }
     } catch {
       setRep(null); // no representative on this host: no Drafts entry
     }
@@ -300,7 +309,45 @@ export function Life() {
           >
             {folded ? "☰" : "«"}
           </button>
+          {selected.kind === "oolu" && rep !== null && (
+            <button
+              type="button"
+              className={`rep-quick${rep.mode !== "off" ? " on" : ""}`}
+              aria-label={
+                rep.mode !== "off" ? tr("rep.toggleOn") : tr("rep.toggleOff")
+              }
+              title={tr("rep.toggleHint")}
+              onClick={async () => {
+                try {
+                  const next = rep.mode === "off" ? "draft" : "off";
+                  const status = await api.configureRepresentative({
+                    mode: next,
+                  });
+                  setRep(status);
+                  if (next !== "off") {
+                    const swept = await api.representativeSweep();
+                    setRep({ ...status, drafts_pending: swept.pending });
+                  }
+                } catch {
+                  /* the poll will tell the truth shortly */
+                }
+              }}
+            >
+              {rep.mode !== "off" ? tr("rep.toggleOn") : tr("rep.toggleOff")}
+            </button>
+          )}
         </div>
+        {selected.kind === "oolu" &&
+          rep !== null &&
+          rep.mode !== "off" &&
+          rep.drafts_pending > 0 && (
+            <div className="rep-sweep">
+              <DraftsInbox
+                onActivity={refreshRuns}
+                onOpenThread={(peer) => open({ kind: "friend", peer })}
+              />
+            </div>
+          )}
         {selected.kind === "oolu" && <Chat />}
         {selected.kind === "friends" &&
           (friends === null ? (

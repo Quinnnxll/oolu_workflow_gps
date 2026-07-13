@@ -63,6 +63,7 @@ def build_sft_dataset(
     # The store returns newest first; the corpus reads oldest first.
     for row in reversed(store.exchanges(scope, limit=max_examples)):
         prompt, reply = str(row["prompt_text"]), str(row["reply_text"])
+        peer = scrub(str(row["peer"] or "")).strip()
         clean_prompt, clean_reply = scrub(prompt), scrub(reply)
         scrubbed += (clean_prompt, clean_reply) != (prompt, reply)
         reply_tokens = normalize_message(clean_reply).split()
@@ -73,12 +74,19 @@ def build_sft_dataset(
             deduped += 1
             continue
         seen.add(key)
+        # The register conditioner: WHO the reply addressed rides the
+        # example, so ONE adapter learns per-person registers — peers with
+        # history get their own voice, strangers get the average one.
+        messages: list[dict] = []
+        if peer:
+            messages.append({"role": "system", "content": f"Replying to {peer}."})
+        messages += [
+            {"role": "user", "content": clean_prompt},
+            {"role": "assistant", "content": clean_reply},
+        ]
         examples.append(
             {
-                "messages": [
-                    {"role": "user", "content": clean_prompt},
-                    {"role": "assistant", "content": clean_reply},
-                ],
+                "messages": messages,
                 "weight": (
                     _ONE_LINER_WEIGHT
                     if len(reply_tokens) <= _ONE_LINER_TOKENS
@@ -123,9 +131,12 @@ def build_dpo_dataset(
         prompt = scrub(str(row["inbound_text"]))
         chosen = scrub(str(row["final_text"]))
         rejected = scrub(str(row["generated_text"]))
+        peer = scrub(str(row["conversation_id"] or "")).strip()
         if not (prompt.strip() and chosen.strip() and rejected.strip()):
             continue
         if normalize_message(chosen) == normalize_message(rejected):
             continue
+        if peer:  # the same register conditioner SFT trains under
+            prompt = f"Replying to {peer}. {prompt}"
         pairs.append({"prompt": prompt, "chosen": chosen, "rejected": rejected})
     return pairs

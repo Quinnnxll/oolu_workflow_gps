@@ -1705,6 +1705,24 @@ const STRINGS: Record<string, Entry> = {
     es: "Redactar una respuesta con tu voz",
     fr: "Rédiger une réponse avec votre voix",
   },
+  "rep.toggleOn": {
+    en: "✍ Representative: on",
+    zh: "✍ 个人代表：开",
+    es: "✍ Representante: sí",
+    fr: "✍ Représentant : oui",
+  },
+  "rep.toggleOff": {
+    en: "✍ Representative: off",
+    zh: "✍ 个人代表：关",
+    es: "✍ Representante: no",
+    fr: "✍ Représentant : non",
+  },
+  "rep.toggleHint": {
+    en: "Draft replies to waiting friends in your voice — you only filter.",
+    zh: "用你的语气为等候中的好友起草回复——你只需筛选。",
+    es: "Redacta respuestas con tu voz para amistades en espera: tú solo filtras.",
+    fr: "Rédige des réponses avec votre voix pour les amis en attente — vous ne faites que filtrer.",
+  },
   "rep.autoToPeer": {
     en: "Auto-replies to {peer} (earned replies only; commitments always wait for you)",
     zh: "对 {peer} 的自动回复（仅限已赢得信任的回复；涉及承诺的内容永远等你决定）",
@@ -2412,5 +2430,8 @@ const ZH_HANT: Record<string, string> = {
   "rep.cancel": "取消",
   "rep.editing": "正在編輯草擬的回覆——傳送會記錄你的版本。",
   "rep.draftButton": "用你的語氣起草回覆",
+  "rep.toggleOn": "✍ 個人代表：開",
+  "rep.toggleOff": "✍ 個人代表：關",
+  "rep.toggleHint": "用你的語氣為等候中的好友起草回覆——你只需篩選。",
   "rep.autoToPeer": "對 {peer} 的自動回覆（僅限已贏得信任的回覆；涉及承諾的內容永遠等你決定）",
 };

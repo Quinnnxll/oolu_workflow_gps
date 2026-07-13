@@ -19,11 +19,21 @@ from .store import RepresentativeStore
 class ExchangeMemory(Protocol):
     """Port for whatever recalls how the user replies to things like this."""
 
-    def remember(self, scope: str, *, key: str, prompt: str, reply: str) -> None: ...
+    def remember(
+        self, scope: str, *, key: str, prompt: str, reply: str, peer: str = ""
+    ) -> None: ...
 
-    def recall(self, scope: str, text: str, *, k: int = 4) -> list[RecallHit]: ...
+    def recall(
+        self, scope: str, text: str, *, k: int = 4, peer: str | None = None
+    ) -> list[RecallHit]: ...
 
     def count(self, scope: str) -> int: ...
+
+
+# A similar exchange with the SAME person outranks a similar one with
+# someone else: register (who you're talking to) shapes the reply as much
+# as topic does. Cross-peer memories still count, just discounted.
+CROSS_PEER_DISCOUNT = 0.75
 
 
 def _tokens(text: str) -> frozenset[str]:
@@ -37,10 +47,16 @@ class StoreExchangeMemory:
         self._store = store
         self._candidate_limit = candidate_limit
 
-    def remember(self, scope: str, *, key: str, prompt: str, reply: str) -> None:
-        self._store.remember_exchange(scope, key=key, prompt=prompt, reply=reply)
+    def remember(
+        self, scope: str, *, key: str, prompt: str, reply: str, peer: str = ""
+    ) -> None:
+        self._store.remember_exchange(
+            scope, key=key, prompt=prompt, reply=reply, peer=peer
+        )
 
-    def recall(self, scope: str, text: str, *, k: int = 4) -> list[RecallHit]:
+    def recall(
+        self, scope: str, text: str, *, k: int = 4, peer: str | None = None
+    ) -> list[RecallHit]:
         query = _tokens(text)
         if not query:
             return []
@@ -55,11 +71,15 @@ class StoreExchangeMemory:
             # Cosine over binary token vectors: symmetric, and long
             # messages don't win just by mentioning everything.
             score = shared / (len(query) * len(document)) ** 0.5
+            row_peer = str(row["peer"] or "")
+            if peer and row_peer != peer:
+                score *= CROSS_PEER_DISCOUNT
             hits.append(
                 RecallHit(
                     prompt_text=row["prompt_text"],
                     reply_text=row["reply_text"],
                     score=round(score, 4),
+                    peer=row_peer,
                 )
             )
         # Candidates arrive newest first; the stable sort keeps recency as
