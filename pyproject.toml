@@ -41,6 +41,15 @@ representative-train = [
     "peft>=0.13",
     "trl>=0.12",
 ]
+# The node-token planning model (docs/node-token-planner.md): a decoder-only
+# transformer whose tokens are nodes/routes, scaling 3B -> 8B -> 30B by config.
+# The vocabulary, corpus exporter, scaling-ladder math, and a pure-Python
+# baseline planner all run in the BASE install; only the real transformer
+# reference (planner/torch_model.py) needs torch, and only for training
+# elsewhere on the exported corpus — never in-process, never in CI.
+workflow-plan = [
+    "torch>=2.3",
+]
 # P2 (v0.5.0) money movement: the Stripe Connect PayoutAdapter reuses the injected
 # HttpTransport (the `http` extra) instead of the Stripe SDK, so it is mockable in
 # tests and never touches raw card data. No separate payments dependency is needed.

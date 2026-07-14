@@ -4,6 +4,51 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+A token stops being a word, and becomes a node:
+
+- **The plan is now generated, not reasoned out.** A new package
+  (`src/oolu/planner/`) prepares a model whose vocabulary is the
+  node/route database instead of English. `NodeVocabulary` gives every
+  node key (`route:{name}` — the same key the trace store grades) one
+  stable token; because a composed route re-enters the library as a
+  single node, one vocabulary tokenizes both nodes and routes. Goals
+  never enter the vocabulary — they are free text, so they condition a
+  plan through a bounded band of hashed goal tokens, and vocabulary
+  growth follows the marketplace, not the sentences users type. Ids are
+  append-only and freezable: a checkpoint keeps its meaning as nodes
+  accumulate, and an unknown node degrades to `<unk>` rather than
+  corrupting a sequence.
+- **A plan reads like a sentence — and rolls out like one.** The trace
+  store's verified runs lift into token-id sequences
+  (`[BOS] [goal] node… [EOS]`), and `MarkovPlanner` — a pure-Python,
+  dependency-free autoregressive back-off planner over those tokens —
+  *generates a whole mission plan* by emitting node tokens until it
+  decides the plan is done. Trained only on verified runs, it
+  regenerates the reliable chain for a goal in one cheap pass;
+  `benchmarks/plan_tokens.py` shows a month-end run and a supplier
+  onboarding planned node by node with no framework in sight.
+- **One architecture, four rungs, checked by arithmetic.**
+  `PlannerConfig` describes a standard decoder-only transformer, and
+  `parameter_count` is exact — so the curriculum the mission names is a
+  four-number change with a verified size: `tiny` (~5.3M, a runnable
+  reference), `s3b` (~2.9B), `s8b` (~7.8B), `s30b` (~30.5B). The real
+  transformer (`planner/torch_model.py`) reads the same config and lives
+  behind a new `workflow-plan` extra, imported lazily like the
+  representative trainer; nothing in CI instantiates a billion
+  parameters, and the corpus exports to portable JSONL so the training
+  run happens off-box when the data reaches scale.
+- **The model proposes; the type system still disposes.** The generative
+  planner enters the marketplace only through the existing
+  `ProposalModel` port (`PlannerProposalModel`): its plan is a prior, not
+  a commitment — folded into the Beta posterior at the bounded proposal
+  strength, unknown ids dropped, exceptions downgraded to
+  verified-history-only. Typed backward-chaining still finds the routes
+  and verified outcomes still choose among them; what the node-token
+  model adds is a cheap whole-mission proposal for cold starts and
+  long-horizon work. Design in `docs/node-token-planner.md` and
+  `docs/adr/0006-node-token-planning-model.md`; nothing is wired into the
+  running engine by default.
+
 The hosted app signs people in:
 
 - **The shell now knows when it is hosted.** The packaged desktop app
