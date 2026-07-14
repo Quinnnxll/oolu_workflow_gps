@@ -51,7 +51,6 @@ from ..chat import (
     consent_answer,
     mood_directive,
     obviously_chat,
-    region_from_locale,
     units_directive,
 )
 from ..durable.files import (
@@ -1090,14 +1089,16 @@ class GatewayApp:
         # current mood, and the turn is coloured to match the face.
         mood_note = mood_directive(body.get("mood"))
         # The reply speaks the units the user thinks in: their explicit
-        # preference wins; "auto" reads their region from the browser locale.
-        units_pref = (
-            self._settings.effective(session.tenant_id).get("account.units", "auto")
+        # preference wins; "auto" reads the account's spending currency — the
+        # same stored signal the representative uses, so both agree.
+        effective = (
+            self._settings.effective(session.tenant_id)
             if self._settings is not None
-            else "auto"
+            else {}
         )
         units_note = units_directive(
-            units_pref, region=region_from_locale(request.header("accept-language"))
+            effective.get("account.units", "auto"),
+            currency=effective.get("account.currency", "USD"),
         )
         context_note = (
             "\n".join(

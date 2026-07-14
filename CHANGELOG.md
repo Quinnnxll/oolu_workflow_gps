@@ -4,6 +4,18 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Units "auto" resolves the same way everywhere:
+
+- **One stored signal decides `auto`, so every surface agrees.** The chat
+  assistant used to read the region from the browser's transient
+  `Accept-Language` while the representative (no browser request) fell back to
+  SI — so the same account could get imperial in chat and metric in a draft.
+  Both now resolve `auto` from the account's spending currency (`account.currency`,
+  a per-tenant setting both already read): imperial for the US/Liberia/Myanmar
+  currencies, SI otherwise. `units_directive(pref, currency=…)` replaces the
+  header path; a metric account spending in USD can still choose `metric`
+  outright.
+
 The representative drafts in the user's units too:
 
 - **The units preference now reaches the representative's drafts.** The same

@@ -1027,16 +1027,17 @@ def build_host_runtime(
         )
 
     # The representative honours the same measurement-units preference the
-    # chat assistant does. The draft path has no browser locale, so "auto"
-    # resolves to SI (the international default); an explicit imperial/metric
-    # choice is honoured regardless. Scope is "tenant:principal"; units are a
-    # per-tenant setting.
+    # chat assistant does, resolved from the SAME stored signal — the account's
+    # spending currency — so "auto" gives the identical answer on both
+    # surfaces. Scope is "tenant:principal"; units and currency are per-tenant.
     from .chat import units_directive
 
     def _representative_units_note(scope: str) -> str | None:
-        tenant = scope.split(":", 1)[0]
-        pref = settings_node.effective(tenant).get("account.units", "auto")
-        return units_directive(pref)
+        effective = settings_node.effective(scope.split(":", 1)[0])
+        return units_directive(
+            effective.get("account.units", "auto"),
+            currency=effective.get("account.currency", "USD"),
+        )
 
     gateway = GatewayApp(
         durable,
