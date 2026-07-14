@@ -23,11 +23,20 @@ Hard rules, always:
 
 
 def build_system_prompt(
-    card: PersonaCard, hits: list[RecallHit], *, peer: str | None = None
+    card: PersonaCard,
+    hits: list[RecallHit],
+    *,
+    peer: str | None = None,
+    units_note: str | None = None,
 ) -> str:
     """The register rides the prompt: WHO the reply addresses is named, and
     same-peer examples are labeled as such — how {name} talks TO this
-    person outranks how they talk in general."""
+    person outranks how they talk in general.
+
+    ``units_note`` is the account's measurement-units directive (the same
+    one the chat assistant gets), so a drafted reply expresses measurements
+    the way {name} prefers — honoured under, never over, the voice examples.
+    """
     name = card.display_name
     lines = [
         f"You are drafting a message reply AS {name} — in their voice, not"
@@ -50,6 +59,8 @@ def build_system_prompt(
             who = hit.peer if peer and hit.peer == peer else "someone"
             lines.append(f'- When {who} said: "{hit.prompt_text}"')
             lines.append(f'  {name} replied: "{hit.reply_text}"')
+    if units_note:
+        lines.append(units_note)
     lines.append(HARD_RULES.format(name=name))
     return "\n".join(lines)
 
@@ -61,6 +72,7 @@ def build_messages(
     *,
     history: list[dict] | None = None,
     peer: str | None = None,
+    units_note: str | None = None,
 ) -> list[dict]:
     """The OpenAI-style message list a ChatModel takes.
 
@@ -69,7 +81,12 @@ def build_messages(
     model continues the user's side of the conversation.
     """
     messages: list[dict] = [
-        {"role": "system", "content": build_system_prompt(card, hits, peer=peer)}
+        {
+            "role": "system",
+            "content": build_system_prompt(
+                card, hits, peer=peer, units_note=units_note
+            ),
+        }
     ]
     for entry in history or []:
         role, content = entry.get("role"), entry.get("content")

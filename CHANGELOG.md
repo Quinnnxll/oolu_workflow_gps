@@ -4,6 +4,18 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The representative drafts in the user's units too:
+
+- **The units preference now reaches the representative's drafts.** The same
+  `account.units` directive the chat assistant honours is threaded into the
+  representative persona prompt: a drafted reply expresses measurements the way
+  the account chose. It rides UNDER the voice examples and above the output
+  rule, so the user's own register still wins. The engine takes a
+  `units_note_for(scope)` resolver (wired from settings in the host); the draft
+  path has no browser locale, so `auto` resolves to SI while an explicit
+  imperial/metric choice is honoured regardless — applied to both the
+  gateway-requested draft and the auto-send path.
+
 Three fixes: a fix that actually locks, units the user thinks in, a clean draft block:
 
 - **Location now waits for the fix to sharpen instead of taking the first

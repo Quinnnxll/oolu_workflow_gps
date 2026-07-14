@@ -139,6 +139,37 @@ def test_a_draft_is_grounded_in_the_users_own_replies():
     assert "Never agree to spend money" in system
     assert messages[-1] == {"role": "user", "content": "what's your deploy process?"}
     assert engine.pending("s1") == [draft]
+
+
+def test_a_draft_honours_the_accounts_measurement_units():
+    parrot = _Parrot()
+    # The resolver the host wires: this account prefers imperial.
+    engine = _engine(
+        model=parrot, units_note_for=lambda scope: "Use imperial units, always."
+    )
+    engine.configure("s1", mode="draft")
+    engine.draft(
+        "s1",
+        conversation_id="bob",
+        inbound_text="how far is the office?",
+        display_name="alice",
+    )
+    system = parrot.calls[0][0]["content"]
+    assert "Use imperial units, always." in system
+    # It rides UNDER the voice, above the output rule (voice still wins).
+    assert system.index("Use imperial units") < system.index(
+        "Output ONLY the reply text"
+    )
+
+
+def test_no_units_resolver_leaves_the_prompt_unchanged():
+    parrot = _Parrot()
+    engine = _engine(model=parrot)  # no units_note_for
+    engine.configure("s1", mode="draft")
+    engine.draft(
+        "s1", conversation_id="bob", inbound_text="hi", display_name="alice"
+    )
+    assert "units" not in parrot.calls[0][0]["content"].lower()
     assert engine.status("s1")["drafts_pending"] == 1
 
 

@@ -68,6 +68,7 @@ class RepresentativeEngine:
         clock: Callable[[], float] = time.time,
         similarity_min: float = DEFAULT_SIMILARITY_MIN,
         few_shot_k: int = 4,
+        units_note_for: Callable[[str], str | None] | None = None,
     ):
         self._store = store
         self._memory = memory or StoreExchangeMemory(store)
@@ -76,6 +77,10 @@ class RepresentativeEngine:
         self._clock = clock
         self._similarity_min = similarity_min
         self._few_shot_k = few_shot_k
+        # Resolves an account's measurement-units directive from its scope, so
+        # a drafted reply speaks the units the user chose — the same
+        # preference the chat assistant honours. None = no units note.
+        self._units_note_for = units_note_for
 
     # -------------------------------------------------------------- #
     # Settings and status.                                            #
@@ -200,8 +205,14 @@ class RepresentativeEngine:
             scope, inbound_text, k=self._few_shot_k, peer=conversation_id
         )
         card = PersonaCard(display_name=display_name, about=self._store.about(scope))
+        units_note = self._units_note_for(scope) if self._units_note_for else None
         messages = build_messages(
-            card, hits, inbound_text, history=history, peer=conversation_id
+            card,
+            hits,
+            inbound_text,
+            history=history,
+            peer=conversation_id,
+            units_note=units_note,
         )
         generated = spoke = None
         failure: ModelUnavailable | None = None

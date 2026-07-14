@@ -1026,6 +1026,18 @@ def build_host_runtime(
             default_tenant=google_default_tenant,
         )
 
+    # The representative honours the same measurement-units preference the
+    # chat assistant does. The draft path has no browser locale, so "auto"
+    # resolves to SI (the international default); an explicit imperial/metric
+    # choice is honoured regardless. Scope is "tenant:principal"; units are a
+    # per-tenant setting.
+    from .chat import units_directive
+
+    def _representative_units_note(scope: str) -> str | None:
+        tenant = scope.split(":", 1)[0]
+        pref = settings_node.effective(tenant).get("account.units", "auto")
+        return units_directive(pref)
+
     gateway = GatewayApp(
         durable,
         validator=validator,
@@ -1096,6 +1108,7 @@ def build_host_runtime(
                 if _os.environ.get("OOLU_REPRESENTATIVE_VLLM")
                 else StoreAdapterServer(_representative_store)
             ),
+            units_note_for=_representative_units_note,
         ),
         # The operator's legal documents; marked templates answer until
         # terms.md / privacy.md exist here.
