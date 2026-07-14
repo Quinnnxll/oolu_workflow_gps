@@ -122,6 +122,20 @@ export function Life() {
       }`}
     >
       <aside className="convo-list">
+        <button
+          type="button"
+          className="sidebar-toggle"
+          aria-label={folded ? tr("nav.showList") : tr("nav.hideList")}
+          title={folded ? tr("nav.showList") : tr("nav.hideList")}
+          onClick={() => {
+            setFolded((f) => {
+              saveSidebarFolded(!f);
+              return !f;
+            });
+          }}
+        >
+          {folded ? "☰" : "«"}
+        </button>
         <div className="mode-tabs">
           <button className="on">{tr("life")}</button>
           <button onClick={() => setMode("work")}>{tr("work")}</button>
@@ -295,47 +309,6 @@ export function Life() {
           >
             ‹ {tr("nav.back")}
           </button>
-          <button
-            type="button"
-            className="sidebar-toggle"
-            aria-label={folded ? tr("nav.showList") : tr("nav.hideList")}
-            title={folded ? tr("nav.showList") : tr("nav.hideList")}
-            onClick={() => {
-              setFolded((f) => {
-                saveSidebarFolded(!f);
-                return !f;
-              });
-            }}
-          >
-            {folded ? "☰" : "«"}
-          </button>
-          {selected.kind === "oolu" && rep !== null && (
-            <button
-              type="button"
-              className={`rep-quick${rep.mode !== "off" ? " on" : ""}`}
-              aria-label={
-                rep.mode !== "off" ? tr("rep.toggleOn") : tr("rep.toggleOff")
-              }
-              title={tr("rep.toggleHint")}
-              onClick={async () => {
-                try {
-                  const next = rep.mode === "off" ? "draft" : "off";
-                  const status = await api.configureRepresentative({
-                    mode: next,
-                  });
-                  setRep(status);
-                  if (next !== "off") {
-                    const swept = await api.representativeSweep();
-                    setRep({ ...status, drafts_pending: swept.pending });
-                  }
-                } catch {
-                  /* the poll will tell the truth shortly */
-                }
-              }}
-            >
-              {rep.mode !== "off" ? tr("rep.toggleOn") : tr("rep.toggleOff")}
-            </button>
-          )}
         </div>
         {selected.kind === "oolu" &&
           rep !== null &&
@@ -348,7 +321,40 @@ export function Life() {
               />
             </div>
           )}
-        {selected.kind === "oolu" && <Chat />}
+        {selected.kind === "oolu" && (
+          <Chat
+            headerAside={
+              rep !== null && (
+                // The representative toggle rides the OoLu-name row.
+                <button
+                  type="button"
+                  className={`rep-quick${rep.mode !== "off" ? " on" : ""}`}
+                  aria-label={
+                    rep.mode !== "off" ? tr("rep.toggleOn") : tr("rep.toggleOff")
+                  }
+                  title={tr("rep.toggleHint")}
+                  onClick={async () => {
+                    try {
+                      const next = rep.mode === "off" ? "draft" : "off";
+                      const status = await api.configureRepresentative({
+                        mode: next,
+                      });
+                      setRep(status);
+                      if (next !== "off") {
+                        const swept = await api.representativeSweep();
+                        setRep({ ...status, drafts_pending: swept.pending });
+                      }
+                    } catch {
+                      /* the poll will tell the truth shortly */
+                    }
+                  }}
+                >
+                  {rep.mode !== "off" ? tr("rep.toggleOn") : tr("rep.toggleOff")}
+                </button>
+              )
+            }
+          />
+        )}
         {selected.kind === "friends" &&
           (friends === null ? (
             <div className="pane-empty">

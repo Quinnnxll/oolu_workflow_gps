@@ -4,6 +4,30 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The chat frame settles: fold rail, aligned toggle, and hidden node IDs:
+
+- **The list fold moves to its own rail.** The show/hide toggle for the
+  friends-and-nodes column used to sit where the interaction window begins;
+  now it lives at the upper-left of the list column itself. When folded, the
+  column collapses to a slim 40px rail that keeps only the toggle visible, so
+  reopening the list is always one click away and never steals the chat's
+  space.
+- **The representative toggle sits on OoLu's row.** The rep quick-toggle was
+  a row above; it now rides in the chat header, on the same line as the OoLu
+  name, threaded through a `headerAside` slot on `Chat` rather than living in
+  the pane bar.
+- **Node IDs are masked by default.** Every node ID renders as
+  `***-<last six>` — a `NodeIdChip` that reveals the full value only when the
+  user presses its eye button, and copies the full ID with its copy button.
+  The reveal is per-chip and local; nothing is spoken.
+  - **Ask OoLu to copy.** A new `copy` field on a chat turn carries a value
+    OoLu is putting on the clipboard because the user asked ("copy that node's
+    ID"). It flows model → `ChatTurn.copy` → gateway payload → the frontend,
+    which writes it to the clipboard best-effort — so the ID reaches the
+    clipboard without ever being printed in the reply. The system prompt tells
+    OoLu to use `list_nodes` to find the ID and set `copy`, then say plainly
+    that it copied it.
+
 The reasoning streams live, end to end:
 
 - **A streaming chat transport, strictly additive.** A new

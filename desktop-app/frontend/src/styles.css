@@ -1855,9 +1855,61 @@ button.ghost {
   line-height: 1.5;
 }
 
-/* Folding the list gives the conversation the whole window. */
+/* Folding collapses the list to a thin rail that keeps only the toggle at
+   the upper-left, so the conversation gets the width WITHOUT the toggle
+   jumping into the chat column. */
 .life.sidebar-folded > .convo-list {
+  width: 40px;
+  padding: 8px 4px;
+  overflow: hidden;
+}
+.life.sidebar-folded > .convo-list > *:not(.sidebar-toggle) {
   display: none;
+}
+
+/* The fold toggle: top-left of the list column, its own small control. */
+.convo-list > .sidebar-toggle {
+  align-self: flex-start;
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  border-radius: 8px;
+  padding: 2px 9px;
+  margin-bottom: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.convo-list > .sidebar-toggle:hover {
+  color: var(--fg);
+}
+
+/* The representative toggle now rides the OoLu-name row (chat-head). */
+.chat-head-aside {
+  margin-left: auto;
+}
+
+/* A masked node ID with reveal + copy controls. */
+.node-id-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.node-id-chip .node-id-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+.node-id-chip .node-id-btn {
+  background: none;
+  border: none;
+  padding: 0 2px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0.7;
+}
+.node-id-chip .node-id-btn:hover {
+  opacity: 1;
 }
 
 .pane-back {

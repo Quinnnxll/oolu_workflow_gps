@@ -165,6 +165,48 @@ function money(micros: number): string {
   return `$${(micros / 1_000_000).toFixed(2)}`;
 }
 
+// A node ID is a long uuid — noise the user never memorizes and shouldn't have
+// to see in full. It shows masked (***-last six), and reveals only when the
+// user presses the eye, or copies straight to the clipboard on the button.
+function NodeIdChip({ value }: { value: string }): JSX.Element {
+  const [shown, setShown] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const masked = "***-" + value.slice(-6);
+  return (
+    <span className="node-id-chip">
+      <span className="node-id-value" title={shown ? value : undefined}>
+        {shown ? value : masked}
+      </span>
+      <button
+        type="button"
+        className="node-id-btn"
+        aria-label={shown ? "Hide the node ID" : "Reveal the node ID"}
+        title={shown ? "Hide" : "Reveal"}
+        onClick={() => setShown((s) => !s)}
+      >
+        {shown ? "🙈" : "👁"}
+      </button>
+      <button
+        type="button"
+        className="node-id-btn"
+        aria-label="Copy the full node ID"
+        title="Copy"
+        onClick={async () => {
+          try {
+            await navigator.clipboard.writeText(value);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          } catch {
+            /* clipboard blocked: the eye still reveals it to copy by hand */
+          }
+        }}
+      >
+        {copied ? "✓" : "⧉"}
+      </button>
+    </span>
+  );
+}
+
 // The feed's clock: down-to-the-second, nothing more — full ISO detail
 // lives in the tooltip and the daily log files.
 function clock(iso: string): string {
@@ -483,7 +525,7 @@ export function NodeThread({
             {displayNodeName(node.title)}
           </div>
           <div className="muted">
-            {node.node_id} ·{" "}
+            <NodeIdChip value={node.node_id} /> ·{" "}
             {account.responsible
               ? `${tr("work.responsible")} ${account.responsible}`
               : tr("work.notOnboarded")}

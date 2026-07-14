@@ -1312,6 +1312,10 @@ class GatewayApp:
                 # camera / file): the client renders a grant button — the
                 # user decides, never a silent sensor read.
                 "device": turn.device,
+                # A value OoLu is copying to the user's clipboard because they
+                # asked (e.g. a masked node ID they want in full) — the client
+                # writes it, so the ID never has to be spoken aloud.
+                "copy": getattr(turn, "copy", None),
                 "run_id": run["run_id"] if run else None,
                 "run": run,
             },

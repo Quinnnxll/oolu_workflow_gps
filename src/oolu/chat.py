@@ -79,6 +79,12 @@ request: never hand "bring in / upload my local file" to the engine as a
 task — its sandbox cannot see this device and would only fabricate an
 empty stand-in.
 
+Node IDs are hidden from the user by default (shown masked). When the user
+asks you to copy a node's ID, find it (use list_nodes) and add a
+"copy": "<the full node id>" key to your JSON — the app writes it to their
+clipboard. Say plainly that you copied it; you do NOT need to print the ID.
+Use "copy" only for a value the user actually asked to copy.
+
 You also have tools over the user's own files (documents and sheets). To use
 one, answer with EXACTLY one JSON object of the shape:
   {"tool": "list_files", "args": {}}
@@ -249,6 +255,10 @@ class ChatTurn:
     # | "file"): the app renders the request as a grant button — the user
     # decides, and only a grant runs the sense.
     device: str | None = None
+    # Text OoLu is putting on the user's clipboard at their request (e.g. a
+    # node ID they asked to copy). The client writes it to the clipboard; the
+    # value never has to be shown on screen.
+    copy: str | None = None
     # The model's own thinking, when it showed it (reasoning models emit a
     # <think> block before the answer). Split off so the spoken turn stays
     # clean; the UI shows it dimmed, as proof the assistant is working.
@@ -334,7 +344,14 @@ def _parse_model_turn(raw: str) -> ChatTurn:
         and device.strip().lower() in {"location", "camera", "file"}
         else None
     )
-    return ChatTurn(say=say or (ACK if task else "…"), task=task, device=device)
+    # A "copy" request rides the same JSON: a short string OoLu puts on the
+    # user's clipboard (a node ID they asked for). Bounded so it can't be
+    # abused to shove a wall of text onto the clipboard.
+    copy = data.get("copy")
+    copy = copy.strip() if isinstance(copy, str) and 0 < len(copy.strip()) <= 200 else None
+    return ChatTurn(
+        say=say or (ACK if task else "…"), task=task, device=device, copy=copy
+    )
 
 
 @runtime_checkable
@@ -1881,6 +1898,7 @@ class ChatAssistant:
                 source="model",
                 actions=actions,
                 device=parsed.device,
+                copy=parsed.copy,
                 reasoning="\n\n".join(thoughts) or None,
             )
         return ChatTurn(
@@ -2044,6 +2062,7 @@ class ChatAssistant:
                 source="model",
                 actions=actions,
                 device=parsed.device,
+                copy=parsed.copy,
                 reasoning="\n\n".join(thoughts) or None,
             )}
             return

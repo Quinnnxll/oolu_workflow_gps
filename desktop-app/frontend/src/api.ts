@@ -494,6 +494,10 @@ export interface ChatTurnReply {
   // OoLu asking for one of THIS device's senses: "location" | "camera" |
   // "file". The client renders a grant button — the user decides.
   device?: string | null;
+  // A value OoLu copied to the clipboard because the user asked — e.g. a
+  // node's full ID they wanted in the clear. The client writes it; the ID
+  // never has to be printed in the reply.
+  copy?: string | null;
   run_id: string | null;
 }
 

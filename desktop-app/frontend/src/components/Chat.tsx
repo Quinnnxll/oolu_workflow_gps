@@ -111,7 +111,7 @@ function fromServer(items: ChatHistoryTurn[]): Msg[] {
   });
 }
 
-export function Chat() {
+export function Chat({ headerAside }: { headerAside?: React.ReactNode } = {}) {
   const tr = useT();
   const [thread, setThread] = useState<Msg[]>(loadThread);
   const [draft, setDraft] = useState("");
@@ -314,6 +314,16 @@ export function Chat() {
         mood,
       );
       updateAvatarSignals({ tone: deriveTone(turn.reply) });
+      // OoLu copied something the user asked for (e.g. a node's full ID) —
+      // write it to the clipboard here, so the value never has to be
+      // printed in the reply. Best-effort: a denied clipboard is silent.
+      if (turn.copy) {
+        try {
+          await navigator.clipboard.writeText(turn.copy);
+        } catch {
+          /* clipboard unavailable or denied — the reply still stands */
+        }
+      }
       if (speakRef.current) {
         speak(turn.reply, moodOf(currentAvatarSignals()).mood);
         // The face mouths along for roughly as long as the reply lasts.
@@ -440,6 +450,7 @@ export function Chat() {
           <div className="chat-head-name">OoLu</div>
           <div className="chat-head-sub">{tr(MOOD_KEY[mood])}</div>
         </div>
+        {headerAside && <div className="chat-head-aside">{headerAside}</div>}
       </div>
       <div className="chat-thread">
         {thread.length === 0 && (
