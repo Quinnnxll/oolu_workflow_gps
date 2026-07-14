@@ -55,13 +55,21 @@ class AmazonClient(Protocol):
 
 
 def _order_authorized(
-    action: ActionEvent, is_authorized: Callable[[str], bool] | None
+    action: ActionEvent,
+    is_authorized: Callable[[str], bool] | None,
+    resolve_authorization: Callable[[ActionEvent], str | None] | None = None,
 ) -> str | None:
     """None when the order may proceed; otherwise the refusal reason.
 
     An order (a reserved, money-spending operation) must name an
-    authorization the payment gate released. A non-order step needs none."""
+    authorization the payment gate released. The id may be carried on the
+    action directly, or resolved from the order's declared intent (payee,
+    amount, run) by ``resolve_authorization`` — the mint-and-attach seam that
+    ties the user's out-of-band consent to this action. A non-order step
+    needs none."""
     auth_id = action.parameters.get("authorization_id")
+    if not auth_id and resolve_authorization is not None:
+        auth_id = resolve_authorization(action)
     if not auth_id:
         return "no payment authorization — an order needs the user's consent + 2FA"
     if is_authorized is not None and not is_authorized(str(auth_id)):
@@ -91,17 +99,20 @@ class _BaseCommerceExecutor:
         *,
         is_authorized: Callable[[str], bool] | None = None,
         orders_enabled: Callable[[], bool] | None = None,
+        resolve_authorization: Callable[[ActionEvent], str | None] | None = None,
     ):
         self._is_authorized = is_authorized
         self._orders_enabled = orders_enabled
+        self._resolve_authorization = resolve_authorization
         self._completed: dict[str, ExecutionOutcome] = {}
         self._lock = threading.RLock()
 
     def _order_refusal(self, action: ActionEvent) -> str | None:
         """The two money gates, in order: the operator's master switch, then
-        the user's per-order consent + 2FA. Either closed → a refusal reason."""
+        the user's per-order consent + 2FA (resolved from the order's intent
+        when the action does not carry an id). Either closed → a reason."""
         return _orders_open(self._orders_enabled) or _order_authorized(
-            action, self._is_authorized
+            action, self._is_authorized, self._resolve_authorization
         )
 
     def cancel(self, idempotency_key: str) -> None:
@@ -139,8 +150,13 @@ class SiteDriverExecutor(_BaseCommerceExecutor):
         *,
         is_authorized: Callable[[str], bool] | None = None,
         orders_enabled: Callable[[], bool] | None = None,
+        resolve_authorization: Callable[[ActionEvent], str | None] | None = None,
     ):
-        super().__init__(is_authorized=is_authorized, orders_enabled=orders_enabled)
+        super().__init__(
+            is_authorized=is_authorized,
+            orders_enabled=orders_enabled,
+            resolve_authorization=resolve_authorization,
+        )
         self._driver = driver
 
     def capabilities(self) -> frozenset[str]:
@@ -190,8 +206,13 @@ class AmazonExecutor(_BaseCommerceExecutor):
         *,
         is_authorized: Callable[[str], bool] | None = None,
         orders_enabled: Callable[[], bool] | None = None,
+        resolve_authorization: Callable[[ActionEvent], str | None] | None = None,
     ):
-        super().__init__(is_authorized=is_authorized, orders_enabled=orders_enabled)
+        super().__init__(
+            is_authorized=is_authorized,
+            orders_enabled=orders_enabled,
+            resolve_authorization=resolve_authorization,
+        )
         self._client = client
 
     def capabilities(self) -> frozenset[str]:

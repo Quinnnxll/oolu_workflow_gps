@@ -161,6 +161,45 @@ def _site_of(parameters: dict[str, Any]) -> str | None:
     return None
 
 
+class BrowserAmazonClient:
+    """A session-driven ``AmazonClient`` — the per-site road, honestly.
+
+    Amazon offers no consumer "place my order" API, so the ``amazon`` road
+    cannot be a structured one-call adapter the way the port's name suggests.
+    This implementation is truthful about that: ``place_order`` drives the
+    same persistent browser session as the general road through the cart →
+    checkout steps the plan carries, pausing to the human for sign-in / OTP /
+    CAPTCHA exactly like ``BrowserSiteDriver`` (which it reuses). It plugs
+    ``build_commerce_executors(amazon_client=...)`` unchanged.
+
+    It is a per-site *specialisation*, not a faster protocol: the win over
+    the general road is that a plan can carry Amazon-tuned selectors and the
+    optimizer can price it as its own road — not that it skips the browser.
+    """
+
+    def __init__(
+        self,
+        session: BrowserSession,
+        *,
+        login_gate: LoginGate | None = None,
+    ):
+        # 'order' is session-gated: placing an order always needs the user's
+        # signed-in Amazon session, so the login pause fires when needed.
+        self._driver = BrowserSiteDriver(
+            session,
+            login_gate=login_gate,
+            session_required=frozenset({"order"}),
+        )
+
+    def place_order(self, parameters: dict[str, Any]) -> dict[str, Any]:
+        """Drive the browser through Amazon's checkout; return a receipt dict.
+        Raises :class:`SiteDriverError` / :class:`LoginAbandoned` on failure,
+        which the ``AmazonExecutor`` turns into a FAILED outcome."""
+        params = dict(parameters)
+        params.setdefault("site", "amazon.com")
+        return self._driver.step("order", params)
+
+
 class PlaywrightSession:  # pragma: no cover - needs Playwright + a display
     """A persistent, headed Chromium profile that survives between steps.
 

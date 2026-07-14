@@ -14,6 +14,7 @@ from oolu.skills.commerce import AmazonExecutor, SiteDriverExecutor
 from oolu.skills.models import ActionEvent, ExecutionStatus
 from oolu.skills.site_driver import (
     AssumeAuthenticated,
+    BrowserAmazonClient,
     BrowserSiteDriver,
     CallbackLoginGate,
     LoginAbandoned,
@@ -281,6 +282,64 @@ def test_no_switch_injected_keeps_the_historical_behavior():
         _action("order", adapter="amazon", authorization_id="ok"), idempotency_key="a1"
     )
     assert ok.status is ExecutionStatus.SUCCEEDED
+
+
+# --------------------------------------------------------------------------- #
+# The per-site Amazon road: session-driven, honest about the browser.          #
+# --------------------------------------------------------------------------- #
+def test_amazon_client_places_an_order_through_the_session():
+    session = _FakeSession(authenticated=True)
+    client = BrowserAmazonClient(session)
+    receipt = client.place_order(
+        {"browser_steps": [{"op": "click", "selector": "#buy-now"}]}
+    )
+    assert receipt["operation"] == "order"
+    assert receipt["site"] == "amazon.com"  # defaulted when unnamed
+    assert len(session.runs) == 1
+
+
+def test_amazon_client_pauses_for_login_before_ordering():
+    session = _FakeSession(authenticated=False)
+    calls = []
+
+    def on_login(site, reason):
+        calls.append((site, reason))
+        session.authenticated = True
+
+    client = BrowserAmazonClient(session, login_gate=CallbackLoginGate(on_login))
+    client.place_order(
+        {"login_probe": "#nav-your-account", "browser_steps": [{"op": "submit"}]}
+    )
+    assert calls == [("amazon.com", "order")]  # the order step needs the session
+    assert len(session.runs) == 1
+
+
+def test_amazon_client_plugs_the_executor_under_the_money_gates():
+    session = _FakeSession(authenticated=True)
+    executor = AmazonExecutor(
+        BrowserAmazonClient(session),
+        is_authorized=lambda a: a == "ok",
+        orders_enabled=lambda: True,
+    )
+    # Gated: no released authorization -> BLOCKED, browser never driven.
+    blocked = executor.execute(
+        _action("order", adapter="amazon", browser_steps=[{"op": "submit"}]),
+        idempotency_key="k1",
+    )
+    assert blocked.status is ExecutionStatus.BLOCKED
+    assert session.runs == []
+    # Authorized -> the session-driven order runs.
+    ok = executor.execute(
+        _action(
+            "order",
+            adapter="amazon",
+            authorization_id="ok",
+            browser_steps=[{"op": "submit"}],
+        ),
+        idempotency_key="k2",
+    )
+    assert ok.status is ExecutionStatus.SUCCEEDED
+    assert len(session.runs) == 1
 
 
 # --------------------------------------------------------------------------- #

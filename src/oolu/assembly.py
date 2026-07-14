@@ -83,6 +83,7 @@ def build_commerce_executors(
     site_driver: Any = None,
     is_authorized: Callable[[str], bool] | None = None,
     orders_enabled: Callable[[], bool] | None = None,
+    resolve_authorization: Callable[[Any], str | None] | None = None,
 ) -> dict[str, ActionExecutor]:
     """The order-placing hands: a general site driver and per-site adapters.
 
@@ -104,12 +105,18 @@ def build_commerce_executors(
     executors: dict[str, ActionExecutor] = {}
     if site_driver is not None:
         web = SiteDriverExecutor(
-            site_driver, is_authorized=is_authorized, orders_enabled=orders_enabled
+            site_driver,
+            is_authorized=is_authorized,
+            orders_enabled=orders_enabled,
+            resolve_authorization=resolve_authorization,
         )
         executors[web.name] = web
     if amazon_client is not None:
         amazon = AmazonExecutor(
-            amazon_client, is_authorized=is_authorized, orders_enabled=orders_enabled
+            amazon_client,
+            is_authorized=is_authorized,
+            orders_enabled=orders_enabled,
+            resolve_authorization=resolve_authorization,
         )
         executors[amazon.name] = amazon
     return executors
@@ -775,12 +782,20 @@ def build_host_runtime(
     # is what ``_order_authorized`` checks before any money step runs. No
     # driver → no road registered → the optimizer simply excludes ordering.
     if site_driver is not None or amazon_client is not None:
+        from .billing import PaymentAuthorizationResolver
+
+        # The mint-and-attach seam: an order action that declares its intent
+        # (payee, exact amount, run, scope) files the consent request and
+        # proceeds the instant the user authorizes it — the released auth_id
+        # is resolved live, not hand-wired onto the plan.
+        _order_resolver = PaymentAuthorizationResolver(_payment_auth)
         run_executors.update(
             build_commerce_executors(
                 amazon_client=amazon_client,
                 site_driver=site_driver,
                 is_authorized=_payment_auth.is_authorized,
                 orders_enabled=lambda: ordering_enabled,
+                resolve_authorization=_order_resolver.resolve,
             )
         )
     if require_isolation and settings.backend.kind != "docker":

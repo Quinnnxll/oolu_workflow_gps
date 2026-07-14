@@ -3,6 +3,7 @@ from .authorization import (
     OrderRequest,
     PaymentAuthorization,
     PaymentAuthorizationError,
+    PaymentAuthorizationResolver,
     PaymentAuthorizationStore,
 )
 from .cards import (
@@ -80,6 +81,7 @@ __all__ = [
     "PaymentAuthorization",
     "PaymentAuthorizationError",
     "PaymentAuthorizationStore",
+    "PaymentAuthorizationResolver",
     "TEST_CARDS",
     "CardSummary",
     "CardVault",

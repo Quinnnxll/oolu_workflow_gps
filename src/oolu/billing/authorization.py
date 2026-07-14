@@ -196,6 +196,34 @@ class PaymentAuthorizationStore:
         record = self.get(auth_id)
         return record is not None and record.status == "authorized"
 
+    def match(
+        self,
+        scope: str,
+        *,
+        run_id: str | None,
+        merchant: str,
+        amount_micros: int,
+    ) -> PaymentAuthorization | None:
+        """The one authorization that covers this run's order, if any.
+
+        Ties an order action back to a consent record by the run it belongs
+        to and the exact merchant + amount it will spend — so the ``run_id``
+        the request recorded is finally read, not inert. An ``authorized``
+        record wins over a still-``pending`` one, and the newest wins among
+        equals, so a resolver sees "released" the instant the user consents.
+        Cancelled records never match.
+        """
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                """SELECT * FROM payment_authorizations
+                   WHERE scope = ? AND run_id IS ? AND merchant = ?
+                     AND amount_micros = ? AND status != 'cancelled'
+                   ORDER BY (status = 'authorized') DESC, created_at DESC
+                   LIMIT 1""",
+                (scope, run_id, merchant.strip(), int(amount_micros)),
+            ).fetchall()
+        return self._row(rows[0]) if rows else None
+
     def pending(self, scope: str) -> list[PaymentAuthorization]:
         with self._conn.lock:
             rows = self._conn.db.execute(
@@ -234,3 +262,82 @@ class PaymentAuthorizationStore:
         if moment.tzinfo is None:
             moment = moment.replace(tzinfo=UTC)
         return moment.isoformat()
+
+
+# The order-intent keys an order action carries so a resolver can reconcile it
+# against the consent store. A plan that decides to buy something knows the
+# payee and the price; it stamps them here alongside the run it belongs to.
+ORDER_INTENT_KEYS = (
+    "authorization_scope",  # tenant:principal — whose money, whose 2FA
+    "run_id",
+    "merchant",
+    "amount_micros",
+    "currency",
+    "description",
+)
+
+
+class PaymentAuthorizationResolver:
+    """The mint-and-attach seam: a released ``auth_id`` for an order action.
+
+    The gateway can mint (``request``) and release (``authorize``) an
+    authorization, and the executor can verify one — but nothing connected the
+    two: the released ``auth_id`` and the plan's order action lived in disjoint
+    worlds, so an order action never actually carried an ``authorization_id``.
+    This resolver is that missing wire. Given an order action that declares its
+    intent (payee, exact amount, the run it belongs to, the account scope), it:
+
+    1. finds the consent record for this run + merchant + amount, and returns
+       its ``auth_id`` the moment the user has authorized it;
+    2. otherwise, files the pending request the FIRST time it sees the order
+       (so it appears on the user's ``/v1/payment-authorizations`` list to
+       consent to) and returns ``None`` — the executor blocks, unspent, until
+       the user acts. A subsequent run of the same action finds the pending
+       (or, once consented, the authorized) record instead of filing again.
+
+    It never authorizes anything — that needs the user's 2FA + exact-amount
+    re-confirmation through ``authorize``. It only reconciles a plan's order
+    action with the consent the user gives out of band.
+    """
+
+    def __init__(self, store: PaymentAuthorizationStore, *, auto_file: bool = True):
+        self._store = store
+        self._auto_file = auto_file
+
+    def resolve(self, action) -> str | None:
+        """A released ``auth_id`` for this order action, or ``None``.
+
+        ``action`` is anything carrying a ``parameters`` mapping (an
+        ``ActionEvent``). An action with no order intent resolves to ``None``
+        (the executor then blocks with the generic "needs consent" reason)."""
+        params = getattr(action, "parameters", None) or {}
+        scope = params.get("authorization_scope")
+        merchant = params.get("merchant")
+        amount = params.get("amount_micros")
+        if not scope or not merchant or amount is None:
+            return None  # no declared intent — nothing to reconcile
+        try:
+            amount_micros = int(amount)
+        except (TypeError, ValueError):
+            return None
+        run_id = params.get("run_id")
+        found = self._store.match(
+            scope, run_id=run_id, merchant=str(merchant), amount_micros=amount_micros
+        )
+        if found is not None:
+            return found.auth_id if found.status == "authorized" else None
+        if self._auto_file:
+            try:
+                self._store.request(
+                    scope,
+                    OrderRequest(
+                        merchant=str(merchant),
+                        amount_micros=amount_micros,
+                        currency=str(params.get("currency") or "USD"),
+                        description=str(params.get("description") or ""),
+                    ),
+                    run_id=run_id,
+                )
+            except PaymentAuthorizationError:
+                return None  # a malformed intent files nothing; the gate holds
+        return None

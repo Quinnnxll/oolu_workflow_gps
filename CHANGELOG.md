@@ -4,6 +4,42 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The consent finally reaches the order, and the Amazon road gets a hand:
+
+- **A released authorization now flows into the order action — the missing
+  wire.** The gateway could mint (`request`) and release (`authorize`) a
+  payment authorization, and the executor could verify one, but nothing
+  connected the two: an order action never actually carried an
+  `authorization_id`, so it was structurally always blocked. The new
+  `PaymentAuthorizationResolver` is that wire. An order action that declares
+  its intent — payee, exact amount, the run it belongs to, the account scope —
+  gets reconciled against the consent store: the resolver files the pending
+  request the first time it sees the order (so it appears on the user's
+  `/v1/payment-authorizations` list) and returns the released `auth_id` the
+  instant the user has authorized it. The `run_id` the request always recorded
+  is finally *read* (`PaymentAuthorizationStore.match`), not inert. It never
+  authorizes anything — that still needs the user's 2FA and exact-amount
+  re-confirmation — it only reconciles a plan's order with the consent the
+  user gives. Tested end to end against the *real* store (no hand-supplied id):
+  first attempt files and blocks, a real TOTP authorization releases it, the
+  same action then executes; a quietly-grown amount is a different order that
+  must be consented to afresh.
+- **The Amazon road gets a real, honest hand.** `AmazonClient` had no
+  production implementation — only test fakes. `BrowserAmazonClient` fills it,
+  truthfully: Amazon offers no consumer order API, so `place_order` drives the
+  same persistent, headed browser session as the general road through the
+  cart → checkout steps the plan carries, pausing to the human for sign-in /
+  OTP / CAPTCHA (it reuses `BrowserSiteDriver`). It plugs
+  `build_commerce_executors(amazon_client=...)` unchanged, under the same two
+  money gates. A per-site *specialisation* — Amazon-tuned selectors, priced as
+  its own road — not a faster protocol that skips the browser.
+- **Still needed, and deliberately not faked:** nothing yet turns a
+  free-text shopping intent ("buy me X on Amazon") into a commerce blueprint
+  whose order action carries that intent — the planner path that would stamp
+  payee/amount/run/scope onto the action. The seam above is ready to receive
+  it; that intent→blueprint planner is a separate, larger piece, left honest
+  rather than half-built.
+
 A master switch above every order — off until the operator says go:
 
 - **Autonomous order placement now has an operator switch, and it defaults
