@@ -4,6 +4,35 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The general road becomes drivable, and it knows when to hand you the wheel:
+
+- **The checkout seam gets a real hand.** `skills/commerce.py` has always
+  defined a `SiteDriver` port and gated the money step behind consent + 2FA,
+  but no production driver ever implemented the port — so "buy this on any
+  site" reached nothing. `skills/site_driver.py` fills it: `BrowserSiteDriver`
+  maps a commerce step (open / search / add_to_cart / checkout) to the browser
+  primitives the plan carries, running them through a `BrowserSession`. The
+  production session, `PlaywrightSession`, is a *persistent, headed* Chromium
+  profile — so a login survives between steps and the human can actually
+  perform it — reusing the existing browser adapter's step vocabulary.
+- **It pauses to the human for login, 2FA, and CAPTCHAs instead of trying to
+  defeat them.** Before any step that needs the user's own session, the driver
+  checks whether the browser is signed in (via a site-supplied probe) and, if
+  not, stops and asks — through a `LoginGate`. The default `AssumeAuthenticated`
+  never pauses; `CallbackLoginGate` hands off to the host UI and blocks until
+  the user is done, and an abandoned login surfaces as an honest FAILED
+  outcome. OoLu never types the user's password or code; it hands them the
+  wheel for exactly the steps that are theirs, then resumes.
+- **The composition root finally calls the wiring that was only ever
+  defined.** `build_host_runtime` gained an opt-in `site_driver` (and
+  `amazon_client`) injection: when present, the `web` (and `amazon`) commerce
+  executor is registered and tied to the host's payment-consent + 2FA gate
+  (`_payment_auth.is_authorized`). A signed-in session is not consent to spend
+  and consent to spend is not a signed-in session — both gates hold,
+  independently. The default stays `None` (a server host has no display to
+  sign a storefront in), and **no money port is opened**: the LaunchGuard
+  (`transactions_enabled`) and the checkout authorization are untouched.
+
 A token stops being a word, and becomes a node:
 
 - **The plan is now generated, not reasoned out.** A new package

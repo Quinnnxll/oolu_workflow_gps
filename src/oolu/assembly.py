@@ -545,6 +545,17 @@ def build_host_runtime(
     # The desktop's own disk for the chat's local file search. ONLY the
     # loopback desktop sets this; a public host must never touch it.
     local_files_root: str | Path | None = None,
+    # The general "buy this on any site" road: a browser-backed SiteDriver
+    # (skills/site_driver.py — a persistent, headed profile with a
+    # human-control login/2FA pause). When provided, the ``web`` commerce
+    # executor is registered and tied to the payment-consent + 2FA gate below.
+    # None (the default) leaves ordering unwired, exactly as before — a
+    # server host has no display to sign a storefront in, so only the desktop
+    # shell passes this. Enabling a driver does NOT open the money port; the
+    # LaunchGuard (``transactions_enabled``) and the checkout authorization
+    # are unchanged.
+    site_driver: Any = None,
+    amazon_client: Any = None,
 ) -> HostRuntime:
     """The multi-user web host: the full multi-tenant gateway over one
     data directory, with LOCAL accounts as the identity provider.
@@ -739,6 +750,18 @@ def build_host_runtime(
         _planning_router(REBUILD_PURPOSE), consent=_autobuild_consent
     )
     run_executors = dict(executors or {})
+    # The order-placing hands, tied to the payment gate: a released
+    # authorization_id (consent + fresh 2FA + exact-amount re-confirmation)
+    # is what ``_order_authorized`` checks before any money step runs. No
+    # driver → no road registered → the optimizer simply excludes ordering.
+    if site_driver is not None or amazon_client is not None:
+        run_executors.update(
+            build_commerce_executors(
+                amazon_client=amazon_client,
+                site_driver=site_driver,
+                is_authorized=_payment_auth.is_authorized,
+            )
+        )
     if require_isolation and settings.backend.kind != "docker":
         logging.getLogger(__name__).warning(
             "public host without an isolation backend (backend.kind=%s): "
