@@ -221,6 +221,98 @@ class ChatModelRouter:
             )
         raise ModelUnavailable("no model key is configured")
 
+    def reply_stream(self, messages: list[dict]):
+        """Yield the reply's text deltas as the model generates them.
+
+        Real token streaming for the local brain (the product default) and
+        keyed OpenAI-shape providers; every other source (subscription,
+        Anthropic) yields the finished reply as a single chunk — the streaming
+        transport is identical, only the granularity differs, and callers that
+        forward ⟨think⟩ deltas still work either way."""
+        self._check_budget()
+        source = self._source()
+        if source == "local":
+            yield from self._stream_local(messages)
+            return
+        if source != "subscription":
+            for provider in self._order():
+                if provider != "openai":
+                    continue
+                try:
+                    secret = self._keyring.secret_for(self._tenant, provider)
+                except KeyringError:
+                    continue
+                if secret is None:
+                    continue
+                try:
+                    yield from self._stream_openai(provider, secret, messages)
+                    return
+                except ProviderError:
+                    break  # fall through to the blocking reply
+        # Subscription/Anthropic/no-key: the full reply, in one chunk.
+        yield self.reply(messages)
+
+    def _stream_local(self, messages):  # pragma: no cover - needs a live server
+        url = str(self._local_url() or "").strip().rstrip("/")
+        model_id = str(self._local_model() or "").strip()
+        if not url or not model_id:
+            raise ModelUnavailable(
+                "local model is selected but not configured — set the "
+                "local model URL and name in Settings"
+            )
+        started = time.monotonic()
+        parts: list[str] = []
+        usage: dict = {}
+        try:
+            for text, u in self._local_adapter(url).chat_stream(
+                messages, model=model_id
+            ):
+                if u:
+                    usage = u
+                if text:
+                    parts.append(text)
+                    yield text
+        except ProviderError as exc:
+            raise ModelUnavailable(f"local ({url}): {exc}") from exc
+        if not "".join(parts):
+            raise ModelUnavailable(f"local ({url}) returned an empty reply")
+        self._record_stream(model_id, "local", usage, started)
+
+    def _stream_openai(self, provider, secret, messages):  # pragma: no cover - live
+        tier = self._tier()
+        model_id = DEFAULT_MODELS[provider].get(
+            tier, DEFAULT_MODELS[provider]["fast"]
+        )
+        started = time.monotonic()
+        parts: list[str] = []
+        usage: dict = {}
+        for text, u in self._adapter(provider, secret).chat_stream(
+            messages, model=model_id
+        ):
+            if u:
+                usage = u
+            if text:
+                parts.append(text)
+                yield text
+        if not "".join(parts):
+            raise ModelUnavailable(f"{provider} returned an empty reply")
+        self._record_stream(model_id, tier, usage, started)
+
+    def _record_stream(self, model, tier, usage, started):  # pragma: no cover
+        if self._meter is None:
+            return
+        record = self._meter.record(
+            self._purpose,
+            _Telemetry(
+                model=model,
+                tier=tier,
+                prompt_tokens=int((usage or {}).get("prompt_tokens", 0) or 0),
+                completion_tokens=int((usage or {}).get("completion_tokens", 0) or 0),
+                duration_s=time.monotonic() - started,
+            ),
+        )
+        self._book_usage(record)
+
     def _ask_subscription(self, messages: list[dict]) -> str:
         """Answer through the PLATFORM's keys, inside the plan's allowance.
 

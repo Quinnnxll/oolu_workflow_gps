@@ -239,3 +239,60 @@ def test_model_backed_route_runs_the_models_task_not_the_raw_message(tmp_path):
         assert response.body["run"]["intent"] == "download and summarize the report"
     finally:
         conn.close()
+
+
+class _StreamingFake:
+    """A model whose reply arrives in chunks (⟨think⟩ first), for streaming."""
+
+    def __init__(self, chunks):
+        self._chunks = chunks
+
+    def reply(self, messages):
+        return "".join(self._chunks)
+
+    def reply_stream(self, messages):
+        yield from self._chunks
+
+
+def test_respond_stream_streams_reasoning_then_a_complete_turn():
+    chunks = [
+        "<thi",
+        "nk>Comparing ",
+        "the two paths",
+        "</think>",
+        '{"say": "Path B is better.", "task": null}',
+    ]
+    events = list(
+        ChatAssistant().respond_stream(
+            "which path should we take", model=_StreamingFake(chunks)
+        )
+    )
+    reasoning = "".join(e["delta"] for e in events if e["type"] == "reasoning")
+    turns = [e["turn"] for e in events if e["type"] == "turn"]
+    assert reasoning == "Comparing the two paths"
+    assert len(turns) == 1
+    assert turns[0].say == "Path B is better."
+    assert turns[0].reasoning == "Comparing the two paths"
+
+
+def test_respond_stream_falls_back_for_a_non_streaming_model():
+    class _Blocking:
+        def reply(self, messages):
+            return '{"say": "done", "task": null}'
+
+    events = list(
+        ChatAssistant().respond_stream("do a thing", model=_Blocking())
+    )
+    assert [e for e in events if e["type"] == "reasoning"] == []
+    assert [e["turn"] for e in events if e["type"] == "turn"][0].say == "done"
+
+
+def test_respond_streaming_forwards_deltas_and_returns_the_turn():
+    seen = []
+    turn = ChatAssistant().respond_streaming(
+        "explain it",
+        model=_StreamingFake(["<think>step</think>", '{"say": "ok", "task": null}']),
+        on_reasoning=seen.append,
+    )
+    assert "".join(seen) == "step"
+    assert turn.say == "ok"

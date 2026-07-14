@@ -754,6 +754,24 @@ class GatewayApp:
     # without knowing anything about sockets. The SSE ``_events`` handler #
     # and the WebSocket binding both consume ``run_event_frames``.        #
     # ------------------------------------------------------------------ #
+    def authorize_chat_stream(self, request) -> Session:
+        """Authenticate a chat-stream request the same way a normal route
+        does — validated bearer token → session, honoring API-key scopes.
+        Raises :class:`GatewayError`; the ASGI binding turns it into an
+        error response before any stream headers are sent."""
+        session, scopes = self._session_and_scopes(
+            request.bearer_token(), request.now or self._clock()
+        )
+        if scopes is not None and not scope_allows(scopes, "POST", "/v1/chat"):
+            raise GatewayError(403, "forbidden", "outside this API key's scopes")
+        return session
+
+    def chat_stream_run(self, request, session: "Session", emit) -> Response:
+        """Run one chat turn, streaming the model's reasoning to ``emit`` as
+        it thinks. Returns the same Response the blocking /v1/chat would — the
+        binding sends it as the terminal ``done`` frame."""
+        return self._chat_turn(request, session, {}, emit=emit)
+
     def authorize_stream(
         self, token: str | None, run_id: str, *, now: datetime | None = None
     ) -> RunState:
@@ -1067,8 +1085,13 @@ class GatewayApp:
     def _health(self, request, session, params) -> Response:
         return json_response(200, {"status": "ok"})
 
-    def _chat_turn(self, request, session, params) -> Response:
+    def _chat_turn(self, request, session, params, *, emit=None) -> Response:
         """One conversational turn with the OoLu assistant.
+
+        ``emit`` (streaming only) is a callback the model's ⟨think⟩ reasoning
+        deltas are pushed to as they are generated; the returned Response is
+        unchanged, so the blocking /v1/chat and the streaming /v1/chat/stream
+        share this one implementation.
 
         The user-facing surface: the assistant answers, and when the turn
         is work it starts a plain (non-marketplace) run whose progress the
@@ -1199,14 +1222,30 @@ class GatewayApp:
                         say=built, source="tool", actions=[{"tool": "build_node"}]
                     )
         if turn is None:
-            turn = self._chat.respond(
-                message,
-                history=[h for h in history if isinstance(h, dict)][-20:],
-                sender=session.principal_id,
-                tools=tools,
-                model=router,
-                context=context_note,
-            )
+            recent = [h for h in history if isinstance(h, dict)][-20:]
+            if emit is not None:
+                # Stream the model's reasoning to the client as it thinks;
+                # the finalized turn is still built from the complete text.
+                turn = self._chat.respond_streaming(
+                    message,
+                    history=recent,
+                    sender=session.principal_id,
+                    tools=tools,
+                    model=router,
+                    context=context_note,
+                    on_reasoning=lambda delta: emit(
+                        {"type": "reasoning", "delta": delta}
+                    ),
+                )
+            else:
+                turn = self._chat.respond(
+                    message,
+                    history=recent,
+                    sender=session.principal_id,
+                    tools=tools,
+                    model=router,
+                    context=context_note,
+                )
         say = turn.say
         if turn.task:
             try:

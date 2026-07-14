@@ -134,6 +134,29 @@ class HttpxTransport:
             headers=dict(response.headers),
         )
 
+    def stream(  # pragma: no cover - needs a live streaming server
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        body: dict[str, Any] | None = None,
+        timeout: float = 120.0,
+    ):
+        """Yield the response's lines as they arrive (server-sent events).
+
+        Uses ``httpx.Client.stream`` — the same client, opened in streaming
+        mode — so a chat completion's tokens can be forwarded live instead of
+        buffered. Streaming timeouts are generous: a long answer is not a
+        stall. Errors surface as ``httpx.HTTPError`` for the caller to map.
+        """
+        with self._client.stream(
+            method, url, headers=dict(headers or {}), json=body, timeout=timeout
+        ) as response:
+            response.raise_for_status()
+            for line in response.iter_lines():
+                yield line
+
     def close(self) -> None:
         if self._owns_client:
             self._client.close()

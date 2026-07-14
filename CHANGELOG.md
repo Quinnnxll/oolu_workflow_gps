@@ -4,6 +4,38 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The reasoning streams live, end to end:
+
+- **A streaming chat transport, strictly additive.** A new
+  `POST /v1/chat/stream` endpoint sends the model's ⟨think⟩ reasoning as
+  Server-Sent Events while it thinks, then a terminal `done` frame carrying
+  the finished turn. The blocking `/v1/chat` is untouched; the frontend uses
+  the stream when it's there and falls back to the blocking turn on a 404, so
+  older hosts keep working. The whole path: model → router → assistant →
+  gateway → ASGI → browser.
+  - **Model layer.** `HttpxTransport.stream` opens the HTTP client in
+    streaming mode; `OpenAiAdapter.chat_stream` sets `stream: true` (with
+    usage in the terminal frame, so streamed calls still meter honestly); a
+    pure, unit-tested `openai_sse_events` parser turns the wire into
+    (text-delta, usage) pairs. `ChatModelRouter.reply_stream` streams for real
+    on the local brain (the product default) and keyed OpenAI-shape providers;
+    every other source (subscription, Anthropic) yields the finished reply in
+    one chunk — same transport, coarser granularity.
+  - **Assistant.** `respond_stream` / `respond_streaming` mirror `respond`'s
+    decision order but emit each round's ⟨think⟩ content as it arrives, then
+    finalize the authoritative turn from the complete text — so say/task/tool
+    routing is unchanged and only the reasoning is revealed live. A model
+    without `reply_stream` degrades to one blocking call per round.
+  - **Gateway/ASGI.** `_chat_turn` gained an optional `emit` hook (blocking
+    path passes `None`); the ASGI binding runs the turn in a worker thread and
+    bridges its reasoning deltas onto the event loop as chunked SSE, with auth
+    resolved before any stream headers so a bad token is a normal error.
+  - **Frontend.** `api.chatStream` reads the SSE body with a stream reader and
+    forwards reasoning deltas; the "thinking" bubble now shows the model's
+    real reasoning growing token by token (dimmed, scrollable) instead of the
+    canned phrase — the honest live picture the earlier fix promised. It falls
+    back to `api.chat` when the endpoint isn't present.
+
 Building a node: named, priced, real, and honest about the wait:
 
 - **The build offer names the node it will build.** "I'll build a node for

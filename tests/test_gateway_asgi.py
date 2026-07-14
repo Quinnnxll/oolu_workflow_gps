@@ -88,6 +88,84 @@ def test_desktop_shell_serves_the_built_react_app(tmp_path):
         conn.close()
 
 
+class _StreamingModel:
+    """A chat model whose reply arrives in chunks, ⟨think⟩ block first."""
+
+    def __init__(self, chunks):
+        self._chunks = chunks
+
+    def reply(self, messages):
+        return "".join(self._chunks)
+
+    def reply_stream(self, messages):
+        yield from self._chunks
+
+
+def _sse_frames(body: bytes):
+    frames = []
+    for block in body.decode("utf-8").split("\n\n"):
+        block = block.strip()
+        if block.startswith("data: "):
+            frames.append(json.loads(block[len("data: ") :]))
+    return frames
+
+
+def test_chat_stream_streams_reasoning_then_a_final_turn(tmp_path):
+    app, conn, _ = _app(tmp_path)
+    try:
+        # The tenant's brain streams: a ⟨think⟩ monologue split across chunks,
+        # then the JSON turn.
+        chunks = [
+            "<thi",
+            "nk>Weighing ",
+            "the options",
+            "</think>",
+            '{"say": "Here is my answer.", "task": null}',
+        ]
+        app._tenant_model = lambda tenant: _StreamingModel(chunks)
+
+        status, headers, body = _call(
+            GatewayASGI(app),
+            "POST",
+            "/v1/chat/stream",
+            headers=_auth(_fresh_token()),
+            body={"message": "explain the plan to me", "history": []},
+        )
+        assert status == 200
+        assert headers["content-type"].startswith("text/event-stream")
+        frames = _sse_frames(body)
+        # Reasoning arrived live, in pieces, before the answer.
+        reasoning = "".join(
+            f["delta"] for f in frames if f.get("type") == "reasoning"
+        )
+        assert reasoning == "Weighing the options"
+        # Exactly one terminal frame carries the finished turn.
+        done = [f for f in frames if f.get("type") == "done"]
+        assert len(done) == 1
+        assert done[-1]["reply"] == "Here is my answer."
+        assert done[-1]["reasoning"] == "Weighing the options"
+        # The reasoning frames precede the done frame.
+        assert frames[-1]["type"] == "done"
+    finally:
+        conn.close()
+
+
+def test_chat_stream_rejects_a_bad_token_before_streaming(tmp_path):
+    app, conn, _ = _app(tmp_path)
+    try:
+        status, headers, _ = _call(
+            GatewayASGI(app),
+            "POST",
+            "/v1/chat/stream",
+            headers={"Authorization": "Bearer nonsense"},
+            body={"message": "hi", "history": []},
+        )
+        assert status == 401
+        assert headers["Content-Type"].startswith("application/json")
+    finally:
+        conn.close()
+
+
 def test_admin_hosts_pick_the_face_by_host_header(tmp_path):
     """One public gateway, two doors: requests whose Host header names an
     admin host get the operator console; every other hostname — including

@@ -116,6 +116,9 @@ export function Chat() {
   const [thread, setThread] = useState<Msg[]>(loadThread);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  // The model's reasoning as it streams in — real ⟨think⟩ tokens, shown live
+  // in the thinking bubble, not a canned animation.
+  const [liveReasoning, setLiveReasoning] = useState("");
   // The one-time first-run guide: gone the moment it's used or dismissed.
   const [firstRun, setFirstRun] = useState(
     () => localStorage.getItem(FIRST_RUN_KEY) === null,
@@ -290,6 +293,7 @@ export function Chat() {
     // The face glows and breathes while the model reasons — the user
     // knows OoLu is still working on it, not hung.
     updateAvatarSignals({ userMood: deriveUserMood(text), thinking: true });
+    setLiveReasoning("");
     setThread((t) => [...t, { kind: "user", text }]);
     try {
       const history = thread
@@ -302,7 +306,13 @@ export function Chat() {
           role: m.kind === "user" ? ("user" as const) : ("assistant" as const),
           content: m.text,
         }));
-      const turn = await api.chat(text, history, undefined, mood);
+      const turn = await api.chatStream(
+        text,
+        history,
+        { onReasoning: (delta) => setLiveReasoning((r) => r + delta) },
+        undefined,
+        mood,
+      );
       updateAvatarSignals({ tone: deriveTone(turn.reply) });
       if (speakRef.current) {
         speak(turn.reply, moodOf(currentAvatarSignals()).mood);
@@ -361,6 +371,7 @@ export function Chat() {
       ]);
     } finally {
       setBusy(false);
+      setLiveReasoning("");
       updateAvatarSignals({ thinking: false });
     }
   }
@@ -585,7 +596,13 @@ export function Chat() {
         {busy && (
           <div className="bubble assistant thinking-bubble">
             <span className="thinking-dot" aria-hidden="true" />
-            <span className="thinking-note">{tr("interact.thinking")}</span>
+            {liveReasoning ? (
+              <span className="thinking-note thinking-reasoning">
+                {liveReasoning}
+              </span>
+            ) : (
+              <span className="thinking-note">{tr("interact.thinking")}</span>
+            )}
           </div>
         )}
         <div ref={endRef} />

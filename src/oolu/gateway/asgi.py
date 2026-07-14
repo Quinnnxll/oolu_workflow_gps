@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import threading
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -191,6 +192,9 @@ class GatewayASGI:
                 return
 
         request = await self._build_request(scope, method, path, receive)
+        if method == "POST" and path == "/v1/chat/stream":
+            await self._chat_stream(request, send)
+            return
         response = self._app.handle(request)
         payload, content_type = _serialize(response)
         headers = dict(response.headers)
@@ -268,6 +272,80 @@ class GatewayASGI:
                 continue
             if message.get("type") == "websocket.disconnect":
                 return
+
+    # ------------------------------------------------------------------ #
+    # Live chat streaming (SSE over chunked HTTP).                        #
+    # ------------------------------------------------------------------ #
+    async def _chat_stream(self, request: Request, send: Any) -> None:
+        """Run one chat turn and stream the model's reasoning as SSE frames,
+        then a terminal ``done`` frame carrying the full reply.
+
+        The turn is synchronous (a blocking model call), so it runs in a
+        worker thread; ``emit`` bridges its reasoning deltas back onto the
+        event loop through a queue. Auth happens BEFORE any stream headers,
+        so a bad token is a normal error response, not a half-open stream.
+        """
+        try:
+            session = self._app.authorize_chat_stream(request)
+        except GatewayError as exc:
+            body = json.dumps(
+                {"error": {"code": exc.code, "message": exc.message}}
+            ).encode("utf-8")
+            await self._respond(
+                send, exc.status, {"Content-Type": "application/json"}, body
+            )
+            return
+
+        loop = asyncio.get_event_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def emit(frame: dict) -> None:  # called from the worker thread
+            loop.call_soon_threadsafe(queue.put_nowait, ("frame", frame))
+
+        def worker() -> None:
+            try:
+                response = self._app.chat_stream_run(request, session, emit)
+                loop.call_soon_threadsafe(queue.put_nowait, ("done", response))
+            except GatewayError as exc:
+                loop.call_soon_threadsafe(queue.put_nowait, ("error", exc.message))
+            except Exception as exc:  # noqa: BLE001 - a turn must not hang the stream
+                loop.call_soon_threadsafe(queue.put_nowait, ("error", str(exc)))
+
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [
+                    (b"content-type", b"text/event-stream; charset=utf-8"),
+                    (b"cache-control", b"no-cache"),
+                    (b"x-accel-buffering", b"no"),
+                ],
+            }
+        )
+        threading.Thread(target=worker, daemon=True).start()
+        while True:
+            kind, payload = await queue.get()
+            if kind == "frame":
+                await self._sse(send, payload)
+            elif kind == "done":
+                raw, _ = _serialize(payload)
+                data = json.loads(raw) if raw else {}
+                await self._sse(send, {"type": "done", **data})
+                await send(
+                    {"type": "http.response.body", "body": b"", "more_body": False}
+                )
+                return
+            else:  # error
+                await self._sse(send, {"type": "error", "message": payload})
+                await send(
+                    {"type": "http.response.body", "body": b"", "more_body": False}
+                )
+                return
+
+    @staticmethod
+    async def _sse(send: Any, obj: dict) -> None:
+        line = ("data: " + json.dumps(obj) + "\n\n").encode("utf-8")
+        await send({"type": "http.response.body", "body": line, "more_body": True})
 
     async def _build_request(
         self, scope: dict, method: str, path: str, receive: Any

@@ -2049,6 +2049,21 @@ button.ghost {
   font-size: 13px;
 }
 
+/* The model's reasoning as it streams: real ⟨think⟩ tokens, dimmed and
+   scrollable, growing live — the honest picture of the work in progress. */
+.thinking-bubble .thinking-reasoning {
+  align-self: flex-start;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.4;
+  max-height: 140px;
+  overflow-y: auto;
+}
+.thinking-bubble:has(.thinking-reasoning) {
+  align-items: flex-start;
+}
+
 .thinking-dot {
   width: 12px;
   height: 12px;

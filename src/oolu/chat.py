@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import Callable, Iterator, Protocol, runtime_checkable
 
 from .durable.files import FileTooLargeError, UserFile, UserFileStore
 from .replies import DeterministicReplyEngine, MessageEnvelope, ReplyRule
@@ -1889,3 +1889,167 @@ class ChatAssistant:
             actions=actions,
             reasoning="\n\n".join(thoughts) or None,
         )
+
+    # ------------------------------------------------------------------ #
+    # Streaming: the reasoning arrives live, the turn lands complete.     #
+    # ------------------------------------------------------------------ #
+    def respond_streaming(
+        self,
+        message: str,
+        *,
+        history: list[dict] | None = None,
+        sender: str = "user",
+        tools: ChatTools | None = None,
+        model: ChatModel | None = None,
+        context: str | None = None,
+        on_reasoning: "Callable[[str], None] | None" = None,
+    ) -> ChatTurn:
+        """Same turn as :meth:`respond`, but the model's ⟨think⟩ monologue is
+        streamed to ``on_reasoning`` as it is generated (when the model can
+        stream). The authoritative ChatTurn is still built from the complete
+        text, so say/task/tool routing is unchanged — only the reasoning is
+        revealed live. Deterministic replies (rules, file commands) stream
+        nothing and just return their turn."""
+        final: ChatTurn | None = None
+        for event in self.respond_stream(
+            message,
+            history=history,
+            sender=sender,
+            tools=tools,
+            model=model,
+            context=context,
+        ):
+            if event["type"] == "reasoning":
+                if on_reasoning is not None and event["delta"]:
+                    on_reasoning(event["delta"])
+            elif event["type"] == "turn":
+                final = event["turn"]
+        assert final is not None  # respond_stream always ends with a turn
+        return final
+
+    def respond_stream(
+        self,
+        message: str,
+        *,
+        history: list[dict] | None = None,
+        sender: str = "user",
+        tools: ChatTools | None = None,
+        model: ChatModel | None = None,
+        context: str | None = None,
+    ) -> "Iterator[dict]":
+        """Yield ``{"type": "reasoning", "delta": str}`` events as the model
+        thinks, then exactly one terminal ``{"type": "turn", "turn": ChatTurn}``.
+        Mirrors :meth:`respond`'s decision order; only the model path streams."""
+        envelope = MessageEnvelope(
+            channel=self._channel,
+            conversation_id=sender,
+            sender_id=sender,
+            text=message,
+        )
+        decision = self._engine.decide(envelope, context={})
+        if decision.source == "rule" and decision.text:
+            yield {"type": "turn", "turn": ChatTurn(
+                say=decision.text, task=None, source="rule"
+            )}
+            return
+        active = model or self._model
+        if active is not None:
+            try:
+                yield from self._model_turn_stream(
+                    active, message, history, tools, context=context
+                )
+                return
+            except ModelBudgetExceeded as exc:
+                yield {"type": "turn", "turn": ChatTurn(
+                    say=str(exc), task=None, source="model"
+                )}
+                return
+            except ModelUnavailable:
+                pass  # fall through to the model-less path
+        if tools is not None:
+            command = _file_command(message, tools)
+            if command is not None:
+                yield {"type": "turn", "turn": command}
+                return
+        yield {"type": "turn", "turn": ChatTurn(
+            say=ACK, task=message.strip(), source="intent"
+        )}
+
+    def _model_turn_stream(
+        self,
+        model: ChatModel,
+        message: str,
+        history: list[dict] | None,
+        tools: ChatTools | None,
+        *,
+        context: str | None = None,
+    ) -> "Iterator[dict]":
+        """The streaming twin of :meth:`_model_turn`: identical loop and turn
+        construction, but each round's ⟨think⟩ content is emitted as it
+        arrives. A model without ``reply_stream`` degrades to one blocking
+        call per round (no live deltas) — streaming is progressive."""
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        if context:
+            messages.append({"role": "system", "content": context})
+        for entry in history or []:
+            role = entry.get("role")
+            content = entry.get("content")
+            if role in ("user", "assistant") and isinstance(content, str):
+                messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": message})
+        stream = getattr(model, "reply_stream", None)
+        actions: list[dict] = []
+        thoughts: list[str] = []
+        for _ in range(MAX_TOOL_ROUNDS):
+            if callable(stream):
+                parts: list[str] = []
+                emitted = 0
+                for delta in stream(messages):
+                    parts.append(delta)
+                    # Re-extract the reasoning-so-far from the whole
+                    # accumulator each chunk, so a ⟨think⟩ tag split across
+                    # deltas is still handled correctly, and emit only what
+                    # is new.
+                    _, so_far = _split_reasoning("".join(parts))
+                    so_far = so_far or ""
+                    if len(so_far) > emitted:
+                        yield {"type": "reasoning", "delta": so_far[emitted:]}
+                        emitted = len(so_far)
+                raw = "".join(parts)
+            else:
+                raw = model.reply(messages)
+            cleaned, reasoning = _split_reasoning(raw)
+            if reasoning:
+                thoughts.append(reasoning)
+            parsed = _parse_model_reply(cleaned)
+            if isinstance(parsed, _ToolCall):
+                if tools is None:
+                    yield {"type": "turn", "turn": ChatTurn(
+                        say="I can't reach any files on this host.",
+                        source="model",
+                        actions=actions,
+                    )}
+                    return
+                result, action = _run_tool(tools, parsed)
+                if action is not None:
+                    actions.append(action)
+                messages.append({"role": "assistant", "content": cleaned})
+                messages.append(
+                    {"role": "user", "content": f"[tool result]\n{result}"}
+                )
+                continue
+            yield {"type": "turn", "turn": ChatTurn(
+                say=parsed.say,
+                task=parsed.task,
+                source="model",
+                actions=actions,
+                device=parsed.device,
+                reasoning="\n\n".join(thoughts) or None,
+            )}
+            return
+        yield {"type": "turn", "turn": ChatTurn(
+            say="I got tangled up in my tools — tell me exactly what you need.",
+            source="model",
+            actions=actions,
+            reasoning="\n\n".join(thoughts) or None,
+        )}

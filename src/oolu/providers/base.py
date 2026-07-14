@@ -175,6 +175,23 @@ class BaseProviderAdapter:
             self._idempotency_cache[idempotency_key] = result
         return result
 
+    def stream_call(  # pragma: no cover - needs a live streaming server
+        self, *, method: str = "POST", path: str = "/", body: dict[str, Any] | None = None
+    ):
+        """Yield the raw SSE lines of a streaming provider call.
+
+        Reuses this adapter's auth headers and base URL, but bypasses the
+        retry/idempotency pipeline (a partially-streamed response cannot be
+        replayed). Raises if the injected transport has no ``stream`` method."""
+        if self._vault.is_revoked(self._primary_ref()):
+            raise RevokedCredential(f"{self.name}: credential is revoked")
+        stream = getattr(self._transport, "stream", None)
+        if not callable(stream):
+            raise ProviderError(f"{self.name}: transport does not stream")
+        url = f"{self._base_url}{path}"
+        headers = {**self._auth_headers(), "Accept": "text/event-stream"}
+        return stream(method, url, headers=headers, body=body)
+
     def _send_with_retries(
         self,
         method: str,

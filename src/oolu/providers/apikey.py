@@ -10,11 +10,41 @@ configuration on top of the same surface.
 
 from __future__ import annotations
 
-from typing import Any
+import json
+from typing import Any, Iterator
 
 from .base import BaseProviderAdapter, HttpTransport
 from .errors import classify_status
 from .vault import CredentialRef, SecretVault
+
+
+def openai_sse_events(
+    lines: Iterator[str],
+) -> Iterator[tuple[str | None, dict | None]]:
+    """Parse OpenAI/Ollama chat-completions SSE lines into (delta, usage).
+
+    Each yielded pair is ``(text_delta_or_None, usage_dict_or_None)``; the
+    ``[DONE]`` sentinel ends the stream. Pure and transport-agnostic, so it is
+    unit-testable against a list of lines — the streaming HTTP call is the only
+    part that needs a live server."""
+    for line in lines:
+        text = (line or "").strip()
+        if not text.startswith("data:"):
+            continue
+        payload = text[len("data:") :].strip()
+        if payload == "[DONE]":
+            return
+        try:
+            data = json.loads(payload)
+        except ValueError:
+            continue
+        usage = data.get("usage") or None
+        delta = None
+        choices = data.get("choices") or []
+        if choices:
+            delta = ((choices[0] or {}).get("delta") or {}).get("content") or None
+        if delta is not None or usage is not None:
+            yield delta, usage
 
 
 class ApiKeyProviderAdapter(BaseProviderAdapter):
@@ -145,6 +175,23 @@ class OpenAiAdapter(ApiKeyProviderAdapter):
             idempotency_key=idempotency_key,
             cost=cost,
         )
+
+    def chat_stream(  # pragma: no cover - needs a live streaming server
+        self, messages: list[dict[str, Any]], *, model: str
+    ) -> Iterator[tuple[str | None, dict | None]]:
+        """Stream a chat completion as (text-delta, usage) pairs. Requests
+        usage in the terminal frame so the call still meters honestly."""
+        lines = self.stream_call(
+            method="POST",
+            path="/chat/completions",
+            body={
+                "model": model,
+                "messages": messages,
+                "stream": True,
+                "stream_options": {"include_usage": True},
+            },
+        )
+        return openai_sse_events(lines)
 
 
 class AnthropicAdapter(ApiKeyProviderAdapter):

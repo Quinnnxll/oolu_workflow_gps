@@ -744,6 +744,74 @@ export const api = {
       ...(nodeId ? { node_id: nodeId } : {}),
       ...(mood ? { mood } : {}),
     }),
+  // The streaming twin: the model's reasoning arrives live via onReasoning as
+  // it thinks, and the finished turn is returned. Falls back to the blocking
+  // chat() when the host has no stream endpoint (404) or no streaming body.
+  chatStream: async (
+    message: string,
+    history: { role: "user" | "assistant"; content: string }[],
+    handlers: { onReasoning?: (delta: string) => void },
+    nodeId?: string,
+    mood?: string,
+  ): Promise<ChatTurnReply> => {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    const token = apiToken();
+    if (token) headers["Authorization"] = "Bearer " + token;
+    let res: Response;
+    try {
+      res = await fetch(BASE() + "/v1/chat/stream", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          message,
+          history,
+          ...(nodeId ? { node_id: nodeId } : {}),
+          ...(mood ? { mood } : {}),
+        }),
+      });
+    } catch {
+      return api.chat(message, history, nodeId, mood);
+    }
+    if (res.status === 404 || !res.body) {
+      return api.chat(message, history, nodeId, mood);
+    }
+    if (res.status === 401 && token) {
+      signOut();
+      throw new Error("signed out");
+    }
+    if (!res.ok) {
+      throw new Error(`server error (${res.status})`);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let done: ChatTurnReply | null = null;
+    for (;;) {
+      const { value, done: finished } = await reader.read();
+      if (finished) break;
+      buffer += decoder.decode(value, { stream: true });
+      let sep: number;
+      while ((sep = buffer.indexOf("\n\n")) >= 0) {
+        const frame = buffer.slice(0, sep).trim();
+        buffer = buffer.slice(sep + 2);
+        if (!frame.startsWith("data:")) continue;
+        let obj: { type?: string; delta?: string; message?: string };
+        try {
+          obj = JSON.parse(frame.slice(5).trim());
+        } catch {
+          continue;
+        }
+        if (obj.type === "reasoning") handlers.onReasoning?.(obj.delta ?? "");
+        else if (obj.type === "error")
+          throw new Error(obj.message ?? "stream error");
+        else if (obj.type === "done") done = obj as unknown as ChatTurnReply;
+      }
+    }
+    if (!done) throw new Error("the stream ended without a reply");
+    return done;
+  },
   // The server-side OoLu thread: what a fresh device loads. Hosts that
   // don't keep history answer 404 — callers fall back to local storage.
   chatHistory: () =>
