@@ -141,9 +141,9 @@ describe("NodeInteract", () => {
 
     // In flight: the node's profile photo breathes with the glow, and the
     // thinking note tells the user OoLu is still working on it.
-    const face = await screen.findByRole("img", { name: /Thinking/ });
+    const face = await screen.findByRole("img", { name: /Working on it/ });
     expect(face.className).toContain("thinking");
-    expect(screen.getByText(/reply lands when the reasoning is done/)).toBeTruthy();
+    expect(screen.getByText(/the reply lands when it's ready/)).toBeTruthy();
 
     release();
     // Landed: the glow is gone, the reply speaks, and the model's brief

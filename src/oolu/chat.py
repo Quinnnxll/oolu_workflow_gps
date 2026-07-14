@@ -61,6 +61,13 @@ or anything you can simply answer in words, keep "task" null and just talk.
 When in doubt, TALK — answer in "say" and offer to do the work rather than
 silently kicking off a task. Never invent work the user did not ask for.
 
+You have NO ability to create, build, or save a node yourself, and no tool
+that does. NEVER claim you built, created, or saved a node, or that a node
+now exists — that is only ever done by the platform's real builder, which
+reports the result itself. If the user asks you to build a node, put the
+request in "task" and let the builder run; do not narrate a finished build
+you did not actually perform.
+
 When the work needs THIS device's senses — the user's location, a fresh
 photo, or a file picked from the device — you ask: add an extra key
 "device": "location" | "camera" | "file" to your JSON, alongside words
@@ -1224,9 +1231,9 @@ def _run_log_say(run: dict, steps: list[dict]) -> str:
 # no trip to Settings required. Anything that isn't a yes or a no withdraws
 # the offer: consent detached from the question it answered is not consent.
 GROWTH_OFFER = (
-    " I can grow that missing piece myself: say “yes” and I'll build a node "
-    "for “{goal}” — with its own written-and-verified function — then run "
-    "it. Say “no” to leave things as they are."
+    " I can grow that missing piece myself: say “yes” and I'll build the "
+    "“{name}” node for “{goal}” — with its own written-and-verified function "
+    "— then run it. Say “no” to leave things as they are."
 )
 
 # The reuse-first twin guard: when a node already answers for NEARLY this
@@ -1242,9 +1249,9 @@ GROWTH_REUSE_OFFER = (
 )
 
 GROWTH_BUILD_INSTEAD = (
-    "Okay — different work, then. Say “yes” and I'll build a separate node "
-    "for “{goal}” with its own written-and-verified function, then run it. "
-    "Say “no” to leave things as they are."
+    "Okay — different work, then. Say “yes” and I'll build a separate "
+    "“{name}” node for “{goal}” with its own written-and-verified function, "
+    "then run it. Say “no” to leave things as they are."
 )
 
 _CONSENT_YES = frozenset(

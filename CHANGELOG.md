@@ -4,6 +4,37 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Building a node: named, priced, real, and honest about the wait:
+
+- **The build offer names the node it will build.** "I'll build a node for
+  '<your whole sentence>'" became "I'll build the '<Node Name>' node for
+  '<goal>'" — the name is `concise_name(goal)`, the exact title the node gets
+  in My nodes, so the offer and the result match. Both build offers carry it;
+  the reuse offer already named its node.
+- **Building a node shows what it cost.** Writing a node's execution function
+  is a real model call; it was metered but the figure was thrown away. The
+  build reply now reports it — "Building it drew ≈1,240 tokens (about $0.0007
+  of model compute)", or "free — written by your own local model" — captured
+  by diffing the model-call meter across the authoring call. No figure is
+  shown when nothing was metered, so the number is never invented.
+- **"Build me a node" actually creates one — no more narrated builds.**
+  General chat had no build tool, so the model could reply "Done, I built your
+  node!" while nothing was persisted. Now an explicit "build me a node …"
+  (the word "node" required, so "build me a report" stays ordinary work) is
+  routed to the REAL builder before the model is ever consulted: it writes the
+  function and persists the node to My nodes, or refuses in words. The system
+  prompt also forbids the model from ever claiming it built a node — that is
+  only ever done by the builder, which reports the result itself.
+- **The "thinking" indicator stops pretending to show reasoning.** The live
+  bubble said "Thinking — the reply lands when the reasoning is done", but it
+  was a wall-clock boolean with a fixed animation — no reasoning, and often no
+  reasoning model at all. It now says the honest thing ("Working on it — the
+  reply lands when it's ready"). The genuinely real reasoning is what already
+  ships: the model's own ⟨think⟩ trace, shown after the reply, and the run
+  card's live phase/step timeline for work that becomes a run. (A live
+  streaming reasoning view would need a streaming transport, which the chat
+  route does not have yet.)
+
 Units "auto" resolves the same way everywhere:
 
 - **One stored signal decides `auto`, so every surface agrees.** The chat

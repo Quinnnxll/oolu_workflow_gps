@@ -131,6 +131,31 @@ def _speak_work(app, replies):
 # --------------------------------------------------------------------------- #
 # The consent matcher.                                                         #
 # --------------------------------------------------------------------------- #
+def test_build_cost_note_reports_tokens_and_compute():
+    from oolu.billing.model_calls import ModelCallMeter
+
+    meter = ModelCallMeter()
+
+    class _Telemetry:
+        def __init__(self, tier, pt, ct):
+            self.model, self.tier = "m", tier
+            self.prompt_tokens, self.completion_tokens = pt, ct
+            self.duration_s = 0.0
+
+    before = len(meter.charges())
+    meter.record("node.build", _Telemetry("fast", 900, 300))
+    note = GatewayApp._build_cost_note(meter, before)
+    assert "≈1,200 tokens" in note
+    assert "$" in note  # a nonzero compute figure
+    # A local (free) model reports the tokens, but says it was free.
+    free = ModelCallMeter()
+    free.record("node.build", _Telemetry("local", 1000, 500))
+    assert "free" in GatewayApp._build_cost_note(free, 0)
+    # No meter, or nothing metered -> no note (never a fake number).
+    assert GatewayApp._build_cost_note(None, 0) == ""
+    assert GatewayApp._build_cost_note(ModelCallMeter(), 0) == ""
+
+
 def test_consent_answer_is_narrow():
     assert consent_answer("yes") == "yes"
     assert consent_answer("  Yes, please!  ") == "yes"
@@ -158,9 +183,52 @@ def test_a_stuck_task_becomes_an_offer_not_a_wall(tmp_path):
         assert "I can't run that on this machine yet" in reply
         assert "grow that missing piece" in reply
         assert GOAL in reply
+        # The offer NAMES the node it will build (concise_name of the goal),
+        # not just the goal sentence.
+        assert "Normalize Invoice Csv" in reply
         assert response.body["run_id"] is None
         # The offer stands, keyed to the person, holding the exact goal.
         assert app._growth_offers.get("t1", "user-1") == ("build", GOAL, GOAL)
+    finally:
+        conn.close()
+
+
+def test_explicit_build_creates_a_real_node_without_consulting_the_model(tmp_path):
+    """Issue: OoLu narrated a build through the chat model without persisting
+    a node. An explicit "build me a node …" now goes to the REAL builder — a
+    node lands in My nodes — and the chat model is never even asked (so it
+    cannot hallucinate the build)."""
+    app, conn, ident, desk, script_exec = _rig(tmp_path)
+    try:
+        # A model that would LIE about building if it were consulted.
+        liar = _FakeModel(['{"say": "Done! I built your node. ✅", "task": null}'])
+        app._tenant_model = lambda tenant: liar
+        app._node_function_author = lambda tenant: FakeAuthor()
+
+        response = _chat(app, ident, "build me a node that " + GOAL)
+        assert response.status == 200, response.body
+        reply = response.body["reply"]
+        # The REAL builder's words, not the model's fabricated confirmation.
+        assert "Built a NEW node" in reply
+        assert "Done! I built your node" not in reply
+        assert response.body["actions"] == [{"tool": "build_node"}]
+        # The model was never consulted for this turn.
+        assert liar.calls == []
+        # And a real node is on the user's desk (My nodes).
+        mine = desk.overview(principal="user-1", tenant="t1")
+        assert [e.title for e in mine] == ["Normalize Invoice Csv Files"]
+    finally:
+        conn.close()
+
+
+def test_a_bare_build_request_asks_what_the_node_should_do(tmp_path):
+    app, conn, ident, desk, script_exec = _rig(tmp_path)
+    try:
+        app._node_function_author = lambda tenant: FakeAuthor()
+        response = _chat(app, ident, "build me a node")
+        assert response.status == 200, response.body
+        assert "tell me what the node should do" in response.body["reply"]
+        assert desk.overview(principal="user-1", tenant="t1") == []
     finally:
         conn.close()
 

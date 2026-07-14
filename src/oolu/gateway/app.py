@@ -168,6 +168,33 @@ from .webhooks import WebhookVerifier
 # approver's SSE feed. Every transition is one of these; nothing is silent.
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
+# An explicit "build me a node ..." request in general chat. It REQUIRES the
+# word "node" so a plain "build me a report" stays ordinary work — only a
+# genuine node-build request is routed to the real builder (never the model,
+# which cannot create a node and must not narrate that it did).
+_NODE_BUILD_RE = re.compile(
+    r"^\s*"
+    # optional polite / addressing lead-in
+    r"(?:(?:hey\s+)?oolu[,:]?\s+)?"
+    r"(?:(?:please|can\s+you|could\s+you|would\s+you|will\s+you|"
+    r"i(?:'d| would)?\s+(?:like|want)\s+you\s+to|i\s+want\s+to)\s+)?"
+    r"(?:please\s+)?"
+    r"(?:build|create|make|add|set\s+up)\s+(?:me\s+)?"
+    r"(?:a|an|the|another)\s+node\b"
+    r"\s*(?:for|that|to|which|:)?\s*(?P<goal>.*)$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def explicit_node_build_goal(message: str | None) -> str | None:
+    """The goal in an explicit node-build request, or ``None`` if it isn't
+    one. Empty goal (bare "build me a node") returns ``""`` so the builder can
+    answer "tell me what the node should do" instead of the model guessing."""
+    match = _NODE_BUILD_RE.match(message or "")
+    if match is None:
+        return None
+    return match.group("goal").strip(" .!?")
+
 _HOLD_EVENT_TYPES = frozenset(
     {"contract.held", "contract.approved", "contract.declined", "contract.expired"}
 )
@@ -1143,7 +1170,9 @@ class GatewayApp:
                         original_goal=original_goal,
                     )
                     turn = ChatTurn(
-                        say=GROWTH_BUILD_INSTEAD.format(goal=original_goal),
+                        say=GROWTH_BUILD_INSTEAD.format(
+                            name=concise_name(original_goal), goal=original_goal
+                        ),
                         source="tool",
                     )
                 elif answer == "no":
@@ -1151,6 +1180,23 @@ class GatewayApp:
                         say="Okay — leaving it as is. Ask me again whenever "
                         "you want it built.",
                         source="tool",
+                    )
+        # An explicit "build me a node …" is executed by the REAL builder, not
+        # narrated by the model: it writes the function and persists the node
+        # to My nodes (or refuses in words), so the reply can never claim a
+        # build that no code performed.
+        if turn is None and not in_node and self._nodeplace is not None:
+            build_goal = explicit_node_build_goal(message)
+            if build_goal is not None:
+                built = self._build_function_node(session, build_goal)
+                if built.startswith("error:"):
+                    turn = ChatTurn(
+                        say=f"I couldn't build that node: {built[7:].strip()}",
+                        source="tool",
+                    )
+                else:
+                    turn = ChatTurn(
+                        say=built, source="tool", actions=[{"tool": "build_node"}]
                     )
         if turn is None:
             turn = self._chat.respond(
@@ -1967,7 +2013,7 @@ class GatewayApp:
                 goal=goal,
                 original_goal=goal,
             )
-            return say + GROWTH_OFFER.format(goal=goal)
+            return say + GROWTH_OFFER.format(name=concise_name(goal), goal=goal)
         hint = (
             (run.get("autobuild") or {}).get("hint")
             if run is not None
@@ -2146,9 +2192,14 @@ class GatewayApp:
                 "function, and no model is configured to write it — "
                 "add a model key (or a local model) in Settings"
             )
+        # Writing the function is the expensive step; meter it so the user
+        # sees what building the node actually drew (the resource question).
+        meter = getattr(self, "_model_meter", None)
+        spent_before = len(meter.charges()) if meter is not None else 0
         script, io, refusal = author_node_function(author, goal)
         if script is None:
             return f"error: {refusal}"
+        cost_note = self._build_cost_note(meter, spent_before)
         name = concise_name(goal)
         skill = ReusableSkill.model_validate(
             {
@@ -2235,13 +2286,33 @@ class GatewayApp:
                 "that expands the path. It starts needs-verification and "
                 "becomes a callable, routable step as its runs verify; once "
                 "proven, the two can be merged into one throughout solution."
+                + cost_note
             )
         return (
             f"Built a NEW node “{name}” ({new_id[:8]}) WITH its own "
             f"execution function ({interface}), {placing}. It starts "
             "needs-verification and becomes a callable, routable step as "
-            "its runs verify."
+            "its runs verify." + cost_note
         )
+
+    @staticmethod
+    def _build_cost_note(meter, before_count: int) -> str:
+        """What writing the node's function drew, in the user's terms — the
+        token count (the resource question) and its small compute cost. Empty
+        when nothing was metered (no meter, or a stubbed/free build)."""
+        if meter is None:
+            return ""
+        spent = meter.charges()[before_count:]
+        tokens = sum(c.prompt_tokens + c.completion_tokens for c in spent)
+        if tokens <= 0:
+            return ""
+        cost = sum(c.cost for c in spent)
+        drew = (
+            "free — written by your own local model"
+            if cost <= 0
+            else f"about ${cost:.4f} of model compute"
+        )
+        return f" Building it drew ≈{tokens:,} tokens ({drew})."
 
     @staticmethod
     def _function_goal_key(text: str) -> str:
