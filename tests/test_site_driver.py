@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from oolu.skills.commerce import SiteDriverExecutor
+from oolu.skills.commerce import AmazonExecutor, SiteDriverExecutor
 from oolu.skills.models import ActionEvent, ExecutionStatus
 from oolu.skills.site_driver import (
     AssumeAuthenticated,
@@ -38,9 +38,9 @@ class _FakeSession:
         return self.authenticated
 
 
-def _action(operation, **params):
+def _action(operation, *, adapter="web", **params):
     return ActionEvent(
-        correlation_id="c", adapter="web", operation=operation, parameters=params
+        correlation_id="c", adapter=adapter, operation=operation, parameters=params
     )
 
 
@@ -195,6 +195,92 @@ def test_navigation_through_the_executor_needs_no_authorization():
         idempotency_key="nav",
     )
     assert outcome.status is ExecutionStatus.SUCCEEDED  # browsing is free
+
+
+class _FakeAmazon:
+    def __init__(self):
+        self.orders = 0
+
+    def place_order(self, parameters):
+        self.orders += 1
+        return {"order_id": "A1"}
+
+
+# --------------------------------------------------------------------------- #
+# The operator's master switch for autonomous ordering (default OFF).          #
+# --------------------------------------------------------------------------- #
+def test_the_operator_switch_off_blocks_even_a_fully_authorized_order():
+    client = _FakeAmazon()
+    executor = AmazonExecutor(
+        client,
+        is_authorized=lambda a: True,  # user consent + 2FA released
+        orders_enabled=lambda: False,  # operator has NOT turned ordering on
+    )
+    outcome = executor.execute(
+        _action("order", adapter="amazon", authorization_id="auth-ok"), idempotency_key="a1"
+    )
+    assert outcome.status is ExecutionStatus.BLOCKED
+    assert "operator switch off" in (outcome.error or "")
+    assert client.orders == 0  # never placed
+
+
+def test_the_operator_switch_on_still_requires_user_authorization():
+    client = _FakeAmazon()
+    executor = AmazonExecutor(
+        client,
+        is_authorized=lambda a: a == "auth-ok",
+        orders_enabled=lambda: True,  # operator on, but...
+    )
+    # ...no released authorization -> still blocked by the per-order gate.
+    blocked = executor.execute(_action("order", adapter="amazon"), idempotency_key="a1")
+    assert blocked.status is ExecutionStatus.BLOCKED
+    assert "consent" in (blocked.error or "")
+    assert client.orders == 0
+    # Both gates open -> the order is placed.
+    ok = executor.execute(
+        _action("order", adapter="amazon", authorization_id="auth-ok"), idempotency_key="a2"
+    )
+    assert ok.status is ExecutionStatus.SUCCEEDED
+    assert client.orders == 1
+
+
+def test_the_web_checkout_step_honors_the_operator_switch():
+    session = _FakeSession(authenticated=True)
+    executor = SiteDriverExecutor(
+        BrowserSiteDriver(session),
+        is_authorized=lambda a: True,
+        orders_enabled=lambda: False,
+    )
+    outcome = executor.execute(
+        _action("checkout", authorization_id="ok", browser_steps=[{"op": "submit"}]),
+        idempotency_key="k",
+    )
+    assert outcome.status is ExecutionStatus.BLOCKED
+    assert "operator switch off" in (outcome.error or "")
+    assert session.runs == []
+
+
+def test_navigation_is_free_even_with_the_operator_switch_off():
+    session = _FakeSession()
+    executor = SiteDriverExecutor(
+        BrowserSiteDriver(session), orders_enabled=lambda: False
+    )
+    outcome = executor.execute(
+        _action("open", browser_steps=[{"op": "goto", "url": "https://x"}]),
+        idempotency_key="nav",
+    )
+    assert outcome.status is ExecutionStatus.SUCCEEDED  # browsing never spends
+
+
+def test_no_switch_injected_keeps_the_historical_behavior():
+    # Omitting orders_enabled means no operator gate — an authorized order
+    # proceeds exactly as before this change.
+    client = _FakeAmazon()
+    executor = AmazonExecutor(client, is_authorized=lambda a: True)
+    ok = executor.execute(
+        _action("order", adapter="amazon", authorization_id="ok"), idempotency_key="a1"
+    )
+    assert ok.status is ExecutionStatus.SUCCEEDED
 
 
 # --------------------------------------------------------------------------- #

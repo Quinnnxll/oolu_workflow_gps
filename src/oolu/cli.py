@@ -405,6 +405,15 @@ def build_parser() -> argparse.ArgumentParser:
         "charged (per-class price settlement and verification still gate). "
         "Requires OOLU_STRIPE_KEY — the port never opens onto test doubles",
     )
+    host.add_argument(
+        "--ordering",
+        action="store_true",
+        help="turn on autonomous order placement: the operator master switch "
+        "above the per-order consent + 2FA gate. Off by default — the "
+        "order-placing hands can browse, but the money step of any order "
+        "stays BLOCKED until this is set. Spends the user's own money at a "
+        "retailer through their released authorization",
+    )
 
     sub.add_parser("show-config", help="print the effective settings").add_argument(
         "--config", metavar="PATH", help="path to a models.yaml settings file"
@@ -1718,6 +1727,7 @@ def _cmd_host(args, out) -> int:
             require_isolation=args.global_service,
             platform_model_keys=platform_model_keys,
             transactions_enabled=args.transactions,
+            ordering_enabled=args.ordering,
             stripe_secret_key=stripe_secret_key,
             stripe_webhook_secret=stripe_webhook_secret,
         )

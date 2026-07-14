@@ -82,6 +82,7 @@ def build_commerce_executors(
     amazon_client: Any = None,
     site_driver: Any = None,
     is_authorized: Callable[[str], bool] | None = None,
+    orders_enabled: Callable[[], bool] | None = None,
 ) -> dict[str, ActionExecutor]:
     """The order-placing hands: a general site driver and per-site adapters.
 
@@ -89,17 +90,27 @@ def build_commerce_executors(
     ``web`` executor needs a browser (Playwright, the ``browser`` extra),
     the ``amazon`` executor needs an Amazon client. The route optimizer
     then scores whichever roads are actually drivable here and picks the
-    cheapest; ``is_authorized`` ties every order to the payment-consent +
-    2FA gate, so no road spends without the user's release.
+    cheapest.
+
+    Two money gates ride on every order, both defensive:
+    ``is_authorized`` ties each order to the user's payment-consent + 2FA
+    release; ``orders_enabled`` is the operator's master switch above it, so
+    that even an authorized order does not go through until the deployment
+    has turned autonomous ordering on. Omit ``orders_enabled`` for no
+    operator gate (the historical behaviour).
     """
     from .skills.commerce import AmazonExecutor, SiteDriverExecutor
 
     executors: dict[str, ActionExecutor] = {}
     if site_driver is not None:
-        web = SiteDriverExecutor(site_driver, is_authorized=is_authorized)
+        web = SiteDriverExecutor(
+            site_driver, is_authorized=is_authorized, orders_enabled=orders_enabled
+        )
         executors[web.name] = web
     if amazon_client is not None:
-        amazon = AmazonExecutor(amazon_client, is_authorized=is_authorized)
+        amazon = AmazonExecutor(
+            amazon_client, is_authorized=is_authorized, orders_enabled=orders_enabled
+        )
         executors[amazon.name] = amazon
     return executors
 
@@ -556,6 +567,15 @@ def build_host_runtime(
     # are unchanged.
     site_driver: Any = None,
     amazon_client: Any = None,
+    # The operator's master switch for autonomous order placement, above the
+    # per-order consent + 2FA gate. Off (the default) means the order-placing
+    # hands are wired and can browse, but the money step of any order is
+    # BLOCKED until the operator turns real ordering on for this deployment —
+    # the "explicit opt-in before anything spends" the checkout road needs.
+    # This spends the USER's money at a retailer through their released
+    # authorization; it is independent of ``transactions_enabled``, which is
+    # OoLu charging its OWN prices through the LaunchGuard.
+    ordering_enabled: bool = False,
 ) -> HostRuntime:
     """The multi-user web host: the full multi-tenant gateway over one
     data directory, with LOCAL accounts as the identity provider.
@@ -760,6 +780,7 @@ def build_host_runtime(
                 amazon_client=amazon_client,
                 site_driver=site_driver,
                 is_authorized=_payment_auth.is_authorized,
+                orders_enabled=lambda: ordering_enabled,
             )
         )
     if require_isolation and settings.backend.kind != "docker":

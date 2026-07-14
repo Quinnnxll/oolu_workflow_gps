@@ -69,11 +69,40 @@ def _order_authorized(
     return None
 
 
+def _orders_open(orders_enabled: Callable[[], bool] | None) -> str | None:
+    """None when this deployment permits real orders; otherwise the reason.
+
+    The operator's master switch, above the per-order consent gate: even a
+    fully-authorized order does not go through until the operator has enabled
+    autonomous ordering for this deployment. ``None`` (no switch injected)
+    means unswitched — the executor behaves exactly as before, so a caller
+    that wants no operator gate simply omits it."""
+    if orders_enabled is not None and not orders_enabled():
+        return (
+            "autonomous ordering is not enabled on this deployment "
+            "(operator switch off)"
+        )
+    return None
+
+
 class _BaseCommerceExecutor:
-    def __init__(self, *, is_authorized: Callable[[str], bool] | None = None):
+    def __init__(
+        self,
+        *,
+        is_authorized: Callable[[str], bool] | None = None,
+        orders_enabled: Callable[[], bool] | None = None,
+    ):
         self._is_authorized = is_authorized
+        self._orders_enabled = orders_enabled
         self._completed: dict[str, ExecutionOutcome] = {}
         self._lock = threading.RLock()
+
+    def _order_refusal(self, action: ActionEvent) -> str | None:
+        """The two money gates, in order: the operator's master switch, then
+        the user's per-order consent + 2FA. Either closed → a refusal reason."""
+        return _orders_open(self._orders_enabled) or _order_authorized(
+            action, self._is_authorized
+        )
 
     def cancel(self, idempotency_key: str) -> None:
         return None
@@ -109,8 +138,9 @@ class SiteDriverExecutor(_BaseCommerceExecutor):
         driver: SiteDriver,
         *,
         is_authorized: Callable[[str], bool] | None = None,
+        orders_enabled: Callable[[], bool] | None = None,
     ):
-        super().__init__(is_authorized=is_authorized)
+        super().__init__(is_authorized=is_authorized, orders_enabled=orders_enabled)
         self._driver = driver
 
     def capabilities(self) -> frozenset[str]:
@@ -132,7 +162,7 @@ class SiteDriverExecutor(_BaseCommerceExecutor):
             )
         # Only the money-spending step is gated; navigation is free.
         if action.operation == WEB_CHECKOUT:
-            refusal = _order_authorized(action, self._is_authorized)
+            refusal = self._order_refusal(action)
             if refusal is not None:
                 return self._done(
                     action, idempotency_key, ExecutionStatus.BLOCKED, error=refusal
@@ -159,8 +189,9 @@ class AmazonExecutor(_BaseCommerceExecutor):
         client: AmazonClient,
         *,
         is_authorized: Callable[[str], bool] | None = None,
+        orders_enabled: Callable[[], bool] | None = None,
     ):
-        super().__init__(is_authorized=is_authorized)
+        super().__init__(is_authorized=is_authorized, orders_enabled=orders_enabled)
         self._client = client
 
     def capabilities(self) -> frozenset[str]:
@@ -175,7 +206,7 @@ class AmazonExecutor(_BaseCommerceExecutor):
                 action, idempotency_key, ExecutionStatus.BLOCKED,
                 error="not an amazon order action",
             )
-        refusal = _order_authorized(action, self._is_authorized)
+        refusal = self._order_refusal(action)
         if refusal is not None:
             return self._done(
                 action, idempotency_key, ExecutionStatus.BLOCKED, error=refusal

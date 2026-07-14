@@ -4,6 +4,26 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+A master switch above every order — off until the operator says go:
+
+- **Autonomous order placement now has an operator switch, and it defaults
+  off.** Wiring a browser driver made the checkout road drivable — but a
+  drivable road with a released consent + 2FA authorization would place a
+  *real* order the moment both lined up, with no deployment-level control.
+  The commerce executors (`AmazonExecutor`, `SiteDriverExecutor`) gained an
+  `orders_enabled` gate that sits **above** the per-order consent gate: even a
+  fully-authorized order is BLOCKED ("operator switch off") until the operator
+  turns real ordering on. Browsing and searching are never gated — only the
+  money step.
+- **`ordering_enabled` on the host, `--ordering` on the CLI.**
+  `build_host_runtime(ordering_enabled=...)` (default `False`) feeds the
+  switch, and `oolu host --ordering` flips it. Deliberately distinct from
+  `--transactions`: that opens the LaunchGuard so OoLu may charge its *own*
+  prices; this permits OoLu to spend the *user's* money at a retailer through
+  their released authorization. Two different kinds of money, two independent
+  switches, both off by default. Omit the switch entirely (as tests and the
+  in-process executors do) and the historical behaviour is unchanged.
+
 The general road becomes drivable, and it knows when to hand you the wheel:
 
 - **The checkout seam gets a real hand.** `skills/commerce.py` has always
