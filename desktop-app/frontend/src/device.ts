@@ -17,36 +17,81 @@ export interface DevicePosition {
   accuracy_m: number;
 }
 
+// Getting a metre-level fix is not a single question — it is watching the
+// receiver refine. A phone answers getCurrentPosition with the FIRST fix it
+// has, which is usually the coarse wifi/cell/IP estimate (tens of km off)
+// because the GNSS chip hasn't locked yet; enableHighAccuracy only *asks*
+// for GPS, it doesn't wait for it. So watch instead: keep the tightest fix
+// seen, resolve the instant one is good enough, and if the window closes
+// with only coarse fixes, hand back the best one WITH its honest radius
+// (never a stale cache) rather than a wrong pinpoint.
+//
+// ``targetAccuracyM`` is "good enough to stop early"; ``timeoutMs`` bounds
+// the wait. On a computer with no GNSS the watch only ever yields the coarse
+// estimate — returned with its true ±radius so the caller can say how rough
+// it is, which is the honest answer that hardware allows.
 export function currentPosition(
   timeoutMs = 20_000,
+  targetAccuracyM = 35,
 ): Promise<DevicePosition> {
   return new Promise((resolve, reject) => {
     if (!("geolocation" in navigator)) {
       reject(new Error("this device offers no location service"));
       return;
     }
-    // enableHighAccuracy asks for the GPS/GNSS fix (metres), not the
-    // coarse wifi/IP estimate (which can be tens of kilometres off); a
-    // longer timeout gives the receiver time to lock, and maximumAge:0
-    // forbids handing back a stale cached position. accuracy_m carries
-    // the fix's real radius so the caller can say how precise it is.
-    navigator.geolocation.getCurrentPosition(
-      (position) =>
-        resolve({
-          lat: position.coords.latitude,
-          lon: position.coords.longitude,
-          accuracy_m: Math.round(position.coords.accuracy),
-        }),
-      (error) =>
-        reject(
-          new Error(
-            error.code === error.PERMISSION_DENIED
-              ? "location permission was refused — allow it in the browser/app settings to share where you are"
-              : error.code === error.TIMEOUT
-                ? "couldn't get a precise fix in time — try again outdoors or near a window"
-                : "the device could not determine its location right now",
-          ),
-        ),
+    const shape = (p: GeolocationPosition): DevicePosition => ({
+      lat: p.coords.latitude,
+      lon: p.coords.longitude,
+      accuracy_m: Math.round(p.coords.accuracy),
+    });
+    let best: GeolocationPosition | null = null;
+    let watchId: number | null = null;
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const settle = (finish: () => void) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+      finish();
+    };
+    // Time's up: answer with the best fix we saw, or say we got none.
+    timer = setTimeout(() => {
+      settle(() =>
+        best
+          ? resolve(shape(best))
+          : reject(
+              new Error(
+                "couldn't get a fix in time — try again outdoors or near a window",
+              ),
+            ),
+      );
+    }, timeoutMs);
+    watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        // Keep the tightest fix; the receiver sharpens it reading by reading.
+        if (!best || position.coords.accuracy < best.coords.accuracy) {
+          best = position;
+        }
+        // Good enough — stop the sensor and answer now.
+        if (best.coords.accuracy <= targetAccuracyM) {
+          settle(() => resolve(shape(best as GeolocationPosition)));
+        }
+      },
+      (error) => {
+        // Permission is a hard no. A transient failure (position momentarily
+        // unavailable) is not fatal: let the watch keep trying until it gets
+        // a fix or the timeout has the final word.
+        if (error.code === error.PERMISSION_DENIED) {
+          settle(() =>
+            reject(
+              new Error(
+                "location permission was refused — allow it in the browser/app settings to share where you are",
+              ),
+            ),
+          );
+        }
+      },
       { enableHighAccuracy: true, timeout: timeoutMs, maximumAge: 0 },
     );
   });

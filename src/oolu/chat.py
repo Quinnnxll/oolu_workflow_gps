@@ -147,6 +147,52 @@ def mood_directive(mood: str | None) -> str | None:
     return MOOD_DIRECTIVES.get(mood.strip().lower())
 
 
+# Measurement system: the user's reply should speak the units they think in.
+# A preference wins outright; "auto" reads the user's region (from the
+# browser's Accept-Language), and only the three imperial holdouts get
+# imperial — everyone else gets SI, the international default.
+METRIC_UNITS_NOTE = (
+    "Use metric / SI units in every reply — metres and kilometres, grams and "
+    "kilograms, litres, °C. If a source is imperial, convert it (you may keep "
+    "the original in parentheses)."
+)
+IMPERIAL_UNITS_NOTE = (
+    "Use US customary / imperial units in every reply — feet and miles, "
+    "ounces and pounds, gallons, °F. If a source is metric, convert it (you "
+    "may keep the original in parentheses)."
+)
+# The only countries on US customary / imperial as their everyday system.
+IMPERIAL_REGIONS = frozenset({"US", "LR", "MM"})
+
+
+def region_from_locale(accept_language: str | None) -> str | None:
+    """The region subtag of the browser's top language (``en-US`` → ``US``)."""
+    if not accept_language:
+        return None
+    primary = accept_language.split(",")[0].strip().split(";")[0].strip()
+    parts = re.split(r"[-_]", primary)
+    if len(parts) >= 2 and len(parts[-1]) == 2 and parts[-1].isalpha():
+        return parts[-1].upper()
+    return None
+
+
+def units_directive(preference: str | None, *, region: str | None = None) -> str | None:
+    """A one-line system note fixing the reply's measurement system.
+
+    ``imperial``/``metric`` are honoured outright; ``auto`` (or anything
+    unrecognised) resolves from ``region`` — imperial only for the US, Liberia,
+    and Myanmar, SI everywhere else (and when the region is unknown)."""
+    choice = (preference or "auto").strip().lower()
+    if choice == "imperial":
+        return IMPERIAL_UNITS_NOTE
+    if choice == "metric":
+        return METRIC_UNITS_NOTE
+    # auto: the user's region decides.
+    if region and region.upper() in IMPERIAL_REGIONS:
+        return IMPERIAL_UNITS_NOTE
+    return METRIC_UNITS_NOTE
+
+
 # What the user hears when a message becomes work — energetic, and it
 # varies so it never sounds like a canned recording.
 ACK = "On it! 🚀 I'll ping you the second it's done or I need a hand."

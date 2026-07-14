@@ -51,6 +51,8 @@ from ..chat import (
     consent_answer,
     mood_directive,
     obviously_chat,
+    region_from_locale,
+    units_directive,
 )
 from ..durable.files import (
     FileTooLargeError,
@@ -1087,8 +1089,20 @@ class GatewayApp:
         # OoLu's voice follows its mood: the client sends the avatar's
         # current mood, and the turn is coloured to match the face.
         mood_note = mood_directive(body.get("mood"))
+        # The reply speaks the units the user thinks in: their explicit
+        # preference wins; "auto" reads their region from the browser locale.
+        units_pref = (
+            self._settings.effective(session.tenant_id).get("account.units", "auto")
+            if self._settings is not None
+            else "auto"
+        )
+        units_note = units_directive(
+            units_pref, region=region_from_locale(request.header("accept-language"))
+        )
         context_note = (
-            "\n".join(n for n in (context_note, search_note, mood_note) if n)
+            "\n".join(
+                n for n in (context_note, search_note, mood_note, units_note) if n
+            )
             or None
         )
         run = None

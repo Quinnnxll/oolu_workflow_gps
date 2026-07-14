@@ -4,6 +4,37 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Three fixes: a fix that actually locks, units the user thinks in, a clean draft block:
+
+- **Location now waits for the fix to sharpen instead of taking the first
+  coarse one.** The previous change flipped `enableHighAccuracy` on, but a
+  single `getCurrentPosition` still returns whatever fix exists *now* — on a
+  phone that is the wifi/cell/IP estimate (tens of km off) because the GNSS
+  chip hasn't locked, and on a laptop it is that estimate forever. `device.ts`
+  now `watchPosition`s: it keeps the tightest reading, resolves the instant one
+  lands within ~35 m, and if the window closes with only coarse fixes it hands
+  back the best one *with its true ±radius* (never a stale cache) so the answer
+  is honest about its own roughness. Coordinates print to six decimals (~0.1 m)
+  so the string stops discarding precision the receiver did resolve.
+- **A measurement-units preference — metric/SI or imperial — and the reply
+  honours it.** New `account.units` setting (`auto`/`metric`/`imperial`,
+  default `auto`) renders in Settings from the catalog with no new UI code.
+  Each chat turn now carries a one-line units directive into the model's
+  context (beside the mood and web-search notes): an explicit choice wins
+  outright, and `auto` reads the user's region from the browser's
+  Accept-Language — imperial only for the US, Liberia, and Myanmar, SI
+  everywhere else. This is the first true user *preference* threaded into the
+  LLM prompt, not just the interface.
+- **The representative's drafted reply is now one clean OoLu message block,
+  and the buttons no longer collide with it.** The draft containers
+  (`.rep-suggestion`, `.draft-card`) had no styling at all: the inner accent
+  bubble rendered full-width and the accent Send/Edit buttons sat flush against
+  it, reading as one overlapping slab. They are now bordered, left-aligned
+  cards — like an OoLu message — that hold the "drafted:" caption, the drafted
+  text as an inset quote, and the actions clearly separated below by the card's
+  own gap. Same treatment for the friend-thread suggestion and the OoLu-window
+  drafts inbox.
+
 A plain-language "buy me…" becomes a real, consent-gated order:
 
 - **The intent→blueprint planner: a shopping ask now becomes a commerce

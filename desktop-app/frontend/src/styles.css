@@ -1930,6 +1930,65 @@ button.ghost {
   max-height: 45%;
   overflow-y: auto;
   flex-shrink: 0;
+  padding: 12px;
+}
+
+/* The drafts inbox stacks its cards as a column with breathing room, so each
+   drafted reply reads as its own OoLu message block. */
+.drafts-inbox {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* The representative's drafted reply, presented as ONE clean OoLu message
+   block: a left-aligned, bordered card (like an assistant bubble) that holds
+   the "drafted:" caption, the drafted text, and — clearly separated below —
+   the Send / Edit / Discard actions. Before this these containers had no
+   rules: the inner accent bubble rendered full-width and the accent buttons
+   sat flush against it, so they read as one overlapping slab. */
+.rep-suggestion,
+.draft-card {
+  align-self: flex-start;
+  max-width: min(88%, 620px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  border-bottom-left-radius: 4px;
+  padding: 12px 14px;
+}
+
+/* The drafted text: an inset quote inside the card, full width — not a
+   right-floated accent bubble (align-self is ignored outside a flex row, so
+   the old .bubble.user rendered as a plain accent block). */
+.rep-suggestion .bubble.user,
+.draft-card .bubble.user {
+  align-self: stretch;
+  max-width: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  border-bottom-right-radius: 10px;
+}
+
+/* The action row sits clearly below the message (the card's gap already
+   separates it); a hair of top padding guarantees the buttons never read as
+   part of the bubble, and wrapping keeps them tidy in a narrow card. */
+.rep-suggestion .setting-control.row,
+.draft-card .setting-control.row {
+  padding-top: 2px;
+  flex-wrap: wrap;
+}
+
+/* The draft's edit box fills the card cleanly too. */
+.draft-card textarea {
+  width: 100%;
+  box-sizing: border-box;
 }
 
 /* Security: 2FA setup + order-consent cards. */

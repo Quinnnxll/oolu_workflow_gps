@@ -179,6 +179,17 @@ SETTINGS_CATALOG: tuple[SettingField, ...] = (
         "meter's internal unit uses fixed reference rates.",
     ),
     SettingField(
+        key="account.units",
+        group="account",
+        label="Measurement units",
+        kind=SettingKind.CHOICE,
+        default="auto",
+        choices=("auto", "metric", "imperial"),
+        description="Which measurement system OoLu answers in — metres and "
+        "kilograms (metric/SI) or feet and pounds (imperial). Auto follows "
+        "your region: imperial for the US, SI everywhere else.",
+    ),
+    SettingField(
         key="account.log_retention_days",
         group="account",
         label="Execution log retention",

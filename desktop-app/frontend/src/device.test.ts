@@ -5,44 +5,95 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("location", () => {
-  it("asks for a fresh GPS fix, not the coarse cached estimate", async () => {
-    let opts: PositionOptions | undefined;
-    vi.stubGlobal("navigator", {
-      geolocation: {
-        getCurrentPosition: (
-          ok: (p: {
-            coords: { latitude: number; longitude: number; accuracy: number };
-          }) => void,
-          _fail: unknown,
-          options: PositionOptions,
-        ) => {
-          opts = options;
-          ok({
-            coords: { latitude: 52.52, longitude: 13.405, accuracy: 8.3 },
+type Fix = { coords: { latitude: number; longitude: number; accuracy: number } };
+
+// Stub navigator.geolocation with a watchPosition that emits a scripted
+// series of fixes (each a coarsening/sharpening reading), records the
+// options, and reports whether the watch was cleared.
+function stubWatch(fixes: Fix[]) {
+  const state = { opts: undefined as PositionOptions | undefined, cleared: false };
+  let stopped = false;
+  vi.stubGlobal("navigator", {
+    geolocation: {
+      watchPosition: (
+        ok: (p: Fix) => void,
+        _fail: unknown,
+        options: PositionOptions,
+      ) => {
+        state.opts = options;
+        // Emit each reading on its own microtask — as the real API does,
+        // AFTER watchPosition returns, so the watch id is assigned first.
+        let chain = Promise.resolve();
+        for (const fix of fixes) {
+          chain = chain.then(() => {
+            if (!stopped) ok(fix);
           });
-        },
+        }
+        return 7;
       },
-    });
+      clearWatch: (id: number) => {
+        if (id === 7) {
+          state.cleared = true;
+          stopped = true;
+        }
+      },
+    },
+  });
+  return state;
+}
+
+describe("location", () => {
+  it("waits for a fix good enough — not the first coarse one", async () => {
+    // The receiver reports a coarse network fix first, then sharpens to GPS.
+    const state = stubWatch([
+      { coords: { latitude: 52.5, longitude: 13.4, accuracy: 2400 } },
+      { coords: { latitude: 52.52, longitude: 13.405, accuracy: 8.3 } },
+    ]);
     const here = await currentPosition();
+    // The tight fix wins, not the coarse opener.
     expect(here).toEqual({ lat: 52.52, lon: 13.405, accuracy_m: 8 });
-    // The metre-precision knobs: GPS on, no stale cache.
-    expect(opts?.enableHighAccuracy).toBe(true);
-    expect(opts?.maximumAge).toBe(0);
+    // The metre-precision knobs: GPS on, no stale cache; watch stopped.
+    expect(state.opts?.enableHighAccuracy).toBe(true);
+    expect(state.opts?.maximumAge).toBe(0);
+    expect(state.cleared).toBe(true);
+  });
+
+  it("hands back the best coarse fix when the window closes without GPS", async () => {
+    vi.useFakeTimers();
+    try {
+      // A computer with no GNSS: only coarse fixes ever arrive.
+      const state = stubWatch([
+        { coords: { latitude: 40, longitude: -74, accuracy: 5200 } },
+        { coords: { latitude: 40.1, longitude: -74.1, accuracy: 3100 } },
+      ]);
+      const pending = currentPosition();
+      await vi.runAllTimersAsync();
+      // The tightest coarse fix, with its honest radius — never a stale cache.
+      await expect(pending).resolves.toEqual({
+        lat: 40.1,
+        lon: -74.1,
+        accuracy_m: 3100,
+      });
+      expect(state.cleared).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("says plainly when permission was refused", async () => {
     vi.stubGlobal("navigator", {
       geolocation: {
-        getCurrentPosition: (
+        watchPosition: (
           _ok: unknown,
           fail: (e: { code: number; PERMISSION_DENIED: number }) => void,
-        ) => fail({ code: 1, PERMISSION_DENIED: 1 }),
+        ) => {
+          fail({ code: 1, PERMISSION_DENIED: 1 });
+          return 7;
+        },
+        clearWatch: () => undefined,
       },
     });
-    await expect(currentPosition()).rejects.toThrow(
-      /permission was refused/,
-    );
+    await expect(currentPosition()).rejects.toThrow(/permission was refused/);
   });
 
   it("says so when the device has no location service at all", async () => {

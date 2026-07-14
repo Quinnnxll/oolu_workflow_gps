@@ -493,12 +493,15 @@ describe("Chat", () => {
     };
     vi.stubGlobal("navigator", {
       geolocation: {
-        getCurrentPosition: (
+        watchPosition: (
           ok: (p: {
             coords: { latitude: number; longitude: number; accuracy: number };
           }) => void,
-        ) =>
-          ok({ coords: { latitude: 52.52, longitude: 13.405, accuracy: 9 } }),
+        ) => {
+          ok({ coords: { latitude: 52.52, longitude: 13.405, accuracy: 9 } });
+          return 7;
+        },
+        clearWatch: () => undefined,
       },
     });
     render(<Chat />);
@@ -523,7 +526,7 @@ describe("Chat", () => {
       const chats = calls.filter((c) => c.path === "/v1/chat");
       expect(chats).toHaveLength(2);
       expect((chats[1].body as { message: string }).message).toContain(
-        "my location right now: 52.52000, 13.40500 (±9 m)",
+        "my location right now: 52.520000, 13.405000 (±9 m)",
       );
     });
     // The settled request keeps a record, not live buttons.
@@ -564,10 +567,14 @@ describe("Chat", () => {
     };
     vi.stubGlobal("navigator", {
       geolocation: {
-        getCurrentPosition: (
+        watchPosition: (
           _ok: unknown,
           fail: (e: { code: number; PERMISSION_DENIED: number }) => void,
-        ) => fail({ code: 1, PERMISSION_DENIED: 1 }),
+        ) => {
+          fail({ code: 1, PERMISSION_DENIED: 1 });
+          return 7;
+        },
+        clearWatch: () => undefined,
       },
     });
     render(<Chat />);

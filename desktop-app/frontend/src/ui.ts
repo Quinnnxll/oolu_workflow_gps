@@ -680,6 +680,18 @@ const STRINGS: Record<string, Entry> = {
   },
   "choice.local": { en: "Local", zh: "本地", es: "Local", fr: "Local" },
   "choice.auto": { en: "Auto", zh: "自动", es: "Automático", fr: "Auto" },
+  "choice.metric": {
+    en: "Metric (SI)",
+    zh: "公制 (SI)",
+    es: "Métrico (SI)",
+    fr: "Métrique (SI)",
+  },
+  "choice.imperial": {
+    en: "Imperial",
+    zh: "英制",
+    es: "Imperial",
+    fr: "Impérial",
+  },
   "choice.monthly": { en: "Monthly", zh: "按月", es: "Mensual", fr: "Mensuel" },
   "choice.yearly": { en: "Yearly", zh: "按年", es: "Anual", fr: "Annuel" },
   // ---- Work chrome: the noder's desk.
@@ -1990,6 +2002,20 @@ const SETTING_STRINGS: Record<string, { label: Entry; desc?: Entry }> = {
       zh: "你所在地区的法定货币——所有上限和消费金额都以它输入和显示。换算到内部计量单位使用固定参考汇率。",
       es: "La moneda legal de tu región: cada límite e importe de gasto se introduce y se muestra en ella. La conversión a la unidad interna usa tasas de referencia fijas.",
       fr: "La devise légale de votre région — chaque plafond et montant s'y saisit et s'y affiche. La conversion vers l'unité interne utilise des taux de référence fixes.",
+    },
+  },
+  "account.units": {
+    label: {
+      en: "Measurement units",
+      zh: "计量单位",
+      es: "Unidades de medida",
+      fr: "Unités de mesure",
+    },
+    desc: {
+      en: "Which measurement system OoLu answers in — metres and kilograms (metric/SI) or feet and pounds (imperial). Auto follows your region: imperial for the US, SI everywhere else.",
+      zh: "OoLu 回答时使用的计量系统——米和千克（公制/SI）或英尺和磅（英制）。自动模式跟随你所在地区：美国用英制，其他地区用 SI。",
+      es: "El sistema de medida con el que responde OoLu: metros y kilogramos (métrico/SI) o pies y libras (imperial). Automático sigue tu región: imperial para EE. UU., SI en el resto.",
+      fr: "Le système de mesure utilisé par OoLu — mètres et kilogrammes (métrique/SI) ou pieds et livres (impérial). Auto suit votre région : impérial pour les États-Unis, SI partout ailleurs.",
     },
   },
   "account.log_retention_days": {

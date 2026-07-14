@@ -210,8 +210,10 @@ export function Chat() {
   async function shareLocation() {
     try {
       const here = await currentPosition();
+      // Six decimals ≈ 0.1 m — below the fix's own radius, so the string
+      // never throws away precision the receiver actually resolved.
       void send(
-        `my location right now: ${here.lat.toFixed(5)}, ${here.lon.toFixed(5)}` +
+        `my location right now: ${here.lat.toFixed(6)}, ${here.lon.toFixed(6)}` +
           ` (±${here.accuracy_m} m)`,
       );
     } catch (e) {
