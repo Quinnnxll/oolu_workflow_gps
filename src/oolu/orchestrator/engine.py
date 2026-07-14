@@ -371,11 +371,20 @@ class WorkflowOrchestrator:
         key = f"{state.run_id}:exec:{attempt}"
         # Resolved brief values (stated by the user, or answered in
         # clarification) flow into the actions right before execution;
-        # the recorded route itself stays exactly as planned.
-        from .adapters import bind_brief_parameters
+        # the recorded route itself stays exactly as planned. Order actions
+        # also get the run they belong to and the account scope stamped on,
+        # so the payment resolver can reconcile them with the user's consent.
+        from .adapters import bind_brief_parameters, stamp_order_context
 
-        state.execution = self._executor.execute(
+        contract = state.contract
+        scope = f"{contract.metadata.get('tenant_id', 'main')}:{contract.submitted_by}"
+        bound = stamp_order_context(
             bind_brief_parameters(state.route, state.brief),
+            run_id=state.run_id,
+            authorization_scope=scope,
+        )
+        state.execution = self._executor.execute(
+            bound,
             idempotency_key=key,
             attempt=attempt,
         )

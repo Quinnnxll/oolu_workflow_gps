@@ -4,6 +4,40 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+A plain-language "buy me…" becomes a real, consent-gated order:
+
+- **The intent→blueprint planner: a shopping ask now becomes a commerce
+  route.** Nothing turned free text into a commerce blueprint — the order
+  roads existed but only tests ever built them. `skills/commerce_intent.py`
+  closes that: `parse_order_intent` reads a purchase ask ("buy me a stainless
+  steel water bottle on Amazon for $24.99") into a typed `OrderIntent`, and
+  `plan_commerce_blueprints` turns it into the candidate roads (Amazon when
+  named, the general web road always). It is conservative about the one field
+  that must never be guessed — the amount: an ask with only a budget ceiling
+  ("under $30") or no price returns nothing, so a number the user would be
+  asked to authorize is never invented.
+- **A new seat in the optimizer, and the run stamped at the wrist.**
+  `CommerceRouteOptimizer` sits in the `RouteOptimizer` port — the one seam
+  that sees the brief — so a purchase ask yields commerce routes at plan time
+  while every other ask passes straight through unchanged; it self-grounds its
+  routes against the installed executors, so it needs no grounder changes.
+  Because the plan is built before the run is known, `stamp_order_context`
+  writes `run_id` and the account scope onto order actions at execution
+  binding (in `_phase_execution`, beside `bind_brief_parameters`) — exactly
+  what `PaymentAuthorizationResolver` needs to reconcile the order with the
+  user's consent. `build_host_runtime` turns this on only where the
+  order-placing hands are wired.
+- **End to end, at last.** A single test drives the whole chain the engine
+  runs — intent → commerce route → execution stamps run + scope → the resolver
+  files the consent request and blocks, unspent → a real TOTP authorization
+  releases it → the order runs — against the real consent store. The path that
+  was structurally impossible three commits ago now works from a sentence.
+- **Still honest about the edges:** fuzzy language beyond these patterns
+  belongs behind an LLM intake port (it produces the same `OrderIntent`); the
+  site-specific `browser_steps` that click a given storefront come from site
+  profiles, not this parser; and reconciling the *observed* cart total against
+  the *authorized* amount is a checkout verify step left named, not faked.
+
 The consent finally reaches the order, and the Amazon road gets a hand:
 
 - **A released authorization now flows into the order action — the missing

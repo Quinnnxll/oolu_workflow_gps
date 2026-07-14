@@ -309,6 +309,96 @@ def bind_brief_parameters(route: RoutePlan, brief) -> RoutePlan:
     )
 
 
+# Markers of an order action that needs a payment authorization: it declares a
+# payee and an exact amount. Stamping keys onto only these keeps the wrist
+# from touching non-money actions.
+_ORDER_MARKERS = ("merchant", "amount_micros")
+
+
+def stamp_order_context(
+    route: RoutePlan, *, run_id: str, authorization_scope: str
+) -> RoutePlan:
+    """Stamp the run this order belongs to onto its order actions.
+
+    The planner knows WHAT to buy (payee, exact amount) but not the run or the
+    account — those live on ``RunState`` and only become known here, at
+    execution binding. This writes ``run_id`` and ``authorization_scope`` onto
+    every reserved action that carries an order intent, so
+    ``PaymentAuthorizationResolver`` can reconcile the plan's order with the
+    user's consent. Values already present win (a plan may fix its own), and
+    non-order actions are untouched.
+    """
+    changed = False
+    stamped = []
+    for item in route.chosen.actions:
+        params = item.action.parameters
+        if item.reserved and all(marker in params for marker in _ORDER_MARKERS):
+            merged = dict(params)
+            merged.setdefault("run_id", run_id)
+            merged.setdefault("authorization_scope", authorization_scope)
+            if merged != params:
+                changed = True
+                stamped.append(
+                    item.model_copy(
+                        update={
+                            "action": item.action.model_copy(
+                                update={"parameters": merged}
+                            )
+                        }
+                    )
+                )
+                continue
+        stamped.append(item)
+    if not changed:
+        return route
+    return route.model_copy(
+        update={"chosen": route.chosen.model_copy(update={"actions": stamped})}
+    )
+
+
+class CommerceRouteOptimizer:
+    """A brief-driven planner in the ``RouteOptimizer`` seat.
+
+    The optimizer port is the one seam that receives the brief, so a shopping
+    ask can become candidate routes here instead of being scored against a
+    static list. When the brief parses as a purchase (``parse_order_intent``),
+    this builds the commerce roads (``plan_commerce_blueprints``) and ranks
+    them least-cost — the Amazon road wins when the ask names Amazon and its
+    executor is installed, the general web road is the fallback. Every other
+    brief passes straight through to the wrapped optimizer, so nothing else in
+    the pipeline changes.
+
+    It self-grounds its own blueprints against ``capabilities`` (the installed
+    executors' capabilities), because it built those routes for exactly those
+    hands — so it does not depend on the intake grounder resolving the commerce
+    operations.
+    """
+
+    def __init__(self, fallback, *, capabilities: frozenset[str] = frozenset()):
+        self._fallback = fallback
+        self._capabilities = frozenset(capabilities)
+
+    def optimize(self, brief, grounding: SemanticGrounding) -> RoutePlan:
+        from ..skills.commerce_intent import (
+            parse_order_intent,
+            plan_commerce_blueprints,
+        )
+
+        intent = parse_order_intent(brief.intent)
+        if intent is None:
+            return self._fallback.optimize(brief, grounding)
+        blueprints = plan_commerce_blueprints(
+            intent, correlation=f"order:{intent.merchant}"
+        )
+        grounded = grounding.model_copy(
+            update={
+                "resolved_capabilities": grounding.resolved_capabilities
+                | self._capabilities
+            }
+        )
+        return LeastCostRouteOptimizer(blueprints).optimize(brief, grounded)
+
+
 class ActionExecutorRouteRunner:
     """Execute a route's actions through the existing ``ActionExecutor`` contract.
 

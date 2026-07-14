@@ -455,8 +455,13 @@ def build_orchestrator_factory(
     executors: dict[str, ActionExecutor] | None = None,
     route_model=None,  # chat.ChatModel: semantic route choice, optional
     rebuilder=None,  # orchestrator.RouteRebuilder: the post-retry LLM rebuild
+    # Turn a shopping ask into commerce routes at plan time: wraps whatever
+    # optimizer the branches below choose with a CommerceRouteOptimizer that
+    # parses a purchase brief and builds the order roads. Off by default;
+    # non-purchase briefs pass straight through unchanged.
+    commerce_planning: bool = False,
 ) -> OrchestratorFactory:
-    from .orchestrator.adapters import ModelRouteOptimizer
+    from .orchestrator.adapters import CommerceRouteOptimizer, ModelRouteOptimizer
 
     intaker = ModelBackedIntaker(intake_model)
     executor = ActionExecutorRouteRunner(dict(executors or {}))
@@ -475,6 +480,13 @@ def build_orchestrator_factory(
     else:
         grounder = PassthroughGrounder()
         optimizer = PlanningOnlyOptimizer()
+
+    if commerce_planning:
+        # The commerce optimizer self-grounds its routes against the installed
+        # executors' capabilities, so it works over any base grounder above.
+        optimizer = CommerceRouteOptimizer(
+            optimizer, capabilities=executor.capabilities()
+        )
 
     def factory(audit: DurableAuditLog) -> WorkflowOrchestrator:
         return WorkflowOrchestrator(
@@ -833,6 +845,9 @@ def build_host_runtime(
         executors=run_executors,
         route_model=_planning_router("plan.route"),
         rebuilder=rebuilder,
+        # Turn shopping asks into commerce routes only where the order-placing
+        # hands are actually wired — the same opt-in that registered them.
+        commerce_planning=site_driver is not None or amazon_client is not None,
     )
     durable = DurableWorkflowService(conn, factory)
 
