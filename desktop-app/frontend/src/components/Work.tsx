@@ -283,8 +283,10 @@ export function AddNode({
       await api.workAccountCreate(id, {
         is_supernode: isSupernode,
         supernode_id: under || null,
-        // A Supernode always audits — humans in full control.
-        audit_mode: isSupernode ? true : audit,
+        // An org's ROOT Supernode always audits — humans in full
+        // control. Under a Supernode the creator chooses: not every
+        // node in an org needs a human countersigning every run.
+        audit_mode: isSupernode && !under ? true : audit,
         allow_autodev_data: autoGrow,
         authority_level: under ? authority : null,
         accept_policy: policyOk,
@@ -416,8 +418,8 @@ export function AddNode({
           <label className="checkline">
             <input
               type="checkbox"
-              checked={isSupernode ? true : audit}
-              disabled={isSupernode}
+              checked={isSupernode && !under ? true : audit}
+              disabled={isSupernode && !under}
               onChange={(e) => setAudit(e.target.checked)}
             />
             {tr("work.auditCheck")}
@@ -463,6 +465,66 @@ export function AddNode({
       </button>
       {error ? <div className="error">{error}</div> : null}
     </form>
+  );
+}
+
+// ---- the SOP dial: a member's execution order, set by the org's owner -----
+// Work flows in ascending numbers — an explicit hand-off to the next node,
+// like an SOP; members sharing a number run in PARALLEL; empty means no
+// fixed place (called whenever needed). The server enforces WHO may turn
+// the dial: only the parent Supernode's own humans.
+export function MemberOrderDial({ member }: { member: WorkNode }) {
+  const tr = useT();
+  const [value, setValue] = useState(
+    member.account.exec_order == null ? "" : String(member.account.exec_order),
+  );
+  const [saved, setSaved] = useState(member.account.exec_order ?? null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function save() {
+    const order = value.trim() === "" ? null : Number(value.trim());
+    if (order !== null && (!Number.isInteger(order) || order < 1)) {
+      setError(tr("work.orderBad"));
+      return;
+    }
+    if (order === saved) return;
+    setError("");
+    setBusy(true);
+    try {
+      const account = await api.setNodeOrder(member.node_id, order);
+      setSaved(account.exec_order ?? null);
+      setValue(account.exec_order == null ? "" : String(account.exec_order));
+    } catch (e) {
+      setError((e as Error).message);
+      setValue(saved == null ? "" : String(saved));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <span className="order-dial" title={tr("work.orderHint")}>
+      <input
+        aria-label={`${tr("work.orderLabel")} ${displayNodeName(member.title)}`}
+        placeholder={tr("work.onDemand")}
+        inputMode="numeric"
+        value={value}
+        disabled={busy}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={() => void save()}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            void save();
+          }
+        }}
+      />
+      <span className="muted">
+        {saved == null ? tr("work.onDemand") : tf("work.orderStep", { n: saved })}
+      </span>
+      {error && <span className="error">{error}</span>}
+    </span>
   );
 }
 
@@ -741,6 +803,9 @@ export function NodeThread({
             {showMembers ? "▾" : "▸"} {tr("work.memberNodes")} (
             {members.length})
           </button>
+          {showMembers && (
+            <p className="muted fixed-note">{tr("work.orderHint")}</p>
+          )}
           {showMembers &&
             members.map((m) => (
               <div key={m.node_id} className="commit-row">
@@ -750,6 +815,10 @@ export function NodeThread({
                 </span>
                 {/* Fixed at creation, authority included: display only. */}
                 <span className="muted">{regimeTag(m.account)}</span>
+                {/* The SOP dial is the one MUTABLE knob on a member:
+                    the owner's execution order — serial by number,
+                    parallel on ties, on-demand when empty. */}
+                <MemberOrderDial member={m} />
               </div>
             ))}
         </div>

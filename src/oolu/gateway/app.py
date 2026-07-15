@@ -150,7 +150,13 @@ from ..providers.keyring import PROVIDERS, ModelKeyring
 from ..providers.vault import SecretVault
 from ..representative import pair_exchanges as pair_representative_exchanges
 from ..settings_node import SettingError, SettingsNode
-from ..skills.contract import NodeContract, Slot, SubgraphBody
+from ..skills.contract import (
+    ContractEdge,
+    NodeContract,
+    Slot,
+    SubgraphBody,
+    derive_data_edges,
+)
 from ..skills.inputs import bind_inputs, inputs_manifest
 from ..skills.models import ExecutionStatus, ReusableSkill
 from ..skills.ports import ActionExecutor
@@ -1030,6 +1036,10 @@ class GatewayApp:
             "/v1/work/nodes/{node_id}/template",
             self._org_template_apply,
         )
+        # The Supernode owner's SOP dial: where a member stands in the
+        # org's execution order (serial by number, parallel on ties,
+        # on-demand when unset). Mutable, owner-gated.
+        r.add("POST", "/v1/work/nodes/{node_id}/order", self._work_order)
         # Imitate: a guided lesson recorded in the node's own window —
         # the user names the goal, describes each step, runs the real
         # work through the node (the execution logs pair automatically),
@@ -4799,6 +4809,43 @@ class GatewayApp:
             raise GatewayError(400, "invalid_request", str(exc)) from exc
         return json_response(200, account.model_dump(mode="json"))
 
+    def _work_order(self, request, session, params) -> Response:
+        """The Supernode owner's SOP: where a member stands in the org's
+        execution order. Work flows in ascending numbers — an explicit
+        hand-off to the next node, like an SOP; members sharing a number
+        run in PARALLEL; ``null`` clears it (the node is called whenever
+        needed). Mutable — an SOP is retuned as the org learns — and
+        only the parent Supernode's own humans may set it."""
+        desk = self._require_desk()
+        body = request.body or {}
+        if "order" not in body:
+            raise GatewayError(
+                400,
+                "invalid_request",
+                "send order: a step number, or null for called-when-needed",
+            )
+        order = body.get("order")
+        if isinstance(order, bool) or (
+            order is not None and not isinstance(order, int)
+        ):
+            raise GatewayError(
+                400, "invalid_request", "order must be a whole number or null"
+            )
+        try:
+            account = desk.set_exec_order(
+                params["node_id"],
+                principal=session.principal_id,
+                tenant=session.tenant_id,
+                order=order,
+            )
+        except OwnershipError as exc:
+            raise GatewayError(403, "forbidden", str(exc)) from exc
+        except ContributionError as exc:
+            raise GatewayError(404, "not_found", str(exc)) from exc
+        except ValueError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(200, account.model_dump(mode="json"))
+
     def _work_activity(self, request, session, params) -> Response:
         """The node's execution feed: bound runs expanded into audit steps.
 
@@ -5835,6 +5882,44 @@ class GatewayApp:
             return None
         return self._wallet_lookup(session.tenant_id, session.principal_id)
 
+    def _stamp_fleet_order(self, contract: NodeContract) -> NodeContract:
+        """The Supernode owners' execution order, stamped as ``sop`` edges.
+
+        Within one Supernode's members present on this contract, every
+        child in an earlier order group must finish before any child in
+        the next present group — the explicit hand-off of an SOP. Equal
+        numbers share a group and run in parallel; members with no order
+        impose nothing (called whenever needed). Existing edges — explicit
+        or implied by typed data flow — outrank the SOP in either
+        direction: a slot dependency is physics, and a contradiction must
+        surface as parallelism, never become a cycle."""
+        body = contract.body
+        if not isinstance(body, SubgraphBody):
+            return contract
+        edges_for = getattr(self._desk, "sop_edges_for", None)
+        if edges_for is None:
+            return contract
+        pairs = edges_for([child.id for child in body.nodes])
+        if not pairs:
+            return contract
+        fixed = {(e.source, e.target) for e in body.edges} | {
+            (e.source, e.target) for e in derive_data_edges(body.nodes)
+        }
+        added = [
+            ContractEdge(source=source, target=target, provenance="sop")
+            for source, target in pairs
+            if (source, target) not in fixed and (target, source) not in fixed
+        ]
+        if not added:
+            return contract
+        return contract.model_copy(
+            update={
+                "body": SubgraphBody(
+                    nodes=list(body.nodes), edges=list(body.edges) + added
+                )
+            }
+        )
+
     def _submit_contract_run(self, request, session, params) -> Response:
         """Execute an assembled contract directly, with multi-node binding.
 
@@ -5879,6 +5964,12 @@ class GatewayApp:
                 contract = bind_inputs(contract, {**filled.values, **user_inputs})
         except ValueError as exc:
             raise GatewayError(400, "invalid_request", str(exc)) from exc
+        if self._desk is not None:
+            # The Supernode owners' SOP binds HERE, where every contract
+            # passes on its way to execution: their execution order lands
+            # as explicit sop edges the scheduler honors — work passed to
+            # the next number, ties in parallel, unordered members free.
+            contract = self._stamp_fleet_order(contract)
         try:
             compiled = compile_contract(contract)
         except ValueError as exc:

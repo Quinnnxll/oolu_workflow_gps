@@ -440,7 +440,9 @@ describe("NodeThread", () => {
     expect(account?.body).toEqual({
       is_supernode: true,
       supernode_id: "sn1",
-      audit_mode: true, // Supernodes always audit
+      // Only the org's ROOT Supernode always audits — a nested one
+      // takes the creator's choice (Issue 15), default off.
+      audit_mode: false,
       allow_autodev_data: true,
       authority_level: 3,
       accept_policy: true,
@@ -816,5 +818,43 @@ describe("Imitate: the guided lesson on the tab row", () => {
       name: "Stop & build the node",
     })) as HTMLButtonElement;
     expect(build.disabled).toBe(true);
+  });
+});
+
+describe("the SOP dial: a member's execution order", () => {
+  it("shows the fleet's orders and lets the owner set one", async () => {
+    routes["GET /v1/work/nodes/sn1/activity"] = {
+      status: 200,
+      body: { items: [] },
+    };
+    const sn = supernode();
+    const member = workNode({
+      node_id: "m1",
+      title: "Order Intake",
+      account: {
+        ...workNode().account,
+        node_id: "m1",
+        supernode_id: "sn1",
+        authority_level: 1,
+        exec_order: null,
+      },
+    });
+    routes["POST /v1/work/nodes/m1/order"] = {
+      status: 200,
+      body: { ...member.account, exec_order: 2 },
+    };
+    render(<NodeThread node={sn} allNodes={[sn, member]} />);
+
+    // Unordered members read as on-demand — called whenever needed.
+    expect(await screen.findByText("on demand")).toBeTruthy();
+    const dial = screen.getByLabelText("Execution order for Order Intake");
+    fireEvent.change(dial, { target: { value: "2" } });
+    fireEvent.keyDown(dial, { key: "Enter" });
+
+    expect(await screen.findByText("step 2")).toBeTruthy();
+    const posted = calls.find(
+      (c) => c.method === "POST" && c.path === "/v1/work/nodes/m1/order",
+    );
+    expect(posted?.body).toEqual({ order: 2 });
   });
 });

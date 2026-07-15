@@ -4,6 +4,31 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The org runs like an SOP — optional audit under the root, and an
+owner-set execution order:
+
+- **Not every node in an org audits.** Only the org's ROOT Supernode
+  (one with no parent) still always audits — humans in full control at
+  the top. Everything created UNDER a Supernode — plain members and
+  nested division Supernodes alike — now takes its creator's audit
+  choice (default off): a division no longer needs a human
+  countersigning every run just because of where it sits.
+- **The execution order: the Supernode owner's SOP dial.** Each member
+  node can carry an order number, set (and retuned — the order is
+  MUTABLE, unlike the fixed trust regime) only by the parent Supernode's
+  own humans, via the member list in the Supernode's window or
+  `POST /v1/work/nodes/{id}/order`. Work flows in ascending numbers —
+  an explicit hand-off to the next node, like an SOP; members sharing a
+  number run in PARALLEL; a member with no number is called whenever
+  needed.
+- **The order binds at execution, not just on paper.** Every submitted
+  contract passes the fleet stamp: ordered members present on the
+  contract gain `provenance="sop"` edges the DAG scheduler honors —
+  earlier groups finish before the next PRESENT group starts, ties stay
+  parallel, different Supernodes' SOPs never entangle. Typed data flow
+  outranks the SOP in either direction: a slot dependency is physics,
+  and a contradiction surfaces as parallelism, never a cycle.
+
 Imitate: the honest record button — guided lessons that build nodes:
 
 - **The capability audit, answered in the tree.** The old vision (watch

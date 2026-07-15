@@ -332,8 +332,16 @@ class WorkDesk:
             admin=admin or None,
             is_supernode=is_supernode,
             supernode_id=supernode_id or None,
-            # Humans in full control: a Supernode always audits.
-            audit_mode=True if is_supernode else audit_mode,
+            # Humans in full control: an org's ROOT Supernode always
+            # audits — but under it, the owner chooses. Not every node
+            # created under a Supernode needs a human countersigning
+            # every run; nested divisions and members take the creator's
+            # own audit choice.
+            audit_mode=(
+                True
+                if is_supernode and not supernode_id
+                else audit_mode
+            ),
             allow_autodev_data=allow_autodev_data,
             authority_level=authority_level,
             # Which Node Policy was agreed upfront — the public create
@@ -620,6 +628,86 @@ class WorkDesk:
             blocked.update(account.blocked_users)
             current_id = account.supernode_id
         return frozenset(blocked)
+
+    # ------------------------------------------------------------------ #
+    # The Supernode owner's SOP: an execution order over the fleet.       #
+    # ------------------------------------------------------------------ #
+    def set_exec_order(
+        self,
+        node_id: str,
+        *,
+        principal: str,
+        tenant: str,
+        order: int | None,
+    ) -> NodeAccount:
+        """Where a member stands in the org's execution order — the SOP
+        dial. Work flows in ascending numbers; members sharing a number
+        run in PARALLEL; None clears it (called whenever needed).
+        MUTABLE, unlike the trust regime — an SOP is retuned as the org
+        learns — but only by the parent Supernode's own humans."""
+        node = self._registry.get_node(node_id)
+        if node is None or node.tenant_id != tenant:
+            raise ContributionError(f"no node '{node_id}'")
+        account = self._accounts.get(node_id)
+        if account is None or not account.supernode_id:
+            raise ValueError(
+                "execution order exists only under a Supernode — a "
+                "standalone node is always called whenever needed"
+            )
+        parent = self._accounts.get(account.supernode_id)
+        if parent is None or principal not in {
+            parent.responsible,
+            parent.admin,
+        }:
+            raise OwnershipError(
+                "only the Supernode's own humans set the execution order"
+            )
+        if order is not None:
+            order = int(order)
+            if not 1 <= order <= 999:
+                raise ValueError(
+                    "an execution order is a small step number (1-999) — "
+                    "or none at all for a node called whenever needed"
+                )
+        updated = account.model_copy(
+            update={"exec_order": order, "updated_at": datetime.now(UTC)}
+        )
+        self._accounts.upsert(updated)
+        return updated
+
+    def sop_edges_for(
+        self, version_ids: list[str]
+    ) -> list[tuple[str, str]]:
+        """The owners' SOP as explicit dependencies over a contract's
+        children: within one Supernode's members, every child in an
+        earlier order group runs before every child in the NEXT present
+        group — like work passed down a line. Equal numbers share a
+        group (parallel); members with no order impose nothing and join
+        wherever data needs them. Returns (source, target) version-id
+        pairs; different Supernodes' SOPs never entangle."""
+        fleets: dict[str, dict[int, list[str]]] = {}
+        for version_id in version_ids:
+            version = self._registry.get_version(version_id)
+            if version is None:
+                continue
+            account = self._accounts.get(version.node_id)
+            if (
+                account is None
+                or not account.supernode_id
+                or account.exec_order is None
+            ):
+                continue
+            fleets.setdefault(account.supernode_id, {}).setdefault(
+                account.exec_order, []
+            ).append(version_id)
+        edges: list[tuple[str, str]] = []
+        for ordered in fleets.values():
+            steps = sorted(ordered)
+            for first, then in zip(steps, steps[1:]):
+                for source in ordered[first]:
+                    for target in ordered[then]:
+                        edges.append((source, target))
+        return edges
 
     def audit_holds_for(self, version_ids: list[str]) -> list[str]:
         """Which of these versions belong to audit-mode nodes — the reasons

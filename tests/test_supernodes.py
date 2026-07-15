@@ -78,13 +78,16 @@ def test_member_authority_is_fixed_at_creation_for_everyone(tmp_path):
 
 def test_supernodes_nest_with_authority(tmp_path):
     """A division's Supernode lives under the ministry's, carrying an
-    authority level like any member — and still always audits."""
+    authority level like any member — and, like any node created under
+    a Supernode, taking its creator's audit choice: only the org's ROOT
+    Supernode always audits (Issue 15)."""
     app, conn, ident, registry, *_rest, desk, _ = _desk_build(tmp_path)
     try:
         ministry_id, division_id = _two_nodes(app, ident, registry)
-        desk.create_account(
+        ministry = desk.create_account(
             ministry_id, principal="noder-export", tenant="t1", is_supernode=True
         )
+        assert ministry.audit_mode is True  # the root always audits
         division = desk.create_account(
             division_id,
             principal="noder-export",
@@ -96,7 +99,10 @@ def test_supernodes_nest_with_authority(tmp_path):
         assert division.is_supernode is True
         assert division.supernode_id == ministry_id
         assert division.authority_level == 3
-        assert division.audit_mode is True  # Supernodes always audit
+        # Under the root, audit is the creator's choice — the default
+        # is off: not every division needs a human countersigning
+        # every run.
+        assert division.audit_mode is False
     finally:
         conn.close()
 

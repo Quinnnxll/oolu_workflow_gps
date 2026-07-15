@@ -942,6 +942,18 @@ main.chat-main {
   color: var(--accent);
 }
 
+/* The SOP dial on a member row: a small step-number input. */
+.order-dial {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.order-dial input {
+  width: 72px;
+  text-align: center;
+}
+
 /* ---- the living OoLu avatar, at the head of the conversation ---- */
 .chat-head {
   display: flex;

@@ -143,11 +143,21 @@ class NodeAccount(BaseModel):
         default=None, ge=AUTHORITY_MIN, le=AUTHORITY_MAX
     )
     # A Supernode is a node that manages many nodes — a group, a
-    # corporation, or a government division — with humans in full control:
-    # it is always an audit node.
+    # corporation, or a government division — with humans in full control.
+    # An org's ROOT Supernode (one with no parent) is always an audit
+    # node; anything created UNDER a Supernode — members and nested
+    # Supernodes alike — takes its creator's audit choice: not every
+    # node in an org needs a human countersigning every run.
     is_supernode: bool = False
     # The Supernode this node was created under, if any. Fixed at creation.
     supernode_id: str | None = None
+    # The Supernode owner's SOP dial: where this member stands in the
+    # org's execution order. Work flows in ascending numbers — members
+    # sharing a number run in PARALLEL; None means no fixed place, the
+    # node is called whenever needed. MUTABLE, unlike the trust regime:
+    # an SOP is retuned as the org learns — but only by the parent
+    # Supernode's own humans.
+    exec_order: int | None = Field(default=None, ge=1, le=999)
     # New nodes are not live until verified; errors demote explicitly.
     status: NodeStatus = NodeStatus.NEEDS_VERIFICATION
     # The node's egress CONSENT: the exact public hosts its http actions

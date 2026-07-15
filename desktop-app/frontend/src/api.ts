@@ -723,6 +723,10 @@ export interface NodeAccountView {
   status: string;
   audit_mode: boolean;
   allow_autodev_data: boolean;
+  // The Supernode owner's SOP dial: work flows in ascending numbers,
+  // equal numbers run in parallel, null means called whenever needed.
+  // Mutable by the parent Supernode's humans (unlike the fixed regime).
+  exec_order?: number | null;
   // The node's egress CONSENT: the exact public hosts its web requests may
   // reach. Empty = no network at all — granted, and withdrawable, by the
   // humans who answer for the node.
@@ -1248,6 +1252,12 @@ export const api = {
     req<NodeAccountView>("POST", `/v1/work/nodes/${nodeId}/account`, patch),
   workActivity: (nodeId: string) =>
     req<{ items: NodeRunSteps[] }>("GET", `/v1/work/nodes/${nodeId}/activity`),
+  // The Supernode owner's SOP dial: a member's execution order — a step
+  // number (ties run parallel), or null for called-whenever-needed.
+  setNodeOrder: (nodeId: string, order: number | null) =>
+    req<NodeAccountView>("POST", `/v1/work/nodes/${nodeId}/order`, {
+      order,
+    }),
   // The Supernode's template button: preview the resolved structure
   // (deterministic — a recorded choice never re-reasons), then import
   // the missing seats as member nodes.
