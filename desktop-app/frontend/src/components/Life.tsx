@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, TERMINAL_PHASES } from "../api";
+import QRCode from "qrcode";
+import jsQR from "jsqr";
+import { api, session, TERMINAL_PHASES } from "../api";
 import type {
   FriendConversation,
   FriendMessage,
@@ -66,6 +68,10 @@ export function Life() {
   // paneOpen decides whether the list or the open conversation shows.
   const [folded, setFolded] = useState(loadSidebarFolded);
   const [paneOpen, setPaneOpen] = useState(false);
+  // Renaming a friend the old way: click their avatar, leave a name note
+  // only you see — "Anna from the conference".
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [aliasDraft, setAliasDraft] = useState("");
 
   function open(next: Selection) {
     setSelected(next);
@@ -130,6 +136,22 @@ export function Life() {
     const t = setInterval(refreshRuns, 5000);
     return () => clearInterval(t);
   }, [refreshRuns]);
+
+  async function saveAlias(peer: string) {
+    try {
+      const saved = await api.setFriendAlias(peer, aliasDraft.trim());
+      // Reflect immediately; the poll confirms from the server after.
+      setFriends(
+        (list) =>
+          list?.map((f) =>
+            f.peer === peer ? { ...f, alias: saved.alias } : f,
+          ) ?? list,
+      );
+    } catch {
+      /* the row keeps its old name; the poll tells the truth */
+    }
+    setRenaming(null);
+  }
 
   if (mode === "work") {
     return <Work onLife={() => setMode("life")} />;
@@ -224,40 +246,97 @@ export function Life() {
             : ""}
         </button>
         {groups.friends &&
-          (friends ?? []).map((f) => (
-            <button
-              key={f.peer}
-              className={`convo ${
-                selected.kind === "friend" && selected.peer === f.peer
-                  ? "on"
-                  : ""
-              }`}
-              onClick={() => open({ kind: "friend", peer: f.peer })}
-            >
-              <span
-                className="convo-avatar"
-                style={{
-                  background: `hsl(${identityHue(f.peer)} 45% 34%)`,
-                  color: "#fff",
-                  borderColor: "transparent",
+          (friends ?? []).map((f) =>
+            renaming === f.peer ? (
+              // Renaming replaces the row with an inline note editor —
+              // the old way of remembering people: your label, private.
+              <form
+                key={f.peer}
+                className="convo alias-edit"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void saveAlias(f.peer);
                 }}
               >
-                {f.peer.slice(0, 1).toUpperCase()}
-              </span>
-              <span className="convo-body">
-                <span className="convo-name">
-                  {f.peer}
-                  {f.unread > 0 ? ` · ${f.unread} new` : ""}
+                <span
+                  className="convo-avatar"
+                  style={{
+                    background: `hsl(${identityHue(f.peer)} 45% 34%)`,
+                    color: "#fff",
+                    borderColor: "transparent",
+                  }}
+                >
+                  {(f.alias || f.peer).slice(0, 1).toUpperCase()}
                 </span>
-                <span className="convo-sub">
-                  {/* A fresh friendship has no words yet — invite them. */}
-                  {f.last_text
-                    ? `${f.last_from === f.peer ? "" : "you: "}${f.last_text.slice(0, 40)}`
-                    : tr("friends.sayHello")}
+                <span className="convo-body">
+                  <input
+                    aria-label={`${tr("friends.rename")} ${f.peer}`}
+                    placeholder={tr("friends.namePlaceholder")}
+                    title={tr("friends.renameHint")}
+                    value={aliasDraft}
+                    autoFocus
+                    onChange={(e) => setAliasDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") setRenaming(null);
+                    }}
+                  />
+                  <span className="setting-control row">
+                    <button type="submit">{tr("friends.save")}</button>
+                    <button
+                      type="button"
+                      className="linklike"
+                      onClick={() => setRenaming(null)}
+                    >
+                      {tr("cancel")}
+                    </button>
+                  </span>
                 </span>
-              </span>
-            </button>
-          ))}
+              </form>
+            ) : (
+              <button
+                key={f.peer}
+                className={`convo ${
+                  selected.kind === "friend" && selected.peer === f.peer
+                    ? "on"
+                    : ""
+                }`}
+                onClick={() => open({ kind: "friend", peer: f.peer })}
+              >
+                {/* The avatar is the rename handle — click it to leave a
+                    name note only you see ("Anna from the conference"). */}
+                <span
+                  className="convo-avatar clickable"
+                  role="button"
+                  aria-label={`${tr("friends.rename")} ${f.peer}`}
+                  title={tr("friends.renameHint")}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setAliasDraft(f.alias ?? "");
+                    setRenaming(f.peer);
+                  }}
+                  style={{
+                    background: `hsl(${identityHue(f.peer)} 45% 34%)`,
+                    color: "#fff",
+                    borderColor: "transparent",
+                  }}
+                >
+                  {(f.alias || f.peer).slice(0, 1).toUpperCase()}
+                </span>
+                <span className="convo-body">
+                  <span className="convo-name">
+                    {f.alias || f.peer}
+                    {f.unread > 0 ? ` · ${f.unread} new` : ""}
+                  </span>
+                  <span className="convo-sub">
+                    {/* A fresh friendship has no words yet — invite them. */}
+                    {f.last_text
+                      ? `${f.last_from === f.peer ? "" : "you: "}${f.last_text.slice(0, 40)}`
+                      : tr("friends.sayHello")}
+                  </span>
+                </span>
+              </button>
+            ),
+          )}
         {groups.friends && (
           <button
             className={`convo ${selected.kind === "friends" ? "on" : ""}`}
@@ -411,6 +490,12 @@ export function Life() {
           <FriendThread
             key={selected.peer}
             peer={selected.peer}
+            alias={
+              friends?.find((f) => f.peer === selected.peer)?.alias ?? ""
+            }
+            since={
+              friends?.find((f) => f.peer === selected.peer)?.since ?? ""
+            }
             onActivity={refreshRuns}
           />
         )}
@@ -699,6 +784,13 @@ export function StartConversation({
     null,
   );
   const [incoming, setIncoming] = useState<string[]>([]);
+  // Side by side, physically: one shows their QR code, the other scans
+  // it — the friend request sends itself. The code carries only the
+  // username (oolu:friend:<name>), nothing secret.
+  const me = session.principal ?? "";
+  const [qrMode, setQrMode] = useState<"none" | "show" | "scan">("none");
+  const [qrUrl, setQrUrl] = useState("");
+  const videoRef = useRef<HTMLVideoElement | null>(null);
 
   const loadIncoming = useCallback(async () => {
     try {
@@ -711,6 +803,85 @@ export function StartConversation({
   useEffect(() => {
     void loadIncoming();
   }, [loadIncoming]);
+
+  useEffect(() => {
+    if (qrMode !== "show" || !me) return;
+    let cancelled = false;
+    QRCode.toDataURL(`oolu:friend:${me}`, { margin: 1, width: 220 })
+      .then((url) => {
+        if (!cancelled) setQrUrl(url);
+      })
+      .catch(() => setQrUrl(""));
+    return () => {
+      cancelled = true;
+    };
+  }, [qrMode, me]);
+
+  const connectScanned = useCallback(async (username: string) => {
+    setError("");
+    setBusy(true);
+    try {
+      setQuery(username);
+      let hit = await api.friendLookup(username);
+      if (hit.relationship === "none") {
+        // The scan IS the intent — being handed the code in person is
+        // the invitation, so the request goes out without a second tap.
+        await api.sendFriendRequest(hit.username);
+        hit = await api.friendLookup(hit.username);
+      }
+      setFound(hit);
+      void loadIncoming();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }, [loadIncoming]);
+
+  useEffect(() => {
+    if (qrMode !== "scan") return;
+    let stopped = false;
+    let timer: number | undefined;
+    let stream: MediaStream | null = null;
+    const canvas = document.createElement("canvas");
+    async function start() {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "environment" },
+        });
+        const video = videoRef.current;
+        if (stopped || !video) return;
+        video.srcObject = stream;
+        await video.play();
+        timer = window.setInterval(() => {
+          const v = videoRef.current;
+          if (!v || v.videoWidth === 0) return;
+          canvas.width = v.videoWidth;
+          canvas.height = v.videoHeight;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) return;
+          ctx.drawImage(v, 0, 0);
+          const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const code = jsQR(image.data, image.width, image.height);
+          const match = code?.data.match(/^oolu:friend:(.+)$/);
+          if (match) {
+            setQrMode("none"); // the cleanup below stops the camera
+            void connectScanned(match[1]);
+          }
+        }, 350);
+      } catch {
+        setError(tr("friends.cameraError"));
+        setQrMode("none");
+      }
+    }
+    void start();
+    return () => {
+      stopped = true;
+      if (timer) clearInterval(timer);
+      stream?.getTracks().forEach((t) => t.stop());
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qrMode, connectScanned]);
 
   async function find() {
     setError("");
@@ -760,6 +931,41 @@ export function StartConversation({
           {busy ? tr("friends.looking") : tr("friends.find")}
         </button>
       </form>
+
+      {/* Side by side, physically: show or scan — no typing at all. */}
+      <div className="qr-connect setting-control row">
+        <button
+          type="button"
+          disabled={!me}
+          onClick={() => setQrMode(qrMode === "show" ? "none" : "show")}
+        >
+          {tr("friends.myQr")}
+        </button>
+        <button
+          type="button"
+          onClick={() => setQrMode(qrMode === "scan" ? "none" : "scan")}
+        >
+          {qrMode === "scan" ? tr("friends.scanStop") : tr("friends.scanQr")}
+        </button>
+        <span className="muted">{tr("friends.qrHint")}</span>
+      </div>
+      {qrMode === "show" && qrUrl && (
+        <div className="qr-panel">
+          <img
+            src={qrUrl}
+            alt={`QR code for ${me}`}
+            width={220}
+            height={220}
+          />
+          <div className="muted">{me}</div>
+        </div>
+      )}
+      {qrMode === "scan" && (
+        <div className="qr-panel">
+          <video ref={videoRef} muted playsInline className="qr-video" />
+          <div className="muted">{tr("friends.scanning")}</div>
+        </div>
+      )}
 
       {found && (
         <div className="found-account setting-control row">
@@ -879,9 +1085,15 @@ export function StartConversation({
 // the run list.
 export function FriendThread({
   peer,
+  alias = "",
+  since = "",
   onActivity,
 }: {
   peer: string;
+  // The user's own name note for this friend (empty = plain username),
+  // and when the friendship began — both worn on the header.
+  alias?: string;
+  since?: string;
   onActivity: () => void;
 }) {
   const tr = useT();
@@ -1002,6 +1214,32 @@ export function FriendThread({
 
   return (
     <div className="chat friend-thread">
+      {/* Who you are talking to — worn on the window, just like OoLu's
+          own header: the face, the name (your note first), the username
+          underneath, and when you became friends. */}
+      <div className="chat-head">
+        <span
+          className="convo-avatar"
+          style={{
+            background: `hsl(${identityHue(peer)} 45% 34%)`,
+            color: "#fff",
+            borderColor: "transparent",
+          }}
+        >
+          {(alias || peer).slice(0, 1).toUpperCase()}
+        </span>
+        <div className="chat-head-body">
+          <div className="chat-head-name">{alias || peer}</div>
+          <div className="chat-head-sub">
+            {[
+              alias ? peer : "",
+              since ? tf("friends.since", { date: since.slice(0, 10) }) : "",
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </div>
+        </div>
+      </div>
       <div className="chat-thread">
         {messages === null && <div className="muted">Loading…</div>}
         {messages !== null && messages.length === 0 && (

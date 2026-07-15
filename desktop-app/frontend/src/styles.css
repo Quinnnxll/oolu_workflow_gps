@@ -255,6 +255,50 @@ main {
   border: 1px solid var(--line);
 }
 
+/* The avatar as a handle: click a friend's face to leave a name note. */
+.convo-avatar.clickable {
+  cursor: pointer;
+}
+
+.convo-avatar.clickable:hover {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Renaming a friend replaces the row with an inline note editor. */
+.convo.alias-edit {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+}
+
+.convo.alias-edit input {
+  width: 100%;
+  min-width: 0;
+}
+
+/* Side-by-side QR connect: one shows the code, the other scans it. */
+.qr-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.qr-panel img {
+  border-radius: 8px;
+  background: #fff;
+  padding: 6px;
+}
+
+.qr-video {
+  width: min(320px, 100%);
+  border-radius: 8px;
+  border: 1px solid var(--line);
+}
+
 .convo-body {
   display: flex;
   flex-direction: column;

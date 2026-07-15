@@ -310,6 +310,19 @@ _MSG_PREFS_SCHEMA = """CREATE TABLE IF NOT EXISTS message_prefs (
     PRIMARY KEY (tenant_id, principal)
 )"""
 
+# The old address book's margin note: what I call this person — "Sam from
+# the conference", "plumber Kate" — visible only to its writer, so a
+# first-met friend stays recallable long after the meeting.
+_ALIASES_SCHEMA = """CREATE TABLE IF NOT EXISTS friend_aliases (
+    tenant_id TEXT NOT NULL,
+    owner TEXT NOT NULL,
+    peer TEXT NOT NULL,
+    alias TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, owner, peer)
+)"""
+
+MAX_ALIAS_CHARS = 60
+
 
 class FriendshipError(ValueError):
     """A refused social move — blocked, or nothing to accept."""
@@ -328,6 +341,7 @@ class FriendshipStore:
         with self._conn.transaction() as db:
             db.execute(_FRIENDS_SCHEMA)
             db.execute(_MSG_PREFS_SCHEMA)
+            db.execute(_ALIASES_SCHEMA)
 
     # -- the preference: may strangers message me? --------------------------
     def allow_nonfriend(self, *, tenant: str, principal: str) -> bool:
@@ -460,6 +474,49 @@ class FriendshipStore:
         if self._status(tenant, me, other) == "blocked":
             self._clear(tenant, me, other)
 
+    def set_alias(self, *, tenant: str, owner: str, peer: str, alias: str) -> str:
+        """What ``owner`` calls ``peer`` — their note, nobody else's. An
+        empty alias erases the note (back to the real username)."""
+        alias = " ".join(str(alias or "").split())
+        if len(alias) > MAX_ALIAS_CHARS:
+            raise FriendshipError("a name note is a label, not a paragraph")
+        with self._conn.transaction() as db:
+            if alias:
+                db.execute(
+                    """INSERT INTO friend_aliases (tenant_id, owner, peer, alias)
+                       VALUES (?, ?, ?, ?)
+                       ON CONFLICT(tenant_id, owner, peer) DO UPDATE SET
+                         alias = excluded.alias""",
+                    (tenant, owner, peer, alias),
+                )
+            else:
+                db.execute(
+                    "DELETE FROM friend_aliases WHERE tenant_id = ?"
+                    " AND owner = ? AND peer = ?",
+                    (tenant, owner, peer),
+                )
+        return alias
+
+    def aliases(self, *, tenant: str, owner: str) -> dict[str, str]:
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                "SELECT peer, alias FROM friend_aliases"
+                " WHERE tenant_id = ? AND owner = ?",
+                (tenant, owner),
+            ).fetchall()
+        return {r["peer"]: r["alias"] for r in rows}
+
+    def friends_since(self, *, tenant: str, me: str) -> dict[str, str]:
+        """When each friendship was accepted (my edge's timestamp), ISO —
+        the memory hook 'we met around …' searches ride on."""
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                "SELECT peer, updated_at FROM friendships"
+                " WHERE tenant_id = ? AND owner = ? AND status = 'accepted'",
+                (tenant, me),
+            ).fetchall()
+        return {r["peer"]: r["updated_at"] for r in rows}
+
     def friends_of(self, *, tenant: str, me: str) -> list[str]:
         """Everyone this account is friends with — the ROSTER, not the
         inbox. An accepted friend belongs in the list from the moment of
@@ -496,6 +553,13 @@ class FriendshipStore:
                 "DELETE FROM message_prefs WHERE tenant_id = ? AND principal = ?",
                 (tenant, principal),
             )
-        return int(getattr(c1, "rowcount", 0) or 0) + int(
-            getattr(c2, "rowcount", 0) or 0
+            c3 = db.execute(
+                "DELETE FROM friend_aliases WHERE tenant_id = ?"
+                " AND (owner = ? OR peer = ?)",
+                (tenant, principal, principal),
+            )
+        return (
+            int(getattr(c1, "rowcount", 0) or 0)
+            + int(getattr(c2, "rowcount", 0) or 0)
+            + int(getattr(c3, "rowcount", 0) or 0)
         )

@@ -574,6 +574,10 @@ export interface FriendConversation {
   last_from: string | null;
   last_at: string;
   unread: number;
+  // The owner's own name note — "Anna from the conference" — private to
+  // them; empty means the plain username. And when the friendship began.
+  alias?: string;
+  since?: string;
 }
 
 export interface FriendMessage {
@@ -967,6 +971,14 @@ export const api = {
       "POST",
       `/v1/friends/requests/${encodeURIComponent(peer)}`,
       { action },
+    ),
+  // The owner's own name note for a friend; empty clears it back to the
+  // real username. Nobody else ever sees it.
+  setFriendAlias: (peer: string, alias: string) =>
+    req<{ peer: string; alias: string }>(
+      "PUT",
+      `/v1/friends/${encodeURIComponent(peer)}/alias`,
+      { alias },
     ),
   friendSettings: () =>
     req<{ allow_nonfriend_messages: boolean }>("GET", "/v1/friends/settings"),

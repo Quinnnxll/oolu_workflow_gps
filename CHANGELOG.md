@@ -4,6 +4,32 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Friends the way people actually meet and remember — QR connect, a face
+on the thread, name notes, and OoLu that recalls:
+
+- **Side by side, physically: QR connect.** Start a new conversation now
+  offers **My QR code** (the username as `oolu:friend:<name>` — nothing
+  secret) and **Scan a code** (the camera + an in-page decoder; no image
+  ever leaves the device). Scanning a friend's code looks them up and —
+  being handed the code in person IS the invitation — sends the friend
+  request without a second tap; if they already requested you, Accept is
+  right there. A machine without a camera says so politely.
+- **You always know who you're talking to.** The friend thread now wears
+  a header just like OoLu's own: the avatar, the name (your note first),
+  the real username underneath, and "friends since …" — the date the
+  friendship was accepted.
+- **Rename a friend the old way.** Click a friend's avatar in the list
+  and leave a name note — "Anna from the conference" — the way phones
+  stored prospects and first-met friends for decades. The note is the
+  OWNER's alone (stored per account, ≤60 chars, empty clears it; a
+  paragraph is refused: "a name note is a label, not a paragraph");
+  the other side never sees it, and erasure takes the notes with it.
+- **OoLu recalls people the way memory works.** A new `find_friend` chat
+  tool searches the roster by username, by the user's own name note, by
+  words from the conversation (with who said them), and by roughly when
+  the friendship began (an ISO date or prefix) — reporting only what is
+  actually stored, never guessing a name.
+
 Personal settings split per account — with the tenant layer kept as the
 safe shared base:
 

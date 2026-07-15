@@ -865,6 +865,9 @@ class GatewayApp:
         r.add("PUT", "/v1/friends/settings", self._friend_settings_put)
         r.add("GET", "/v1/friends/{peer}/messages", self._friend_messages)
         r.add("POST", "/v1/friends/{peer}/messages", self._friend_send)
+        # The owner's own name note for a friend — how people remembered
+        # each other before software: "Anna from the conference".
+        r.add("PUT", "/v1/friends/{peer}/alias", self._friend_alias_put)
         # The representative: drafts in the account's own voice. Drafts
         # are proposed, listed, and decided — nothing sends without the
         # user's word (docs/representative-plan.md, Phase 0).
@@ -1175,6 +1178,10 @@ class GatewayApp:
                     accounts=self._accounts,
                     direct_messages=self._direct_messages,
                     local_root=self._local_files_root,
+                    # The friend-memory hands: find a friend by name, by
+                    # the owner's own name note, by what was said, or by
+                    # roughly when the friendship began.
+                    friendships=self._friendships,
                     # The representative's conversation-side hands: list
                     # what waits on the user, redraft with their answer,
                     # or lay a message to rest — all gateway-walled.
@@ -1477,7 +1484,15 @@ class GatewayApp:
         items = store.conversations(
             tenant=session.tenant_id, principal=session.principal_id
         )
+        aliases: dict[str, str] = {}
+        since: dict[str, str] = {}
         if self._friendships is not None:
+            aliases = self._friendships.aliases(
+                tenant=session.tenant_id, owner=session.principal_id
+            )
+            since = self._friendships.friends_since(
+                tenant=session.tenant_id, me=session.principal_id
+            )
             spoken = {item["peer"] for item in items}
             for peer in self._friendships.friends_of(
                 tenant=session.tenant_id, me=session.principal_id
@@ -1493,6 +1508,9 @@ class GatewayApp:
                         "last_at": "",
                     }
                 )
+        for item in items:
+            item["alias"] = aliases.get(item["peer"], "")
+            item["since"] = since.get(item["peer"], "")
         return json_response(200, {"items": items})
 
     def _friends_lookup(self, request, session, params) -> Response:
@@ -1620,6 +1638,24 @@ class GatewayApp:
             tenant=session.tenant_id, principal=session.principal_id, allow=allow
         )
         return json_response(200, {"allow_nonfriend_messages": allow})
+
+    def _friend_alias_put(self, request, session, params) -> Response:
+        """Rename a friend the old way — 'Anna from the conference' — a
+        private note only the owner ever sees. Empty clears it."""
+        from ..social import FriendshipError
+
+        friends = self._require_friendships()
+        peer = self._friend_or_404(session, params["peer"])
+        try:
+            alias = friends.set_alias(
+                tenant=session.tenant_id,
+                owner=session.principal_id,
+                peer=peer,
+                alias=str((request.body or {}).get("alias", "")),
+            )
+        except FriendshipError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(200, {"peer": peer, "alias": alias})
 
     def _friend_messages(self, request, session, params) -> Response:
         """The thread with one person — and opening it reads it."""

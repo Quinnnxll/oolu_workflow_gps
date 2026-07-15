@@ -281,6 +281,99 @@ describe("the foldable list and the one-pane phone flow", () => {
   });
 });
 
+describe("friend memory: name notes and the thread header", () => {
+  const FRIEND = {
+    peer: "bob",
+    last_text: "",
+    last_from: null,
+    last_at: "",
+    unread: 0,
+    alias: "Bob from the gym",
+    since: "2026-05-12T09:00:00+00:00",
+  };
+
+  it("wears the note in the list and the header — username kept honest", async () => {
+    routes["GET /v1/friends"] = { status: 200, body: { items: [FRIEND] } };
+    routes["GET /v1/friends/bob/messages"] = {
+      status: 200,
+      body: { peer: "bob", items: [] },
+    };
+    const { container } = render(<Life />);
+
+    // The list shows the user's own note instead of the bare username.
+    fireEvent.click(await screen.findByText("Bob from the gym"));
+    // The thread header: the note as the name, the real username and the
+    // friendship date underneath — you always know who you talk to.
+    await vi.waitFor(() => {
+      const head = container.querySelector(".friend-thread .chat-head")!;
+      expect(head.querySelector(".chat-head-name")?.textContent).toBe(
+        "Bob from the gym",
+      );
+      expect(head.querySelector(".chat-head-sub")?.textContent).toContain(
+        "bob",
+      );
+      expect(head.querySelector(".chat-head-sub")?.textContent).toContain(
+        "friends since 2026-05-12",
+      );
+    });
+  });
+
+  it("renames a friend by clicking their avatar — the old way", async () => {
+    routes["GET /v1/friends"] = {
+      status: 200,
+      body: { items: [{ ...FRIEND, alias: "" }] },
+    };
+    routes["PUT /v1/friends/bob/alias"] = {
+      status: 200,
+      body: { peer: "bob", alias: "Bob from the conference" },
+    };
+    render(<Life />);
+
+    // The avatar is the rename handle; clicking it must NOT open the chat.
+    fireEvent.click(await screen.findByRole("button", { name: "Rename bob" }));
+    const input = await screen.findByPlaceholderText(
+      "name note (empty = username)",
+    );
+    fireEvent.change(input, { target: { value: "Bob from the conference" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await vi.waitFor(() => {
+      const put = calls.find(
+        (c) => c.method === "PUT" && c.path === "/v1/friends/bob/alias",
+      );
+      expect(put?.body).toEqual({ alias: "Bob from the conference" });
+    });
+    // The list wears the note right away.
+    expect(await screen.findByText("Bob from the conference")).toBeTruthy();
+  });
+});
+
+describe("QR connect: side by side, physically", () => {
+  it("offers both doors, and a machine without a camera fails politely", async () => {
+    const { StartConversation } = await import("./Life");
+    routes["GET /v1/friends/requests"] = { status: 200, body: { items: [] } };
+    render(<StartConversation onOpen={() => {}} />);
+
+    // Signed out (no principal cached): showing MY code is off; scanning
+    // still offers itself — and jsdom has no camera, so it says so.
+    const myQr = screen.getByRole("button", { name: "My QR code" });
+    expect((myQr as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Scan a code" }));
+    expect(
+      await screen.findByText("The camera could not be opened."),
+    ).toBeTruthy();
+  });
+
+  it("shows my code once signed in", async () => {
+    localStorage.setItem("oolu_principal", "alice");
+    const { StartConversation } = await import("./Life");
+    routes["GET /v1/friends/requests"] = { status: 200, body: { items: [] } };
+    render(<StartConversation onOpen={() => {}} />);
+    const myQr = screen.getByRole("button", { name: "My QR code" });
+    expect((myQr as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
 describe("StartConversation: friend requests, not messages", () => {
   it("finds someone and sends a request instead of a message", async () => {
     const { StartConversation } = await import("./Life");

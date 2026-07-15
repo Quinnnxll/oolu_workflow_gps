@@ -102,6 +102,7 @@ one, answer with EXACTLY one JSON object of the shape:
   {"tool": "rep_ignore", "args": {"peer": "<the friend>"}}
   {"tool": "create_reminder", "args": {"text": "<what to remind>", "in_minutes": 30}}   (or "at": "15:00" / "3pm" in the user's local time)
   {"tool": "list_reminders", "args": {}}
+  {"tool": "find_friend", "args": {"query": "<a name, the user's own name note, words they said, or a date like 2026-05>"}}
 The tool's result arrives as the next message; then answer the user with the
 {"say", "task"} shape. write_file replaces the whole file — read it first
 when editing. Touch only files the user asked about. send_message delivers
@@ -109,6 +110,12 @@ to a friend or one of the user's nodes by name — the delivery is marked as
 forwarded via OoLu from the user (you never impersonate them); use it ONLY
 when the user asked to send or forward something. To redo past work, set
 "task" to that run's intent — there is no tool for starting work.
+
+When the user is trying to RECALL a person — "who was that guy from the
+conference", "the friend I added in May", "who told me about the cabin" —
+use find_friend: it searches their friends by username, by the user's own
+name note, by words from the conversation, and by when the friendship
+began, and reports only what is actually stored. Never guess a name.
 
 Replying to or messaging a friend is NEVER work for the engine and NEVER
 needs a node: use send_message — it resolves WHO by name against the
@@ -527,6 +534,15 @@ class RepresentativeTools(Protocol):
 
 
 @runtime_checkable
+class FriendSearchTools(Protocol):
+    """The friend-memory read surface: find a person the way people
+    actually remember — by name, by the owner's own name note, by words
+    from the conversation, or by roughly when the friendship began."""
+
+    def search_friends(self, query: str) -> str: ...
+
+
+@runtime_checkable
 class ReminderTools(Protocol):
     """Reminders as rows with a clock — created deterministically, and
     every confirmation read back from the STORED row, never assumed."""
@@ -569,6 +585,10 @@ class GatewayChatTools(FileChatTools):
         # .reminder_in(text, minutes) / .reminder_at(text, h, m, ampm) /
         # .reminder_list(). None when this host keeps no reminders.
         reminders=None,
+        # The friend-memory read surface (social.FriendshipStore): the
+        # roster, the owner's own name notes, and when each friendship
+        # began — what find_friend searches. None when friends are off.
+        friendships=None,
     ):
         # The file hands are OWNER-gated: this account's documents only.
         super().__init__(store, tenant=tenant, owner=principal)
@@ -582,6 +602,7 @@ class GatewayChatTools(FileChatTools):
         self._local_root = local_root
         self._representative = representative
         self._reminders = reminders
+        self._friendships = friendships
 
     def local_search_enabled(self) -> bool:
         return self._local_root is not None
@@ -709,6 +730,74 @@ class GatewayChatTools(FileChatTools):
             "name": account.username,
             "habit": 0.0,
         }
+
+    def search_friends(self, query: str) -> str:
+        """Find a friend the way memory works: by username, by the user's
+        own name note ("Anna from the conference"), by words from the
+        conversation, or by roughly when the friendship began (an ISO
+        date or prefix like 2026-05). Read-only — nothing is sent, and
+        every line reports only what is actually stored."""
+        if self._friendships is None:
+            return "error: friends are not enabled on this host"
+        wanted = " ".join(str(query or "").split())
+        if not wanted:
+            return "error: tell me a name, a note, some words, or a date"
+        needle = wanted.casefold()
+        notes = self._friendships.aliases(
+            tenant=self._chat_tenant, owner=self._principal
+        )
+        since = self._friendships.friends_since(
+            tenant=self._chat_tenant, me=self._principal
+        )
+        roster = set(
+            self._friendships.friends_of(
+                tenant=self._chat_tenant, me=self._principal
+            )
+        )
+        if self._direct_messages is not None:
+            roster.update(
+                convo["peer"]
+                for convo in self._direct_messages.conversations(
+                    tenant=self._chat_tenant, principal=self._principal
+                )
+            )
+        date_token = re.search(r"\d{4}(?:-\d{2}){0,2}", wanted)
+        hits: list[str] = []
+        for peer in sorted(roster):
+            note = notes.get(peer, "")
+            met = (since.get(peer, "") or "")[:10]
+            reasons: list[str] = []
+            if needle in peer.casefold():
+                reasons.append("their name")
+            if note and needle in note.casefold():
+                reasons.append(f"your note “{note}”")
+            if date_token and met.startswith(date_token.group(0)):
+                reasons.append("when you became friends")
+            if not reasons and self._direct_messages is not None:
+                for message in self._direct_messages.between(
+                    tenant=self._chat_tenant, me=self._principal, peer=peer
+                ):
+                    if needle not in message.body.casefold():
+                        continue
+                    snippet = " ".join(message.body.split())
+                    if len(snippet) > 80:
+                        snippet = snippet[:77] + "…"
+                    who = "they" if message.sender == peer else "you"
+                    reasons.append(f"{who} said “{snippet}”")
+                    break
+            if not reasons:
+                continue
+            label = f"{peer} (your note: “{note}”)" if note else peer
+            when = f", friends since {met}" if met else ""
+            hits.append(f"- {label}{when} — matched {'; '.join(reasons)}")
+            if len(hits) >= 10:
+                break
+        if not hits:
+            return (
+                f"no friend matched “{wanted}” by name, your notes, "
+                "your messages, or the date you became friends"
+            )
+        return "friends matching “{}”:\n{}".format(wanted, "\n".join(hits))
 
     def message_targets(self) -> list[dict]:
         """Where a message can go from here: the friends the user actually
@@ -2207,6 +2296,13 @@ def _run_tool(tools: ChatTools, call: _ToolCall) -> tuple[str, dict | None]:
         return result, action
     if call.name == "list_reminders" and isinstance(tools, ReminderTools):
         return tools.list_reminders(), {"tool": "list_reminders"}
+    if call.name == "find_friend" and isinstance(tools, FriendSearchTools):
+        query = str(call.args.get("query", ""))
+        result = tools.search_friends(query)
+        action = None if result.startswith("error:") else {
+            "tool": "find_friend"
+        }
+        return result, action
     return f"error: unknown tool '{call.name}'", None
 
 
