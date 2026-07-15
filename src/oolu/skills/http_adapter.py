@@ -144,10 +144,21 @@ class HttpActionExecutor:
             grant = frozenset(
                 str(h).strip().lower() for h in raw if str(h).strip()
             )
+        # The OPEN regime: the node stands under a Supernode verified as a
+        # legal entity under the global account, so its web is not limited
+        # to an allowlist — only the org's own block list refuses hosts.
+        # Open beats the allow-grant when both were stamped.
+        blocked: frozenset[str] | None = None
+        if action.parameters.get("_egress_open"):
+            grant = None
+            raw = action.parameters.get("_egress_blocked") or []
+            blocked = frozenset(
+                str(h).strip().lower() for h in raw if str(h).strip()
+            )
 
         try:
             outcome = self._fetch(
-                action, idempotency_key, url.strip(), headers, grant
+                action, idempotency_key, url.strip(), headers, grant, blocked
             )
         except Exception as exc:  # noqa: BLE001 - a dead network is a failed
             # action with a reason, never a crashed run.
@@ -159,11 +170,17 @@ class HttpActionExecutor:
 
     # ------------------------------------------------------------------ #
     def _guard(
-        self, url: str, grant: frozenset[str] | None = None
+        self,
+        url: str,
+        grant: frozenset[str] | None = None,
+        blocked: frozenset[str] | None = None,
     ) -> str | None:
         """The policy verdict for one URL. None = allowed, else the reason.
         ``grant`` is the owning NODE's consented host list: when present it
-        is a second wall inside the machine's — no grant, no egress."""
+        is a second wall inside the machine's — no grant, no egress.
+        ``blocked`` is the open-web regime's inverse wall: the web stands
+        open (a verified Supernode under the global account), and only the
+        org's own refusals — plus their subdomains — die here."""
         parts = urlsplit(url)
         if parts.scheme not in ("http", "https"):
             return f"only http(s) URLs are allowed, not {parts.scheme!r}"
@@ -172,6 +189,11 @@ class HttpActionExecutor:
             return "the URL has no host"
         if not self._policy.host_allowed(host):
             return f"host {host!r} is not on this machine's allowlist"
+        if blocked is not None and _grant_allows(host, blocked):
+            return (
+                f"host {host!r} is blocked by this node's Supernode — "
+                "the org chose not to reach it"
+            )
         if grant is not None:
             if not grant:
                 return (
@@ -198,6 +220,7 @@ class HttpActionExecutor:
         url: str,
         headers: dict[str, str],
         grant: frozenset[str] | None = None,
+        blocked: frozenset[str] | None = None,
     ) -> ExecutionOutcome:
         import httpx
 
@@ -211,7 +234,9 @@ class HttpActionExecutor:
         for _hop in range(_MAX_REDIRECTS + 1):
             # The grant rides every hop: a granted URL that redirects to an
             # ungranted host dies at the bounce, same as the SSRF guard.
-            reason = self._guard(current, grant)
+            # The block list rides the hops too — open web is not a tunnel
+            # through a redirect into what the org refused.
+            reason = self._guard(current, grant, blocked)
             if reason is not None:
                 return self._done(
                     action, key, ExecutionStatus.BLOCKED, error=reason

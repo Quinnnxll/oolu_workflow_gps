@@ -4,6 +4,56 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The verified Supernode's web opens, and its org imports as a template:
+
+- **Open web for a Supernode under the global account.** A Supernode
+  verified as a legal entity (KYC on the Global service) is no longer
+  limited to the 8-host egress grant: its whole fleet's web stands OPEN,
+  flowing down the membership chain exactly like trust. The machine
+  policy and the SSRF guard still stand; what changes is the node-consent
+  wall — `KycService.open_egress` walks the chain, the execution stamp
+  carries `_egress_open`/`_egress_blocked` instead of an allowlist, and
+  the HTTP executor enforces the blocks on every redirect hop. An
+  unverified Supernode (and every edge install) keeps the grant regime.
+- **The org chooses its refusals, like a user.** Two mutable lists on
+  the account, edited through the same door as the grant:
+  `blocked_hosts` — hosts the org refuses (subdomains covered, binding
+  every node down the chain, unioned never cancelled) — and
+  `blocked_users` — principals the org will not hear from: their
+  messages to the Supernode or any member are refused in words, exactly
+  like a user blocking a user. The Work desk shows both editors on the
+  Supernode; verified orgs see the open-web line in place of the grant.
+- **The template button: a working structure, imported.** A Supernode's
+  description resolves to a curated org template — member nodes with a
+  NAME, one clear RESPONSIBILITY each, and an essential starting
+  function — through `GET/POST /v1/work/nodes/{id}/template`.
+  - **Deterministic plan first, reasoning last — the node execution
+    concept applied to org design.** A RECORDED choice returns instantly
+    and is never re-reasoned (the key sticks on the account after the
+    first press); a keyword match over the description is pure
+    arithmetic; only when evidence is thin is the model consulted — and
+    then only to PICK a key from the catalog, never to invent an org
+    chart. No model at all falls back to the lean generic shape.
+  - **Lean beats large.** Every template — commerce, software, client
+    services, public-service division, logistics, research, lean-org —
+    seats at most 5 roles, because communication, coordination, trust,
+    and clear responsibility are what limit mass-produced intelligence;
+    a corporation or government gets a LEANER structure, not a bigger
+    one. Scale comes from each role's node growing its function.
+  - **Essential functions, deterministic.** Each imported node is born
+    with a real script (no model writes it): it emits the role's
+    structured work product — record fields and working checklist — so a
+    route can chain on it today; imports are idempotent by role name,
+    and members start unclaimed like any node minted under a Supernode.
+- Tests: open egress takes a verified Supernode; blocks union down the
+  chain and die at the redirect bounce; open beats the allow-grant; the
+  account door edits blocks and still refuses fixed traits; a blocked
+  user is refused in words; the catalog stays lean; all 28 role scripts
+  execute deterministically and pass screening; resolution order
+  (recorded > matched > model-picked > fallback) with the recorded
+  choice never re-reasoning; the routes preview/record/import
+  idempotently, owner-only. Backend 1215 passed; frontend 232 passed.
+
 The chat frame settles: fold rail, aligned toggle, and hidden node IDs:
 
 - **The list fold moves to its own rail.** The show/hide toggle for the

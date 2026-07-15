@@ -498,6 +498,23 @@ button.convo-group.toggle:hover {
   font-size: 13px;
 }
 
+/* The Supernode's block lists stack two labeled editors; give the
+   second group a breath of air above it. */
+.supernode-blocks .convo-group + .convo-group,
+.supernode-blocks form + .convo-group {
+  margin-top: 10px;
+}
+
+/* The org template: the role list reads as a roster — name on top,
+   responsibility dimmed under it. */
+.org-template .tpl-role span {
+  line-height: 1.45;
+}
+
+.org-template > button {
+  margin-top: 6px;
+}
+
 .commit-row .row {
   display: flex;
   gap: 6px;

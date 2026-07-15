@@ -654,6 +654,14 @@ export interface NodeAccountView {
   // reach. Empty = no network at all — granted, and withdrawable, by the
   // humans who answer for the node.
   network_hosts?: string[];
+  // The Supernode's block lists — the same consent inverted. A verified
+  // Supernode under the global account has its web OPEN; these are the
+  // hosts the org refuses, and the principals it will not hear from.
+  blocked_hosts?: string[];
+  blocked_users?: string[];
+  // The org template this Supernode resolved to — recorded once, never
+  // re-reasoned. Empty until the template button first runs.
+  org_template?: string;
 }
 
 // The regime fixed at creation — audit, auto-growing, supernode-ness and
@@ -677,6 +685,39 @@ export interface NodeAccountPatch {
   status: string;
   // Replaces the whole egress grant — bare hostnames only, at most 8.
   network_hosts: string[];
+  // Replaces the Supernode's block lists whole, same shape discipline.
+  blocked_hosts: string[];
+  blocked_users: string[];
+}
+
+// One seat in a Supernode's org template: a name, ONE responsibility,
+// and the essential function the imported node is born with.
+export interface OrgTemplateRole {
+  name: string;
+  responsibility: string;
+  goal: string;
+  authority: number;
+  // Whether a member with this name already sits under the Supernode.
+  exists: boolean;
+}
+
+// The resolved template: deterministic-first ("recorded" | "matched"),
+// the model only ever PICKS from the catalog ("model"), else "fallback".
+export interface OrgTemplateView {
+  key: string;
+  name: string;
+  purpose: string;
+  source: string;
+  evidence: string[];
+  roles: OrgTemplateRole[];
+}
+
+export interface OrgTemplateApplied {
+  key: string;
+  name: string;
+  source: string;
+  created: { node_id: string; name: string; authority: number }[];
+  skipped: { name: string; reason: string }[];
 }
 
 export interface WorkNode {
@@ -1091,6 +1132,13 @@ export const api = {
     req<NodeAccountView>("POST", `/v1/work/nodes/${nodeId}/account`, patch),
   workActivity: (nodeId: string) =>
     req<{ items: NodeRunSteps[] }>("GET", `/v1/work/nodes/${nodeId}/activity`),
+  // The Supernode's template button: preview the resolved structure
+  // (deterministic — a recorded choice never re-reasons), then import
+  // the missing seats as member nodes.
+  orgTemplate: (nodeId: string) =>
+    req<OrgTemplateView>("GET", `/v1/work/nodes/${nodeId}/template`),
+  orgTemplateApply: (nodeId: string) =>
+    req<OrgTemplateApplied>("POST", `/v1/work/nodes/${nodeId}/template`, {}),
   // Supernode KYC: status + apply (a reviewer decides platform-side).
   kycStatus: (nodeId: string) =>
     req<KycView>("GET", `/v1/work/nodes/${nodeId}/kyc`),

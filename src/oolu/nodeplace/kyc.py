@@ -303,6 +303,35 @@ class KycService:
             current_id = account.supernode_id
         return best
 
+    def open_egress(self, node_id: str) -> tuple[str, ...] | None:
+        """The open-web verdict for one node: ``None`` keeps the allow-
+        grant regime; a tuple means the web stands OPEN minus these hosts.
+
+        A Supernode set up under the global account — a VERIFIED legal
+        entity (verification only happens on the Global service) — is not
+        limited to the 8-host grant: its whole fleet's web is open, like
+        trust, flowing down the membership chain. What remains is the
+        org's own CHOICE: every ``blocked_hosts`` list along the chain
+        binds (a ministry's block covers its divisions), unioned."""
+        open_web = False
+        blocked: set[str] = set()
+        seen: set[str] = set()
+        current_id: str | None = node_id
+        while current_id and current_id not in seen:
+            seen.add(current_id)
+            account = self._accounts.get(current_id)
+            if account is None:
+                break
+            blocked.update(account.blocked_hosts)
+            if account.is_supernode:
+                record = self._store.get(current_id)
+                if record is not None and record.status is KycStatus.VERIFIED:
+                    open_web = True
+            current_id = account.supernode_id
+        if not open_web:
+            return None
+        return tuple(sorted(blocked))
+
 
 class SubscriptionRequired(ValueError):
     """KYC asked for without the paying plan that carries its fee."""

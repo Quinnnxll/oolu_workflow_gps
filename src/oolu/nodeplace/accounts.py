@@ -25,15 +25,26 @@ AUTHORITY_MAX = 5
 # short, reviewable list, never a mirror of the internet.
 MAX_NETWORK_HOSTS = 8
 
+# A Supernode's block list may be longer than a grant (an org refuses more
+# than it curates), but it is still a reviewable list, not a firewall dump.
+MAX_BLOCKED_HOSTS = 32
 
-def normalize_network_hosts(hosts: object) -> tuple[str, ...]:
-    """A node's egress grant in canonical form: bare lowercase hostnames.
+# How many principals a Supernode may block. Same spirit: a human-sized,
+# reviewable list.
+MAX_BLOCKED_USERS = 64
 
-    Refused in words: schemes/paths (a grant names a HOST, not a URL),
-    IP literals and localhost (the SSRF guard's territory — a grant must
-    never be a tunnel into the machine's own network), wildcards, and
-    silly lengths. Subdomains of a granted host are implicitly covered,
-    matching the executor's semantics."""
+
+def normalize_network_hosts(
+    hosts: object, *, max_hosts: int = MAX_NETWORK_HOSTS, kind: str = "grant"
+) -> tuple[str, ...]:
+    """A node's egress host list in canonical form: bare lowercase hostnames.
+
+    Used for the allow-grant AND the Supernode's block list — both name
+    hosts the same way. Refused in words: schemes/paths (the list names a
+    HOST, not a URL), IP literals and localhost (the SSRF guard's
+    territory — a grant must never be a tunnel into the machine's own
+    network), wildcards, and silly lengths. Subdomains of a listed host
+    are implicitly covered, matching the executor's semantics."""
     if hosts is None:
         return ()
     if not isinstance(hosts, (list, tuple)):
@@ -45,13 +56,13 @@ def normalize_network_hosts(hosts: object) -> tuple[str, ...]:
             continue
         if "://" in host or "/" in host or ":" in host or " " in host:
             raise ValueError(
-                f"'{host}' is not a bare hostname — grants name hosts, "
+                f"'{host}' is not a bare hostname — a {kind} names hosts, "
                 "not URLs or ports"
             )
         if "*" in host:
             raise ValueError(
-                "wildcards are not grants — name the host; subdomains of "
-                "a granted host are already covered"
+                f"wildcards are not a {kind} — name the host; subdomains "
+                "of a listed host are already covered"
             )
         if host == "localhost" or host.replace(".", "").isdigit():
             raise ValueError(
@@ -62,10 +73,41 @@ def normalize_network_hosts(hosts: object) -> tuple[str, ...]:
             raise ValueError(f"'{host}' is not a valid public hostname")
         if host not in cleaned:
             cleaned.append(host)
-    if len(cleaned) > MAX_NETWORK_HOSTS:
+    if len(cleaned) > max_hosts:
         raise ValueError(
-            f"a grant names at most {MAX_NETWORK_HOSTS} hosts — a short, "
+            f"a {kind} names at most {max_hosts} hosts — a short, "
             "reviewable list, never a mirror of the internet"
+        )
+    return tuple(cleaned)
+
+
+def normalize_blocked_hosts(hosts: object) -> tuple[str, ...]:
+    """The Supernode's own deny list, canonicalized like a grant."""
+    return normalize_network_hosts(
+        hosts, max_hosts=MAX_BLOCKED_HOSTS, kind="block list"
+    )
+
+
+def normalize_blocked_users(users: object) -> tuple[str, ...]:
+    """The principals a Supernode refuses, canonicalized: trimmed,
+    deduplicated usernames — a human-sized list, refused past the cap."""
+    if users is None:
+        return ()
+    if not isinstance(users, (list, tuple)):
+        raise ValueError("blocked users must be a list of usernames")
+    cleaned: list[str] = []
+    for raw in users:
+        name = str(raw).strip()
+        if not name:
+            continue
+        if len(name) > 120 or "\n" in name:
+            raise ValueError(f"'{name[:40]}…' is not a username")
+        if name not in cleaned:
+            cleaned.append(name)
+    if len(cleaned) > MAX_BLOCKED_USERS:
+        raise ValueError(
+            f"a block list names at most {MAX_BLOCKED_USERS} users — "
+            "a reviewable list, not a census"
         )
     return tuple(cleaned)
 
@@ -113,6 +155,16 @@ class NodeAccount(BaseModel):
     # Empty = no egress at all for this node — fail closed. Operational
     # like status, not fixed at creation: consent can change its mind.
     network_hosts: tuple[str, ...] = ()
+    # The other direction, for Supernodes whose web stands OPEN (a verified
+    # legal entity under the global account is not limited to an 8-host
+    # grant): the hosts this org CHOOSES to refuse. Binds every node down
+    # the membership chain. Mutable, like the grant — it is the same
+    # consent, inverted.
+    blocked_hosts: tuple[str, ...] = ()
+    # The principals this Supernode refuses — like a user blocking a user:
+    # a blocked principal's messages to the Supernode and its members are
+    # refused in words. Mutable by the same humans who answer for the node.
+    blocked_users: tuple[str, ...] = ()
     # An audit node never runs unattended: every request is held until a
     # human commits it. FIXED AT CREATION — a node cannot quietly shed
     # its audit regime later.
@@ -127,6 +179,10 @@ class NodeAccount(BaseModel):
     # the agreement that authorizes hygiene (clone/fraud/zombie
     # detection with restriction or removal). FIXED AT CREATION.
     policy_version: str = ""
+    # The org template this Supernode resolved to (by key), recorded the
+    # FIRST time the template button ran — so the choice is decided once
+    # and never re-reasoned, model or not. Empty = not resolved yet.
+    org_template: str = ""
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 

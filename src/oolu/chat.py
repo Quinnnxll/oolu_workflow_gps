@@ -694,6 +694,17 @@ class GatewayChatTools(FileChatTools):
 
             from .naming import concise_name
 
+            # A Supernode blocks principals just like a user blocks a user:
+            # a blocked sender's message reaches neither the Supernode nor
+            # any node down its chain — refused in words, never dropped.
+            blocked_for = getattr(self._desk, "blocked_users_for", None)
+            if blocked_for is not None and self._principal in blocked_for(
+                target_id
+            ):
+                return (
+                    "error: this node's organization has blocked messages "
+                    "from your account"
+                )
             name = (
                 f"{(concise_name(text) or 'message').lower()}"
                 f"-{uuid4().hex[:6]}.md"

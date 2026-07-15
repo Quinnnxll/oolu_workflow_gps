@@ -120,6 +120,7 @@ def stamp_egress_grants(
     contract: NodeContract,
     compiled: CompiledContract,
     grants: Mapping[str, tuple[str, ...]],
+    open_grants: Mapping[str, tuple[str, ...]] | None = None,
 ) -> CompiledContract:
     """Stamp each node-owned http action with its node's egress grant.
 
@@ -132,12 +133,20 @@ def stamp_egress_grants(
     (ad-hoc, unregistered) stay unstamped — they are the submitter's own
     direct request, governed by the machine policy alone.
 
+    ``open_grants`` is the OTHER regime, for nodes under a Supernode set
+    up under the global account (a verified legal entity): version id →
+    the org's own blocked hosts. Those children get ``_egress_open`` and
+    ``_egress_blocked`` instead of an allowlist — their web stands open,
+    minus what the org chose to refuse. Open beats the allow-grant when
+    both apply: verification is the wider consent.
+
     Call this at EXECUTION time, not hold time: consent is withdrawable,
     so a held contract must run under the grants of the moment it is
     approved, not the moment it was submitted."""
     children = (
         contract.body.nodes if isinstance(contract.body, SubgraphBody) else [contract]
     )
+    open_grants = open_grants or {}
     id_by_name = {child.name: child.id for child in children}
     stamped: list = []
     changed = False
@@ -145,7 +154,19 @@ def stamp_egress_grants(
         action = item.action
         owner = compiled.owners.get(action.id)
         version_id = id_by_name.get(owner or "")
-        if action.adapter == "http" and version_id in grants:
+        if action.adapter == "http" and version_id in open_grants:
+            action = action.model_copy(
+                update={
+                    "parameters": {
+                        **action.parameters,
+                        "_egress_open": True,
+                        "_egress_blocked": list(open_grants[version_id]),
+                    }
+                }
+            )
+            item = item.model_copy(update={"action": action})
+            changed = True
+        elif action.adapter == "http" and version_id in grants:
             action = action.model_copy(
                 update={
                     "parameters": {

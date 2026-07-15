@@ -984,6 +984,15 @@ class GatewayApp:
         r.add("GET", "/v1/work/nodes", self._work_nodes)
         r.add("POST", "/v1/work/nodes/{node_id}/account", self._work_account)
         r.add("GET", "/v1/work/nodes/{node_id}/activity", self._work_activity)
+        # The Supernode's template button: preview resolves the org
+        # structure (deterministic-first) and apply imports the member
+        # nodes — role by role, each with its essential function.
+        r.add("GET", "/v1/work/nodes/{node_id}/template", self._org_template)
+        r.add(
+            "POST",
+            "/v1/work/nodes/{node_id}/template",
+            self._org_template_apply,
+        )
         r.add("GET", "/v1/work/nodes/{node_id}/kyc", self._kyc_status)
         r.add("POST", "/v1/work/nodes/{node_id}/kyc", self._kyc_apply)
         r.add("POST", "/v1/work/nodes/{node_id}/kyc/decide", self._kyc_decide)
@@ -4236,6 +4245,12 @@ class GatewayApp:
                     # actions may reach — given and withdrawable by the
                     # humans who answer for the node, validated hard.
                     network_hosts=body.get("network_hosts"),
+                    # The same consent inverted, for a Supernode whose web
+                    # stands open (verified under the global account): the
+                    # hosts the org refuses, and the principals it will
+                    # not hear from — just like a user blocking a user.
+                    blocked_hosts=body.get("blocked_hosts"),
+                    blocked_users=body.get("blocked_users"),
                 )
         except OwnershipError as exc:
             raise GatewayError(403, "forbidden", str(exc)) from exc
@@ -4510,6 +4525,187 @@ class GatewayApp:
             if record.tenant == session.tenant_id
         ]
         return json_response(200, {"items": pending})
+
+    # ------------------------------------------------------------------ #
+    # The Supernode's template button: a working structure, imported.    #
+    # ------------------------------------------------------------------ #
+    def _resolve_org_template(self, session, node_id: str):
+        """Gate, resolve, record — the shared half of preview and apply.
+
+        Deterministic plan first, exactly like node execution: a RECORDED
+        choice returns instantly (never re-reasoned); a keyword match on
+        the Supernode's description is pure arithmetic; only when the
+        evidence is thin is the model consulted — and then only to PICK a
+        key from the catalog, never to invent a structure. The verdict is
+        recorded on the account, so every later press — preview or apply,
+        for every role and node id — is free and identical."""
+        from ..nodeplace.org_templates import (
+            model_chooser,
+            resolve_org_template,
+        )
+
+        desk = self._require_desk()
+        try:
+            account = desk.supernode_owned(
+                node_id, principal=session.principal_id, tenant=session.tenant_id
+            )
+        except OwnershipError as exc:
+            raise GatewayError(403, "forbidden", str(exc)) from exc
+        except ContributionError as exc:
+            raise GatewayError(404, "not_found", str(exc)) from exc
+        description = desk.describe(node_id, tenant=session.tenant_id)
+        author = (
+            None
+            if account.org_template
+            else self._node_function_author(session.tenant_id)
+        )
+        resolved = resolve_org_template(
+            description,
+            recorded=account.org_template,
+            chooser=model_chooser(author) if author is not None else None,
+        )
+        desk.record_org_template(
+            node_id,
+            principal=session.principal_id,
+            tenant=session.tenant_id,
+            key=resolved.template.key,
+        )
+        return desk, resolved
+
+    def _org_template(self, request, session, params) -> Response:
+        """Preview: the resolved structure, role by role, with which
+        seats already exist under this Supernode — nothing minted."""
+        node_id = params["node_id"]
+        desk, resolved = self._resolve_org_template(session, node_id)
+        existing = {
+            m["title"].strip().lower()
+            for m in desk.members_of(node_id, tenant=session.tenant_id)
+        }
+        return json_response(
+            200,
+            {
+                "key": resolved.template.key,
+                "name": resolved.template.name,
+                "purpose": resolved.template.purpose,
+                "source": resolved.source,
+                "evidence": list(resolved.evidence),
+                "roles": [
+                    {
+                        "name": role.name,
+                        "responsibility": role.responsibility,
+                        "goal": role.goal,
+                        "authority": role.authority,
+                        "exists": role.name.strip().lower() in existing,
+                    }
+                    for role in resolved.template.roles
+                ],
+            },
+        )
+
+    def _org_template_apply(self, request, session, params) -> Response:
+        """Apply: import the missing seats as member nodes under this
+        Supernode — each with its NAME, its one responsibility, and its
+        essential function as a DETERMINISTIC script (the template is the
+        plan; no model writes these). Idempotent by role name: a seat
+        that already sits is skipped, never duplicated. Members start
+        unclaimed, exactly like any node minted under a Supernode."""
+        from ..nodeplace.org_templates import role_script
+
+        node_id = params["node_id"]
+        desk, resolved = self._resolve_org_template(session, node_id)
+        if self._nodeplace is None:
+            raise GatewayError(404, "not_found", "nodes are not enabled here")
+        existing = {
+            m["title"].strip().lower()
+            for m in desk.members_of(node_id, tenant=session.tenant_id)
+        }
+        created: list[dict] = []
+        skipped: list[dict] = []
+        for role in resolved.template.roles:
+            if role.name.strip().lower() in existing:
+                skipped.append({"name": role.name, "reason": "already seated"})
+                continue
+            skill_id = self._function_skill_id(session.tenant_id, role.goal)
+            skill = ReusableSkill.model_validate(
+                {
+                    "id": skill_id,
+                    "name": role.name,
+                    "description": role.goal,
+                    "signature": {"application": "script", "adapter": "script"},
+                    "parameters": [],
+                    # The seat's essential function: deterministic, from
+                    # the template — emits the role's structured work
+                    # product. Grown later by rebuilding with a model.
+                    "actions": [
+                        {
+                            "correlation_id": "function",
+                            "adapter": "script",
+                            "operation": "run",
+                            "parameters": {
+                                "goal": role.goal,
+                                "script": role_script(role),
+                                "node_key": f"node:{skill_id}",
+                            },
+                        }
+                    ],
+                }
+            )
+            try:
+                result = self._nodeplace.contribute(
+                    noder_principal=session.principal_id,
+                    tenant_id=session.tenant_id,
+                    skill=skill,
+                    semver="1.0.0",
+                    title=role.name,
+                    summary=role.responsibility,
+                    produces=[
+                        Slot(
+                            name="work_product",
+                            value_type="str",
+                            role="result",
+                        )
+                    ],
+                )
+                desk.create_account(
+                    result.node.node_id,
+                    principal=session.principal_id,
+                    tenant=session.tenant_id,
+                    supernode_id=node_id,
+                    authority_level=role.authority,
+                    policy_version=NODE_POLICY_VERSION,
+                )
+            except (ContributionError, OwnershipError, ValueError) as exc:
+                skipped.append({"name": role.name, "reason": str(exc)})
+                continue
+            created.append(
+                {
+                    "node_id": result.node.node_id,
+                    "name": role.name,
+                    "authority": role.authority,
+                }
+            )
+        self._durable.audit.append(
+            "org_template.applied",
+            {
+                "run_id": f"template:{node_id}",
+                "node_id": node_id,
+                "template": resolved.template.key,
+                "source": resolved.source,
+                "created": len(created),
+                "skipped": len(skipped),
+                "by": session.principal_id,
+            },
+        )
+        return json_response(
+            200,
+            {
+                "key": resolved.template.key,
+                "name": resolved.template.name,
+                "source": resolved.source,
+                "created": created,
+                "skipped": skipped,
+            },
+        )
 
     # ------------------------------------------------------------------ #
     # Node hygiene: the policy agreed upfront, and its enforcement.       #
@@ -5025,11 +5221,7 @@ class GatewayApp:
             # Each registered child's http actions carry that node's egress
             # CONSENT into the executor — stamped at execution time, so the
             # run honors the grants of this moment, not of compile time.
-            compiled = stamp_egress_grants(
-                contract,
-                compiled,
-                self._desk.network_grants([c.id for c in children]),
-            )
+            compiled = self._stamp_egress(contract, compiled, children)
 
         def submit() -> dict:
             result = execute_contract(
@@ -5061,6 +5253,26 @@ class GatewayApp:
             else submit()
         )
         return json_response(200, result)
+
+    def _stamp_egress(self, contract, compiled, children):
+        """Stamp each registered child's egress regime onto its http
+        actions: the allow-grant by default, or the OPEN web (minus the
+        org's blocked hosts) for nodes under a Supernode verified as a
+        legal entity under the global account — trust widens consent,
+        the same way it lifts ranking."""
+        ids = [c.id for c in children]
+        open_grants: dict[str, tuple[str, ...]] = {}
+        if self._kyc is not None:
+            for version_id, node_id in self._desk.owning_nodes(ids).items():
+                verdict = self._kyc.open_egress(node_id)
+                if verdict is not None:
+                    open_grants[version_id] = verdict
+        return stamp_egress_grants(
+            contract,
+            compiled,
+            self._desk.network_grants(ids),
+            open_grants=open_grants,
+        )
 
     def _sweep_holds(self, request) -> set[str]:
         """Lazily expire stale holds; every sweep is audited per hold."""
@@ -5270,11 +5482,7 @@ class GatewayApp:
                 if isinstance(parsed.body, SubgraphBody)
                 else [parsed]
             )
-            compiled = stamp_egress_grants(
-                parsed,
-                compiled,
-                self._desk.network_grants([c.id for c in members]),
-            )
+            compiled = self._stamp_egress(parsed, compiled, members)
         result = execute_contract(
             parsed,
             compiled,

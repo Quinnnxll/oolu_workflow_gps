@@ -26,6 +26,8 @@ from .accounts import (
     NodeAccount,
     NodeAccountStore,
     NodeStatus,
+    normalize_blocked_hosts,
+    normalize_blocked_users,
     normalize_network_hosts,
 )
 from .errors import ContributionError, OwnershipError
@@ -222,6 +224,41 @@ class WorkDesk:
             )
         return members
 
+    def members_of(self, supernode_id: str, *, tenant: str) -> list[dict]:
+        """A Supernode's own fleet, same-tenant, each as
+        ``{"node_id", "title"}`` — what the template import checks
+        against so a role that already sits is never minted twice."""
+        members: list[dict] = []
+        for member in self._accounts.under(supernode_id):
+            node = self._registry.get_node(member.node_id)
+            if node is None or node.tenant_id != tenant:
+                continue
+            version_ids = [
+                v.version_id for v in self._registry.list_versions(node.node_id)
+            ]
+            members.append(
+                {"node_id": node.node_id, "title": self._title(node, version_ids)}
+            )
+        return members
+
+    def describe(self, node_id: str, *, tenant: str) -> str:
+        """The node's human description — its title plus the newest
+        listing's summary. What the template matcher reads."""
+        node = self._registry.get_node(node_id)
+        if node is None or node.tenant_id != tenant:
+            return ""
+        version_ids = [
+            v.version_id for v in self._registry.list_versions(node_id)
+        ]
+        title = self._title(node, version_ids)
+        summary = ""
+        for version_id in reversed(version_ids):
+            listing = self._registry.listing_for_version(version_id)
+            if listing is not None:
+                summary = listing.summary
+                break
+        return " — ".join(p for p in (title, summary) if p)
+
     def mark_verified(self, node_id: str) -> NodeAccount | None:
         """The verification door: a node whose own function completed a
         real, audited run stops being 'needs_verification' and goes live.
@@ -352,16 +389,20 @@ class WorkDesk:
         status: str | None = None,
         admin: str | None = None,
         network_hosts: list[str] | tuple[str, ...] | None = None,
+        blocked_hosts: list[str] | tuple[str, ...] | None = None,
+        blocked_users: list[str] | tuple[str, ...] | None = None,
     ) -> NodeAccount:
-        """The mutable slice of an account: status, admin, and the egress
-        grant. NOTHING else.
+        """The mutable slice of an account: status, admin, the egress
+        grant, and the Supernode's block lists. NOTHING else.
 
         Authority level, Supernode membership, audit, and auto-growing were
         all fixed at creation — for everyone, the Supernode's humans
         included — and are refused here by construction: this method simply
         has no parameters for them. The egress grant IS mutable because it
         is consent — given and withdrawable by the same humans who answer
-        for the node."""
+        for the node — and the block lists are the same consent inverted:
+        which hosts an open-web Supernode refuses, and which principals it
+        will not hear from."""
         node = self._registry.get_node(node_id)
         if node is None or node.tenant_id != tenant:
             raise ContributionError(f"no node '{node_id}'")
@@ -383,6 +424,16 @@ class WorkDesk:
                     current.network_hosts
                     if network_hosts is None
                     else normalize_network_hosts(network_hosts)
+                ),
+                "blocked_hosts": (
+                    current.blocked_hosts
+                    if blocked_hosts is None
+                    else normalize_blocked_hosts(blocked_hosts)
+                ),
+                "blocked_users": (
+                    current.blocked_users
+                    if blocked_users is None
+                    else normalize_blocked_users(blocked_users)
                 ),
                 "updated_at": datetime.now(UTC),
             }
@@ -499,6 +550,76 @@ class WorkDesk:
                 account.network_hosts if account is not None else ()
             )
         return grants
+
+    def owning_nodes(self, version_ids: list[str]) -> dict[str, str]:
+        """Each REGISTERED version's owning node id, keyed by version id —
+        the join the open-web verdict needs (per node, not per version).
+        Unknown versions are omitted, same as ``network_grants``."""
+        owners: dict[str, str] = {}
+        for version_id in version_ids:
+            version = self._registry.get_version(version_id)
+            if version is not None:
+                owners[version_id] = version.node_id
+        return owners
+
+    def supernode_owned(
+        self, node_id: str, *, principal: str, tenant: str
+    ) -> NodeAccount:
+        """The template door's gate: the node exists here, IS a Supernode,
+        and the caller is one of its humans — or the exact refusal."""
+        node = self._registry.get_node(node_id)
+        if node is None or node.tenant_id != tenant:
+            raise ContributionError(f"no node '{node_id}'")
+        current = self._accounts.get(node_id)
+        if current is None or not current.is_supernode:
+            raise ContributionError(
+                "org templates belong to Supernodes — this node is not one"
+            )
+        allowed = {node.noder_principal, current.responsible}
+        if current.admin:
+            allowed.add(current.admin)
+        if principal not in allowed:
+            raise OwnershipError(
+                "only the Supernode's owner, responsible, or admin may "
+                "resolve its template"
+            )
+        return current
+
+    def record_org_template(
+        self, node_id: str, *, principal: str, tenant: str, key: str
+    ) -> NodeAccount:
+        """Record which org template this Supernode resolved to — ONCE.
+
+        The first resolution wins and sticks: a recorded choice is never
+        re-reasoned, which is what keeps the template button deterministic
+        (and free) on every later press. Only the Supernode's own humans
+        may record it."""
+        current = self.supernode_owned(
+            node_id, principal=principal, tenant=tenant
+        )
+        if current.org_template:
+            return current  # decided once; recording is idempotent
+        account = current.model_copy(
+            update={"org_template": key, "updated_at": datetime.now(UTC)}
+        )
+        self._accounts.upsert(account)
+        return account
+
+    def blocked_users_for(self, node_id: str) -> frozenset[str]:
+        """Every principal refused along this node's Supernode chain — the
+        node's own list plus each Supernode above it (a ministry's block
+        binds its divisions). Empty when nobody is blocked."""
+        blocked: set[str] = set()
+        seen: set[str] = set()
+        current_id: str | None = node_id
+        while current_id and current_id not in seen:
+            seen.add(current_id)
+            account = self._accounts.get(current_id)
+            if account is None:
+                break
+            blocked.update(account.blocked_users)
+            current_id = account.supernode_id
+        return frozenset(blocked)
 
     def audit_holds_for(self, version_ids: list[str]) -> list[str]:
         """Which of these versions belong to audit-mode nodes — the reasons

@@ -6,6 +6,7 @@ import type {
   KycView,
   NodeAccountView,
   NodeRunSteps,
+  OrgTemplateView,
   WorkNode,
 } from "../api";
 import { identityHue } from "../avatar";
@@ -557,6 +558,13 @@ export function NodeThread({
         <KycSection nodeId={node.node_id} />
       )}
 
+      {/* The template button: read the org's description, resolve a lean
+          working structure (recorded once, never re-reasoned), import the
+          missing seats as member nodes. */}
+      {tab === "activity" && account.is_supernode && account.responsible && (
+        <OrgTemplateSection nodeId={node.node_id} onImported={refresh} />
+      )}
+
       {/* The fleet roster lives on the Activity tab only — the Files tab
           already answered "which nodes" there; repeating the list is
           noise, not orientation. */}
@@ -615,10 +623,17 @@ export function NodeThread({
       </div>
 
       {/* Egress consent lives with the rest of the human desk: what this
-          node may reach on the web, granted and withdrawable here. */}
-      {tab === "activity" && account.responsible && (
-        <NetworkGrant nodeId={node.node_id} account={account} />
-      )}
+          node may reach on the web, granted and withdrawable here. A
+          Supernode edits its block lists instead — a verified org's web
+          stands open, so its choice is what to REFUSE (hosts) and whom
+          not to hear (users). */}
+      {tab === "activity" &&
+        account.responsible &&
+        (account.is_supernode ? (
+          <SupernodeBlocks nodeId={node.node_id} account={account} />
+        ) : (
+          <NetworkGrant nodeId={node.node_id} account={account} />
+        ))}
 
       {tab === "interact" && <NodeInteract node={node} />}
       {tab === "files" && <FilesPane nodeId={node.node_id} />}
@@ -726,6 +741,230 @@ function NetworkGrant({
           {tr("net.grant")}
         </button>
       </form>
+      {error ? <div className="error">{error}</div> : null}
+    </div>
+  );
+}
+
+// ---- the Supernode's block lists: hosts refused, users unheard -------------
+// A verified Supernode under the global account has its web OPEN — no host
+// grant limits it. What remains is choice: which hosts the org refuses
+// (binding every node down the chain) and which users it will not hear
+// from, exactly like a user blocking a user.
+function SupernodeBlocks({
+  nodeId,
+  account,
+}: {
+  nodeId: string;
+  account: NodeAccountView;
+}) {
+  const tr = useT();
+  const [hosts, setHosts] = useState<string[]>(account.blocked_hosts ?? []);
+  const [users, setUsers] = useState<string[]>(account.blocked_users ?? []);
+  const [hostDraft, setHostDraft] = useState("");
+  const [userDraft, setUserDraft] = useState("");
+  const [error, setError] = useState("");
+  // Whether this org's web stands open (a VERIFIED entity under the
+  // global account) — decides the explanatory line, not the editors.
+  const [openWeb, setOpenWeb] = useState(false);
+  useEffect(() => {
+    api
+      .kycStatus(nodeId)
+      .then((k) => setOpenWeb(k.application?.status === "verified"))
+      .catch(() => setOpenWeb(false));
+  }, [nodeId]);
+
+  async function save(patch: {
+    blocked_hosts?: string[];
+    blocked_users?: string[];
+  }) {
+    setError("");
+    try {
+      const saved = await api.workAccount(nodeId, patch);
+      setHosts(saved.blocked_hosts ?? []);
+      setUsers(saved.blocked_users ?? []);
+      setHostDraft("");
+      setUserDraft("");
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  return (
+    <div className="commits network-grant supernode-blocks">
+      {/* Until the org is verified under the global account its web is
+          still the grant regime — the allow list stays editable. Once
+          verified, the open-web line replaces it. */}
+      {openWeb ? (
+        <p className="muted">{tr("net.openWeb")}</p>
+      ) : (
+        <NetworkGrant nodeId={nodeId} account={account} />
+      )}
+      <div className="convo-group">{tr("net.blockedHosts")}</div>
+      {hosts.length === 0 && (
+        <div className="muted">{tr("net.noBlockedHosts")}</div>
+      )}
+      {hosts.map((h) => (
+        <div key={h} className="commit-row">
+          <span>{h}</span>
+          <button
+            onClick={() =>
+              void save({ blocked_hosts: hosts.filter((x) => x !== h) })
+            }
+          >
+            {tr("net.unblock")}
+          </button>
+        </div>
+      ))}
+      <form
+        className="grant-row"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const host = hostDraft.trim().toLowerCase();
+          if (host && !hosts.includes(host))
+            void save({ blocked_hosts: [...hosts, host] });
+        }}
+      >
+        <input
+          aria-label={tr("net.blockHostLabel")}
+          placeholder="tracker.example.com"
+          value={hostDraft}
+          onChange={(e) => setHostDraft(e.target.value)}
+        />
+        <button type="submit" disabled={!hostDraft.trim()}>
+          {tr("net.blockHost")}
+        </button>
+      </form>
+      <div className="convo-group">{tr("net.blockedUsers")}</div>
+      {users.length === 0 && (
+        <div className="muted">{tr("net.noBlockedUsers")}</div>
+      )}
+      {users.map((u) => (
+        <div key={u} className="commit-row">
+          <span>{u}</span>
+          <button
+            onClick={() =>
+              void save({ blocked_users: users.filter((x) => x !== u) })
+            }
+          >
+            {tr("net.unblock")}
+          </button>
+        </div>
+      ))}
+      <form
+        className="grant-row"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const user = userDraft.trim();
+          if (user && !users.includes(user))
+            void save({ blocked_users: [...users, user] });
+        }}
+      >
+        <input
+          aria-label={tr("net.blockUserLabel")}
+          placeholder="username"
+          value={userDraft}
+          onChange={(e) => setUserDraft(e.target.value)}
+        />
+        <button type="submit" disabled={!userDraft.trim()}>
+          {tr("net.blockUser")}
+        </button>
+      </form>
+      {error ? <div className="error">{error}</div> : null}
+    </div>
+  );
+}
+
+// ---- the template button: a lean working structure, imported --------------
+// Deterministic-first, like node execution: a recorded choice returns
+// instantly, a keyword match is arithmetic, and the model is consulted
+// only when evidence is thin — and then only to PICK from the catalog.
+function OrgTemplateSection({
+  nodeId,
+  onImported,
+}: {
+  nodeId: string;
+  onImported: () => void;
+}) {
+  const tr = useT();
+  const [view, setView] = useState<OrgTemplateView | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [imported, setImported] = useState<number | null>(null);
+  const [error, setError] = useState("");
+
+  const missing = view ? view.roles.filter((r) => !r.exists).length : 0;
+
+  return (
+    <div className="commits org-template">
+      <div className="convo-group">{tr("tpl.header")}</div>
+      {view === null && (
+        <div className="commit-row">
+          <span className="muted">{tr("tpl.hint")}</span>
+          <button
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              setError("");
+              api
+                .orgTemplate(nodeId)
+                .then(setView)
+                .catch((e) => setError((e as Error).message))
+                .finally(() => setBusy(false));
+            }}
+          >
+            {tr("tpl.button")}
+          </button>
+        </div>
+      )}
+      {view !== null && (
+        <>
+          <div className="commit-row">
+            <span>
+              {view.name}
+              {view.evidence.length > 0 && (
+                <span className="muted"> · {view.evidence.join(", ")}</span>
+              )}
+            </span>
+            <span className="muted">{tr(`tpl.source.${view.source}`)}</span>
+          </div>
+          <p className="muted">{view.purpose}</p>
+          {view.roles.map((r) => (
+            <div key={r.name} className="commit-row tpl-role">
+              <span>
+                <strong>{r.name}</strong>
+                {r.exists && (
+                  <span className="muted"> · {tr("tpl.seated")}</span>
+                )}
+                <br />
+                <span className="muted">{r.responsibility}</span>
+              </span>
+            </div>
+          ))}
+          {imported !== null ? (
+            <p className="muted">{tf("tpl.imported", { n: imported })}</p>
+          ) : missing === 0 ? (
+            <p className="muted">{tr("tpl.allSeated")}</p>
+          ) : (
+            <button
+              disabled={busy}
+              onClick={() => {
+                setBusy(true);
+                setError("");
+                api
+                  .orgTemplateApply(nodeId)
+                  .then((applied) => {
+                    setImported(applied.created.length);
+                    onImported();
+                  })
+                  .catch((e) => setError((e as Error).message))
+                  .finally(() => setBusy(false));
+              }}
+            >
+              {tf("tpl.import", { n: missing })}
+            </button>
+          )}
+        </>
+      )}
       {error ? <div className="error">{error}</div> : null}
     </div>
   );
