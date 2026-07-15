@@ -172,6 +172,33 @@ export function Chat({ headerAside }: { headerAside?: React.ReactNode } = {}) {
       .catch(() => {}); // no server history here: the cache is the thread
   }, []);
 
+  // Reminders ring HERE: a ripe reminder surfaces as OoLu's own message
+  // the moment the poll sees it. Marked delivered FIRST (exactly-once —
+  // the store refuses a second marking), then spoken into the thread;
+  // hosts without reminders 404 and the poll stays silent.
+  useEffect(() => {
+    const t = setInterval(async () => {
+      try {
+        const { due } = await api.reminders();
+        for (const reminder of due ?? []) {
+          const marked = await api
+            .reminderDelivered(reminder.reminder_id)
+            .then(() => true)
+            .catch(() => false);
+          if (!marked) continue; // another device already rang it
+          setThread((thread_) => [
+            ...thread_,
+            { kind: "assistant", text: `⏰ ${tr("chat.reminderRing")} ${reminder.text}` },
+          ]);
+        }
+      } catch {
+        /* no reminder store on this host — nothing to ring */
+      }
+    }, 30_000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // The representative's question for the user, surfaced LIVE: when a
   // drafted reply needs something only the user knows, the sweep appends
   // OoLu's question to the server history and announces it here — the

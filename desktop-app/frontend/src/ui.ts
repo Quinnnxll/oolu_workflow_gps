@@ -329,6 +329,12 @@ const STRINGS: Record<string, Entry> = {
     fr: "Première visite ? Une minute jusqu'à votre première tâche :",
   },
   "chat.sayHi": { en: "Say hi", zh: "打个招呼", es: "Saluda", fr: "Dites bonjour" },
+  "chat.reminderRing": {
+    en: "Reminder:",
+    zh: "提醒：",
+    es: "Recordatorio:",
+    fr: "Rappel :",
+  },
   "chat.sayHiTail": {
     en: "— hear how I talk.",
     zh: "——听听我怎么说话。",

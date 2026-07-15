@@ -197,6 +197,15 @@ def explicit_node_build_goal(message: str | None) -> str | None:
         return None
     return match.group("goal").strip(" .!?")
 
+
+def _tz_minutes(raw) -> int:
+    """The client's timezone offset, minutes east of UTC — clamped to the
+    real world's ±14 h and never trusted to be a number."""
+    try:
+        return max(-14 * 60, min(14 * 60, int(raw or 0)))
+    except (TypeError, ValueError):
+        return 0
+
 _HOLD_EVENT_TYPES = frozenset(
     {"contract.held", "contract.approved", "contract.declined", "contract.expired"}
 )
@@ -500,6 +509,8 @@ class GatewayApp:
         # thread per account, shared by every signed-in device
         representative=None,  # representative.RepresentativeEngine: drafts
         # replies in the account's own voice — never sends on its own
+        reminders=None,  # reminders.ReminderStore: rows with a clock,
+        # created deterministically and surfaced by the client's poll
         legal_dir=None,  # where the operator's terms.md/privacy.md live;
         # marked templates answer until those files exist
         local_files_root=None,  # the DESKTOP's own disk for the chat's
@@ -609,6 +620,7 @@ class GatewayApp:
         self._friendships = friendships
         self._assistant_history = assistant_history
         self._representative = representative
+        self._reminders = reminders
         self._legal_dir = legal_dir
         self._local_files_root = local_files_root
         # What may run where, per trust level — rendered by the shell's
@@ -849,6 +861,16 @@ class GatewayApp:
         # The representative: drafts in the account's own voice. Drafts
         # are proposed, listed, and decided — nothing sends without the
         # user's word (docs/representative-plan.md, Phase 0).
+        # Reminders: rows with a clock. The client's poll is the tick —
+        # a ripe reminder surfaces as OoLu's own message and is marked
+        # delivered exactly once.
+        r.add("GET", "/v1/reminders", self._reminders_list)
+        r.add("POST", "/v1/reminders", self._reminders_create)
+        r.add(
+            "POST",
+            "/v1/reminders/{reminder_id}/delivered",
+            self._reminder_delivered,
+        )
         r.add("GET", "/v1/representative", self._representative_status)
         r.add("PUT", "/v1/representative", self._representative_configure)
         r.add("GET", "/v1/representative/drafts", self._representative_drafts)
@@ -1144,6 +1166,16 @@ class GatewayApp:
                     # what waits on the user, redraft with their answer,
                     # or lay a message to rest — all gateway-walled.
                     representative=rep_hands,
+                    # The reminder hands: rows with a clock, resolved in
+                    # the USER's timezone (the client sends its offset)
+                    # and confirmed from the stored row.
+                    reminders=self._reminder_chat_hands(
+                        session,
+                        now=request.now or self._clock(),
+                        tz_offset_minutes=_tz_minutes(
+                            body.get("tz_offset_minutes")
+                        ),
+                    ),
                 )
         router = self._tenant_model(session.tenant_id)
         # When the model really can search (an Anthropic path with the
@@ -1175,6 +1207,17 @@ class GatewayApp:
             waiting = rep_hands.waiting()
             if waiting:
                 rep_note = REP_WAITING_NOTE.format(n=len(waiting))
+        # The clock, for time-shaped asks ("at 3pm"): the model reads the
+        # user's local time from here and passes exact values to the
+        # create_reminder tool — it has no clock of its own.
+        turn_now = request.now or self._clock()
+        local_now = turn_now + timedelta(
+            minutes=_tz_minutes(body.get("tz_offset_minutes"))
+        )
+        time_note = (
+            f"Current time: {turn_now:%Y-%m-%d %H:%M} UTC; the user's "
+            f"local time is {local_now:%Y-%m-%d %H:%M}."
+        )
         context_note = (
             "\n".join(
                 n
@@ -1184,6 +1227,7 @@ class GatewayApp:
                     mood_note,
                     units_note,
                     rep_note,
+                    time_note,
                 )
                 if n
             )
@@ -1282,6 +1326,16 @@ class GatewayApp:
         say = turn.say
         if turn.task:
             try:
+                # With standing consent, the missing node is built BEFORE
+                # the run — function written, node on the desk, the route
+                # through it — instead of firing a doomed run first and
+                # offering afterwards. No consent, no silent build: the
+                # growth offer below still asks.
+                built = None
+                if not in_node:
+                    built = self._autobuild_before_run(session, turn.task)
+                if built:
+                    say = f"{say} {built}".strip()
                 run = self._start_intent_run(session, turn.task)
                 self._metrics["chat_runs"] += 1
                 # The run may have already failed DURING execution (submit
@@ -1656,6 +1710,169 @@ class GatewayApp:
                 )
         except Exception:  # noqa: BLE001 — see docstring: a bonus, not a step
             return
+
+    # ------------------------------------------------------------------ #
+    # Reminders: the deterministic route for "remind me".                #
+    # ------------------------------------------------------------------ #
+    def _require_reminders(self):
+        if self._reminders is None:
+            raise GatewayError(
+                404, "not_found", "reminders are not kept on this host"
+            )
+        return self._reminders
+
+    def _reminders_list(self, request, session, params) -> Response:
+        store = self._require_reminders()
+        now = request.now or self._clock()
+        return json_response(
+            200,
+            {
+                "due": [
+                    r.model_dump(mode="json")
+                    for r in store.due(
+                        tenant=session.tenant_id,
+                        principal=session.principal_id,
+                        now=now,
+                    )
+                ],
+                "upcoming": [
+                    r.model_dump(mode="json")
+                    for r in store.upcoming(
+                        tenant=session.tenant_id,
+                        principal=session.principal_id,
+                        now=now,
+                    )
+                ],
+            },
+        )
+
+    def _reminders_create(self, request, session, params) -> Response:
+        store = self._require_reminders()
+        body = request.body or {}
+        now = request.now or self._clock()
+        due_at = None
+        if body.get("in_minutes") is not None:
+            try:
+                due_at = now + timedelta(minutes=int(body["in_minutes"]))
+            except (TypeError, ValueError):
+                raise GatewayError(
+                    400, "invalid_request", "in_minutes must be a whole number"
+                ) from None
+        elif body.get("due_at"):
+            try:
+                due_at = datetime.fromisoformat(str(body["due_at"]))
+            except ValueError:
+                raise GatewayError(
+                    400, "invalid_request", "due_at must be an ISO timestamp"
+                ) from None
+        if due_at is None:
+            raise GatewayError(
+                400, "invalid_request", "say when — due_at or in_minutes"
+            )
+        try:
+            reminder = store.add(
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+                text=str(body.get("text", "")),
+                due_at=due_at,
+            )
+        except ValueError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(201, reminder.model_dump(mode="json"))
+
+    def _reminder_delivered(self, request, session, params) -> Response:
+        store = self._require_reminders()
+        marked = store.mark_delivered(
+            params["reminder_id"],
+            tenant=session.tenant_id,
+            principal=session.principal_id,
+        )
+        if marked is None:
+            raise GatewayError(
+                404, "not_found", "no undelivered reminder by that id"
+            )
+        return json_response(200, marked.model_dump(mode="json"))
+
+    def _reminder_chat_hands(self, session, *, now, tz_offset_minutes: int):
+        """The chat's reminder hands, clock- and timezone-bound: the words
+        every path speaks are read back from the STORED row — due time in
+        the user's local clock — so the confirmation IS the real result."""
+        store = self._reminders
+        if store is None:
+            return None
+        offset = timedelta(
+            minutes=max(-14 * 60, min(14 * 60, int(tz_offset_minutes or 0)))
+        )
+        tenant, principal = session.tenant_id, session.principal_id
+
+        def _confirm(reminder) -> str:
+            local_due = reminder.due_at + offset
+            minutes = round(
+                (reminder.due_at - now).total_seconds() / 60
+            )
+            when = (
+                f"in {minutes} minute{'s' if minutes != 1 else ''}"
+                if minutes < 90
+                else f"in {round(minutes / 60)} hours"
+            )
+            return (
+                f"Reminder set — {local_due:%H:%M} ({when}): "
+                f"“{reminder.text}”. I'll bring it up here when it's time."
+            )
+
+        class _Hands:
+            def reminder_in(self, text: str, minutes: int) -> str:
+                try:
+                    reminder = store.add(
+                        tenant=tenant,
+                        principal=principal,
+                        text=text,
+                        due_at=now + timedelta(minutes=int(minutes)),
+                    )
+                except (TypeError, ValueError) as exc:
+                    return f"error: {exc}"
+                return _confirm(reminder)
+
+            def reminder_at(
+                self, text: str, hour: int, minute: int, ampm: str | None
+            ) -> str:
+                if ampm == "pm" and hour < 12:
+                    hour += 12
+                if ampm == "am" and hour == 12:
+                    hour = 0
+                if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                    return "error: that is not a clock time"
+                # The user's clock, not the server's: resolve in local
+                # time, next occurrence, then store as UTC.
+                local_now = now + offset
+                local_due = local_now.replace(
+                    hour=hour, minute=minute, second=0, microsecond=0
+                )
+                if local_due <= local_now:
+                    local_due += timedelta(days=1)
+                try:
+                    reminder = store.add(
+                        tenant=tenant,
+                        principal=principal,
+                        text=text,
+                        due_at=local_due - offset,
+                    )
+                except ValueError as exc:
+                    return f"error: {exc}"
+                return _confirm(reminder)
+
+            def reminder_list(self) -> str:
+                upcoming = store.upcoming(
+                    tenant=tenant, principal=principal, now=now
+                )
+                if not upcoming:
+                    return "No reminders ahead."
+                return "Your reminders:\n" + "\n".join(
+                    f"• {(r.due_at + offset):%Y-%m-%d %H:%M} — {r.text}"
+                    for r in upcoming
+                )
+
+        return _Hands()
 
     # ------------------------------------------------------------------ #
     # The representative: replies drafted in the account's own voice.    #
@@ -2158,6 +2375,37 @@ class GatewayApp:
         return bool(
             self._settings.effective(tenant).get(AUTOBUILD_CONSENT_KEY, False)
         )
+
+    def _autobuild_before_run(self, session, goal: str) -> str | None:
+        """The nodes and the route, built TOGETHER before the run — with
+        standing consent ('Auto-build nodes on my paths').
+
+        A task whose route has no node yet is doomed: triggering a
+        workflow with no function inside it just fails and asks later.
+        With the consent switch on, the missing node is built FIRST —
+        the model writes its execution function, the node lands on the
+        desk (My nodes) — and the run that follows routes through that
+        function. Returns the build's words, or None when there was
+        nothing to build (a node already answers, the goal is chat, no
+        consent, no model) — every refusal falls back to the offer flow."""
+        goal = (goal or "").strip()
+        if (
+            not goal
+            or obviously_chat(goal)
+            or self._nodeplace is None
+            or self._desk is None
+            or not self._autobuild_consented(session.tenant_id)
+            or self._tenant_model(session.tenant_id) is None
+            or self._resolve_node_function(session, goal) is not None
+            # A near-twin is a QUESTION (reuse or build distinct?), never
+            # a silent build — the growth offer handles it in words.
+            or self._find_similar_function_node(session, goal) is not None
+        ):
+            return None
+        result = self._build_function_node(session, goal)
+        if result.startswith("error:"):
+            return None  # the run + offer flow explains, as before
+        return result
 
     def _offer_growth(
         self, say: str, session, goal: str, *, run: dict | None
@@ -3059,6 +3307,13 @@ class GatewayApp:
             export["chat"] = self._assistant_history.history(
                 tenant=tenant, principal=principal, limit=10_000
             )
+        if self._reminders is not None:
+            export["reminders"] = [
+                r.model_dump(mode="json")
+                for r in self._reminders.upcoming(
+                    tenant=tenant, principal=principal, limit=10_000
+                )
+            ]
         if self._direct_messages is not None:
             export["messages"] = {
                 conversation["peer"]: [
@@ -3155,6 +3410,10 @@ class GatewayApp:
             )
         if self._assistant_history is not None:
             erased["chat_turns"] = self._assistant_history.erase(
+                tenant=tenant, principal=principal
+            )
+        if self._reminders is not None:
+            erased["reminders"] = self._reminders.erase(
                 tenant=tenant, principal=principal
             )
         if self._representative is not None:
@@ -6287,6 +6546,102 @@ class GatewayApp:
         self._record_function_verification(state)
         return state
 
+    def _persist_rebuilt_route(self, state: RunState) -> None:
+        """Self-built code the user's credit paid for becomes a REAL node.
+
+        A COMPLETED run whose route the model rebuilt
+        (``origin="llm_rebuild"``) has proven its script end to end —
+        burying that code in one run's log would waste the build the user
+        paid for. It is contributed as a function node and given a desk
+        account, so it lands in Work → My nodes (not only the run list),
+        and the next run of this goal routes straight through it instead
+        of rebuilding. One node per goal — the same skill-id dedupe as
+        every build. Refusals are silent: the run already succeeded, and
+        persistence is a bonus, never a step of it."""
+        if self._nodeplace is None or self._desk is None:
+            return
+        if state.phase is not Phase.COMPLETED:
+            return
+        route = state.route
+        if route is None or route.chosen.origin != "llm_rebuild":
+            return
+        action = next(
+            (
+                item.action
+                for item in route.chosen.actions
+                if item.action.adapter == "script"
+            ),
+            None,
+        )
+        script = (action.parameters or {}).get("script") if action else None
+        if not script:
+            return
+        tenant = str((state.contract.metadata or {}).get("tenant_id", ""))
+        principal = state.contract.submitted_by
+        intent = (state.contract.intent or "").strip()
+        if not tenant or not principal or not intent:
+            return
+        skill_id = self._function_skill_id(tenant, intent)
+        try:
+            nodes = self._nodeplace.list_own_nodes(
+                noder_principal=principal, tenant_id=tenant
+            )
+            if any(n.skill_id == skill_id for n in nodes):
+                return  # a node already answers for this goal
+            name = concise_name(intent)
+            skill = ReusableSkill.model_validate(
+                {
+                    "id": skill_id,
+                    "name": name,
+                    "description": intent,
+                    "signature": {
+                        "application": "script",
+                        "adapter": "script",
+                    },
+                    "parameters": [],
+                    "actions": [
+                        {
+                            "correlation_id": "function",
+                            "adapter": "script",
+                            "operation": "run",
+                            "parameters": {
+                                "goal": intent,
+                                "script": str(script),
+                                "node_key": f"node:{skill_id}",
+                            },
+                        }
+                    ],
+                }
+            )
+            result = self._nodeplace.contribute(
+                noder_principal=principal,
+                tenant_id=tenant,
+                skill=skill,
+                semver="1.0.0",
+                title=name,
+                summary=intent,
+                produces=[
+                    Slot(name="result", value_type="str", role="result")
+                ],
+            )
+            self._desk.create_account(
+                result.node.node_id,
+                principal=principal,
+                tenant=tenant,
+                policy_version=NODE_POLICY_VERSION,
+            )
+            self._durable.audit.append(
+                "node.rebuild_persisted",
+                {
+                    "run_id": state.run_id,
+                    "node_id": result.node.node_id,
+                    "skill_id": skill_id,
+                },
+            )
+        except Exception:  # noqa: BLE001 — a bonus on a succeeded run,
+            # never a new way for it to fail.
+            return
+
     def _record_function_verification(self, state: RunState) -> None:
         """A TERMINAL run through a node's own function IS evidence.
 
@@ -6304,6 +6659,9 @@ class GatewayApp:
         The event carries NO consumer principal (the deriver's no-binding
         shape): a self-run proves the function works — or doesn't — but
         it must never unlock rating your own node."""
+        # Same hook, sibling concern: a completed REBUILT route persists
+        # as a real node on the desk before any evidence bookkeeping.
+        self._persist_rebuilt_route(state)
         if self._metering is None or self._nodeplace is None:
             return
         if state.phase is Phase.COMPLETED:

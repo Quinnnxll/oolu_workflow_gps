@@ -660,6 +660,7 @@ def build_host_runtime(
         WorkDesk,
     )
     from .providers.keyring import ModelKeyring
+    from .reminders import ReminderStore
     from .representative import (
         RepresentativeEngine,
         RepresentativeStore,
@@ -1092,6 +1093,9 @@ def build_host_runtime(
         direct_messages=DirectMessageStore(conn),
         friendships=FriendshipStore(conn),
         assistant_history=AssistantHistoryStore(conn),
+        # Reminders: rows with a clock — the deterministic route for
+        # "remind me", surfaced by the client's poll.
+        reminders=ReminderStore(conn),
         # The representative: replies drafted in each account's own voice
         # (docs/representative-plan.md). Local SQLite like every learned
         # store; the per-tenant chat router is handed in per call by the

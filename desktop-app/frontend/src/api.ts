@@ -549,6 +549,16 @@ export interface RepresentativeStatus {
   adapter: string;
 }
 
+// One reminder: a row with a clock. Due ones surface in the OoLu chat as
+// its own message and are marked delivered exactly once.
+export interface ReminderView {
+  reminder_id: string;
+  text: string;
+  due_at: string;
+  created_at: string;
+  delivered_at: string | null;
+}
+
 // One generated reply awaiting (or past) the user's decision. A decide
 // response carries `delivered` when send/edit actually delivered words.
 export interface RepresentativeDraft {
@@ -789,6 +799,9 @@ export const api = {
     req<ChatTurnReply>("POST", "/v1/chat", {
       message,
       history,
+      // The user's clock, minutes east of UTC — so "at 3pm" means THEIR
+      // 3pm when a reminder (or any time-shaped ask) is resolved.
+      tz_offset_minutes: -new Date().getTimezoneOffset() || 0,
       ...(nodeId ? { node_id: nodeId } : {}),
       ...(mood ? { mood } : {}),
     }),
@@ -815,6 +828,7 @@ export const api = {
         body: JSON.stringify({
           message,
           history,
+          tz_offset_minutes: -new Date().getTimezoneOffset() || 0,
           ...(nodeId ? { node_id: nodeId } : {}),
           ...(mood ? { mood } : {}),
         }),
@@ -1150,6 +1164,19 @@ export const api = {
     req<OrgTemplateView>("GET", `/v1/work/nodes/${nodeId}/template`),
   orgTemplateApply: (nodeId: string) =>
     req<OrgTemplateApplied>("POST", `/v1/work/nodes/${nodeId}/template`, {}),
+  // Reminders: rows with a clock. The client's poll is the tick — a ripe
+  // one surfaces as OoLu's own message and is marked delivered once.
+  reminders: () =>
+    req<{ due: ReminderView[]; upcoming: ReminderView[] }>(
+      "GET",
+      "/v1/reminders",
+    ),
+  reminderDelivered: (reminderId: string) =>
+    req<ReminderView>(
+      "POST",
+      `/v1/reminders/${encodeURIComponent(reminderId)}/delivered`,
+      {},
+    ),
   // Supernode KYC: status + apply (a reviewer decides platform-side).
   kycStatus: (nodeId: string) =>
     req<KycView>("GET", `/v1/work/nodes/${nodeId}/kyc`),

@@ -4,6 +4,42 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The work actually completes: reminders are real, builds come first,
+run-again reuses, and self-built code lands on the desk:
+
+- **"Remind me" stops being a doomed workflow.** There was no scheduling
+  capability at all — a reminder intent failed at route optimization
+  every time. Now a reminder is what it really is: a ROW with a clock
+  (`ReminderStore`, `/v1/reminders`). "remind me to X in 20 minutes /
+  at 3pm" is DETERMINISTIC — parsed before any model, created through
+  the store, confirmed from the STORED row in the user's local time
+  (the client sends its timezone offset on every chat turn, and the
+  model's context now carries the current clock). The model has the
+  same door (`create_reminder` / `list_reminders` tools) for
+  conversational phrasings — and is told its words alone never create
+  one. Ripe reminders ring in the OoLu conversation via the client's
+  poll, delivered exactly once even across devices. Reminders ride the
+  account export and erasure like everything else.
+- **The nodes and the route are built together, BEFORE the run.** With
+  the standing "Auto-build nodes on my paths" consent on, a chat task
+  whose route has no node no longer fires a doomed run and offers
+  afterwards: the missing node is built FIRST — the model writes its
+  execution function, the node lands on the desk — and the run that
+  follows routes through that function. No consent, no silent build:
+  the growth offer still asks, exactly as before.
+- **Run again reuses the node — never recreates it.** Re-running a
+  built goal routes through the existing node's stored function and
+  mints nothing (proven by test: two runs, one node); a near-twin goal
+  is a QUESTION (reuse or build distinct), never a silent second build.
+- **Self-built code the user's credit paid for becomes a REAL node.**
+  A completed run whose route the LLM rebuild wrote used to bury that
+  proven script in one run's log — visible in the run list, absent from
+  Work → My nodes. Now it is contributed as a function node WITH its
+  script and given a desk account, so it appears in My nodes and the
+  next run of that goal routes straight through it instead of
+  rebuilding. One node per goal, refusals silent — persistence is a
+  bonus on a succeeded run, never a new way for it to fail.
+
 A settings reply is the real result, never the model's narration of one:
 
 - **Explicit settings commands are deterministic again — model or not.**

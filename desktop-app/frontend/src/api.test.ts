@@ -355,6 +355,9 @@ describe("auth", () => {
     expect(lastCall().path).toBe("https://host.example/v1/chat");
     expect(lastCall().body).toEqual({
       message: "email bob",
+      // The user's clock rides every turn so time-shaped asks resolve
+      // in THEIR timezone.
+      tz_offset_minutes: -new Date().getTimezoneOffset() || 0,
       history: [
         { role: "user", content: "hi" },
         { role: "assistant", content: "Hi!" },

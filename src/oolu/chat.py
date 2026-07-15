@@ -100,6 +100,8 @@ one, answer with EXACTLY one JSON object of the shape:
   {"tool": "rep_waiting", "args": {}}   (representative mode: drafted replies waiting on info from the user)
   {"tool": "rep_answer", "args": {"peer": "<the friend>", "info": "<what the user just told you>"}}
   {"tool": "rep_ignore", "args": {"peer": "<the friend>"}}
+  {"tool": "create_reminder", "args": {"text": "<what to remind>", "in_minutes": 30}}   (or "at": "15:00" / "3pm" in the user's local time)
+  {"tool": "list_reminders", "args": {}}
 The tool's result arrives as the next message; then answer the user with the
 {"say", "task"} shape. write_file replaces the whole file — read it first
 when editing. Touch only files the user asked about. send_message delivers
@@ -107,6 +109,13 @@ to a friend or one of the user's nodes by name — the delivery is marked as
 forwarded via OoLu from the user (you never impersonate them); use it ONLY
 when the user asked to send or forward something. To redo past work, set
 "task" to that run's intent — there is no tool for starting work.
+
+Reminders are ROWS with a clock, not workflows: create one ONLY with the
+create_reminder tool — never by handing "remind me…" to the engine as a
+task, and never by claiming a reminder exists when the tool did not run.
+The tool result you relay is read back from the stored row. Relative
+times ride "in_minutes"; clock times ride "at" in the USER's local time
+(the context note carries the current time).
 
 Settings change ONLY when your set_setting tool actually runs and its
 result comes back "set … — verified in the store". Your words alone
@@ -494,6 +503,18 @@ class RepresentativeTools(Protocol):
     def rep_ignore(self, peer: str) -> str: ...
 
 
+@runtime_checkable
+class ReminderTools(Protocol):
+    """Reminders as rows with a clock — created deterministically, and
+    every confirmation read back from the STORED row, never assumed."""
+
+    def create_reminder_in(self, text: str, minutes: int) -> str: ...
+    def create_reminder_at(
+        self, text: str, hour: int, minute: int, ampm: str | None
+    ) -> str: ...
+    def list_reminders(self) -> str: ...
+
+
 class GatewayChatTools(FileChatTools):
     """File tools plus the engine's read surface, tenant-bound.
 
@@ -521,6 +542,10 @@ class GatewayChatTools(FileChatTools):
         # .waiting() / .answer(peer, info) / .ignore(peer). None when the
         # representative is off — the tools then answer in words.
         representative=None,
+        # The reminder hands (gateway-bound, clock- and timezone-aware):
+        # .reminder_in(text, minutes) / .reminder_at(text, h, m, ampm) /
+        # .reminder_list(). None when this host keeps no reminders.
+        reminders=None,
     ):
         super().__init__(store, tenant=tenant)
         self._chat_tenant = tenant
@@ -532,6 +557,7 @@ class GatewayChatTools(FileChatTools):
         self._direct_messages = direct_messages
         self._local_root = local_root
         self._representative = representative
+        self._reminders = reminders
 
     def local_search_enabled(self) -> bool:
         return self._local_root is not None
@@ -800,6 +826,26 @@ class GatewayChatTools(FileChatTools):
         if self._representative is None:
             return "error: representative mode is off"
         return self._representative.ignore(peer)
+
+    # ------------------------------------------------------------------ #
+    # Reminders: rows with a clock, confirmed from the stored row.        #
+    # ------------------------------------------------------------------ #
+    def create_reminder_in(self, text: str, minutes: int) -> str:
+        if self._reminders is None:
+            return "error: reminders are not kept on this host"
+        return self._reminders.reminder_in(text, minutes)
+
+    def create_reminder_at(
+        self, text: str, hour: int, minute: int, ampm: str | None
+    ) -> str:
+        if self._reminders is None:
+            return "error: reminders are not kept on this host"
+        return self._reminders.reminder_at(text, hour, minute, ampm)
+
+    def list_reminders(self) -> str:
+        if self._reminders is None:
+            return "error: reminders are not kept on this host"
+        return self._reminders.reminder_list()
 
 
 # --------------------------------------------------------------------------- #
@@ -1752,6 +1798,71 @@ def _stored_setting(tools: EngineTools, key: str) -> dict | None:
     return None
 
 
+# "remind me to X in 20 minutes" / "remind me in 2 hours to X" /
+# "remind me to X at 15:00" / "… at 3pm". A reminder is a ROW with a
+# clock, not a workflow to plan — the deterministic path creates it and
+# confirms from the stored row.
+_REMIND_TAIL_RE = re.compile(
+    r"^remind me\s+(?:to\s+|about\s+|that\s+)?(?P<text>.+?)\s+"
+    r"(?:in\s+(?P<count>\d+)\s*(?P<unit>minutes?|mins?|min|hours?|hrs?|hr)"
+    r"|at\s+(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<ampm>am|pm)?)"
+    r"\s*[.!]?$",
+    re.I,
+)
+_REMIND_LEAD_RE = re.compile(
+    r"^remind me\s+"
+    r"(?:in\s+(?P<count>\d+)\s*(?P<unit>minutes?|mins?|min|hours?|hrs?|hr)"
+    r"|at\s+(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<ampm>am|pm)?)\s+"
+    r"(?:to\s+|about\s+|that\s+)?(?P<text>.+?)\s*[.!]?$",
+    re.I,
+)
+_LIST_REMINDERS_PHRASES = frozenset(
+    {"my reminders", "list reminders", "show reminders", "show my reminders"}
+)
+
+
+def _reminder_command(text: str, tools: ChatTools | None) -> ChatTurn | None:
+    """Explicit reminder phrasings, deterministic and store-backed: the
+    row is created through the reminder hands and the confirmation reads
+    the stored time back. Anything less explicit falls to the model,
+    which has the create_reminder tool for the same door."""
+    if not isinstance(tools, ReminderTools):
+        return None
+    lowered = text.strip().casefold().rstrip(".!?")
+    if lowered in _LIST_REMINDERS_PHRASES:
+        return ChatTurn(
+            say=tools.list_reminders(),
+            source="tool",
+            actions=[{"tool": "list_reminders"}],
+        )
+    match = _REMIND_TAIL_RE.match(text.strip()) or _REMIND_LEAD_RE.match(
+        text.strip()
+    )
+    if match is None:
+        return None
+    what = match.group("text").strip()
+    if match.group("count"):
+        minutes = int(match.group("count"))
+        if match.group("unit").lower().startswith("h"):
+            minutes *= 60
+        result = tools.create_reminder_in(what, minutes)
+    else:
+        result = tools.create_reminder_at(
+            what,
+            int(match.group("hour")),
+            int(match.group("minute") or 0),
+            (match.group("ampm") or "").lower() or None,
+        )
+    if result.startswith("error:"):
+        return ChatTurn(
+            say=f"I couldn't set that reminder: {result[7:].strip()}",
+            source="tool",
+        )
+    return ChatTurn(
+        say=result, source="tool", actions=[{"tool": "create_reminder"}]
+    )
+
+
 # A reply CLAIMING a configuration change: a done-deed verb ("I've set…",
 # "has been changed", "is now") near a settings noun. Used only to catch
 # a claim with no successful set_setting behind it — never to block the
@@ -1997,6 +2108,33 @@ def _run_tool(tools: ChatTools, call: _ToolCall) -> tuple[str, dict | None]:
             "name": peer,
         }
         return result, action
+    if call.name == "create_reminder" and isinstance(tools, ReminderTools):
+        what = str(call.args.get("text", "")).strip()
+        in_minutes = call.args.get("in_minutes")
+        at = str(call.args.get("at", "") or "").strip()
+        if in_minutes is not None:
+            try:
+                result = tools.create_reminder_in(what, int(in_minutes))
+            except (TypeError, ValueError):
+                return "error: in_minutes must be a whole number", None
+        elif at:
+            clock = re.match(r"^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$", at, re.I)
+            if clock is None:
+                return "error: 'at' looks like 15:00 or 3pm", None
+            result = tools.create_reminder_at(
+                what,
+                int(clock.group(1)),
+                int(clock.group(2) or 0),
+                (clock.group(3) or "").lower() or None,
+            )
+        else:
+            return "error: say when — in_minutes or at", None
+        action = None if result.startswith("error:") else {
+            "tool": "create_reminder"
+        }
+        return result, action
+    if call.name == "list_reminders" and isinstance(tools, ReminderTools):
+        return tools.list_reminders(), {"tool": "list_reminders"}
     return f"error: unknown tool '{call.name}'", None
 
 
@@ -2045,6 +2183,12 @@ class ChatAssistant:
             configured = _settings_command(message, tools)
             if configured is not None:
                 return configured
+        # Same doctrine for reminders: "remind me to X in 20 minutes" is
+        # a row with a clock, created here and confirmed from the store —
+        # never a workflow for the engine to fail at.
+        reminded = _reminder_command(message, tools)
+        if reminded is not None:
+            return reminded
 
         # A per-call model (the gateway's per-tenant router) outranks the
         # constructor's; either way an unusable model degrades, not dies.
@@ -2197,6 +2341,10 @@ class ChatAssistant:
             if configured is not None:
                 yield {"type": "turn", "turn": configured}
                 return
+        reminded = _reminder_command(message, tools)
+        if reminded is not None:
+            yield {"type": "turn", "turn": reminded}
+            return
         active = model or self._model
         if active is not None:
             try:
