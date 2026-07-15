@@ -185,3 +185,118 @@ def test_chat_route_configures_through_the_settings_node(tmp_path):
         assert bad.status == 400
     finally:
         conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# The reply is the REAL result check (Issue 7): deterministic first, the      #
+# tool result store-verified, and an unbacked claim corrected.                 #
+# --------------------------------------------------------------------------- #
+class _MustNotSpeak:
+    """A model whose consultation is itself the test failure."""
+
+    def reply(self, messages):  # pragma: no cover - the point is silence
+        raise AssertionError("an explicit settings command must not reach the model")
+
+
+def test_explicit_set_is_deterministic_even_with_a_model(tmp_path):
+    tools, node, conn = _tools(tmp_path)
+    try:
+        turn = ChatAssistant(model=_MustNotSpeak()).respond(
+            "set my hard spending cap to 50", tools=tools
+        )
+        # The confirmation is read back from the store, never narrated.
+        assert node.effective("t1")["budget.hard_cap"] == 50.0
+        assert "50" in turn.say and turn.source == "tool"
+        assert turn.actions == [{"tool": "set_setting", "name": "budget.hard_cap"}]
+        # The streaming path shares the wall.
+        events = list(
+            ChatAssistant(model=_MustNotSpeak()).respond_stream(
+                "set my theme to dark", tools=tools
+            )
+        )
+        assert events[-1]["turn"].say.startswith("Done — Theme is now dark")
+        assert node.effective("t1")["app.theme"] == "dark"
+    finally:
+        conn.close()
+
+
+def test_everyday_phrasings_configure_deterministically(tmp_path):
+    tools, node, conn = _tools(tmp_path)
+    try:
+        assistant = ChatAssistant(model=_MustNotSpeak())
+        turn = assistant.respond("change my theme to light", tools=tools)
+        assert node.effective("t1")["app.theme"] == "light"
+        assert "Theme is now light" in turn.say
+        turn = assistant.respond("turn speak replies aloud off", tools=tools)
+        assert node.effective("t1")["app.voice_replies"] is False
+        assert "False" in turn.say
+    finally:
+        conn.close()
+
+
+def test_a_claimed_change_with_no_tool_behind_it_is_corrected(tmp_path):
+    from oolu.chat import SETTINGS_NOT_APPLIED
+
+    tools, node, conn = _tools(tmp_path)
+    try:
+        model = _FakeModel(
+            ['{"say": "Done — I switched your units to imperial.", "task": null}']
+        )
+        turn = ChatAssistant(model=model).respond(
+            "could you put me on imperial measurements?", tools=tools
+        )
+        # The claim had no verified set_setting behind it: corrected.
+        assert turn.say == SETTINGS_NOT_APPLIED
+        assert turn.actions == []
+        assert node.effective("t1")["account.units"] == "auto"  # unchanged
+    finally:
+        conn.close()
+
+
+def test_a_real_tool_backed_change_keeps_its_words(tmp_path):
+    tools, node, conn = _tools(tmp_path)
+    try:
+        model = _FakeModel(
+            [
+                '{"tool": "set_setting", "args": {"key": "account.units", "value": "imperial"}}',
+                '{"say": "Done — your units are now imperial.", "task": null}',
+            ]
+        )
+        turn = ChatAssistant(model=model).respond(
+            "could you put me on imperial measurements?", tools=tools
+        )
+        # The tool result the model saw was verified against the store.
+        assert "verified in the store" in model.calls[1][-1]["content"]
+        assert turn.say == "Done — your units are now imperial."
+        assert node.effective("t1")["account.units"] == "imperial"
+    finally:
+        conn.close()
+
+
+def test_a_settings_layer_that_lies_is_caught_at_the_tool_boundary():
+    from oolu.chat import _run_tool, _ToolCall
+
+    class _Lying:
+        """Claims success; the store never changes."""
+
+        def list_runs(self):
+            return []
+
+        def run_log(self, run_id):
+            return []
+
+        def list_nodes(self):
+            return []
+
+        def get_settings(self):
+            return [{"key": "app.theme", "label": "Theme", "value": "system"}]
+
+        def set_setting(self, key, value):
+            return f"set {key} to {value}"  # a lie: nothing was stored
+
+    result, action = _run_tool(
+        _Lying(),
+        _ToolCall(name="set_setting", args={"key": "app.missing", "value": "x"}),
+    )
+    assert result.startswith("error:") and "did not stick" in result
+    assert action is None

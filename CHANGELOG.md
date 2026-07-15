@@ -4,6 +4,28 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+A settings reply is the real result, never the model's narration of one:
+
+- **Explicit settings commands are deterministic again — model or not.**
+  "set / change / switch / update … to …" and "turn … on/off" run
+  straight through the settings node BEFORE any model is consulted (both
+  the blocking and streaming paths), and the confirmation value is READ
+  BACK from the store — "Done — Theme is now dark" states what the app
+  actually holds. Soft verbs never hijack: an ambiguous or unmatched
+  name falls through to the model instead of guessing.
+- **The set_setting tool verifies at the boundary.** A successful tool
+  result is now re-read from the store and reported as
+  "set <key> to <stored value> — verified in the store"; a change that
+  did not stick is an error. A set_setting action on a turn therefore
+  PROVES the app is really configured — a lying layer is caught before
+  the model ever sees a success.
+- **An unbacked claim is corrected, not repeated.** If the model's final
+  reply claims a settings change ("I've switched your units…", "your
+  theme is now…", "Done — changed…") and no verified set_setting ran
+  this turn, the reply is replaced with an honest correction telling the
+  user nothing changed and how to apply it for real. The system prompt
+  says so up front: words alone configure nothing, and the app checks.
+
 The representative asks the USER what it's missing — never the peer:
 
 - **Questions never leak into a draft.** When the model can't honestly

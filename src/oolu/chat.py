@@ -108,6 +108,14 @@ forwarded via OoLu from the user (you never impersonate them); use it ONLY
 when the user asked to send or forward something. To redo past work, set
 "task" to that run's intent — there is no tool for starting work.
 
+Settings change ONLY when your set_setting tool actually runs and its
+result comes back "set … — verified in the store". Your words alone
+configure nothing. NEVER say a setting was changed, switched, or is now
+anything unless that verified tool result arrived in THIS turn — the app
+checks your claim against the turn's real tool results and will correct
+you. When unsure of the exact key, call get_settings first; keys look
+like "account.units" or "app.theme", never bare words.
+
 Representative mode: when it is on, replies to friends are DRAFTED for the
 user's review — and a draft that needs information only the user has WAITS
 instead of guessing (rep_waiting lists them, with the questions). You
@@ -1655,8 +1663,18 @@ def _engine_command(text: str, tools: EngineTools) -> ChatTurn | None:
 _SETTINGS_LIST_PHRASES = frozenset(
     {"settings", "my settings", "show settings", "show my settings", "app settings"}
 )
-# "set <key> to <value>" / "set my <label> to <value>".
-_SET_RE = re.compile(r"^set\s+(?:my\s+)?(.+?)\s+to\s+(.+?)\s*$", re.I)
+# "set <key> to <value>" / "set my <label> to <value>" — plus the
+# everyday synonyms ("change/switch/update … to …", "turn … on/off").
+# The verb is captured: only plain "set" may ASK on an ambiguous name;
+# the softer verbs fall through to the model instead of hijacking a
+# message that merely contains the word "change".
+_SET_RE = re.compile(
+    r"^(set|change|switch|update)\s+(?:my\s+|the\s+)?(.+?)\s+to\s+(.+?)\s*$",
+    re.I,
+)
+_TOGGLE_RE = re.compile(
+    r"^(turn)\s+(?:my\s+|the\s+)?(.+?)\s+(on|off)\s*[.!]?\s*$", re.I
+)
 
 
 def _match_setting(described: list[dict], phrase: str) -> list[dict]:
@@ -1688,32 +1706,97 @@ def _settings_command(text: str, tools: EngineTools) -> ChatTurn | None:
             actions=[{"tool": "get_settings"}],
         )
 
-    setter = _SET_RE.match(text)
+    setter = _SET_RE.match(text) or _TOGGLE_RE.match(text)
     if setter:
+        verb = setter.group(1).casefold()
         described = tools.get_settings()
         if not described:
             return None
-        matches = _match_setting(described, setter.group(1))
+        matches = _match_setting(described, setter.group(2))
         if len(matches) == 1:
             key = matches[0]["key"]
-            result = tools.set_setting(key, setter.group(2).strip())
+            result = tools.set_setting(key, setter.group(3).strip())
             if result.startswith("error:"):
                 return ChatTurn(
                     say=f"I couldn't: {result[7:].strip()}", source="tool"
                 )
+            # The confirmation is the REAL result check: the value spoken
+            # is re-read from the store, never assumed from the request.
+            stored = _stored_setting(tools, key)
+            if stored is None:
+                return ChatTurn(
+                    say="I couldn't: the change did not stick in the store.",
+                    source="tool",
+                )
             return ChatTurn(
-                say=f"Done — {matches[0]['label']} is now"
-                f" {result.split(' to ', 1)[-1]}.",
+                say=f"Done — {matches[0]['label']} is now {stored['value']}.",
                 source="tool",
                 actions=[{"tool": "set_setting", "name": key}],
             )
-        if len(matches) > 1:
+        if len(matches) > 1 and verb == "set":
             names = ", ".join(m["label"] for m in matches[:6])
             return ChatTurn(
                 say=f"Which setting do you mean: {names}?", source="tool"
             )
-        # No setting by that name: probably not a settings command.
+        # No setting by that name (or a soft verb with an ambiguous one):
+        # probably not a settings command — the model handles it.
     return None
+
+
+def _stored_setting(tools: EngineTools, key: str) -> dict | None:
+    """The setting as the store holds it RIGHT NOW — the check every
+    settings confirmation is built from."""
+    for described in tools.get_settings():
+        if described["key"] == key:
+            return described
+    return None
+
+
+# A reply CLAIMING a configuration change: a done-deed verb ("I've set…",
+# "has been changed", "is now") near a settings noun. Used only to catch
+# a claim with no successful set_setting behind it — never to block the
+# model from talking ABOUT settings.
+_SETTINGS_CLAIM_RE = re.compile(
+    r"(?i)(?:\bI(?:'ve| have| just)?\s+(?:now\s+|also\s+)?"
+    r"(?:set|changed|switched|updated|turned|enabled|disabled|applied|configured)\b"
+    r"|\b(?:has|have)\s+been\s+"
+    r"(?:set|changed|switched|updated|enabled|disabled|applied|configured)\b"
+    r"|\b(?:is|are)\s+now\b"
+    r"|\bdone\b[^.!?]*\b(?:set|changed|switched|updated|turned)\b)"
+)
+_SETTINGS_NOUN_RE = re.compile(
+    r"(?i)\b(?:settings?|theme|units?|currenc(?:y|ies)|language|budget|"
+    r"caps?|thresholds?|plan|voice|mode|preferences?)\b"
+)
+
+
+def _claims_setting_change(say: str | None) -> bool:
+    return bool(
+        say and _SETTINGS_CLAIM_RE.search(say) and _SETTINGS_NOUN_RE.search(say)
+    )
+
+
+# The honest correction when the model narrated a change it never made:
+# nothing is configured except through the settings tool, and the app
+# checks the claim against the turn's actual tool results.
+SETTINGS_NOT_APPLIED = (
+    "Let me take that back — I didn't actually change any setting just "
+    "now (a change only happens when my settings tool runs, and it "
+    "didn't). Tell me “set <setting> to <value>” and I'll apply it and "
+    "confirm from the stored result."
+)
+
+
+def _settings_honest_say(say: str | None, actions: list[dict]) -> str | None:
+    """The reply, tied to the turn's REAL settings results: a claim of a
+    changed setting with no verified set_setting behind it is replaced
+    with the honest correction. A turn that really configured something
+    keeps its words — the model saw the store-verified tool result."""
+    if not _claims_setting_change(say):
+        return say
+    if any(a.get("tool") == "set_setting" for a in actions):
+        return say
+    return SETTINGS_NOT_APPLIED
 
 
 def _run_tool(tools: ChatTools, call: _ToolCall) -> tuple[str, dict | None]:
@@ -1796,11 +1879,23 @@ def _run_tool(tools: ChatTools, call: _ToolCall) -> tuple[str, dict | None]:
     if call.name == "set_setting" and isinstance(tools, EngineTools):
         key = str(call.args.get("key", ""))
         result = tools.set_setting(key, call.args.get("value"))
-        action = None if result.startswith("error:") else {
-            "tool": "set_setting",
-            "name": key,
-        }
-        return result, action
+        if result.startswith("error:"):
+            return result, None
+        # The REAL result check, at the tool boundary: the value reported
+        # back to the model is re-read from the store, and a change that
+        # did not stick is an error — a successful set_setting action in
+        # the turn therefore PROVES the app is really configured.
+        stored = _stored_setting(tools, key)
+        if stored is None:
+            return (
+                f"error: {key} did not stick in the store — "
+                "nothing was configured",
+                None,
+            )
+        return (
+            f"set {stored['key']} to {stored['value']} — verified in the store",
+            {"tool": "set_setting", "name": key},
+        )
     if call.name == "list_nodes" and isinstance(tools, EngineTools):
         nodes = tools.list_nodes()
         listing = (
@@ -1942,6 +2037,15 @@ class ChatAssistant:
         if decision.source == "rule" and decision.text:
             return ChatTurn(say=decision.text, task=None, source="rule")
 
+        # An explicit settings command is DETERMINISTIC, model or not:
+        # "set units to imperial" goes straight through the settings node
+        # and the confirmation is read back from the store — the reply is
+        # the real result, never the model's narration of one.
+        if isinstance(tools, EngineTools):
+            configured = _settings_command(message, tools)
+            if configured is not None:
+                return configured
+
         # A per-call model (the gateway's per-tenant router) outranks the
         # constructor's; either way an unusable model degrades, not dies.
         active = model or self._model
@@ -2007,7 +2111,9 @@ class ChatAssistant:
                 )
                 continue
             return ChatTurn(
-                say=parsed.say,
+                # A claimed settings change is checked against the turn's
+                # actual tool results — never taken at the model's word.
+                say=_settings_honest_say(parsed.say, actions),
                 task=parsed.task,
                 source="model",
                 actions=actions,
@@ -2084,6 +2190,13 @@ class ChatAssistant:
                 say=decision.text, task=None, source="rule"
             )}
             return
+        # Explicit settings commands stay deterministic on the streaming
+        # path too — same wall as respond().
+        if isinstance(tools, EngineTools):
+            configured = _settings_command(message, tools)
+            if configured is not None:
+                yield {"type": "turn", "turn": configured}
+                return
         active = model or self._model
         if active is not None:
             try:
@@ -2171,7 +2284,9 @@ class ChatAssistant:
                 )
                 continue
             yield {"type": "turn", "turn": ChatTurn(
-                say=parsed.say,
+                # Same wall as the blocking twin: a claimed settings
+                # change must be backed by this turn's real tool results.
+                say=_settings_honest_say(parsed.say, actions),
                 task=parsed.task,
                 source="model",
                 actions=actions,
