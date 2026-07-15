@@ -42,8 +42,11 @@ def test_client_config_is_public_and_honest_by_default(tmp_path):
     assert response.body == {
         "server": None,
         "google": False,
+        # Registration is open by DEFAULT — but a bare gateway has no
+        # account service, so the door honestly reports closed.
         "registration": False,
         "verification": False,
+        "phone": False,
     }
     conn.close()
 
@@ -62,8 +65,10 @@ def test_client_config_advertises_the_paired_server_and_doors(tmp_path):
         closer.close()
 
 
-def test_registration_is_closed_unless_the_host_opts_in(tmp_path):
-    gateway, _, closers = _host(tmp_path)  # open_registration defaults off
+def test_registration_is_closed_when_the_host_opts_out(tmp_path):
+    # Open by default (a server exists to take accounts) — closing is
+    # the explicit choice (--no-open-registration).
+    gateway, _, closers = _host(tmp_path, open_registration=False)
     response = gateway.handle(
         _req(
             "POST",

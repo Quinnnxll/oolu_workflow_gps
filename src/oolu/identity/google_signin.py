@@ -187,6 +187,10 @@ class GoogleSignIn:
         default_tenant: str = "main",
         flow_ttl_seconds: int = 600,
         clock: Callable[[], datetime] | None = None,
+        # (email, username, password) -> None: tells a first-arrival user
+        # the auto-generated password of their fresh account. None keeps
+        # the historical unknowable-password behavior.
+        notify_password: Callable[[str, str, str], None] | None = None,
     ) -> None:
         self._accounts = accounts
         self._links = links
@@ -195,6 +199,7 @@ class GoogleSignIn:
         self._transport = transport
         self._tenant = default_tenant
         self._ttl = timedelta(seconds=flow_ttl_seconds)
+        self._notify_password = notify_password
         self._clock = clock or (lambda: datetime.now(UTC))
         self._flows: dict[str, _Flow] = {}
         self._lock = threading.Lock()
@@ -359,11 +364,17 @@ class GoogleSignIn:
         if existing is not None:
             return self._accounts.external_login(existing["username"], now=now)
 
-        # First arrival: a fresh account named after the email, linked.
+        # First arrival: a fresh account named after the email, linked —
+        # and born with a USABLE password. When the host can mail, the
+        # password goes to the proven address, so username+password works
+        # from day one and Settings only ever needs "change", never
+        # "set". Without a mail door the password stays unknowable and
+        # Google remains the key, exactly as before.
         username = self._fresh_username(email)
+        password = secrets.token_urlsafe(9 if self._notify_password else 24)
         self._accounts.create_user(
             username,
-            secrets.token_urlsafe(24),  # never told to anyone; Google IS the key
+            password,
             tenant=self._tenant,
             granted_by="google-signin",
         )
@@ -371,6 +382,12 @@ class GoogleSignIn:
             provider="google", subject=subject, tenant=self._tenant,
             username=username, email=email, at=now,
         )
+        if self._notify_password is not None:
+            try:
+                self._notify_password(email, username, password)
+            except Exception:  # noqa: BLE001 - a dead mailer must not block
+                # the sign-in; the password can still be reset by e-mail.
+                pass
         return self._accounts.external_login(username, now=now)
 
     def _fresh_username(self, email: str) -> str:

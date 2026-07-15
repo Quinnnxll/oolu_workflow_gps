@@ -385,10 +385,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     host.add_argument(
         "--open-registration",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help="allow self-serve e-mail registration (POST /v1/auth/register). "
-        "Pre-launch: addresses are recorded but not yet verified — the "
-        "mail-sender milestone adds verification codes",
+        "ON by default — a server exists to take accounts; pass "
+        "--no-open-registration for a closed install",
     )
     host.add_argument(
         "--global-service",
@@ -1676,8 +1677,13 @@ def _cmd_host(args, out) -> int:
         global_service=args.global_service,
     )
     from .mail import build_mail_sender
+    from .sms import build_sms_sender
 
     mail = build_mail_sender(os.environ)
+    # The phone door: OOLU_SMS=console for development, OOLU_SMS_URL +
+    # OOLU_SMS_KEY + OOLU_SMS_FROM for a real provider; absent, the
+    # phone routes answer 404 and the app hides the button.
+    sms = build_sms_sender(os.environ)
     if args.global_service and args.open_registration and mail is None:
         raise _CliError(
             "--global-service with --open-registration needs a mail sender:"
@@ -1724,6 +1730,7 @@ def _cmd_host(args, out) -> int:
             google_client_secret=os.environ.get("OOLU_GOOGLE_CLIENT_SECRET", ""),
             google_default_tenant=args.tenant,
             mail=mail,
+            sms=sms,
             require_isolation=args.global_service,
             platform_model_keys=platform_model_keys,
             transactions_enabled=args.transactions,

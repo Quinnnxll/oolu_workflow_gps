@@ -16,6 +16,7 @@ import json
 import logging
 import random
 import re
+import secrets
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -367,7 +368,10 @@ class GatewayConfig:
     # opts in with --open-registration. (E-mail *verification* arrives
     # with the mail-sender milestone; until then this is honest,
     # unverified sign-up for pre-launch testing.)
-    open_registration: bool = False
+    # Self-serve e-mail registration is ON by default — a server exists
+    # to take accounts. Operators running a closed install turn it off
+    # explicitly (--no-open-registration).
+    open_registration: bool = True
     # Which tenant self-served accounts land in.
     registration_tenant: str = "main"
     # Is this deployment the OoLu GLOBAL service? Supernodes serving the
@@ -500,6 +504,7 @@ class GatewayApp:
         identity_links: IdentityLinkStore | None = None,  # email/IdP -> account
         mail=None,  # mail.MailSender: verification + reset codes go out here
         mail_codes=None,  # mail.MailCodeStore: hashed one-time codes
+        sms=None,  # sms.SmsSender: "continue with phone" codes + passwords
         totp=None,  # identity.TotpStore: the payment second factor
         payment_authorizations=None,  # billing.PaymentAuthorizationStore:
         # the order/booking consent gate (amount consent + TOTP)
@@ -615,6 +620,7 @@ class GatewayApp:
         self._identity_links = identity_links
         self._mail = mail
         self._mail_codes = mail_codes
+        self._sms = sms
         self._totp = totp
         self._payment_authorizations = payment_authorizations
         self._direct_messages = direct_messages
@@ -1077,6 +1083,12 @@ class GatewayApp:
         # rides the same codes.
         r.add("POST", "/v1/auth/register", self._auth_register, public=True)
         r.add("POST", "/v1/auth/verify", self._auth_verify, public=True)
+        # Continue with phone: an SMS code signs you in — and creates the
+        # account (auto-generated password texted over) when the number
+        # is new. Hosts without an SMS sender answer 404 and the app
+        # hides the button.
+        r.add("POST", "/v1/auth/phone/start", self._phone_start, public=True)
+        r.add("POST", "/v1/auth/phone/verify", self._phone_verify, public=True)
         r.add("POST", "/v1/auth/reset/request", self._reset_request, public=True)
         r.add("POST", "/v1/auth/reset/confirm", self._reset_confirm, public=True)
         # Sign in with Google (RFC 8252): the app begins and polls; only
@@ -6251,8 +6263,135 @@ class GatewayApp:
                 "verification": bool(
                     self._mail is not None and self._mail_codes is not None
                 ),
+                # Continue with phone: offered only when this host can
+                # actually text (an SMS sender + the code store).
+                "phone": bool(
+                    self._sms is not None
+                    and self._mail_codes is not None
+                    and self._accounts is not None
+                ),
             },
         )
+
+    # ------------------------------------------------------------------ #
+    # Continue with phone: an SMS code is the key.                        #
+    # ------------------------------------------------------------------ #
+    # A phone-created account lives in its own username namespace so a
+    # manual registration can never squat the name a number would get.
+    _PHONE_USERNAME_PREFIX = "phone-"
+
+    def _require_phone_door(self):
+        accounts = self._require_accounts()
+        if self._sms is None or self._mail_codes is None:
+            raise GatewayError(
+                404, "not_found", "phone sign-in is not offered on this host"
+            )
+        return accounts
+
+    def _phone_start(self, request, session, params) -> Response:
+        """Text a one-time code to the number — the same hashed, expiring,
+        attempt-limited store the mail door uses. The answer never says
+        whether the number has an account (no enumeration)."""
+        self._require_phone_door()
+        from ..sms import normalize_phone
+
+        try:
+            phone = normalize_phone((request.body or {}).get("phone"))
+        except ValueError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        code = self._mail_codes.issue(phone, "phone")
+        self._sms.send(
+            to=phone,
+            body=f"Your OoLu sign-in code is {code}. It expires in 30 "
+            "minutes. If you didn't request it, ignore this text.",
+        )
+        return json_response(200, {"sent": True})
+
+    def _phone_verify(self, request, session, params) -> Response:
+        """The code comes back: sign in — or create the account when the
+        number is new. A fresh account is born WITH a usable password,
+        auto-generated and texted to the number (changeable in Settings),
+        so username+password works from day one."""
+        accounts = self._require_phone_door()
+        from ..sms import normalize_phone
+
+        body = request.body or {}
+        try:
+            phone = normalize_phone(body.get("phone"))
+        except ValueError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        code = str(body.get("code", "")).strip()
+        if not code:
+            raise GatewayError(400, "invalid_request", "the texted code is required")
+        if not self._mail_codes.redeem(phone, "phone", code):
+            raise GatewayError(
+                401, "unauthorized", "that code is wrong or expired — start again"
+            )
+        now = request.now or self._clock()
+        existing = (
+            self._identity_links.lookup("phone", phone)
+            if self._identity_links is not None
+            else None
+        )
+        created = False
+        if existing is not None:
+            username = existing["username"]
+        else:
+            if self._identity_links is None:
+                raise GatewayError(
+                    404, "not_found", "phone accounts need the identity-link store"
+                )
+            username = self._fresh_phone_username(phone, accounts)
+            password = secrets.token_urlsafe(9)
+            try:
+                accounts.create_user(
+                    username,
+                    password,
+                    tenant=self._config.registration_tenant,
+                    granted_by="phone-signin",
+                )
+            except ValueError as exc:
+                raise GatewayError(400, "invalid_request", str(exc)) from exc
+            self._identity_links.link(
+                provider="phone", subject=phone, tenant=self._config.registration_tenant,
+                username=username, email="", at=now,
+            )
+            # The account is born with a REAL password, told to its owner
+            # — never an unknowable secret that forces a settings dance.
+            self._sms.send(
+                to=phone,
+                body=f"Welcome to OoLu! Your account is {username} and "
+                f"your password is {password} — change it in Settings "
+                "whenever you like.",
+            )
+            self._metrics["registrations"] += 1
+            created = True
+        try:
+            result = accounts.external_login(username, method="phone", now=now)
+        except AuthenticationError as exc:
+            raise GatewayError(401, "unauthorized", str(exc)) from exc
+        return json_response(
+            200,
+            {
+                "token": result.token,
+                "expires_at": result.expires_at.isoformat(),
+                "tenant": result.tenant_id,
+                "principal": result.principal,
+                "created": created,
+            },
+        )
+
+    def _fresh_phone_username(self, phone: str, accounts) -> str:
+        """A username from the RESERVED phone namespace: phone-<last4>,
+        suffixed until free. Manual registration can never mint names
+        here (see _fresh_username), so the number's name is never taken."""
+        base = f"{self._PHONE_USERNAME_PREFIX}{phone[-4:]}"
+        candidate = base
+        for suffix in range(2, 10_000):
+            if accounts.user(candidate) is None:
+                return candidate
+            candidate = f"{base}-{suffix}"
+        raise GatewayError(500, "internal", "could not derive a free username")
 
     def _auth_register(self, request, session, params) -> Response:
         """Create an account from e-mail + password, where the host allows.
@@ -6320,9 +6459,15 @@ class GatewayApp:
             },
         )
 
-    @staticmethod
-    def _fresh_username(email: str, accounts) -> str:
+    @classmethod
+    def _fresh_username(cls, email: str, accounts) -> str:
         base = username_from_email(email)
+        # The account-creation rule: names auto-created sign-ins mint
+        # (phone-…) are a RESERVED namespace — a manual registration can
+        # never take the name a phone number would get, so "continue
+        # with phone" never finds its account squatted.
+        if base.startswith(cls._PHONE_USERNAME_PREFIX):
+            base = f"u-{base}"
         candidate = base
         for suffix in range(2, 100):
             if accounts.user(candidate) is None:

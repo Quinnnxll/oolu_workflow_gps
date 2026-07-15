@@ -554,6 +554,7 @@ def build_host_runtime(
     google_default_tenant: str = "main",
     seed_handiwork_for: str | None = None,
     mail=None,  # mail.MailSender: e-mail verification + password reset
+    sms=None,  # sms.SmsSender: "continue with phone" codes + passwords
     # A PUBLIC host must never run synthesized code unsandboxed: with
     # require_isolation the script hand is wired only when the backend is
     # real isolation (docker), never the subprocess dev fallback.
@@ -1025,6 +1026,24 @@ def build_host_runtime(
             ),
             transport=google_transport,
             default_tenant=google_default_tenant,
+            # A first-arrival Google account is born with a USABLE
+            # password, mailed to the proven address — Settings then
+            # only ever needs "change password", never "set".
+            notify_password=(
+                (
+                    lambda email, username, password: mail.send(
+                        to=email,
+                        subject="Your OoLu account password",
+                        body=(
+                            f"Welcome to OoLu! Your account is {username} "
+                            f"and your password is {password} — change it "
+                            "in Settings whenever you like."
+                        ),
+                    )
+                )
+                if mail is not None
+                else None
+            ),
         )
 
     # The representative honours the same measurement-units preference the
@@ -1085,6 +1104,7 @@ def build_host_runtime(
         # always there so verified marks survive sender changes.
         mail=mail,
         mail_codes=_mail_codes,
+        sms=sms,
         totp=_totp,
         payment_authorizations=_payment_auth,
         local_files_root=Path(local_files_root) if local_files_root else None,

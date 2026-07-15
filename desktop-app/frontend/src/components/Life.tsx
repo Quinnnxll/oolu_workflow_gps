@@ -769,18 +769,32 @@ export function StartConversation({
               {tr("friends.openChat")}
             </button>
           ) : found.relationship === "pending_out" ? (
-            <span className="muted">{tr("friends.requestSent")}</span>
+            <>
+              <button disabled={busy} onClick={() => onOpen(found.username)}>
+                {tr("friends.message")}
+              </button>
+              <span className="muted">{tr("friends.requestSent")}</span>
+            </>
           ) : found.relationship === "pending_in" ? (
-            <button
-              disabled={busy}
-              onClick={() =>
-                void act(() =>
-                  api.decideFriendRequest(found.username, "accept"),
-                )
-              }
-            >
-              {tr("friends.accept")}
-            </button>
+            <>
+              <button
+                disabled={busy}
+                onClick={() =>
+                  void act(() =>
+                    api.decideFriendRequest(found.username, "accept"),
+                  )
+                }
+              >
+                {tr("friends.accept")}
+              </button>
+              <button
+                className="linklike"
+                disabled={busy}
+                onClick={() => onOpen(found.username)}
+              >
+                {tr("friends.message")}
+              </button>
+            </>
           ) : found.relationship === "blocked" ? (
             <button
               disabled={busy}
@@ -793,12 +807,28 @@ export function StartConversation({
               {tr("friends.unblock")}
             </button>
           ) : (
-            <button
-              disabled={busy}
-              onClick={() => void act(() => api.sendFriendRequest(found.username))}
-            >
-              {tr("friends.sendRequest")}
-            </button>
+            <>
+              {/* Messaging does not WAIT on friendship: recipients who
+                  accept non-friend messages (the default) get it right
+                  away; a friends-only recipient answers the send with
+                  "send a friend request first" — their choice, enforced
+                  by the server, not preempted by the UI. */}
+              <button
+                disabled={busy}
+                onClick={() => onOpen(found.username)}
+              >
+                {tr("friends.message")}
+              </button>
+              <button
+                className="linklike"
+                disabled={busy}
+                onClick={() =>
+                  void act(() => api.sendFriendRequest(found.username))
+                }
+              >
+                {tr("friends.sendRequest")}
+              </button>
+            </>
           )}
         </div>
       )}

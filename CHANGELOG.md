@@ -4,6 +4,39 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The doors open: message non-friends, register freely, continue with phone:
+
+- **Messaging no longer waits on friendship.** The backend always
+  honoured the "receive messages from non-friends" setting (open by
+  default) — but the UI offered strangers nothing except "send a friend
+  request". Finding someone now offers **Message** alongside the
+  request, whatever the relationship state; a friends-only recipient
+  still turns the send into the friend-request nudge — their choice,
+  enforced by the server, not preempted by the UI.
+- **Registration is open by default.** "This server does not offer
+  registration yet" was the closed-by-default config. A server exists
+  to take accounts: `open_registration` now defaults ON (config and
+  CLI), with `--no-open-registration` for closed installs; the
+  global-service rule (open registration needs a mail sender) stands.
+- **Continue with phone — on both doors.** A new SMS seam (`sms.py`:
+  console/HTTP senders, `OOLU_SMS*` env) powers
+  `POST /v1/auth/phone/start` + `/verify`: a texted one-time code (the
+  same hashed, expiring, attempt-limited store the mail door uses)
+  signs an existing number in and CREATES the account when the number
+  is new — no enumeration either way. The sign-in and create-account
+  views both carry the button; a fresh account flows into an optional
+  choose-your-password page.
+  - **Every login account is born with a real password.** A phone
+    account's auto-generated password is texted to it; a Google
+    first-arrival's is mailed to the proven address (hosts without a
+    mail door keep the old unknowable-password behavior). Settings
+    accordingly says **Change password** — never "set": there is
+    always one to change.
+  - **The account-creation rule.** Phone accounts live in the reserved
+    `phone-…` username namespace, and manual registration can never
+    mint names there (an e-mail local part that collides gets a `u-`
+    prefix) — a number's account name can never have been taken.
+
 OoLu is strictly personal, and a friendship exists from acceptance:
 
 - **An accepted friend shows in the list, empty thread and all.** The

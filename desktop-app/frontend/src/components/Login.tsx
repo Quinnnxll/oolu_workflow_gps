@@ -2,10 +2,13 @@ import { useEffect, useState, type FormEvent } from "react";
 import { tf, useT } from "../ui";
 import {
   DEFAULT_GLOBAL_SERVER,
+  api,
   clientConfig,
   confirmReset,
   isRemote,
   login,
+  phoneStart,
+  phoneVerify,
   register,
   requestReset,
   session,
@@ -15,7 +18,11 @@ import {
 
 // verify: the code-entry step a mail-verifying host adds after register.
 // reset: forgot-password — an e-mail first, then the code + new password.
-type View = "signin" | "register" | "verify" | "reset";
+// phone: continue with phone — a texted code signs in, and creates the
+// account (auto password texted) when the number is new; a fresh account
+// may choose its own password right away.
+type View = "signin" | "register" | "verify" | "reset" | "phone";
+type PhoneStep = "number" | "code" | "password";
 type Scope = "edge" | "global";
 type EdgeMode = "device" | "network";
 
@@ -43,6 +50,8 @@ export function Login({
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
+  const [phone, setPhone] = useState("");
+  const [phoneStep, setPhoneStep] = useState<PhoneStep>("number");
   const [resetSent, setResetSent] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
@@ -75,6 +84,7 @@ export function Login({
     setError("");
     setNotice("");
     setCode("");
+    setPhoneStep("number");
     setResetSent(false);
   }
 
@@ -98,7 +108,28 @@ export function Login({
     setError("");
     setBusy(true);
     try {
-      if (view === "signin") {
+      if (view === "phone") {
+        // Continue with phone: number → texted code → (fresh accounts)
+        // an optional choose-your-password step. The texted password
+        // already works, so skipping is safe.
+        if (phoneStep === "number") {
+          await phoneStart(phone, authTarget());
+          setNotice(tr("login.phoneCodeSent"));
+          setPhoneStep("code");
+        } else if (phoneStep === "code") {
+          const result = await phoneVerify(phone, code, authTarget());
+          if (result.created) {
+            setNotice(tr("login.phoneCreated"));
+            setPassword("");
+            setPhoneStep("password");
+          } else {
+            onSignedIn();
+          }
+        } else {
+          await api.setSignInPassword(password);
+          onSignedIn();
+        }
+      } else if (view === "signin") {
         await login(username, password, authTarget());
         onSignedIn();
       } else if (view === "register") {
@@ -215,22 +246,68 @@ export function Login({
         {showScope && scope === "edge" && edgeMode === "device" ? null : (
           <>
             <p className="muted">
-              {view === "verify"
-                ? tr("login.checkInbox")
-                : view === "reset"
-                  ? resetSent
-                    ? tr("login.resetEnterCode")
-                    : tr("login.resetEnterEmail")
-                  : onEdgeNetwork
-                    ? view === "signin"
-                      ? tr("login.signInEdge")
-                      : tr("login.registerEdge")
-                    : view === "signin"
-                      ? tr("login.signInGlobal")
-                      : tr("login.registerGlobal")}
+              {view === "phone"
+                ? phoneStep === "number"
+                  ? tr("login.phoneIntro")
+                  : phoneStep === "code"
+                    ? tr("login.phoneEnterCode")
+                    : tr("login.phoneChoosePassword")
+                : view === "verify"
+                  ? tr("login.checkInbox")
+                  : view === "reset"
+                    ? resetSent
+                      ? tr("login.resetEnterCode")
+                      : tr("login.resetEnterEmail")
+                    : onEdgeNetwork
+                      ? view === "signin"
+                        ? tr("login.signInEdge")
+                        : tr("login.registerEdge")
+                      : view === "signin"
+                        ? tr("login.signInGlobal")
+                        : tr("login.registerGlobal")}
             </p>
 
-            {view === "verify" ? null : (
+            {view === "phone" && phoneStep !== "password" ? (
+              <>
+                <label htmlFor="phone-number">{tr("login.phoneNumber")}</label>
+                <input
+                  id="phone-number"
+                  inputMode="tel"
+                  autoComplete="tel"
+                  placeholder="+1 555 010 0000"
+                  value={phone}
+                  disabled={phoneStep !== "number"}
+                  onChange={(e) => setPhone(e.target.value)}
+                />
+              </>
+            ) : null}
+            {view === "phone" && phoneStep === "code" ? (
+              <>
+                <label htmlFor="phone-code">{tr("login.code")}</label>
+                <input
+                  id="phone-code"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  placeholder="123456"
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
+                />
+              </>
+            ) : null}
+            {view === "phone" && phoneStep === "password" ? (
+              <>
+                <label htmlFor="phone-password">{tr("login.newPassword")}</label>
+                <input
+                  id="phone-password"
+                  type="password"
+                  autoComplete="new-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
+              </>
+            ) : null}
+
+            {view === "phone" || view === "verify" ? null : (
               <>
                 <label htmlFor="username">
                   {view === "signin" ? tr("login.username") : tr("login.email")}
@@ -256,7 +333,9 @@ export function Login({
                 />
               </>
             ) : null}
-            {view === "verify" || (view === "reset" && !resetSent) ? null : (
+            {view === "phone" ||
+            view === "verify" ||
+            (view === "reset" && !resetSent) ? null : (
               <>
                 <label htmlFor="password">
                   {view === "reset" ? tr("login.newPassword") : tr("login.password")}
@@ -273,26 +352,50 @@ export function Login({
               </>
             )}
             <button type="submit" disabled={busy}>
-              {view === "signin"
-                ? busy
-                  ? tr("login.signingIn")
-                  : tr("login.signIn")
-                : view === "register"
+              {view === "phone"
+                ? phoneStep === "number"
                   ? busy
-                    ? tr("login.creatingAccount")
-                    : tr("login.createAccount")
-                  : view === "verify"
+                    ? tr("login.sendingCode")
+                    : tr("login.sendPhoneCode")
+                  : phoneStep === "code"
                     ? busy
                       ? tr("login.verifying")
                       : tr("login.verify")
-                    : resetSent
+                    : busy
+                      ? tr("login.changingPassword")
+                      : tr("login.savePassword")
+                : view === "signin"
+                  ? busy
+                    ? tr("login.signingIn")
+                    : tr("login.signIn")
+                  : view === "register"
+                    ? busy
+                      ? tr("login.creatingAccount")
+                      : tr("login.createAccount")
+                    : view === "verify"
                       ? busy
-                        ? tr("login.changingPassword")
-                        : tr("login.changePassword")
-                      : busy
-                        ? tr("login.sendingCode")
-                        : tr("login.sendCode")}
+                        ? tr("login.verifying")
+                        : tr("login.verify")
+                      : resetSent
+                        ? busy
+                          ? tr("login.changingPassword")
+                          : tr("login.changePassword")
+                        : busy
+                          ? tr("login.sendingCode")
+                          : tr("login.sendCode")}
             </button>
+            {view === "phone" && phoneStep === "password" ? (
+              // The texted password already works: choosing here is a
+              // convenience, never a wall.
+              <button
+                type="button"
+                className="linklike"
+                disabled={busy}
+                onClick={onSignedIn}
+              >
+                {tr("login.keepTexted")}
+              </button>
+            ) : null}
 
             {view === "signin" || view === "register" ? (
               <div className="alt-auth">
@@ -303,11 +406,16 @@ export function Login({
                 >
                   {tr("login.google")}
                 </button>
-                {view === "register" ? (
-                  <button type="button" disabled title={tr("login.comingSoon")}>
-                    {tr("login.phone")}
-                  </button>
-                ) : null}
+                {/* Continue with phone lives on BOTH doors: the same
+                    texted code signs an existing number in and creates
+                    the account for a new one. */}
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => switchView("phone")}
+                >
+                  {tr("login.phone")}
+                </button>
               </div>
             ) : null}
 
@@ -344,7 +452,15 @@ export function Login({
                     {tr("login.startOver")}
                   </button>
                 </>
-              ) : (
+              ) : view === "phone" && phoneStep !== "password" ? (
+                <button
+                  type="button"
+                  className="linklike"
+                  onClick={() => switchView("signin")}
+                >
+                  {tr("login.backToSignIn")}
+                </button>
+              ) : view === "phone" ? null : (
                 <>
                   {tr("login.haveAccount")}{" "}
                   <button

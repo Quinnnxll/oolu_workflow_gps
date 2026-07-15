@@ -189,14 +189,22 @@ describe("Login", () => {
     });
   });
 
-  it("phone sign-up stays disabled until a provider exists", () => {
+  it("continue with phone opens the number-first flow on both doors", () => {
     render(<Login onSignedIn={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: "Create one" }));
-
+    // Present on sign-in…
     const phone = screen.getByRole("button", {
       name: "Continue with phone",
     }) as HTMLButtonElement;
-    expect(phone.disabled).toBe(true);
+    expect(phone.disabled).toBe(false);
+    fireEvent.click(phone);
+    expect(screen.getByLabelText("Phone number")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Send code" })).toBeTruthy();
+    // …and reachable from Create account too (back first).
+    fireEvent.click(screen.getByRole("button", { name: "Back to sign-in" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create one" }));
+    expect(
+      screen.getByRole("button", { name: "Continue with phone" }),
+    ).toBeTruthy();
   });
 
   it("signs in with Google: opens the consent page, polls, stores the token", async () => {

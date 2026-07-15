@@ -114,6 +114,9 @@ export interface ClientConfig {
   server?: string | null;
   google?: boolean;
   registration?: boolean;
+  verification?: boolean;
+  // Whether this host can text: "Continue with phone" shows only then.
+  phone?: boolean;
 }
 
 export async function clientConfig(): Promise<ClientConfig> {
@@ -210,6 +213,36 @@ export async function register(
   if (ok.verification_required) return { verificationRequired: true };
   session.set(ok.token, ok.principal, ok.tenant ?? "");
   return { verificationRequired: false };
+}
+
+// Continue with phone: a texted code signs you in — and creates the
+// account when the number is new (the auto-generated password is texted
+// too; change it in Settings). Hosts without an SMS door answer 404.
+export async function phoneStart(
+  phone: string,
+  server?: string,
+): Promise<void> {
+  await authPost(
+    authBase(server) + "/v1/auth/phone/start",
+    { phone },
+    "could not send the code",
+    "this server does not offer phone sign-in",
+  );
+}
+
+export async function phoneVerify(
+  phone: string,
+  code: string,
+  server?: string,
+): Promise<{ created: boolean }> {
+  const ok = (await authPost(
+    authBase(server) + "/v1/auth/phone/verify",
+    { phone, code },
+    "that code didn't work",
+    "this server does not offer phone sign-in",
+  )) as LoginResponse & { created?: boolean };
+  session.set(ok.token, ok.principal, ok.tenant ?? "");
+  return { created: ok.created === true };
 }
 
 // Finish a mail-verified registration: the e-mailed code plus the password
