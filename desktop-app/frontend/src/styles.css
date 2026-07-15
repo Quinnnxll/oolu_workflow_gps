@@ -903,6 +903,45 @@ main.chat-main {
   font-size: 12px;
 }
 
+/* Imitate rides the tab row's right edge — same height as the labels. */
+.dev-nav button.imitate {
+  margin-left: auto;
+  color: var(--accent);
+}
+
+.dev-nav button.imitate.rec {
+  color: var(--danger-strong);
+}
+
+.imitate-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.imitate-panel input {
+  flex: 1;
+  min-width: 0;
+}
+
+.imitate-steps {
+  margin: 0;
+  padding-left: 22px;
+}
+
+.imitate-steps li.run,
+.imitate-steps li.file {
+  color: var(--muted);
+}
+
+.imitate-built {
+  color: var(--accent);
+}
+
 /* ---- the living OoLu avatar, at the head of the conversation ---- */
 .chat-head {
   display: flex;

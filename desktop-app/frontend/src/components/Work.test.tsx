@@ -715,3 +715,106 @@ describe("NodeThread", () => {
     });
   });
 });
+
+describe("Imitate: the guided lesson on the tab row", () => {
+  it("teaches step by step and builds from the demonstration", async () => {
+    routes["GET /v1/work/nodes/n1/activity"] = {
+      status: 200,
+      body: { items: [] },
+    };
+    routes["GET /v1/work/nodes/n1/imitate"] = {
+      status: 200,
+      body: { lesson: null },
+    };
+    const recording = {
+      lesson_id: "l1",
+      node_id: "n1",
+      goal: "normalize supplier invoices",
+      status: "recording",
+      created_at: "2026-07-15T10:00:00+00:00",
+      ended_at: null,
+      built_node_id: "",
+      steps: [] as unknown[],
+    };
+    routes["POST /v1/work/nodes/n1/imitate"] = {
+      status: 201,
+      body: { lesson: recording },
+    };
+    routes["POST /v1/work/nodes/n1/imitate/step"] = {
+      status: 200,
+      body: {
+        lesson: {
+          ...recording,
+          steps: [
+            { seq: 1, kind: "say", text: "download the csvs", at: "t" },
+          ],
+        },
+      },
+    };
+    routes["POST /v1/work/nodes/n1/imitate/stop"] = {
+      status: 200,
+      body: {
+        lesson: { ...recording, status: "built", built_node_id: "new9" },
+        say: "Built a NEW node “Normalize Supplier Invoices” (new9) …",
+      },
+    };
+    render(<NodeThread node={workNode()} allNodes={[workNode()]} />);
+
+    // The button rides the Activity/Interact/Files row.
+    fireEvent.click(await screen.findByRole("button", { name: /Imitate/ }));
+    // The honest capability note IS the guidance: no screen recording.
+    expect(
+      await screen.findByText(/no screen or key recording/i),
+    ).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("what should the new node do?"), {
+      target: { value: "normalize supplier invoices" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start the lesson" }));
+    // Recording: the row's button now says so.
+    expect(await screen.findByText(/Learning…/)).toBeTruthy();
+
+    fireEvent.change(
+      await screen.findByLabelText("describe the next step…"),
+      { target: { value: "download the csvs" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Add step" }));
+    expect(await screen.findByText("download the csvs")).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Stop & build the node" }),
+    );
+    // The build's own words come back, and the lesson closes.
+    expect(await screen.findByText(/Built a NEW node/)).toBeTruthy();
+    const stop = calls.find((c) => c.path === "/v1/work/nodes/n1/imitate/stop");
+    expect(stop?.body).toEqual({ build: true });
+  });
+
+  it("cannot build an empty lesson — showing comes first", async () => {
+    routes["GET /v1/work/nodes/n1/activity"] = {
+      status: 200,
+      body: { items: [] },
+    };
+    // A lesson already recording re-opens its panel on arrival.
+    routes["GET /v1/work/nodes/n1/imitate"] = {
+      status: 200,
+      body: {
+        lesson: {
+          lesson_id: "l1",
+          node_id: "n1",
+          goal: "teach me",
+          status: "recording",
+          created_at: "2026-07-15T10:00:00+00:00",
+          ended_at: null,
+          built_node_id: "",
+          steps: [],
+        },
+      },
+    };
+    render(<NodeThread node={workNode()} allNodes={[workNode()]} />);
+    const build = (await screen.findByRole("button", {
+      name: "Stop & build the node",
+    })) as HTMLButtonElement;
+    expect(build.disabled).toBe(true);
+  });
+});

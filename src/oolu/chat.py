@@ -1052,7 +1052,7 @@ def obviously_chat(goal: str) -> bool:
 
 
 def author_node_function(
-    model: ChatModel, goal: str
+    model: ChatModel, goal: str, *, demonstrated: list[str] | None = None
 ) -> tuple[str | None, dict, str]:
     """``(script, io, refusal_reason)`` — the creation gates in one call.
 
@@ -1061,14 +1061,33 @@ def author_node_function(
     model wrote no usable code, or the model could not be reached.
     ``io`` is the declared interface (inputs/outputs) that makes the
     node chainable on a route — defaulted when the model omits it.
+
+    ``demonstrated`` carries an Imitate lesson: the user's own ordered
+    steps (plus the runs their window logged). The steps ARE the plan —
+    the model's one job is to write the function that performs them in
+    order, never to re-plan the work its teacher already laid out.
     """
     from .routing.gateway import extract_script
 
+    content = goal
+    if demonstrated:
+        numbered = "\n".join(
+            f"{i}. {step}" for i, step in enumerate(demonstrated, start=1)
+        )
+        content = (
+            f"{goal}\n\n"
+            "The user DEMONSTRATED this procedure step by step — imitate "
+            "it exactly. The numbered steps below ARE the plan: write the "
+            "function that performs them in this order; do not invent a "
+            "different approach. Lines marked (observed: …) are execution "
+            "logs recorded while they demonstrated.\n"
+            f"{numbered}"
+        )
     try:
         raw = model.reply(
             [
                 {"role": "system", "content": NODE_FUNCTION_PROMPT},
-                {"role": "user", "content": goal},
+                {"role": "user", "content": content},
             ]
         )
     except Exception as exc:  # noqa: BLE001 - a dead model builds nothing

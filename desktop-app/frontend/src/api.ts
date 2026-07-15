@@ -793,6 +793,29 @@ export interface OrgTemplateApplied {
   skipped: { name: string; reason: string }[];
 }
 
+// ---- imitate (guided lesson) wire shapes -------------------------------------
+// A demonstration recorded in a node's window: the user's ordered steps
+// ("say"), plus runs ("run") and files ("file") the window logged while
+// recording. The finished lesson is the training data log a node is
+// built from.
+export interface LessonStep {
+  seq: number;
+  kind: string; // say | run | file
+  text: string;
+  at: string;
+}
+
+export interface Lesson {
+  lesson_id: string;
+  node_id: string;
+  goal: string;
+  status: string; // recording | built | discarded
+  created_at: string;
+  ended_at: string | null;
+  built_node_id: string;
+  steps: LessonStep[];
+}
+
 export interface WorkNode {
   node_id: string;
   title: string;
@@ -1228,6 +1251,30 @@ export const api = {
   // The Supernode's template button: preview the resolved structure
   // (deterministic — a recorded choice never re-reasons), then import
   // the missing seats as member nodes.
+  // Imitate: a guided lesson recorded in the node's own window — name
+  // the goal, describe each step, run the real work through the node
+  // (the execution logs pair automatically), then stop-and-build.
+  imitateStatus: (nodeId: string) =>
+    req<{ lesson: Lesson | null }>(
+      "GET",
+      `/v1/work/nodes/${nodeId}/imitate`,
+    ),
+  imitateStart: (nodeId: string, goal: string) =>
+    req<{ lesson: Lesson }>("POST", `/v1/work/nodes/${nodeId}/imitate`, {
+      goal,
+    }),
+  imitateStep: (nodeId: string, text: string) =>
+    req<{ lesson: Lesson }>(
+      "POST",
+      `/v1/work/nodes/${nodeId}/imitate/step`,
+      { text },
+    ),
+  imitateStop: (nodeId: string, build: boolean) =>
+    req<{ lesson: Lesson; say: string }>(
+      "POST",
+      `/v1/work/nodes/${nodeId}/imitate/stop`,
+      { build },
+    ),
   orgTemplate: (nodeId: string) =>
     req<OrgTemplateView>("GET", `/v1/work/nodes/${nodeId}/template`),
   orgTemplateApply: (nodeId: string) =>

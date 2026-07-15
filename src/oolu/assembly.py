@@ -647,6 +647,7 @@ def build_host_runtime(
     )
     from .identity.apikeys import ApiKeyService
     from .knowledge import TraceStore
+    from .lessons import LessonStore
     from .mail import MailCodeStore
     from .metering import AttributionStore, MeteringLedger
     from .nodeplace import (
@@ -1122,6 +1123,9 @@ def build_host_runtime(
         # Reminders: rows with a clock — the deterministic route for
         # "remind me", surfaced by the client's poll.
         reminders=ReminderStore(conn),
+        # Imitate: guided demonstrations recorded in a node's window —
+        # the training data logs that build capable nodes.
+        lessons=LessonStore(conn),
         # The representative: replies drafted in each account's own voice
         # (docs/representative-plan.md). Local SQLite like every learned
         # store; the per-tenant chat router is handed in per call by the

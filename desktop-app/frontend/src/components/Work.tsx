@@ -4,6 +4,7 @@ import type {
   HoldItem,
   KycApplication,
   KycView,
+  Lesson,
   NodeAccountView,
   NodeRunSteps,
   OrgTemplateView,
@@ -465,6 +466,146 @@ export function AddNode({
   );
 }
 
+// ---- Imitate: a guided lesson in the node's window builds a node ----------
+// The honest version of the record button: OoLu owns no screen or key
+// recording (and mobile never will), so the user teaches through what the
+// platform can verifiably see — name the goal, describe each step in
+// order, run the real work through this node (the execution logs pair
+// automatically), then stop-and-build. The demonstration persists as a
+// training data log in the built node's drawer.
+export function ImitatePanel({
+  node,
+  lesson,
+  onLesson,
+}: {
+  node: WorkNode;
+  lesson: Lesson | null;
+  onLesson: (lesson: Lesson | null) => void;
+}) {
+  const tr = useT();
+  const [goal, setGoal] = useState("");
+  const [step, setStep] = useState("");
+  const [say, setSay] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function run(fn: () => Promise<void>) {
+    setError("");
+    setBusy(true);
+    try {
+      await fn();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="imitate-panel">
+      <p className="muted">{tr("work.imitateHint")}</p>
+      {!lesson && (
+        <form
+          className="setting-control row"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void run(async () => {
+              onLesson(
+                (await api.imitateStart(node.node_id, goal.trim())).lesson,
+              );
+              setGoal("");
+              setSay("");
+            });
+          }}
+        >
+          <input
+            aria-label={tr("work.imitateGoal")}
+            placeholder={tr("work.imitateGoal")}
+            value={goal}
+            onChange={(e) => setGoal(e.target.value)}
+          />
+          <button type="submit" disabled={busy || !goal.trim()}>
+            {tr("work.imitateStart")}
+          </button>
+        </form>
+      )}
+      {lesson && (
+        <>
+          <div className="convo-group">“{lesson.goal}”</div>
+          {lesson.steps.length > 0 && (
+            <ol className="imitate-steps">
+              {lesson.steps.map((s) => (
+                <li key={s.seq} className={s.kind}>
+                  {s.kind === "say" ? s.text : `⚙ ${s.text}`}
+                </li>
+              ))}
+            </ol>
+          )}
+          <form
+            className="setting-control row"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void run(async () => {
+                onLesson(
+                  (await api.imitateStep(node.node_id, step.trim())).lesson,
+                );
+                setStep("");
+              });
+            }}
+          >
+            <input
+              aria-label={tr("work.imitateStepPh")}
+              placeholder={tr("work.imitateStepPh")}
+              value={step}
+              onChange={(e) => setStep(e.target.value)}
+            />
+            <button type="submit" disabled={busy || !step.trim()}>
+              {tr("work.imitateAdd")}
+            </button>
+          </form>
+          <div className="setting-control row">
+            <button
+              disabled={busy || lesson.steps.length === 0}
+              onClick={() =>
+                void run(async () => {
+                  const done = await api.imitateStop(node.node_id, true);
+                  setSay(done.say);
+                  // A refusal keeps the lesson recording — nothing
+                  // demonstrated is lost; a build closes it.
+                  onLesson(
+                    done.lesson.status === "recording" ? done.lesson : null,
+                  );
+                })
+              }
+            >
+              {tr("work.imitateBuild")}
+            </button>
+            <button
+              className="linklike"
+              disabled={busy}
+              onClick={() =>
+                void run(async () => {
+                  await api.imitateStop(node.node_id, false);
+                  onLesson(null);
+                  setSay("");
+                })
+              }
+            >
+              {tr("work.imitateDiscard")}
+            </button>
+          </div>
+        </>
+      )}
+      {say && (
+        <div className={say.startsWith("error:") ? "error" : "imitate-built"}>
+          {say}
+        </div>
+      )}
+      {error && <div className="error">{error}</div>}
+    </div>
+  );
+}
+
 // ---- one node's thread: fixed regime, feed, and the human desk ------------
 export function NodeThread({
   node,
@@ -481,6 +622,9 @@ export function NodeThread({
   );
   // A large fleet folds away for a clear view of the thread itself.
   const [showMembers, setShowMembers] = useState(true);
+  // Imitate: the guided lesson recording in THIS node's window, if any.
+  const [lesson, setLesson] = useState<Lesson | null>(null);
+  const [imitateOpen, setImitateOpen] = useState(false);
   const account = node.account;
   const members = allNodes.filter(
     (n) => n.account.supernode_id === node.node_id,
@@ -516,6 +660,25 @@ export function NodeThread({
     const t = setInterval(refresh, 6000);
     return () => clearInterval(t);
   }, [refresh]);
+
+  // A lesson that was already recording re-opens its panel — leaving
+  // the window never loses a demonstration in progress.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .imitateStatus(node.node_id)
+      .then((r) => {
+        if (cancelled) return;
+        setLesson(r.lesson);
+        if (r.lesson) setImitateOpen(true);
+      })
+      .catch(() => {
+        if (!cancelled) setLesson(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [node.node_id]);
 
   return (
     <div className="noder-thread">
@@ -620,7 +783,23 @@ export function NodeThread({
         >
           {tr("files")}
         </button>
+        {/* Imitate rides the tab row's right edge: the guided lesson —
+            name the goal, describe each step, run the real work through
+            this node — that builds a capable node from the demonstration. */}
+        <button
+          className={`imitate${lesson ? " rec" : ""}`}
+          title={tr("work.imitateHint")}
+          onClick={() => setImitateOpen((o) => !o)}
+        >
+          {lesson
+            ? `● ${tr("work.imitateRecording")}`
+            : `◉ ${tr("work.imitate")}`}
+        </button>
       </div>
+
+      {imitateOpen && (
+        <ImitatePanel node={node} lesson={lesson} onLesson={setLesson} />
+      )}
 
       {/* Egress consent lives with the rest of the human desk: what this
           node may reach on the web, granted and withdrawable here. A

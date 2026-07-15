@@ -517,6 +517,8 @@ class GatewayApp:
         # replies in the account's own voice — never sends on its own
         reminders=None,  # reminders.ReminderStore: rows with a clock,
         # created deterministically and surfaced by the client's poll
+        lessons=None,  # lessons.LessonStore: guided demonstrations —
+        # goal + ordered steps + paired run logs — that build nodes
         legal_dir=None,  # where the operator's terms.md/privacy.md live;
         # marked templates answer until those files exist
         local_files_root=None,  # the DESKTOP's own disk for the chat's
@@ -628,6 +630,7 @@ class GatewayApp:
         self._assistant_history = assistant_history
         self._representative = representative
         self._reminders = reminders
+        self._lessons = lessons
         self._legal_dir = legal_dir
         self._local_files_root = local_files_root
         # What may run where, per trust level — rendered by the shell's
@@ -1026,6 +1029,22 @@ class GatewayApp:
             "POST",
             "/v1/work/nodes/{node_id}/template",
             self._org_template_apply,
+        )
+        # Imitate: a guided lesson recorded in the node's own window —
+        # the user names the goal, describes each step, runs the real
+        # work through the node (the execution logs pair automatically),
+        # and the finished demonstration builds a capable node.
+        r.add("GET", "/v1/work/nodes/{node_id}/imitate", self._imitate_status)
+        r.add("POST", "/v1/work/nodes/{node_id}/imitate", self._imitate_start)
+        r.add(
+            "POST",
+            "/v1/work/nodes/{node_id}/imitate/step",
+            self._imitate_step,
+        )
+        r.add(
+            "POST",
+            "/v1/work/nodes/{node_id}/imitate/stop",
+            self._imitate_stop,
         )
         r.add("GET", "/v1/work/nodes/{node_id}/kyc", self._kyc_status)
         r.add("POST", "/v1/work/nodes/{node_id}/kyc", self._kyc_apply)
@@ -2642,6 +2661,7 @@ class GatewayApp:
         under_entry=None,
         under_node_id=None,
         allow_twin: bool = False,
+        demonstrated: list[str] | None = None,
     ) -> str:
         """Create ONE node born WITH its own execution function — the shared
         core behind the interact window's ``build`` and the chat's growth
@@ -2722,7 +2742,9 @@ class GatewayApp:
         # sees what building the node actually drew (the resource question).
         meter = getattr(self, "_model_meter", None)
         spent_before = len(meter.charges()) if meter is not None else 0
-        script, io, refusal = author_node_function(author, goal)
+        script, io, refusal = author_node_function(
+            author, goal, demonstrated=demonstrated
+        )
         if script is None:
             return f"error: {refusal}"
         cost_note = self._build_cost_note(meter, spent_before)
@@ -3496,6 +3518,10 @@ class GatewayApp:
         if self._reminders is not None:
             erased["reminders"] = self._reminders.erase(
                 tenant=tenant, principal=principal
+            )
+        if self._lessons is not None:
+            erased["lessons"] = self._lessons.erase(
+                tenant=tenant, owner=principal
             )
         if self._settings is not None:
             # The personal settings layer goes with the account; the
@@ -4902,6 +4928,265 @@ class GatewayApp:
                 continue
             if aged > retention:
                 self._files.delete(file.file_id, tenant=session.tenant_id)
+
+    # ------------------------------------------------------------------ #
+    # Imitate: a guided lesson in the node's own window builds a node.    #
+    # ------------------------------------------------------------------ #
+    # The platform owns no global mouse/keyboard capture and no screen
+    # recording (the shell is capability-minimal by design, and mobile
+    # will never allow it) — what it owns COMPLETELY is everything that
+    # runs through a node: the hash-chained audit of every execution and
+    # each node's daily log file. So the lesson is taught here: the user
+    # names the goal, describes each step, runs the real work through
+    # the node while recording — and stop pairs those words with the
+    # window's execution logs and builds through the one gated path.
+    def _require_lessons(self):
+        if self._lessons is None:
+            raise GatewayError(
+                404, "not_found", "imitation lessons are not enabled here"
+            )
+        return self._lessons
+
+    def _imitate_entry(self, session, node_id: str):
+        """Imitate happens on the caller's OWN desk — teaching demands
+        the teacher answer for the node whose window records it."""
+        desk = self._require_desk()
+        entry = next(
+            (
+                e
+                for e in desk.overview(
+                    principal=session.principal_id, tenant=session.tenant_id
+                )
+                if e.node_id == node_id
+            ),
+            None,
+        )
+        if entry is None:
+            raise GatewayError(404, "not_found", "no such node on your desk")
+        return desk, entry
+
+    @staticmethod
+    def _lesson_json(lesson) -> dict:
+        return {
+            "lesson_id": lesson.lesson_id,
+            "node_id": lesson.node_id,
+            "goal": lesson.goal,
+            "status": lesson.status,
+            "created_at": lesson.created_at.isoformat(),
+            "ended_at": (
+                lesson.ended_at.isoformat() if lesson.ended_at else None
+            ),
+            "built_node_id": lesson.built_node_id,
+            "steps": [
+                {
+                    "seq": s.seq,
+                    "kind": s.kind,
+                    "text": s.text,
+                    "at": s.at.isoformat(),
+                }
+                for s in lesson.steps
+            ],
+        }
+
+    def _imitate_status(self, request, session, params) -> Response:
+        lessons = self._require_lessons()
+        self._imitate_entry(session, params["node_id"])
+        lesson = lessons.active(
+            tenant=session.tenant_id,
+            node_id=params["node_id"],
+            owner=session.principal_id,
+        )
+        return json_response(
+            200, {"lesson": self._lesson_json(lesson) if lesson else None}
+        )
+
+    def _imitate_start(self, request, session, params) -> Response:
+        lessons = self._require_lessons()
+        self._imitate_entry(session, params["node_id"])
+        try:
+            lesson = lessons.start(
+                tenant=session.tenant_id,
+                node_id=params["node_id"],
+                owner=session.principal_id,
+                goal=str((request.body or {}).get("goal", "")),
+            )
+        except ValueError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(201, {"lesson": self._lesson_json(lesson)})
+
+    def _imitate_step(self, request, session, params) -> Response:
+        lessons = self._require_lessons()
+        self._imitate_entry(session, params["node_id"])
+        lesson = lessons.active(
+            tenant=session.tenant_id,
+            node_id=params["node_id"],
+            owner=session.principal_id,
+        )
+        if lesson is None:
+            raise GatewayError(404, "not_found", "no lesson is recording here")
+        try:
+            lessons.add_step(
+                lesson.lesson_id,
+                tenant=session.tenant_id,
+                owner=session.principal_id,
+                kind="say",
+                text=str((request.body or {}).get("text", "")),
+            )
+        except ValueError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        fresh = lessons.get(
+            lesson.lesson_id,
+            tenant=session.tenant_id,
+            owner=session.principal_id,
+        )
+        return json_response(200, {"lesson": self._lesson_json(fresh)})
+
+    def _pair_lesson_runs(self, desk, session, lesson) -> list[str]:
+        """The automatic half of the demonstration: every run this node
+        executed while the lesson recorded, read from the same audit
+        chain the activity feed serves — the user's words paired with
+        what the machine verifiably DID."""
+        started = lesson.created_at.isoformat()
+        paired: list[str] = []
+        try:
+            feed = desk.activity(lesson.node_id, tenant=session.tenant_id)
+        except ContributionError:
+            return paired
+        for run in feed:
+            if not run.steps:
+                continue
+            if run.steps[-1]["at"] < started:
+                continue  # ran before the lesson opened — not part of it
+            outcome = run.steps[-1]["event_type"]
+            paired.append(
+                f"run {run.run_id[:8]}: {len(run.steps)} logged events, "
+                f"ended {outcome}"
+            )
+        return paired
+
+    def _imitate_stop(self, request, session, params) -> Response:
+        """Close the lesson. ``build: true`` compiles the demonstration —
+        the user's ordered steps plus the runs the window logged — into
+        ONE node through the same gated build path as every other door,
+        and files the lesson verbatim into the new node's drawer as a
+        training data log. ``build: false`` discards, keeping the record."""
+        lessons = self._require_lessons()
+        desk, _entry = self._imitate_entry(session, params["node_id"])
+        lesson = lessons.active(
+            tenant=session.tenant_id,
+            node_id=params["node_id"],
+            owner=session.principal_id,
+        )
+        if lesson is None:
+            raise GatewayError(404, "not_found", "no lesson is recording here")
+        build = bool((request.body or {}).get("build", False))
+        if not build:
+            closed = lessons.finish(
+                lesson.lesson_id,
+                tenant=session.tenant_id,
+                owner=session.principal_id,
+                status="discarded",
+            )
+            return json_response(
+                200, {"lesson": self._lesson_json(closed), "say": ""}
+            )
+        said = [s.text for s in lesson.steps if s.kind == "say"]
+        if not said:
+            raise GatewayError(
+                400,
+                "invalid_request",
+                "a lesson needs at least one demonstrated step — describe "
+                "what to do, in order, before building",
+            )
+        # Pair the words with the logs, then record the pairing ON the
+        # lesson — the stored demonstration is the full training record.
+        for line in self._pair_lesson_runs(desk, session, lesson):
+            try:
+                lessons.add_step(
+                    lesson.lesson_id,
+                    tenant=session.tenant_id,
+                    owner=session.principal_id,
+                    kind="run",
+                    text=line,
+                )
+            except ValueError:
+                break  # the lesson is full — the said steps still build
+        lesson = lessons.get(
+            lesson.lesson_id,
+            tenant=session.tenant_id,
+            owner=session.principal_id,
+        )
+        demonstrated = [
+            f"{s.text}" if s.kind == "say" else f"(observed: {s.text})"
+            for s in lesson.steps
+        ]
+        say = self._build_function_node(
+            session, lesson.goal, demonstrated=demonstrated
+        )
+        if say.startswith("error:"):
+            # The lesson stays recording: fix the goal or add a step and
+            # press stop again — nothing recorded is lost to a refusal.
+            return json_response(
+                200, {"lesson": self._lesson_json(lesson), "say": say}
+            )
+        built_id = self._lesson_built_node_id(session, lesson.goal)
+        closed = lessons.finish(
+            lesson.lesson_id,
+            tenant=session.tenant_id,
+            owner=session.principal_id,
+            status="built",
+            built_node_id=built_id,
+        )
+        self._file_lesson_log(session, closed, built_id)
+        return json_response(
+            200, {"lesson": self._lesson_json(closed), "say": say}
+        )
+
+    def _lesson_built_node_id(self, session, goal: str) -> str:
+        """The node the build just minted — found deterministically by
+        the same goal-derived skill id the builder used."""
+        if self._nodeplace is None:
+            return ""
+        skill_id = self._function_skill_id(session.tenant_id, goal)
+        node = next(
+            (
+                n
+                for n in self._nodeplace.list_own_nodes(
+                    noder_principal=session.principal_id,
+                    tenant_id=session.tenant_id,
+                )
+                if n.skill_id == skill_id
+            ),
+            None,
+        )
+        return node.node_id if node is not None else ""
+
+    def _file_lesson_log(self, session, lesson, built_id: str) -> None:
+        """The lesson, verbatim, as a JSON data log in the BUILT node's
+        drawer — node creation requirements as a solid training record:
+        goal, ordered demonstrated steps, paired executions, timestamps."""
+        if self._files is None or not built_id or lesson is None:
+            return
+        try:
+            self._files.save(
+                UserFile(
+                    tenant_id=session.tenant_id,
+                    node_id=built_id,
+                    name=f"lesson-{lesson.lesson_id[:8]}.json",
+                    folder="lessons",
+                    media_type="application/json",
+                    content=json.dumps(
+                        {
+                            **self._lesson_json(lesson),
+                            "taught_by": session.principal_id,
+                            "taught_in_node": lesson.node_id,
+                        },
+                        indent=2,
+                    ),
+                )
+            )
+        except FileTooLargeError:
+            pass  # a lesson that big still built; only the copy is skipped
 
     # ------------------------------------------------------------------ #
     # Supernode KYC: verified legal entities earn global trust.           #

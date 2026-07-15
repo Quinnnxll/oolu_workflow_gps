@@ -4,6 +4,35 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Imitate: the honest record button — guided lessons that build nodes:
+
+- **The capability audit, answered in the tree.** The old vision (watch
+  the user drive OTHER software) cannot be honest here: the desktop
+  shell is capability-minimal by design (no input hooks, no screen
+  recording, loopback-locked), mobile will never allow a backend screen
+  recorder, and nothing reads other apps' logs. What the platform owns
+  COMPLETELY is everything that runs through a node: the hash-chained
+  audit of every execution, each node's daily log file, script
+  stdout/stderr, and files of every type (text inline, binary blobs,
+  CSV/PDF/image/office). The audit and the design it forces are recorded
+  in `docs/imitation-learning.md`.
+- **The Imitate button** rides the right edge of the
+  Activity/Interact/Files row in Work → My nodes. Press it and teach:
+  name the goal, describe each step in order, run the real work through
+  the node while the lesson records — every run the window logged while
+  recording pairs automatically with the demonstrated steps. Stop &
+  build compiles the demonstration into ONE node through the same gated
+  build path as every other door; the model is told the numbered steps
+  ARE the plan and to imitate them exactly, never to re-plan. A refusal
+  keeps the lesson recording (nothing demonstrated is lost); the built
+  node lands on the desk needing verification, like every node.
+- **Node creation as training data.** Every lesson persists verbatim —
+  rows in the new `LessonStore` (goal, ordered say/run/file steps,
+  timestamps, outcome; erased with the account) and a
+  `lessons/lesson-<id>.json` data log in the built node's own drawer
+  (goal, steps, paired executions, who taught it, where) — the solid,
+  consent-gathered corpus later training rides on.
+
 Friends the way people actually meet and remember — QR connect, a face
 on the thread, name notes, and OoLu that recalls:
 
