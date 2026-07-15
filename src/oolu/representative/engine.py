@@ -8,6 +8,7 @@ gates the result, and files a draft. Nothing here ever sends.
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable, Iterable, Sequence
 from uuid import uuid4
@@ -16,7 +17,7 @@ from ..chat import ChatModel, ModelUnavailable
 from ..replies.models import MessageEnvelope
 from .gate import DEFAULT_SIMILARITY_MIN, judge
 from .memory import ExchangeMemory, StoreExchangeMemory
-from .models import MAX_ABOUT_CHARS, MODES, Draft, PersonaCard
+from .models import MAX_ABOUT_CHARS, MODES, Draft, GateVerdict, PersonaCard
 from .persona import build_messages
 from .serving import AdapterServer, NoopAdapterServer
 from .store import RepresentativeStore
@@ -26,6 +27,11 @@ from .store import RepresentativeStore
 AUTO_WINDOW = 50
 AUTO_MIN_DECIDED = 20
 AUTO_ACCEPT_RATE = 0.8
+
+# The model's honest "I can't write this without the user": one line, the
+# marker then its questions. Never sent, never shown to the peer — the
+# questions go to the USER, in their own assistant conversation.
+_NEED_INFO_RE = re.compile(r"^\s*NEED_INFO\s*:\s*", re.IGNORECASE)
 
 
 def pair_exchanges(
@@ -110,6 +116,9 @@ class RepresentativeEngine:
             "about": self._store.about(scope),
             "exchanges": self._memory.count(scope),
             "drafts_pending": outcomes.get("pending", 0),
+            # Waiting on information only the user can give — the
+            # conversation window works through these one at a time.
+            "drafts_waiting": outcomes.get("needs_info", 0),
             "drafts_decided": decided,
             "sent_unedited": outcomes.get("sent", 0),
             "auto_sent": outcomes.get("auto_sent", 0),
@@ -180,7 +189,11 @@ class RepresentativeEngine:
         display_name: str,
         history: list[dict] | None = None,
         model: ChatModel | None = None,
+        extra_context: str | None = None,
     ) -> Draft:
+        """``extra_context`` is the user's own answer to an earlier
+        NEED_INFO question — the missing facts, added to the prompt for
+        THIS reply. A successful redraft supersedes the waiting draft."""
         inbound_text = inbound_text.strip()
         if not inbound_text:
             raise ValueError("nothing to reply to")
@@ -213,6 +226,7 @@ class RepresentativeEngine:
             history=history,
             peer=conversation_id,
             units_note=units_note,
+            info_note=extra_context,
         )
         generated = spoke = None
         failure: ModelUnavailable | None = None
@@ -226,17 +240,37 @@ class RepresentativeEngine:
             raise failure or ModelUnavailable("no model answered")
         if not generated:
             raise ModelUnavailable("the model returned an empty draft")
+        # The model's honest refusal to guess: a NEED_INFO line files a
+        # WAITING draft — its questions carried in generated_text, asked
+        # to the user in their own conversation, never shown to the peer.
+        asks = _NEED_INFO_RE.match(generated)
+        needs_info = asks is not None
+        if needs_info:
+            questions = generated[asks.end() :].strip()
+            generated = questions or (
+                "what should the reply say? I don't have enough to go on"
+            )
         draft = Draft(
             draft_id=uuid4().hex,
             scope=scope,
             conversation_id=conversation_id,
             inbound_text=inbound_text,
             generated_text=generated,
-            gate=judge(generated, hits, similarity_min=self._similarity_min),
+            status="needs_info" if needs_info else "pending",
+            gate=(
+                GateVerdict()
+                if needs_info
+                else judge(generated, hits, similarity_min=self._similarity_min)
+            ),
             adapter_version=spoke or "base",
             created_at=self._clock(),
         )
         self._store.add_draft(draft)
+        # A fresh draft — written or still asking — supersedes any older
+        # waiting draft for the same message: one question stands, not a pile.
+        self._store.supersede_needs_info(
+            scope, conversation_id, inbound_text, keep=draft.draft_id
+        )
         return draft
 
     def auto_reply(
@@ -287,6 +321,27 @@ class RepresentativeEngine:
     def pending(self, scope: str) -> list[Draft]:
         return self._store.pending_drafts(scope)
 
+    def waiting(self, scope: str) -> list[Draft]:
+        """Drafts waiting on information only the user can give — their
+        generated_text is the QUESTIONS, oldest first, handled one at a
+        time through the user's own conversation."""
+        return self._store.waiting_drafts(scope)
+
+    def next_unnotified(self, scope: str) -> Draft | None:
+        return self._store.next_unnotified(scope)
+
+    def mark_notified(self, scope: str, draft_id: str) -> None:
+        draft = self._store.get_draft(draft_id)
+        if draft is None or draft.scope != scope:
+            raise KeyError(draft_id)
+        self._store.mark_notified(draft_id)
+
+    def ignore_conversation(self, scope: str, conversation_id: str) -> int:
+        """The user's word to let a peer's message rest without a reply:
+        every standing draft for that conversation settles as ignored.
+        Marking the thread read is the caller's job."""
+        return self._store.ignore_conversation(scope, conversation_id)
+
     def get(self, scope: str, draft_id: str) -> Draft:
         """The scope's own draft; a stranger's is indistinguishable from
         missing. Raises KeyError either way."""
@@ -305,6 +360,7 @@ class RepresentativeEngine:
         draft = self._store.get_draft(draft_id)
         if draft is None or draft.scope != scope:
             raise KeyError(draft_id)
+        from_statuses: tuple[str, ...] = ("pending",)
         if action == "send":
             status, final = "sent", draft.generated_text
         elif action == "edit":
@@ -314,9 +370,18 @@ class RepresentativeEngine:
             status = "edited"
         elif action == "discard":
             status, final = "discarded", None
+        elif action == "ignore":
+            # "Let it rest, no reply" — settles a written draft AND a
+            # draft still waiting on info; the caller marks the thread
+            # read. Never counts toward the accept-rate: ignoring the
+            # message says nothing about the draft's quality.
+            status, final = "ignored", None
+            from_statuses = ("pending", "needs_info")
         else:
-            raise ValueError("action must be send, edit, or discard")
-        decided = self._store.decide_draft(draft_id, status=status, final_text=final)
+            raise ValueError("action must be send, edit, discard, or ignore")
+        decided = self._store.decide_draft(
+            draft_id, status=status, final_text=final, from_statuses=from_statuses
+        )
         if decided is None:
             raise ValueError("that draft was already decided")
         if final is not None:

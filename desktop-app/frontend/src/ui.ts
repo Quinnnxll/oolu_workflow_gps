@@ -108,6 +108,28 @@ export function saveSidebarFolded(folded: boolean): void {
   }
 }
 
+// A friend conversation's typing block, surviving pane switches and
+// restarts. A DISCARDED representative draft lands here — kept, not
+// buried — so the user can rework it in their own time.
+const COMPOSE_KEY = "oolu_compose_";
+
+export function loadCompose(peer: string): string {
+  try {
+    return localStorage.getItem(COMPOSE_KEY + peer) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function saveCompose(peer: string, text: string): void {
+  try {
+    if (text) localStorage.setItem(COMPOSE_KEY + peer, text);
+    else localStorage.removeItem(COMPOSE_KEY + peer);
+  } catch {
+    /* storage unavailable: the words still sit in the box this session */
+  }
+}
+
 // Paint the cached choices before any settings request returns. With no
 // stored choice yet (a first run — the SIGN-IN screen included), the
 // device's own language decides, never a hardcoded English.
@@ -1830,6 +1852,31 @@ const STRINGS: Record<string, Entry> = {
   "rep.send": { en: "Send", zh: "发送", es: "Enviar", fr: "Envoyer" },
   "rep.edit": { en: "Edit", zh: "编辑", es: "Editar", fr: "Modifier" },
   "rep.discard": { en: "Discard", zh: "丢弃", es: "Descartar", fr: "Abandonner" },
+  "rep.ignore": { en: "Ignore", zh: "忽略", es: "Ignorar", fr: "Ignorer" },
+  "rep.discarded": {
+    en: "Kept in your typing box with {peer} — I'll offer a fresh draft if they write again, when you toggle me back on, or if it's still unread tomorrow.",
+    zh: "已存入你与 {peer} 的输入框——若对方再来消息、你重新开启代表模式，或明天仍未读，我会再拟一稿。",
+    es: "Guardado en tu cuadro de escritura con {peer} — ofreceré un borrador nuevo si vuelven a escribir, cuando me reactives, o si sigue sin leer mañana.",
+    fr: "Conservé dans votre zone de saisie avec {peer} — je proposerai un nouveau brouillon s'ils réécrivent, quand vous me réactiverez, ou s'il reste non lu demain.",
+  },
+  "rep.waitingTitle": {
+    en: "Waiting on you",
+    zh: "等待你的信息",
+    es: "Esperándote",
+    fr: "En attente de vous",
+  },
+  "rep.waitingCard": {
+    en: "To reply to {peer} — “{text}” — I need:",
+    zh: "要回复 {peer}——“{text}”——我需要：",
+    es: "Para responder a {peer} — “{text}” — necesito:",
+    fr: "Pour répondre à {peer} — « {text} » — j'ai besoin de :",
+  },
+  "rep.waitingHint": {
+    en: "Answer me in the OoLu chat and I'll draft it — or press Ignore to mark it read with no reply.",
+    zh: "在 OoLu 对话中回答我，我就会拟稿——或按“忽略”将其标为已读且不回复。",
+    es: "Respóndeme en el chat de OoLu y lo redactaré — o pulsa Ignorar para marcarlo leído sin respuesta.",
+    fr: "Répondez-moi dans la discussion OoLu et je le rédigerai — ou appuyez sur Ignorer pour le marquer lu sans réponse.",
+  },
   "rep.sendEdited": {
     en: "Send edited",
     zh: "发送修改稿",

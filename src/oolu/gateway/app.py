@@ -40,6 +40,8 @@ from ..chat import (
     GROWTH_BUILD_INSTEAD,
     GROWTH_OFFER,
     GROWTH_REUSE_OFFER,
+    REP_NEEDS_INFO_ASK,
+    REP_WAITING_NOTE,
     WEB_SEARCH_NOTE,
     ChatAssistant,
     ChatTurn,
@@ -1119,6 +1121,7 @@ class GatewayApp:
         # and, inside a node's interact window, that node's own desk.
         tools = None
         context_note = None
+        rep_hands = None
         if self._files is not None:
             node_id = body.get("node_id")
             if node_id:
@@ -1126,6 +1129,7 @@ class GatewayApp:
                     request, session, str(node_id)
                 )
             else:
+                rep_hands = self._representative_chat_hands(session)
                 tools = GatewayChatTools(
                     self._files,
                     tenant=session.tenant_id,
@@ -1136,6 +1140,10 @@ class GatewayApp:
                     accounts=self._accounts,
                     direct_messages=self._direct_messages,
                     local_root=self._local_files_root,
+                    # The representative's conversation-side hands: list
+                    # what waits on the user, redraft with their answer,
+                    # or lay a message to rest — all gateway-walled.
+                    representative=rep_hands,
                 )
         router = self._tenant_model(session.tenant_id)
         # When the model really can search (an Anthropic path with the
@@ -1159,9 +1167,25 @@ class GatewayApp:
             effective.get("account.units", "auto"),
             currency=effective.get("account.currency", "USD"),
         )
+        # Drafted replies waiting on the user's own knowledge: the turn is
+        # told, so OoLu can raise ONE of them when the moment fits — the
+        # tasks are gathered here, in conversation, never in the drafts.
+        rep_note = None
+        if rep_hands is not None:
+            waiting = rep_hands.waiting()
+            if waiting:
+                rep_note = REP_WAITING_NOTE.format(n=len(waiting))
         context_note = (
             "\n".join(
-                n for n in (context_note, search_note, mood_note, units_note) if n
+                n
+                for n in (
+                    context_note,
+                    search_note,
+                    mood_note,
+                    units_note,
+                    rep_note,
+                )
+                if n
             )
             or None
         )
@@ -1647,8 +1671,80 @@ class GatewayApp:
         return self._representative
 
     @staticmethod
+    def _shorten(text: str, limit: int) -> str:
+        text = " ".join(str(text or "").split())
+        return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+    @staticmethod
     def _representative_scope(session) -> str:
         return f"{session.tenant_id}:{session.principal_id}"
+
+    def _representative_chat_hands(self, session):
+        """The chat assistant's representative hands, session-bound.
+
+        OoLu gathers what a reply needs by asking the USER, in their own
+        conversation — these are the hands that close that loop: list the
+        drafts waiting on information, redraft one with the user's answer
+        (the fresh draft lands in the inbox for review — OoLu still never
+        sends), or lay a message to rest as read. None when the
+        representative is off or absent: the tools answer in words."""
+        rep, store = self._representative, self._direct_messages
+        if rep is None or store is None:
+            return None
+        scope = self._representative_scope(session)
+        if rep.mode(scope) == "off":
+            return None
+        app = self
+
+        class _Hands:
+            def waiting(self) -> list[dict]:
+                return [
+                    {
+                        "peer": d.conversation_id,
+                        "message": d.inbound_text,
+                        "questions": d.generated_text,
+                    }
+                    for d in rep.waiting(scope)
+                ]
+
+            def answer(self, peer: str, info: str) -> str:
+                peer, info = (peer or "").strip(), (info or "").strip()
+                if not peer or not info:
+                    return "error: answering takes the friend's name and the information"
+                try:
+                    draft = app._draft_friend_reply(
+                        session, peer, extra_context=info
+                    )
+                except GatewayError as exc:
+                    return f"error: {exc.message}"
+                except (ModelBudgetExceeded, ModelUnavailable) as exc:
+                    return f"error: {exc}"
+                if draft.status == "needs_info":
+                    return (
+                        "still missing something — the reply also needs: "
+                        f"{draft.generated_text}"
+                    )
+                return (
+                    f"drafted the reply to {peer} — it is waiting in the "
+                    "drafts block for the user's review (nothing sent)"
+                )
+
+            def ignore(self, peer: str) -> str:
+                peer = (peer or "").strip()
+                if not peer:
+                    return "error: say whose message to ignore"
+                settled = rep.ignore_conversation(scope, peer)
+                store.mark_read(
+                    tenant=session.tenant_id,
+                    reader=session.principal_id,
+                    peer=peer,
+                )
+                return (
+                    f"marked {peer}'s messages as read — no reply will be "
+                    f"drafted ({settled} standing draft(s) settled)"
+                )
+
+        return _Hands()
 
     def _representative_status(self, request, session, params) -> Response:
         rep = self._require_representative()
@@ -1674,15 +1770,24 @@ class GatewayApp:
         rep = self._require_representative()
         scope = self._representative_scope(session)
         return json_response(
-            200, {"items": [draft.model_dump() for draft in rep.pending(scope)]}
+            200,
+            {
+                "items": [draft.model_dump() for draft in rep.pending(scope)],
+                # Waiting on the user: generated_text is the QUESTIONS —
+                # answered in the OoLu conversation, one at a time.
+                "waiting": [
+                    draft.model_dump() for draft in rep.waiting(scope)
+                ],
+            },
         )
 
-    def _draft_friend_reply(self, session, peer: str):
+    def _draft_friend_reply(self, session, peer: str, *, extra_context=None):
         """The one drafting path: fold the thread into memory (idempotent
         by message id, register-tagged with the peer), then draft a reply
         to the latest unanswered message. Raises GatewayError(409) when
         the last word is already the user's; model errors propagate for
-        the caller to map. Returns the Draft."""
+        the caller to map. Returns the Draft. ``extra_context`` is the
+        user's own answer to an earlier needs-info question."""
         rep = self._require_representative()
         store = self._require_direct_messages()
         scope = self._representative_scope(session)
@@ -1717,6 +1822,7 @@ class GatewayApp:
             display_name=session.principal_id,
             history=history,
             model=self._tenant_model(session.tenant_id),
+            extra_context=extra_context,
         )
 
     def _representative_draft(self, request, session, params) -> Response:
@@ -1767,12 +1873,43 @@ class GatewayApp:
                 # stop asking, say so once, keep what was drafted.
                 model_error = str(exc)
                 break
-            drafted.append(draft.model_dump())
+            if draft.status != "needs_info":
+                drafted.append(draft.model_dump())
+        # A reply the model could not honestly write becomes OoLu's OWN
+        # question to the user, in the user's conversation — never words
+        # in the peer-facing draft. One ask per sweep: the tasks are dealt
+        # with one by one through the conversation window, and nothing
+        # forces an answer the moment the toggle flips.
+        asked = None
+        waiting_draft = rep.next_unnotified(scope)
+        if waiting_draft is not None:
+            text = REP_NEEDS_INFO_ASK.format(
+                peer=waiting_draft.conversation_id,
+                inbound=self._shorten(waiting_draft.inbound_text, 140),
+                questions=waiting_draft.generated_text,
+            )
+            if self._assistant_history is not None:
+                self._assistant_history.append(
+                    tenant=session.tenant_id,
+                    principal=session.principal_id,
+                    kind="assistant",
+                    body=text,
+                )
+            rep.mark_notified(scope, waiting_draft.draft_id)
+            asked = {
+                "draft_id": waiting_draft.draft_id,
+                "peer": waiting_draft.conversation_id,
+                "text": text,
+            }
         return json_response(
             200,
             {
                 "drafted": drafted,
                 "pending": len(rep.pending(scope)),
+                "waiting": len(rep.waiting(scope)),
+                # OoLu's question for the user, freshly surfaced this
+                # sweep (also appended to the conversation history).
+                "asked": asked,
                 "model_error": model_error,
             },
         )
@@ -1824,6 +1961,14 @@ class GatewayApp:
             raise GatewayError(404, "not_found", "no such draft") from None
         except ValueError as exc:
             raise GatewayError(400, "invalid_request", str(exc)) from exc
+        if action == "ignore" and self._direct_messages is not None:
+            # "No reply, let it rest" — the message is READ: it stops
+            # counting as waiting, and the sweep never drafts it again.
+            self._direct_messages.mark_read(
+                tenant=session.tenant_id,
+                reader=session.principal_id,
+                peer=draft.conversation_id,
+            )
         delivered = None
         if delivers and draft.final_text:
             message = store.send(

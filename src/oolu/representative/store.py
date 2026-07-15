@@ -96,6 +96,18 @@ def _add_exchange_peer(conn: sqlite3.Connection) -> None:
     )
 
 
+def _add_info_flow_columns(conn: sqlite3.Connection) -> None:
+    # notified_at: when a needs_info draft's questions were surfaced to the
+    # user in their OoLu conversation — asked once, never repeated.
+    # mode_on_at: the last time the representative was switched ON — a
+    # discarded draft only blocks re-drafting until the next switch-on.
+    conn.executescript(
+        "ALTER TABLE drafts ADD COLUMN notified_at REAL;"
+        " ALTER TABLE representative_settings"
+        "   ADD COLUMN mode_on_at REAL NOT NULL DEFAULT 0;"
+    )
+
+
 def _create_peer_rules(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
@@ -120,6 +132,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(up=_create_adapter_versions, down=_drop_adapter_versions),
     Migration(up=_create_peer_rules, down=_drop_peer_rules),
     Migration(up=_add_exchange_peer),  # irreversible: a column, kept
+    Migration(up=_add_info_flow_columns),  # irreversible: columns, kept
 )
 
 # An adapter's life: pending -> trained -> active -> retired, or failed.
@@ -170,16 +183,40 @@ class RepresentativeStore:
     def configure(
         self, scope: str, *, mode: str | None = None, about: str | None = None
     ) -> None:
+        now = self._clock()
+        # Switching ON (off -> draft/auto, or between on-modes) stamps
+        # mode_on_at: the moment discarded drafts stop blocking a redraft.
+        turned_on = mode is not None and mode != "off"
         with self._lock, self._db:
             self._db.execute(
-                """INSERT INTO representative_settings (scope, mode, persona_about, updated_at)
-                   VALUES (?, COALESCE(?, 'off'), COALESCE(?, ''), ?)
+                """INSERT INTO representative_settings
+                       (scope, mode, persona_about, updated_at, mode_on_at)
+                   VALUES (?, COALESCE(?, 'off'), COALESCE(?, ''), ?, ?)
                    ON CONFLICT(scope) DO UPDATE SET
                        mode = COALESCE(?, representative_settings.mode),
                        persona_about = COALESCE(?, representative_settings.persona_about),
-                       updated_at = excluded.updated_at""",
-                (scope, mode, about, self._clock(), mode, about),
+                       updated_at = excluded.updated_at,
+                       mode_on_at = CASE WHEN ? THEN excluded.updated_at
+                                         ELSE representative_settings.mode_on_at END""",
+                (
+                    scope,
+                    mode,
+                    about,
+                    now,
+                    now if turned_on else 0,
+                    mode,
+                    about,
+                    int(turned_on),
+                ),
             )
+
+    def mode_on_at(self, scope: str) -> float:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT mode_on_at FROM representative_settings WHERE scope = ?",
+                (scope,),
+            ).fetchone()
+        return float(row["mode_on_at"]) if row is not None else 0.0
 
     # -------------------------------------------------------------- #
     # Exchanges (the memory, and later the training corpus).          #
@@ -266,19 +303,86 @@ class RepresentativeStore:
         return [self._draft(row) for row in rows]
 
     def decide_draft(
-        self, draft_id: str, *, status: str, final_text: str | None
+        self,
+        draft_id: str,
+        *,
+        status: str,
+        final_text: str | None,
+        from_statuses: tuple[str, ...] = ("pending",),
     ) -> Draft | None:
         """Record the user's decision; returns the updated draft, or None
-        when the draft is missing or already decided (no double-spends)."""
+        when the draft is missing or already decided (no double-spends).
+        ``from_statuses`` widens the door for verdicts that also settle a
+        waiting question (ignore covers needs_info too)."""
+        marks = ", ".join("?" for _ in from_statuses)
         with self._lock, self._db:
             cursor = self._db.execute(
-                """UPDATE drafts SET status = ?, final_text = ?, decided_at = ?
-                   WHERE draft_id = ? AND status = 'pending'""",
-                (status, final_text, self._clock(), draft_id),
+                f"""UPDATE drafts SET status = ?, final_text = ?, decided_at = ?
+                   WHERE draft_id = ? AND status IN ({marks})""",
+                (status, final_text, self._clock(), draft_id, *from_statuses),
             )
             if int(getattr(cursor, "rowcount", 0) or 0) == 0:
                 return None
         return self.get_draft(draft_id)
+
+    def waiting_drafts(self, scope: str, *, limit: int = 100) -> list[Draft]:
+        """Drafts waiting on information only the user can give, OLDEST
+        first — the conversation works through them one at a time."""
+        with self._lock:
+            rows = self._db.execute(
+                """SELECT * FROM drafts WHERE scope = ? AND status = 'needs_info'
+                   ORDER BY created_at ASC, draft_id ASC LIMIT ?""",
+                (scope, int(limit)),
+            ).fetchall()
+        return [self._draft(row) for row in rows]
+
+    def next_unnotified(self, scope: str) -> Draft | None:
+        """The oldest waiting draft whose questions have NOT yet been
+        surfaced in the user's OoLu conversation — one ask per sweep."""
+        with self._lock:
+            row = self._db.execute(
+                """SELECT * FROM drafts
+                   WHERE scope = ? AND status = 'needs_info'
+                     AND notified_at IS NULL
+                   ORDER BY created_at ASC, draft_id ASC LIMIT 1""",
+                (scope,),
+            ).fetchone()
+        return self._draft(row) if row is not None else None
+
+    def mark_notified(self, draft_id: str) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "UPDATE drafts SET notified_at = ? WHERE draft_id = ?",
+                (self._clock(), draft_id),
+            )
+
+    def supersede_needs_info(
+        self, scope: str, conversation_id: str, inbound_text: str, *, keep: str
+    ) -> int:
+        """Mark older waiting drafts for this exact message as ANSWERED —
+        the user supplied the information and a fresh draft (``keep``)
+        stands in their place. Answered drafts never block a redraft."""
+        with self._lock, self._db:
+            cursor = self._db.execute(
+                """UPDATE drafts SET status = 'answered', decided_at = ?
+                   WHERE scope = ? AND conversation_id = ? AND inbound_text = ?
+                     AND status = 'needs_info' AND draft_id != ?""",
+                (self._clock(), scope, conversation_id, inbound_text.strip(), keep),
+            )
+        return int(getattr(cursor, "rowcount", 0) or 0)
+
+    def ignore_conversation(self, scope: str, conversation_id: str) -> int:
+        """The user's word to let a peer's message rest: every standing
+        draft (pending or waiting on info) for that conversation is
+        settled as IGNORED. Returns how many were settled."""
+        with self._lock, self._db:
+            cursor = self._db.execute(
+                """UPDATE drafts SET status = 'ignored', decided_at = ?
+                   WHERE scope = ? AND conversation_id = ?
+                     AND status IN ('pending', 'needs_info')""",
+                (self._clock(), scope, conversation_id),
+            )
+        return int(getattr(cursor, "rowcount", 0) or 0)
 
     def recent_decisions(self, scope: str, *, limit: int = 50) -> list[str]:
         """The user's latest verdicts (sent/edited/discarded), newest first.
@@ -309,16 +413,48 @@ class RepresentativeStore:
     def has_draft_for(
         self, scope: str, conversation_id: str, inbound_text: str
     ) -> bool:
-        """Whether this exact message was ever drafted for — the sweep's
-        idempotency: one message, one draft, whatever the user decided."""
+        """Whether this exact message already has a STANDING draft — the
+        sweep's idempotency, with a memory that forgives:
+
+        - pending / needs_info / sent / edited / auto_sent / ignored
+          block forever: the message is being handled, was answered, or
+          was deliberately laid to rest;
+        - answered never blocks — it was superseded by a real draft
+          (which blocks on its own);
+        - discarded blocks only while FRESH: a discard postpones, it
+          never buries. It stops blocking after ``REDRAFT_AFTER_S`` (a
+          day) or the moment the representative is switched on again —
+          and a NEW message from the peer never matched here anyway.
+        """
+        from .models import REDRAFT_AFTER_S
+
         with self._lock:
-            row = self._db.execute(
-                """SELECT 1 FROM drafts
-                   WHERE scope = ? AND conversation_id = ? AND inbound_text = ?
-                   LIMIT 1""",
+            rows = self._db.execute(
+                """SELECT status, decided_at FROM drafts
+                   WHERE scope = ? AND conversation_id = ? AND inbound_text = ?""",
                 (scope, conversation_id, inbound_text.strip()),
-            ).fetchone()
-        return row is not None
+            ).fetchall()
+        if not rows:
+            return False
+        mode_on = self.mode_on_at(scope)
+        now = self._clock()
+        for row in rows:
+            status = str(row["status"])
+            if status == "answered":
+                continue
+            if status == "discarded":
+                decided = (
+                    float(row["decided_at"])
+                    if row["decided_at"] is not None
+                    else 0.0
+                )
+                aged = now - decided >= REDRAFT_AFTER_S
+                # Forgiven only by a switch-on strictly AFTER the discard.
+                retoggled = decided < mode_on
+                if aged or retoggled:
+                    continue
+            return True
+        return False
 
     def outcome_counts(self, scope: str) -> dict[str, int]:
         with self._lock:

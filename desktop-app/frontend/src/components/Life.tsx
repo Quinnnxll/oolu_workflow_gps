@@ -7,7 +7,14 @@ import type {
   RepresentativeStatus,
 } from "../api";
 import { identityHue, updateAvatarSignals } from "../avatar";
-import { loadSidebarFolded, saveSidebarFolded, tf, useT } from "../ui";
+import {
+  loadCompose,
+  loadSidebarFolded,
+  saveCompose,
+  saveSidebarFolded,
+  tf,
+  useT,
+} from "../ui";
 import { conciseName } from "../naming";
 import type { RunSummary, TimelineEvent } from "../types";
 import { ForwardMenu } from "./ForwardMenu";
@@ -96,8 +103,21 @@ export function Life() {
         // The busy person's pass: draft a reply for every waiting friend
         // message. Idempotent per message — free until something is new.
         const swept = await api.representativeSweep();
-        if (swept.drafted.length > 0) {
-          setRep({ ...status, drafts_pending: swept.pending });
+        if (swept.drafted.length > 0 || (swept.waiting ?? 0) > 0) {
+          setRep({
+            ...status,
+            drafts_pending: swept.pending,
+            drafts_waiting: swept.waiting ?? 0,
+          });
+        }
+        // A reply that needs the user's own knowledge: OoLu just asked in
+        // the conversation (the history has it) — surface it live too.
+        if (swept.asked) {
+          window.dispatchEvent(
+            new CustomEvent("oolu-rep-question", {
+              detail: { text: swept.asked.text },
+            }),
+          );
         }
       }
     } catch {
@@ -313,7 +333,7 @@ export function Life() {
         {selected.kind === "oolu" &&
           rep !== null &&
           rep.mode !== "off" &&
-          rep.drafts_pending > 0 && (
+          (rep.drafts_pending > 0 || (rep.drafts_waiting ?? 0) > 0) && (
             <div className="rep-sweep">
               <DraftsInbox
                 onActivity={refreshRuns}
@@ -341,8 +361,21 @@ export function Life() {
                       });
                       setRep(status);
                       if (next !== "off") {
+                        // Toggling back ON forgives earlier discards: the
+                        // still-unread messages get a fresh draft pass.
                         const swept = await api.representativeSweep();
-                        setRep({ ...status, drafts_pending: swept.pending });
+                        setRep({
+                          ...status,
+                          drafts_pending: swept.pending,
+                          drafts_waiting: swept.waiting ?? 0,
+                        });
+                        if (swept.asked) {
+                          window.dispatchEvent(
+                            new CustomEvent("oolu-rep-question", {
+                              detail: { text: swept.asked.text },
+                            }),
+                          );
+                        }
                       }
                     } catch {
                       /* the poll will tell the truth shortly */
@@ -408,15 +441,21 @@ export function DraftsInbox({
 }) {
   const tr = useT();
   const [drafts, setDrafts] = useState<RepresentativeDraft[] | null>(null);
+  // Drafts waiting on information only the user can give: their
+  // generated_text is OoLu's QUESTIONS, answered in the OoLu chat.
+  const [waiting, setWaiting] = useState<RepresentativeDraft[]>([]);
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(
     null,
   );
+  const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
-      setDrafts((await api.representativeDrafts()).items);
+      const got = await api.representativeDrafts();
+      setDrafts(got.items);
+      setWaiting(got.waiting ?? []);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -430,6 +469,17 @@ export function DraftsInbox({
     setError("");
     setBusy(true);
     try {
+      // A DISCARDED draft is kept, not buried: its words land in the
+      // friend conversation's typing block, and the message is drafted
+      // again when the peer writes anew, the representative is toggled
+      // back on, or it still sits unread after a day.
+      if (action === "discard") {
+        const discarded = drafts?.find((d) => d.draft_id === draftId);
+        if (discarded) {
+          saveCompose(discarded.conversation_id, discarded.generated_text);
+          setNote(tf("rep.discarded", { peer: discarded.conversation_id }));
+        }
+      }
       await api.decideRepresentativeDraft(draftId, action, text);
       setEditing(null);
       await refresh();
@@ -517,11 +567,51 @@ export function DraftsInbox({
                 >
                   {tr("rep.discard")}
                 </button>
+                <button
+                  className="linklike"
+                  disabled={busy}
+                  onClick={() => void decide(d.draft_id, "ignore")}
+                >
+                  {tr("rep.ignore")}
+                </button>
               </div>
             </>
           )}
         </div>
       ))}
+      {note && <div className="muted rep-note">{note}</div>}
+      {waiting.length > 0 && (
+        <>
+          <div className="convo-group">{tr("rep.waitingTitle")}</div>
+          {waiting.map((w) => (
+            <div key={w.draft_id} className="settings-group draft-card">
+              <div className="muted">
+                <button
+                  className="linklike"
+                  onClick={() => onOpenThread(w.conversation_id)}
+                >
+                  {tf("rep.waitingCard", {
+                    peer: w.conversation_id,
+                    text: w.inbound_text,
+                  })}
+                </button>
+              </div>
+              {/* The QUESTIONS, spoken by OoLu — never words for the peer. */}
+              <div className="bubble">{w.generated_text}</div>
+              <div className="setting-control row">
+                <span className="muted">{tr("rep.waitingHint")}</span>
+                <button
+                  className="linklike"
+                  disabled={busy}
+                  onClick={() => void decide(w.draft_id, "ignore")}
+                >
+                  {tr("rep.ignore")}
+                </button>
+              </div>
+            </div>
+          ))}
+        </>
+      )}
     </div>
   );
 }
@@ -764,7 +854,9 @@ export function FriendThread({
 }) {
   const tr = useT();
   const [messages, setMessages] = useState<FriendMessage[] | null>(null);
-  const [draft, setDraft] = useState("");
+  // The typing block survives pane switches and restarts — and a
+  // discarded representative draft lands HERE, kept for reworking.
+  const [draft, setDraft] = useState(() => loadCompose(peer));
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   // The representative: ✍ appears only when the account turned it on.
@@ -812,6 +904,11 @@ export function FriendThread({
     endRef.current?.scrollIntoView?.({ block: "end" });
   }, [messages?.length]);
 
+  // Persist the typing block as it changes; sending clears it below.
+  useEffect(() => {
+    saveCompose(peer, draft);
+  }, [peer, draft]);
+
   async function send() {
     const text = draft.trim();
     if (!text) return;
@@ -856,6 +953,9 @@ export function FriendThread({
     setBusy(true);
     try {
       await api.decideRepresentativeDraft(suggestion.draft_id, action);
+      // A discarded suggestion is kept, not buried: it lands in THIS
+      // conversation's typing block, ready to be reworked by hand.
+      if (action === "discard") setDraft(suggestion.generated_text);
       setSuggestion(null);
       if (action === "send") {
         await refresh();

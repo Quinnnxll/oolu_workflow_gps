@@ -537,6 +537,9 @@ export interface RepresentativeStatus {
   about: string;
   exchanges: number;
   drafts_pending: number;
+  // Waiting on information only the user can give — OoLu asks in the
+  // user's own conversation, one at a time; nothing is drafted blind.
+  drafts_waiting?: number;
   drafts_decided: number;
   sent_unedited: number;
   auto_sent: number;
@@ -925,7 +928,10 @@ export const api = {
   representativeDraft: (peer: string) =>
     req<RepresentativeDraft>("POST", "/v1/representative/drafts", { peer }),
   representativeDrafts: () =>
-    req<{ items: RepresentativeDraft[] }>("GET", "/v1/representative/drafts"),
+    req<{ items: RepresentativeDraft[]; waiting?: RepresentativeDraft[] }>(
+      "GET",
+      "/v1/representative/drafts",
+    ),
   // The busy person's pass: one call drafts a reply for every waiting
   // friend message (idempotent per message — polling is free until
   // someone says something new).
@@ -960,6 +966,11 @@ export const api = {
     req<{
       drafted: RepresentativeDraft[];
       pending: number;
+      // Drafts waiting on the user's own knowledge, and OoLu's freshly
+      // surfaced question for the oldest one (also appended to the OoLu
+      // conversation history) — null when nothing new was asked.
+      waiting?: number;
+      asked?: { draft_id: string; peer: string; text: string } | null;
       model_error: string | null;
     }>("POST", "/v1/representative/sweep", {}),
   setRepresentativePeerAuto: (peer: string, auto: boolean) =>

@@ -4,6 +4,37 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The representative asks the USER what it's missing — never the peer:
+
+- **Questions never leak into a draft.** When the model can't honestly
+  write a reply ("what gathering? who's asking?"), it no longer files a
+  draft full of meta-questions addressed at nobody. The persona prompt
+  forbids asking the user inside the reply and gives the model an honest
+  escape hatch — a single `NEED_INFO:` line — which files a WAITING
+  draft (new status `needs_info`) whose text is the questions, kept out
+  of the peer-facing inbox entirely.
+- **OoLu gathers the information in conversation, one task at a time.**
+  The sweep surfaces ONE waiting question per pass as OoLu's own
+  assistant message in the user's conversation (appended to the server
+  history and announced live) — no reply has to exist the moment the
+  toggle flips. Three new chat hands close the loop: `rep_waiting`
+  lists what waits, `rep_answer` redrafts with what the user just said
+  (the fresh reviewable draft supersedes the question — status
+  `answered`), and `rep_ignore` lays a message to rest. The chat turn's
+  context says when drafts are waiting, so OoLu raises the oldest one
+  when the moment fits.
+- **Discard postpones; it never buries.** A discarded draft's words land
+  in that friend's typing block (persisted per peer), ready to rework by
+  hand — and the message earns a fresh draft when the peer writes again,
+  when the representative is toggled back on, or after a day still
+  unread (`has_draft_for` forgives a discard on those exact terms; a
+  new `mode_on_at` column records the switch-on).
+- **"Ignore it" means read.** A new `ignore` verdict (button on the
+  draft card, or asked of OoLu in conversation) settles pending AND
+  waiting drafts, marks the friend's thread read, blocks any redraft
+  forever, and never counts toward the accept-rate — ignoring the
+  message says nothing about the draft's quality.
+
 The verified Supernode's web opens, and its org imports as a template:
 
 - **Open web for a Supernode under the global account.** A Supernode

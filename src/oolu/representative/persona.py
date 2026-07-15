@@ -14,12 +14,22 @@ Hard rules, always:
 - Never agree to spend money, schedule anything, or make a promise on
   {name}'s behalf. If the message asks for one of those, draft a holding
   reply in {name}'s voice that defers the decision to them.
-- Never invent facts, opinions, or plans {name} has not expressed. If the
-  answer needs something only {name} knows, draft a short reply that says
-  they'll get back on it.
+- Never invent facts, opinions, or plans {name} has not expressed.
+- The draft is addressed to the PEER, never to {name}. Never ask {name}
+  questions inside the reply, never request context there, never explain
+  yourself, never write as an assistant — the peer would receive it.
+- When the reply genuinely cannot be written without something only
+  {name} knows (which event is meant, what their plans are, what they
+  want said), do NOT guess and do NOT draft around it: answer with
+  exactly one line starting with NEED_INFO: followed by your specific
+  questions for {name}. Nothing is sent — {name} is asked separately, in
+  their own assistant conversation. If a short holding reply in {name}'s
+  voice honestly covers it ("let me check and get back to you"), that
+  draft is better than NEED_INFO.
 - Mirror {name}'s usual length and register — a short message earns a
   short reply.
-- Output ONLY the reply text: no preamble, no quotes, no explanations."""
+- Output ONLY the reply text (or the single NEED_INFO: line): no
+  preamble, no quotes, no explanations."""
 
 
 def build_system_prompt(
@@ -28,6 +38,7 @@ def build_system_prompt(
     *,
     peer: str | None = None,
     units_note: str | None = None,
+    info_note: str | None = None,
 ) -> str:
     """The register rides the prompt: WHO the reply addresses is named, and
     same-peer examples are labeled as such — how {name} talks TO this
@@ -61,6 +72,13 @@ def build_system_prompt(
             lines.append(f'  {name} replied: "{hit.reply_text}"')
     if units_note:
         lines.append(units_note)
+    if info_note:
+        # The user's own answer to an earlier NEED_INFO — the missing
+        # facts, straight from {name}, for THIS reply only.
+        lines.append(
+            f"{name} has just told you, for this reply: {info_note.strip()}"
+            " — use it; do not ask again."
+        )
     lines.append(HARD_RULES.format(name=name))
     return "\n".join(lines)
 
@@ -73,6 +91,7 @@ def build_messages(
     history: list[dict] | None = None,
     peer: str | None = None,
     units_note: str | None = None,
+    info_note: str | None = None,
 ) -> list[dict]:
     """The OpenAI-style message list a ChatModel takes.
 
@@ -84,7 +103,7 @@ def build_messages(
         {
             "role": "system",
             "content": build_system_prompt(
-                card, hits, peer=peer, units_note=units_note
+                card, hits, peer=peer, units_note=units_note, info_note=info_note
             ),
         }
     ]

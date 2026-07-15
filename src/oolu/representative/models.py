@@ -17,10 +17,31 @@ from pydantic import BaseModel, ConfigDict, Field
 RepresentativeMode = Literal["off", "draft", "auto"]
 MODES: tuple[str, ...] = ("off", "draft", "auto")
 
-# "auto_sent" is the representative speaking for the user; the four human
-# statuses are the user speaking about the representative — only those
-# count toward the accept-rate that earns autonomy.
-DraftStatus = Literal["pending", "sent", "edited", "discarded", "auto_sent"]
+# "auto_sent" is the representative speaking for the user; sent/edited/
+# discarded are the user speaking about the representative — only those
+# count toward the accept-rate that earns autonomy. "needs_info" is a
+# draft that never got written: the model needed something only the user
+# knows, and generated_text carries its QUESTIONS for the user (asked in
+# the OoLu conversation, never inside a reply). "answered" is a needs_info
+# draft superseded once the user supplied the information. "ignored" is
+# the user's word to let a message rest unanswered — it is marked read
+# and never drafted for again.
+DraftStatus = Literal[
+    "pending",
+    "sent",
+    "edited",
+    "discarded",
+    "auto_sent",
+    "needs_info",
+    "answered",
+    "ignored",
+]
+
+# A DISCARDED draft blocks re-drafting the same message only this long:
+# a discard postpones ("not this, not now"), it never buries — the
+# message is drafted again when the peer says something new, when the
+# user toggles the representative back on, or after a day still unread.
+REDRAFT_AFTER_S = 24 * 3600
 
 # A short standing self-description, not a biography.
 MAX_ABOUT_CHARS = 2_000

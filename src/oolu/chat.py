@@ -97,13 +97,27 @@ one, answer with EXACTLY one JSON object of the shape:
   {"tool": "get_settings", "args": {}}
   {"tool": "set_setting", "args": {"key": "<a settings key>", "value": <the new value>}}
   {"tool": "send_message", "args": {"to": "<a friend or node, by name>", "text": "<the message>"}}
+  {"tool": "rep_waiting", "args": {}}   (representative mode: drafted replies waiting on info from the user)
+  {"tool": "rep_answer", "args": {"peer": "<the friend>", "info": "<what the user just told you>"}}
+  {"tool": "rep_ignore", "args": {"peer": "<the friend>"}}
 The tool's result arrives as the next message; then answer the user with the
 {"say", "task"} shape. write_file replaces the whole file — read it first
 when editing. Touch only files the user asked about. send_message delivers
 to a friend or one of the user's nodes by name — the delivery is marked as
 forwarded via OoLu from the user (you never impersonate them); use it ONLY
 when the user asked to send or forward something. To redo past work, set
-"task" to that run's intent — there is no tool for starting work."""
+"task" to that run's intent — there is no tool for starting work.
+
+Representative mode: when it is on, replies to friends are DRAFTED for the
+user's review — and a draft that needs information only the user has WAITS
+instead of guessing (rep_waiting lists them, with the questions). You
+gather what's needed by asking the user HERE, in this conversation, one
+message at a time — never by putting questions into the reply itself, and
+never all at once. There is no rush: a reply does not have to exist the
+moment representative mode is switched on. When the user answers, call
+rep_answer with the friend's name and what they said — a fresh draft
+appears for their review (you never send it). If they say to ignore that
+message, call rep_ignore — it is marked read, with no reply."""
 
 _HELP = (
     "I'm OoLu — your get-it-done sidekick! ⚡ Tell me what you need and I'll "
@@ -462,6 +476,16 @@ class EngineTools(Protocol):
     def set_setting(self, key: str, value: object) -> str: ...
 
 
+@runtime_checkable
+class RepresentativeTools(Protocol):
+    """The representative's conversation-side hands: OoLu gathers what a
+    drafted reply needs by asking the USER here — never inside the draft."""
+
+    def rep_waiting(self) -> list[dict] | str: ...
+    def rep_answer(self, peer: str, info: str) -> str: ...
+    def rep_ignore(self, peer: str) -> str: ...
+
+
 class GatewayChatTools(FileChatTools):
     """File tools plus the engine's read surface, tenant-bound.
 
@@ -485,6 +509,10 @@ class GatewayChatTools(FileChatTools):
         # `oolu desktop` loopback). A multi-user host never sets this —
         # a server has no business in anyone's home directory.
         local_root=None,  # pathlib.Path | None
+        # The representative's conversation-side hands (gateway-bound):
+        # .waiting() / .answer(peer, info) / .ignore(peer). None when the
+        # representative is off — the tools then answer in words.
+        representative=None,
     ):
         super().__init__(store, tenant=tenant)
         self._chat_tenant = tenant
@@ -495,6 +523,7 @@ class GatewayChatTools(FileChatTools):
         self._accounts = accounts
         self._direct_messages = direct_messages
         self._local_root = local_root
+        self._representative = representative
 
     def local_search_enabled(self) -> bool:
         return self._local_root is not None
@@ -739,6 +768,30 @@ class GatewayChatTools(FileChatTools):
         except SettingError as exc:
             return f"error: {exc}"
         return f"set {key} to {applied}"
+
+    # ------------------------------------------------------------------ #
+    # The representative's conversation-side hands: gather what a drafted #
+    # reply needs by asking the USER here — never inside the draft.       #
+    # ------------------------------------------------------------------ #
+    def rep_waiting(self) -> list[dict] | str:
+        if self._representative is None:
+            return "error: representative mode is off — nothing is waiting"
+        return self._representative.waiting()
+
+    def rep_answer(self, peer: str, info: str) -> str:
+        """The user answered a draft's question: redraft that reply with
+        their information. The fresh draft lands in the inbox for their
+        review — OoLu still never sends."""
+        if self._representative is None:
+            return "error: representative mode is off"
+        return self._representative.answer(peer, info)
+
+    def rep_ignore(self, peer: str) -> str:
+        """The user's word to let a friend's message rest: no reply is
+        drafted and the message is marked READ."""
+        if self._representative is None:
+            return "error: representative mode is off"
+        return self._representative.ignore(peer)
 
 
 # --------------------------------------------------------------------------- #
@@ -1282,6 +1335,28 @@ GROWTH_BUILD_INSTEAD = (
     "then run it. Say “no” to leave things as they are."
 )
 
+# The representative could not honestly write a reply — the missing facts
+# live with the USER, so OoLu asks THEM, here in their own conversation,
+# never inside the peer-facing draft. One question at a time; no reply is
+# forced the moment the toggle flips.
+REP_NEEDS_INFO_ASK = (
+    "Before I draft a reply to {peer} — they wrote “{inbound}” — I need "
+    "something only you know: {questions}\n"
+    "Tell me here and I'll draft the reply for your review, or say "
+    "“ignore it” and I'll mark it read with no reply."
+)
+
+# Rides the chat turn's context when drafted replies wait on the user's
+# own knowledge — so OoLu raises one when the moment fits, in THIS
+# conversation, one at a time.
+REP_WAITING_NOTE = (
+    "Representative: {n} drafted reply/replies are waiting on information "
+    "only the user can give (rep_waiting lists them). If the moment fits, "
+    "ask the user about the OLDEST one — one at a time, never all at once. "
+    "When they answer, call rep_answer with what they said; if they say to "
+    "ignore that message, call rep_ignore."
+)
+
 _CONSENT_YES = frozenset(
     {
         "yes",
@@ -1797,6 +1872,34 @@ def _run_tool(tools: ChatTools, call: _ToolCall) -> tuple[str, dict | None]:
         action = None if result.startswith("error:") else {
             "tool": "send_message",
             "name": str(matches[0]["name"]),
+        }
+        return result, action
+    if call.name == "rep_waiting" and isinstance(tools, RepresentativeTools):
+        waiting = tools.rep_waiting()
+        if isinstance(waiting, str):
+            return waiting, None
+        listing = (
+            "\n".join(
+                f"{w['peer']} wrote: \"{w['message']}\" — needs: {w['questions']}"
+                for w in waiting
+            )
+            or "(nothing is waiting on the user)"
+        )
+        return listing, {"tool": "rep_waiting"}
+    if call.name == "rep_answer" and isinstance(tools, RepresentativeTools):
+        peer = str(call.args.get("peer", "")).strip()
+        result = tools.rep_answer(peer, str(call.args.get("info", "")))
+        action = None if result.startswith("error:") else {
+            "tool": "rep_answer",
+            "name": peer,
+        }
+        return result, action
+    if call.name == "rep_ignore" and isinstance(tools, RepresentativeTools):
+        peer = str(call.args.get("peer", "")).strip()
+        result = tools.rep_ignore(peer)
+        action = None if result.startswith("error:") else {
+            "tool": "rep_ignore",
+            "name": peer,
         }
         return result, action
     return f"error: unknown tool '{call.name}'", None

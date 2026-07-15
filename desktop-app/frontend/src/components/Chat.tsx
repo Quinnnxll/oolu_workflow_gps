@@ -172,6 +172,25 @@ export function Chat({ headerAside }: { headerAside?: React.ReactNode } = {}) {
       .catch(() => {}); // no server history here: the cache is the thread
   }, []);
 
+  // The representative's question for the user, surfaced LIVE: when a
+  // drafted reply needs something only the user knows, the sweep appends
+  // OoLu's question to the server history and announces it here — the
+  // bubble appears in this conversation the moment it is asked.
+  useEffect(() => {
+    const onQuestion = (e: Event) => {
+      const text = (e as CustomEvent<{ text?: string }>).detail?.text;
+      if (!text) return;
+      setThread((t) =>
+        // The history append already carries it — never bubble it twice.
+        t.some((m) => m.kind === "assistant" && m.text === text)
+          ? t
+          : [...t, { kind: "assistant", text }],
+      );
+    };
+    window.addEventListener("oolu-rep-question", onQuestion);
+    return () => window.removeEventListener("oolu-rep-question", onQuestion);
+  }, []);
+
   // The conversation is endless, so unfinished work surfaces ITSELF: once
   // the user has been idle a while, ONE reminder bubble lists what is
   // still running and what waits on them — it stays at the bottom of the

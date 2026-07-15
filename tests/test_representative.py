@@ -204,7 +204,7 @@ def test_the_engine_refuses_what_it_should():
     )
     with pytest.raises(ValueError, match="edited words"):
         engine.decide("s1", draft.draft_id, action="edit", text="  ")
-    with pytest.raises(ValueError, match="send, edit, or discard"):
+    with pytest.raises(ValueError, match="send, edit, discard, or ignore"):
         engine.decide("s1", draft.draft_id, action="yolo")
     # Another scope's drafts are indistinguishable from missing.
     with pytest.raises(KeyError):
@@ -228,6 +228,7 @@ def test_erasing_a_scope_removes_the_whole_representative():
         "about": "",
         "exchanges": 0,
         "drafts_pending": 0,
+        "drafts_waiting": 0,
         "drafts_decided": 0,
         "sent_unedited": 0,
         "auto_sent": 0,
