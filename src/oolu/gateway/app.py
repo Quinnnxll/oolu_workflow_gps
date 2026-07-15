@@ -51,6 +51,7 @@ from ..chat import (
     NodeChatTools,
     author_node_function,
     consent_answer,
+    messaging_intent,
     mood_directive,
     obviously_chat,
     units_directive,
@@ -2392,6 +2393,8 @@ class GatewayApp:
         if (
             not goal
             or obviously_chat(goal)
+            # A message to a friend is delivered, never built for.
+            or messaging_intent(goal)
             or self._nodeplace is None
             or self._desk is None
             or not self._autobuild_consented(session.tenant_id)
@@ -2428,6 +2431,8 @@ class GatewayApp:
         can_offer = (
             bool(goal)
             and not obviously_chat(goal)
+            # A message to a friend is never a node to offer.
+            and not messaging_intent(goal)
             and self._nodeplace is not None
             and self._desk is not None
             and self._tenant_model(session.tenant_id) is not None
@@ -2588,6 +2593,12 @@ class GatewayApp:
                 "error: that reads as conversation, not an executable "
                 "task — a node is its function, so there is nothing "
                 "to build"
+            )
+        if messaging_intent(goal):
+            return (
+                "error: that's a message to send, not a node to build — "
+                "just tell me what to say and to whom (\"tell <friend> "
+                "<the message>\") and I'll deliver it directly"
             )
         if self._nodeplace is None or self._desk is None:
             return "error: nodes are not enabled on this host"

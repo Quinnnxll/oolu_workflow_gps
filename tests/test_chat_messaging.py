@@ -209,7 +209,12 @@ def test_the_model_sends_through_the_same_tool(tmp_path):
                 return self.replies.pop(0)
 
         assistant = ChatAssistant(model=_Model())
-        turn = assistant.respond("let bob know I'm on my way", tools=tools)
+        # A conversational shape (the deterministic patterns skip a
+        # "could you…?" ask) reaches the model, whose send_message tool
+        # goes through the same delivery door.
+        turn = assistant.respond(
+            "could you let bob know I'm on my way?", tools=tools
+        )
         assert turn.actions == [{"tool": "send_message", "name": "bob"}]
         [message] = messages.between(tenant="t1", me="bob", peer="alice")
         assert message.body == f"{VIA_OOLU_MARK} alice:\non my way"
@@ -280,3 +285,62 @@ def test_siblings_under_the_same_supernode_are_reachable(tmp_path):
         assert "batch 7 is clean" in doc.content
     finally:
         conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# Issue 9: a message-shaped sentence delivers DIRECTLY — no model, no task,    #
+# no node. WHO comes from the user's real friends and nodes; WHAT is the       #
+# user's own words, marked as forwarded via OoLu.                              #
+# --------------------------------------------------------------------------- #
+class _NeverSpeaks:
+    def reply(self, _messages):  # pragma: no cover - the point is silence
+        raise AssertionError("a message command must not reach the model")
+
+
+def test_message_shaped_sentences_deliver_without_the_model(tmp_path):
+    conn, tools, files, messages, registry, desk, accounts = _rig(tmp_path)
+    try:
+        assistant = ChatAssistant(model=_NeverSpeaks())
+        for sentence, expected in (
+            ("tell bob I'll be late", "I'll be late"),
+            ("reply to bob that we're still coming", "we're still coming"),
+            ("let bob know the meeting moved to 4", "the meeting moved to 4"),
+            ("send the go to market plan to bob", "the go to market plan"),
+        ):
+            turn = assistant.respond(sentence, tools=tools)
+            # Never a task, never a node — a delivery, confirmed.
+            assert turn.task is None and turn.source == "tool", sentence
+            assert turn.actions == [{"tool": "send_message", "name": "bob"}]
+            latest = messages.between(tenant="t1", me="bob", peer="alice")[-1]
+            assert latest.body == f"{VIA_OOLU_MARK} alice:\n{expected}"
+    finally:
+        conn.close()
+
+
+def test_a_name_matching_nobody_still_falls_through_to_the_model(tmp_path):
+    conn, tools, files, messages, registry, desk, accounts = _rig(tmp_path)
+    try:
+        class _Chatty:
+            def reply(self, _messages):
+                return '{"say": "Here is a joke!", "task": null}'
+
+        turn = ChatAssistant(model=_Chatty()).respond(
+            "tell me a joke", tools=tools
+        )
+        assert turn.say == "Here is a joke!"
+        assert messages.between(tenant="t1", me="bob", peer="alice") == []
+    finally:
+        conn.close()
+
+
+def test_messaging_intents_never_mint_nodes():
+    from oolu.chat import messaging_intent
+
+    assert messaging_intent("reply to quinnnxll that I'm on my way")
+    assert messaging_intent("tell mom the dinner is at eight")
+    assert messaging_intent("let kai know that the deploy finished")
+    assert messaging_intent("send the report to bob")
+    # Ordinary work stays work.
+    assert not messaging_intent("normalize invoice csv files")
+    assert not messaging_intent("convert the report to pdf")
+    assert not messaging_intent("")

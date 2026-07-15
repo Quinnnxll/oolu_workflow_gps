@@ -110,6 +110,13 @@ forwarded via OoLu from the user (you never impersonate them); use it ONLY
 when the user asked to send or forward something. To redo past work, set
 "task" to that run's intent — there is no tool for starting work.
 
+Replying to or messaging a friend is NEVER work for the engine and NEVER
+needs a node: use send_message — it resolves WHO by name against the
+user's real friends and nodes, and delivers WHAT the user wants said
+(marked as forwarded via OoLu from them). Do not put "reply to <friend>"
+in "task", and never propose building a node for it. When the user wants
+a reply drafted in their own voice, that is representative mode's job.
+
 Reminders are ROWS with a clock, not workflows: create one ONLY with the
 create_reminder tool — never by handing "remind me…" to the engine as a
 task, and never by claiming a reminder exists when the tool did not run.
@@ -1568,6 +1575,42 @@ def _file_command(message: str, tools: ChatTools) -> ChatTurn | None:
 # reaches the right person ("send the go to market plan to bob").
 _SEND_TO_RE = re.compile(r"^(?:send|forward)\s+(.+)\s+to\s+([^:\n]{1,60})$", re.I | re.S)
 _TELL_RE = re.compile(r"^(?:message|tell)\s+([^:\n]{1,60}):\s*(.+)$", re.I | re.S)
+# The everyday shapes: "tell bob I'll be late", "reply to alice that we're
+# coming", "let kai know the meeting moved". The NAME is one token (a
+# username or a first name — resolution widens it by substring and habit);
+# a name nothing matches falls through, so "tell me a joke" stays chat.
+_TELL_PLAIN_RE = re.compile(
+    r"^(?:tell|ping)\s+(\S{1,60}?)\s+(?:that\s+)?(.+)$", re.I | re.S
+)
+_REPLY_TO_RE = re.compile(
+    r"^(?:reply|respond)\s+(?:to\s+)?(\S{1,60}?)\s+"
+    r"(?:that\s+|saying\s+|with\s+)?(.+)$",
+    re.I | re.S,
+)
+_LET_KNOW_RE = re.compile(
+    r"^let\s+(\S{1,60}?)\s+know\s+(?:that\s+)?(.+)$", re.I | re.S
+)
+
+
+def messaging_intent(text: str) -> bool:
+    """Whether a sentence is a MESSAGE to a person — send/tell/reply/
+    let-know shaped. Messaging is never work for the engine and never a
+    node to build: the walls that mint nodes check here first, so
+    "reply to bob that I'm running late" can never grow a
+    “Reply Bob Running Late” node."""
+    stripped = (text or "").strip()
+    if not stripped:
+        return False
+    return any(
+        pattern.match(stripped)
+        for pattern in (
+            _SEND_TO_RE,
+            _TELL_RE,
+            _TELL_PLAIN_RE,
+            _REPLY_TO_RE,
+            _LET_KNOW_RE,
+        )
+    )
 
 
 def _message_command(text: str, tools: "MessagingTools") -> ChatTurn | None:
@@ -1578,7 +1621,12 @@ def _message_command(text: str, tools: "MessagingTools") -> ChatTurn | None:
     command at all."""
     stripped = text.strip()
     send = _SEND_TO_RE.match(stripped)
-    tell = _TELL_RE.match(stripped)
+    tell = (
+        _TELL_RE.match(stripped)
+        or _TELL_PLAIN_RE.match(stripped)
+        or _REPLY_TO_RE.match(stripped)
+        or _LET_KNOW_RE.match(stripped)
+    )
     if send:
         body, wanted = send.group(1).strip(), send.group(2).strip()
     elif tell:
@@ -2189,6 +2237,15 @@ class ChatAssistant:
         reminded = _reminder_command(message, tools)
         if reminded is not None:
             return reminded
+        # And for messages: "tell bob I'll be late" names WHO (resolved
+        # against the user's real friends and nodes, habits breaking
+        # ties) and WHAT (the user's own words, delivered marked as
+        # forwarded via OoLu). Never a task, never a node. A name that
+        # matches nobody falls through — "tell me a joke" stays chat.
+        if isinstance(tools, MessagingTools):
+            messaged = _message_command(message, tools)
+            if messaged is not None:
+                return messaged
 
         # A per-call model (the gateway's per-tenant router) outranks the
         # constructor's; either way an unusable model degrades, not dies.
@@ -2345,6 +2402,11 @@ class ChatAssistant:
         if reminded is not None:
             yield {"type": "turn", "turn": reminded}
             return
+        if isinstance(tools, MessagingTools):
+            messaged = _message_command(message, tools)
+            if messaged is not None:
+                yield {"type": "turn", "turn": messaged}
+                return
         active = model or self._model
         if active is not None:
             try:

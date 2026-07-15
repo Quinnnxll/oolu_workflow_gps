@@ -480,3 +480,27 @@ def test_one_offer_per_person_and_the_newest_wins(tmp_path):
         assert offers.get("t2", "alice") is None  # tenant-walled
     finally:
         conn.close()
+
+
+def test_a_message_to_a_friend_is_never_a_node_to_build(tmp_path):
+    """Issue 9: 'reply to bob…' is delivered, never built for — the build
+    door refuses in words, and the growth trigger never offers."""
+    app, conn, ident, desk, script_exec = _rig(tmp_path)
+    try:
+        _speak_work(app, [])
+        from test_http_gateway import NOW
+
+        session = app._session_for(ident.token("user-1", "t1"), NOW)
+        result = app._build_function_node(
+            session, "reply to bob that I'm running late"
+        )
+        assert result.startswith("error:")
+        assert "message to send" in result
+        assert desk.overview(principal="user-1", tenant="t1") == []
+        # The growth trigger stays silent on messaging intents too.
+        say = app._offer_growth(
+            "Hmm.", session, "tell bob the deploy finished", run=None
+        )
+        assert "yes" not in say.lower()
+    finally:
+        conn.close()

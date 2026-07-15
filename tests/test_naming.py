@@ -111,3 +111,22 @@ def test_desk_title_condenses_a_learned_skill_id(tmp_path):
         assert entry.title == "Convert Quarterly Report Pdf"
     finally:
         conn.close()
+
+
+def test_the_trigger_sentences_scaffolding_never_names_the_node():
+    # "create a node that…" is about the WORK, not the asking.
+    assert (
+        concise_name("please create a node that can reply to quinn on whatsapp")
+        == "Reply Quinn Whatsapp"
+    )
+    assert (
+        concise_name("build me a node for normalizing invoice csv files")
+        == "Normalizing Invoice Csv Files"
+    )
+    assert (
+        concise_name("set up a node that automatically waters the plants")
+        == "Waters Plants"
+    )
+    # When ONLY scaffolding survives, the plain keywords still stand —
+    # a name is never empty because the filter got greedy.
+    assert concise_name("build me a node") == "Build Node"

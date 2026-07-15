@@ -4,6 +4,29 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+A message is delivered, never built for — and nodes get clean names:
+
+- **"Reply to a friend" now has real hands, and never mints a node.**
+  Message-shaped sentences — "tell bob I'll be late", "reply to alice
+  that we're coming", "let kai know the meeting moved", "send X to Y" —
+  are recognized DETERMINISTICALLY before any model: WHO resolves
+  against the user's real friends and nodes (exact name → substring →
+  habits break ties; a name matching nobody falls through, so "tell me
+  a joke" stays chat), and WHAT is the user's own words, delivered
+  marked as forwarded via OoLu. The same `messaging_intent` wall guards
+  every node-minting door — the build refuses in words ("that's a
+  message to send, not a node to build"), the growth trigger never
+  offers, consented auto-build never fires — and the system prompt
+  tells the model: messaging is never a task and never needs a node.
+- **Node names are keywords, not transcripts.** `concise_name` now
+  filters the trigger sentence's scaffolding — create/build/make/node,
+  politeness, "automatically" — on top of the stopwords, so "please
+  create a node that can reply to quinn on whatsapp" names the node
+  “Reply Quinn Whatsapp”, not a slice of the whole ask. Machine ids
+  (`keyword_slug`) deliberately keep the old filter: identities never
+  shift under existing nodes. When only scaffolding survives ("build me
+  a node"), the plain keywords still stand — a name is never empty.
+
 The work actually completes: reminders are real, builds come first,
 run-again reuses, and self-built code lands on the desk:
 

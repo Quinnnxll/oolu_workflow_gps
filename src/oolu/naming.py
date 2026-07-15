@@ -27,11 +27,25 @@ _TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
 MAX_KEYWORDS = 4
 
+# Words that describe the ACT of asking for a node — the trigger
+# sentence's scaffolding, not the work itself. "Please create a node
+# that can reply to quinn on whatsapp" is about replying on whatsapp;
+# "create" and "node" carry zero identity and only make names messy.
+# Display names filter these on TOP of the stopwords; machine ids
+# (keyword_slug) deliberately do not — identities must never shift
+# under an existing node because the meta list grew.
+META_WORDS = frozenset(
+    """build builds building built create creates creating created make
+    makes making made add adds adding added new setup set node nodes
+    function functions task tasks workflow oolu hey hello kindly
+    really thanks thank automatically able capable""".split()
+)
+
 
 def keywords(text: str, limit: int = MAX_KEYWORDS) -> list[str]:
     """The first ``limit`` distinct non-stopword tokens, in spoken order —
     order preserved because 'report pdf' and 'pdf report' name different
-    intents."""
+    intents. ``limit <= 0`` means every content word."""
     seen: set[str] = set()
     picked: list[str] = []
     for token in _TOKEN_RE.findall((text or "").lower()):
@@ -39,17 +53,24 @@ def keywords(text: str, limit: int = MAX_KEYWORDS) -> list[str]:
             continue
         seen.add(token)
         picked.append(token)
-        if len(picked) >= limit:
+        if limit > 0 and len(picked) >= limit:
             break
     return picked
 
 
 def concise_name(text: str, limit: int = MAX_KEYWORDS) -> str:
     """A display name from a task sentence: 'convert the quarterly report
-    to pdf and email it' -> 'Convert Quarterly Report Pdf'. Falls back to
-    a trimmed slice of the original when nothing survives the stopword
-    filter (e.g. 'do it for me')."""
-    words = keywords(text, limit)
+    to pdf and email it' -> 'Convert Quarterly Report Pdf'; 'please
+    create a node that replies to quinn on whatsapp' -> 'Replies Quinn
+    Whatsapp'. The trigger sentence's scaffolding (create/build/node,
+    politeness) is filtered on top of the stopwords, so the name is the
+    WORK's keywords, never a transcript of the ask. When the meta filter
+    would leave nothing ("build me a node"), the plain keywords stand;
+    when even those are empty ("do it for me"), a trimmed slice of the
+    original does."""
+    plain = keywords(text, limit=0)  # every content word, in order
+    lean = [word for word in plain if word not in META_WORDS]
+    words = (lean or plain)[:limit]
     if not words:
         fallback = (text or "").strip()
         return fallback if len(fallback) <= 32 else fallback[:32] + "…"
