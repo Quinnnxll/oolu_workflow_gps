@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, TERMINAL_PHASES } from "../api";
+import { accountScope, api, TERMINAL_PHASES } from "../api";
 import type { ChatAction, ChatHistoryTurn } from "../api";
 import { humanizeEvent, statusSentence } from "../humanize";
 import { conciseName } from "../naming";
@@ -58,7 +58,11 @@ type Msg =
   | { kind: "device"; device: string; done?: boolean }
   | { kind: "run"; runId: string };
 
-const CHAT_KEY = "oolu_chat";
+// The thread cache is PER ACCOUNT: two people on one device must never
+// read each other's OoLu — its history, style, and memories are strictly
+// gated by account, on the server and in this cache alike. Sign-out
+// additionally purges every oolu_chat* key (see api.signOut).
+const chatKey = (): string => `oolu_chat::${accountScope()}`;
 // Shown once, before the first conversation: three concrete steps from
 // zero to a first real task. Dismissed forever the moment it's used.
 const FIRST_RUN_KEY = "oolu_first_run_done";
@@ -91,7 +95,7 @@ const QUICK_STARTS: { labelKey: string; message: string }[] = [
 
 function loadThread(): Msg[] {
   try {
-    const raw = localStorage.getItem(CHAT_KEY);
+    const raw = localStorage.getItem(chatKey());
     const parsed = raw ? (JSON.parse(raw) as Msg[]) : [];
     return Array.isArray(parsed) ? parsed : [];
   } catch {
@@ -156,7 +160,7 @@ export function Chat({ headerAside }: { headerAside?: React.ReactNode } = {}) {
   useEffect(() => onAvatarSignals((s) => setMood(moodOf(s).mood)), []);
 
   useEffect(() => {
-    localStorage.setItem(CHAT_KEY, JSON.stringify(thread));
+    localStorage.setItem(chatKey(), JSON.stringify(thread));
     endRef.current?.scrollIntoView?.({ block: "end" });
   }, [thread]);
 

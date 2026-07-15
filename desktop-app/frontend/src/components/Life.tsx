@@ -250,8 +250,10 @@ export function Life() {
                   {f.unread > 0 ? ` · ${f.unread} new` : ""}
                 </span>
                 <span className="convo-sub">
-                  {f.last_from === f.peer ? "" : "you: "}
-                  {f.last_text.slice(0, 40)}
+                  {/* A fresh friendship has no words yet — invite them. */}
+                  {f.last_text
+                    ? `${f.last_from === f.peer ? "" : "you: "}${f.last_text.slice(0, 40)}`
+                    : tr("friends.sayHello")}
                 </span>
               </span>
             </button>

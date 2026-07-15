@@ -533,6 +533,21 @@ describe("auth", () => {
     signOut();
     expect(session.signedIn()).toBe(false);
   });
+
+  it("signOut purges every account-content cache on the device", () => {
+    // The strict gate: signing out on a shared device leaves no thread
+    // and no typed drafts readable behind — whoever wrote them.
+    session.set("t", "alice", "acme");
+    localStorage.setItem("oolu_chat::alice", "[]");
+    localStorage.setItem("oolu_compose_alice::bob", "half-typed words");
+    localStorage.setItem("oolu_sidebar_folded", "1"); // a UI pref stays
+    const reload = vi.fn();
+    vi.stubGlobal("location", { ...window.location, reload });
+    signOut();
+    expect(localStorage.getItem("oolu_chat::alice")).toBeNull();
+    expect(localStorage.getItem("oolu_compose_alice::bob")).toBeNull();
+    expect(localStorage.getItem("oolu_sidebar_folded")).toBe("1");
+  });
 });
 
 describe("non-JSON error bodies", () => {

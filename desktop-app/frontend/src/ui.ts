@@ -9,6 +9,8 @@
 
 import { useEffect, useState } from "react";
 
+import { accountScope } from "./api";
+
 export type UiLanguage = "en" | "zh" | "zh-hant" | "es" | "fr";
 
 const LANGUAGES: readonly UiLanguage[] = ["en", "zh", "zh-hant", "es", "fr"];
@@ -110,12 +112,18 @@ export function saveSidebarFolded(folded: boolean): void {
 
 // A friend conversation's typing block, surviving pane switches and
 // restarts. A DISCARDED representative draft lands here — kept, not
-// buried — so the user can rework it in their own time.
+// buried — so the user can rework it in their own time. Keyed PER
+// ACCOUNT: another sign-in on this device never reads these words, and
+// sign-out purges every oolu_compose_* key (api.signOut).
 const COMPOSE_KEY = "oolu_compose_";
+
+function composeKey(peer: string): string {
+  return `${COMPOSE_KEY}${accountScope()}::${peer}`;
+}
 
 export function loadCompose(peer: string): string {
   try {
-    return localStorage.getItem(COMPOSE_KEY + peer) ?? "";
+    return localStorage.getItem(composeKey(peer)) ?? "";
   } catch {
     return "";
   }
@@ -123,8 +131,8 @@ export function loadCompose(peer: string): string {
 
 export function saveCompose(peer: string, text: string): void {
   try {
-    if (text) localStorage.setItem(COMPOSE_KEY + peer, text);
-    else localStorage.removeItem(COMPOSE_KEY + peer);
+    if (text) localStorage.setItem(composeKey(peer), text);
+    else localStorage.removeItem(composeKey(peer));
   } catch {
     /* storage unavailable: the words still sit in the box this session */
   }
@@ -1075,6 +1083,12 @@ const STRINGS: Record<string, Entry> = {
     zh: "已导入 {n} 个节点——均为未认领状态：仅将节点 id 分享给应接管它的人。",
     es: "Importados {n} nodos — cada uno empieza sin reclamar: comparte el id de un nodo solo con quien deba incorporarlo.",
     fr: "{n} nœuds importés — chacun commence non réclamé : ne partagez l'id d'un nœud qu'avec la personne qui doit le reprendre.",
+  },
+  "friends.sayHello": {
+    en: "New friend — say hello!",
+    zh: "新朋友——打个招呼吧！",
+    es: "Nueva amistad — ¡saluda!",
+    fr: "Nouvel ami — dites bonjour !",
   },
   "hold.from": { en: "from", zh: "来自", es: "de", fr: "de" },
   "hold.unknown": { en: "unknown", zh: "未知", es: "desconocido", fr: "inconnu" },

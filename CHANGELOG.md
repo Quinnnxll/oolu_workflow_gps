@@ -4,6 +4,33 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+OoLu is strictly personal, and a friendship exists from acceptance:
+
+- **An accepted friend shows in the list, empty thread and all.** The
+  friends list used to be the CONVERSATIONS list — an accepted friend
+  who hadn't spoken yet was invisible. It now unions the roster
+  (`FriendshipStore.friends_of`) with the conversations: both sides see
+  the friendship the moment it is accepted, with a "New friend — say
+  hello!" line where the last message would be; once words flow, the
+  conversation entry takes over.
+- **The OoLu conversation is gated per account — the fatal leak
+  closed.** The thread cache lived under one device-wide key: a second
+  account signing in on the same device READ (and then unknowingly
+  re-uploaded) the first account's whole conversation. The cache is now
+  keyed per signed-in account (`oolu_chat::<who>`), the compose stashes
+  likewise, and SIGN-OUT PURGES every account-content cache on the
+  device — a shared machine keeps nothing readable behind. Server-side
+  history was already per account; now the device is too.
+- **Memories are personal even on a shared tenant.** Life-drawer files
+  gain an OWNER: on the Global service (where self-registrations share
+  one tenant) each account's OoLu lists, reads, and edits only its own
+  documents — by listing and by id alike (another account's file is
+  indistinguishable from missing), through the routes and the chat's
+  file hands both. Writing a name someone else used creates YOUR file,
+  never edits theirs. Legacy unowned rows stay visible so nobody's
+  drawer goes dark on upgrade; node drawers stay the node's own. The
+  representative (QLoRA voice) was already scoped per account.
+
 A message is delivered, never built for — and nodes get clean names:
 
 - **"Reply to a friend" now has real hands, and never mints a node.**

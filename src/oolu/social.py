@@ -460,6 +460,19 @@ class FriendshipStore:
         if self._status(tenant, me, other) == "blocked":
             self._clear(tenant, me, other)
 
+    def friends_of(self, *, tenant: str, me: str) -> list[str]:
+        """Everyone this account is friends with — the ROSTER, not the
+        inbox. An accepted friend belongs in the list from the moment of
+        acceptance, messages or none."""
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                "SELECT peer FROM friendships"
+                " WHERE tenant_id = ? AND owner = ? AND status = 'accepted'"
+                " ORDER BY updated_at DESC",
+                (tenant, me),
+            ).fetchall()
+        return [r["peer"] for r in rows]
+
     def incoming(self, *, tenant: str, me: str) -> list[str]:
         """Accounts awaiting my decision — the friend-request inbox."""
         with self._conn.lock:

@@ -1456,15 +1456,30 @@ class GatewayApp:
         return username
 
     def _friends_list(self, request, session, params) -> Response:
+        """Conversations first — then every ACCEPTED friend who has not
+        said anything yet. A friendship exists from the moment of
+        acceptance; an empty thread is a fresh start, not an absence."""
         store = self._require_direct_messages()
-        return json_response(
-            200,
-            {
-                "items": store.conversations(
-                    tenant=session.tenant_id, principal=session.principal_id
-                )
-            },
+        items = store.conversations(
+            tenant=session.tenant_id, principal=session.principal_id
         )
+        if self._friendships is not None:
+            spoken = {item["peer"] for item in items}
+            for peer in self._friendships.friends_of(
+                tenant=session.tenant_id, me=session.principal_id
+            ):
+                if peer in spoken:
+                    continue
+                items.append(
+                    {
+                        "peer": peer,
+                        "unread": 0,
+                        "last_text": "",
+                        "last_from": None,
+                        "last_at": "",
+                    }
+                )
+        return json_response(200, {"items": items})
 
     def _friends_lookup(self, request, session, params) -> Response:
         """Find a person by EXACT username or e-mail — never a directory.
@@ -4427,7 +4442,14 @@ class GatewayApp:
             {
                 "items": [
                     self._file_meta(f)
-                    for f in store.list(tenant=session.tenant_id, node_id=node_id)
+                    # The Life drawer is PERSONAL: only the caller's own
+                    # files (and legacy unowned rows) list on a shared
+                    # tenant. Node drawers stay the node's own.
+                    for f in store.list(
+                        tenant=session.tenant_id,
+                        node_id=node_id,
+                        owner=session.principal_id,
+                    )
                 ]
             },
         )
@@ -4445,6 +4467,9 @@ class GatewayApp:
         file = UserFile(
             tenant_id=session.tenant_id,
             node_id=(str(body["node_id"]) if body.get("node_id") else None),
+            # The memories gate: a Life-drawer file belongs to whoever
+            # saved it, even on a shared tenant.
+            owner=session.principal_id,
             name=name.strip(),
             folder=folder,
             media_type=str(body.get("media_type") or _media_type_for(name)),
@@ -4484,6 +4509,7 @@ class GatewayApp:
         file = UserFile(
             tenant_id=session.tenant_id,
             node_id=node_id,
+            owner=session.principal_id,
             name=name,
             folder=folder,
             media_type=media_type or _media_type_for(name),
@@ -4515,6 +4541,13 @@ class GatewayApp:
     def _load_file(self, params, session) -> UserFile:
         store = self._require_files()
         file = store.get(params["file_id"], tenant=session.tenant_id)
+        # Another account's Life-drawer file is indistinguishable from a
+        # missing one — the memories gate, by id exactly as by listing.
+        # Legacy unowned rows ("") stay reachable; node files stay the
+        # node's, governed by the node's own doors.
+        if file is not None and file.node_id is None:
+            if file.owner not in ("", session.principal_id):
+                file = None
         if file is None:
             raise GatewayError(404, "not_found", "no such file")
         return file

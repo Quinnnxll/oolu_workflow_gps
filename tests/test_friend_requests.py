@@ -200,3 +200,105 @@ def test_a_google_account_can_set_a_sign_in_password(tmp_path):
         _req("POST", "/v1/auth/password", token=bob, body={"password": "short"})
     ).status == 400
     conn.close()
+
+
+def test_an_accepted_friend_shows_in_the_list_before_any_message(tmp_path):
+    """Issue 10: the friendship exists from the moment of acceptance —
+    the list shows the account even while the thread is still empty."""
+    gateway, conn, ident = _host(tmp_path)
+    alice, bob = ident.token("alice", "t1"), ident.token("bob", "t1")
+    # An empty roster lists nothing.
+    assert gateway.handle(
+        _req("GET", "/v1/friends", token=alice)
+    ).body["items"] == []
+    gateway.handle(
+        _req("POST", "/v1/friends/requests", token=alice, body={"username": "bob"})
+    )
+    gateway.handle(
+        _req("POST", "/v1/friends/requests/alice", token=bob,
+             body={"action": "accept"})
+    )
+    # BOTH sides see the friendship, messages or none.
+    for token, peer in ((alice, "bob"), (bob, "alice")):
+        [entry] = gateway.handle(
+            _req("GET", "/v1/friends", token=token)
+        ).body["items"]
+        assert entry["peer"] == peer
+        assert entry["unread"] == 0 and entry["last_text"] == ""
+    # Once words flow, the conversation entry takes over — no duplicate.
+    gateway.handle(
+        _req("POST", "/v1/friends/bob/messages", token=alice,
+             body={"text": "hello!"})
+    )
+    [entry] = gateway.handle(
+        _req("GET", "/v1/friends", token=alice)
+    ).body["items"]
+    assert entry["peer"] == "bob" and entry["last_text"] == "hello!"
+    conn.close()
+
+
+def test_the_life_drawer_is_personal_even_on_a_shared_tenant(tmp_path):
+    """Issue 10: OoLu's memories are strictly per account. Two accounts
+    on ONE tenant: each lists, reads, and edits only their own files —
+    by listing and by id alike. Legacy unowned rows stay reachable."""
+    from oolu.durable import UserFileStore
+    from oolu.durable.files import UserFile
+
+    gateway, conn, ident = _host(tmp_path)
+    store = UserFileStore(conn)
+    gateway._files = store
+    alice, bob = ident.token("alice", "t1"), ident.token("bob", "t1")
+
+    created = gateway.handle(
+        _req("POST", "/v1/files", token=alice,
+             body={"name": "diary.md", "content": "alice's memories"})
+    )
+    assert created.status == 201
+    file_id = created.body["file_id"]
+    # Alice sees her file; bob sees NOTHING — not in the list...
+    assert [f["name"] for f in gateway.handle(
+        _req("GET", "/v1/files", token=alice)
+    ).body["items"]] == ["diary.md"]
+    assert gateway.handle(
+        _req("GET", "/v1/files", token=bob)
+    ).body["items"] == []
+    # ...and not by id: another account's file is indistinguishable
+    # from a missing one.
+    assert gateway.handle(
+        _req("GET", f"/v1/files/{file_id}", token=bob)
+    ).status == 404
+    assert gateway.handle(
+        _req("GET", f"/v1/files/{file_id}", token=alice)
+    ).status == 200
+    # A legacy row from before the gate (no owner) stays visible to all.
+    store.save(UserFile(tenant_id="t1", name="old-note.md", content="legacy"))
+    names = [f["name"] for f in gateway.handle(
+        _req("GET", "/v1/files", token=bob)
+    ).body["items"]]
+    assert names == ["old-note.md"]
+    conn.close()
+
+
+def test_the_chat_file_hands_are_owner_gated(tmp_path):
+    """The assistant's own hands honour the same wall: listing, reading,
+    and writing reach only the caller's slice of the Life drawer."""
+    from oolu.chat import GatewayChatTools
+    from oolu.durable import UserFileStore
+
+    conn = DurableConnection(tmp_path / "d.db")
+    try:
+        store = UserFileStore(conn)
+        alice_tools = GatewayChatTools(store, tenant="t1", principal="alice")
+        bob_tools = GatewayChatTools(store, tenant="t1", principal="bob")
+        alice_tools.write_file("plan.md", "alice's plan")
+        assert [f.name for f in alice_tools.list_files()] == ["plan.md"]
+        assert bob_tools.list_files() == []
+        assert bob_tools.resolve("plan.md") == []
+        # Bob writing the same name creates BOB's file, never edits hers.
+        bob_tools.write_file("plan.md", "bob's plan")
+        [hers] = alice_tools.list_files()
+        [his] = bob_tools.list_files()
+        assert hers.content == "alice's plan" and hers.owner == "alice"
+        assert his.content == "bob's plan" and his.owner == "bob"
+    finally:
+        conn.close()

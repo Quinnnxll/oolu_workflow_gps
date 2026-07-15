@@ -330,8 +330,29 @@ export async function signInWithGoogle(
   throw new Error("Google sign-in timed out — try again");
 }
 
+// WHOSE device-side caches these are. Every per-account cache (the OoLu
+// thread, compose stashes) is keyed by this, so two accounts on one
+// device can never read each other's conversation — OoLu's history,
+// style, and memories are strictly per account, on the server AND here.
+export const accountScope = (): string => session.principal ?? "local";
+
+// The per-account cache prefixes the sign-out purge sweeps. Content
+// caches only — UI preferences (theme, language, fold) stay device-wide.
+const ACCOUNT_CACHE_PREFIXES = ["oolu_chat", "oolu_compose_"] as const;
+
 export function signOut(): void {
   session.clear();
+  // Leaving a shared device leaves NOTHING readable behind: every
+  // account-content cache goes, whichever account wrote it.
+  try {
+    for (const key of Object.keys(localStorage)) {
+      if (ACCOUNT_CACHE_PREFIXES.some((p) => key.startsWith(p))) {
+        localStorage.removeItem(key);
+      }
+    }
+  } catch {
+    /* storage unavailable: nothing cached, nothing to purge */
+  }
   location.reload();
 }
 
@@ -514,8 +535,10 @@ export interface ChatHistoryTurn {
 // A conversation in the peer list: who, what was said last, what waits.
 export interface FriendConversation {
   peer: string;
+  // Empty when the friendship is fresh: accepted friends appear in the
+  // list from the moment of acceptance, before any words are exchanged.
   last_text: string;
-  last_from: string;
+  last_from: string | null;
   last_at: string;
   unread: number;
 }

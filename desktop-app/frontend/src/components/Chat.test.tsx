@@ -321,7 +321,7 @@ describe("Chat", () => {
   it("loads the account's thread from the server — one thread across devices", async () => {
     // Another device talked earlier; this device's cache has older words.
     localStorage.setItem(
-      "oolu_chat",
+      "oolu_chat::local",
       JSON.stringify([{ kind: "assistant", text: "stale cache line" }]),
     );
     routes["GET /v1/chat/history"] = {
@@ -343,7 +343,7 @@ describe("Chat", () => {
 
   it("keeps the local thread on hosts that keep no history", async () => {
     localStorage.setItem(
-      "oolu_chat",
+      "oolu_chat::local",
       JSON.stringify([{ kind: "assistant", text: "the local story" }]),
     );
     routes["GET /v1/chat/history"] = { status: 404, body: {} };
@@ -365,7 +365,7 @@ describe("Chat", () => {
 
     // Used once, gone forever — even on a fresh empty thread.
     first.unmount();
-    localStorage.removeItem("oolu_chat");
+    localStorage.removeItem("oolu_chat::local");
     render(<Chat />);
     expect(screen.queryByText(/First time here/)).toBeNull();
   });

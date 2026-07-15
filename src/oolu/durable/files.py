@@ -57,6 +57,13 @@ class UserFile(BaseModel):
     # A file lives with its owner: None = the Life environment's shared
     # drawer; a node id = that node's own independent files in Work.
     node_id: str | None = None
+    # WHO the file belongs to inside the tenant — the memories gate. On
+    # a shared tenant (the Global service's self-registrations) OoLu's
+    # documents are personal: a Life-drawer file is visible only to its
+    # owner. "" = legacy rows from before the gate — visible as before,
+    # so nobody's existing drawer goes dark on upgrade. Node-drawer files
+    # are the NODE's and stay governed by the node's own doors.
+    owner: str = ""
     name: str
     # Where the file sits INSIDE its drawer: a '/'-separated folder path
     # ('' = the drawer's root). Folders are derived from the files that
@@ -162,9 +169,21 @@ class UserFileStore:
             ).fetchone()
         return UserFile.model_validate_json(row["payload_json"]) if row else None
 
-    def list(self, *, tenant: str, node_id: str | None = None) -> list[UserFile]:
+    def list(
+        self,
+        *,
+        tenant: str,
+        node_id: str | None = None,
+        owner: str | None = None,
+    ) -> list[UserFile]:
         """One drawer at a time: the Life files (node_id None) or one
-        node's own files — never a mixed listing."""
+        node's own files — never a mixed listing.
+
+        ``owner`` is the memories gate for the LIFE drawer: pass the
+        caller's principal and only their own files (plus legacy rows
+        with no owner) return — on a shared tenant, one account's OoLu
+        never reads another's documents. Node drawers ignore it: a
+        node's files are the node's, governed by the node's doors."""
         with self._conn.lock:
             rows = self._conn.db.execute(
                 "SELECT payload_json FROM user_files WHERE tenant_id = ?",
@@ -174,7 +193,10 @@ class UserFileStore:
         # Oldest-first by the record's own clock — rowid is SQLite-only
         # and would be an UndefinedColumn on the PostgreSQL backend.
         files.sort(key=lambda f: (f.created_at.isoformat(), f.file_id))
-        return [f for f in files if f.node_id == node_id]
+        files = [f for f in files if f.node_id == node_id]
+        if owner is not None and node_id is None:
+            files = [f for f in files if f.owner in ("", owner)]
+        return files
 
     def delete(self, file_id: str, *, tenant: str) -> bool:
         doomed = self.get(file_id, tenant=tenant)

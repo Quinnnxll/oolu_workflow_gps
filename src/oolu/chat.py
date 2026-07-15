@@ -402,15 +402,26 @@ class ChatTools(Protocol):
 
 
 class FileChatTools:
-    """Tenant-bound file tools over the durable file store."""
+    """Tenant-bound file tools over the durable file store.
 
-    def __init__(self, store: UserFileStore, *, tenant: str):
+    ``owner`` is the memories gate: when set, the hands reach only THIS
+    account's Life-drawer files (plus legacy unowned rows) and stamp new
+    files as theirs — on a shared tenant, one account's OoLu never reads
+    or edits another account's documents."""
+
+    def __init__(self, store: UserFileStore, *, tenant: str, owner: str = ""):
         self._store = store
         self._tenant = tenant
+        self._owner = owner
 
     def list_files(self) -> list[UserFile]:
-        # The assistant's hands reach the Life drawer, not node files.
-        return self._store.list(tenant=self._tenant, node_id=None)
+        # The assistant's hands reach the Life drawer, not node files —
+        # and only the caller's own slice of it.
+        return self._store.list(
+            tenant=self._tenant,
+            node_id=None,
+            owner=self._owner if self._owner else None,
+        )
 
     def resolve(self, name: str) -> list[UserFile]:
         """Exact name first; else case-insensitive substring matches."""
@@ -427,7 +438,12 @@ class FileChatTools:
             updated = matches[0].model_copy(update={"content": content})
             return self._store.save(updated)
         return self._store.save(
-            UserFile(tenant_id=self._tenant, name=name.strip(), content=content)
+            UserFile(
+                tenant_id=self._tenant,
+                owner=self._owner,
+                name=name.strip(),
+                content=content,
+            )
         )
 
 
@@ -554,7 +570,8 @@ class GatewayChatTools(FileChatTools):
         # .reminder_list(). None when this host keeps no reminders.
         reminders=None,
     ):
-        super().__init__(store, tenant=tenant)
+        # The file hands are OWNER-gated: this account's documents only.
+        super().__init__(store, tenant=tenant, owner=principal)
         self._chat_tenant = tenant
         self._principal = principal
         self._durable = durable
