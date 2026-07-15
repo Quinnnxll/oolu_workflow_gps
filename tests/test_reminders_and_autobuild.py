@@ -267,7 +267,7 @@ def test_the_reminder_routes_end_to_end(tmp_path):
 # --------------------------------------------------------------------------- #
 def _consent_autobuild(app):
     class _Settings:
-        def effective(self, tenant):
+        def effective(self, tenant, principal=None):
             return {"account.autobuild_consent": True}
 
         def describe(self, tenant):

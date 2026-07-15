@@ -357,6 +357,27 @@ def field_for(key: str) -> SettingField | None:
     return _BY_KEY.get(key.strip())
 
 
+# Which setting GROUPS are PERSONAL — the working-style knobs (theme,
+# language, voice, units, currency, display name, auto-build consent)
+# that must never be shared between accounts on a shared tenant. The
+# rest — subscription, model wiring, budget walls — are the TENANT's:
+# they govern shared money and shared infrastructure, and staying
+# tenant-scoped is what keeps per-tenant caches (the model router, the
+# budget profile) safely shareable across accounts.
+PERSONAL_GROUPS = frozenset({"app", "account"})
+
+
+def personal_scope(tenant: str, principal: str) -> str:
+    """The storage scope of one account's personal settings. '::' so a
+    representative-style 'tenant:principal' string can never collide."""
+    return f"{tenant}::{principal}"
+
+
+def is_personal(key: str) -> bool:
+    field = field_for(key)
+    return field is not None and field.group in PERSONAL_GROUPS
+
+
 _SCHEMA = """CREATE TABLE IF NOT EXISTS settings (
     tenant_id TEXT NOT NULL,
     key TEXT NOT NULL,
@@ -383,6 +404,15 @@ class SettingsStore:
             ).fetchall()
         return {r["key"]: json.loads(r["value_json"]) for r in rows}
 
+    def erase(self, scope: str) -> int:
+        """Every stored value under one scope, gone — the personal layer's
+        share of a data-subject erasure."""
+        with self._conn.transaction() as db:
+            cursor = db.execute(
+                "DELETE FROM settings WHERE tenant_id = ?", (scope,)
+            )
+        return int(getattr(cursor, "rowcount", 0) or 0)
+
     def set_raw(self, tenant: str, key: str, value: Any) -> None:
         import json
 
@@ -398,20 +428,38 @@ class SettingsStore:
 
 class SettingsNode:
     """The declared configuration surface: read the catalog + stored values,
-    apply bounded set operations. The only way to change configuration."""
+    apply bounded set operations. The only way to change configuration.
+
+    Two layers, split carefully (Issue 12): PERSONAL groups (app,
+    account — the working-style knobs) live per account under
+    ``tenant::principal`` and overlay the tenant layer; everything else
+    (subscription, model wiring, budget walls) stays on the TENANT.
+    The tenant layer doubles as the safe shared base: values set there
+    reach every account as defaults — one place to configure an org —
+    and per-tenant caches built on tenant-scoped settings (the model
+    router, the budget profile) stay valid across accounts, because no
+    personal value ever feeds them."""
 
     def __init__(self, store: SettingsStore):
         self._store = store
 
-    def effective(self, tenant: str) -> dict[str, Any]:
-        """Every declared setting's current value: stored, else its default."""
+    def effective(self, tenant: str, principal: str | None = None) -> dict[str, Any]:
+        """Every declared setting's current value: the account's own
+        (personal groups, when ``principal`` is given), else the tenant's,
+        else the catalog default."""
         stored = self._store.get_raw(tenant)
-        return {f.key: stored.get(f.key, f.default) for f in SETTINGS_CATALOG}
+        values = {f.key: stored.get(f.key, f.default) for f in SETTINGS_CATALOG}
+        if principal:
+            personal = self._store.get_raw(personal_scope(tenant, principal))
+            for field in SETTINGS_CATALOG:
+                if field.group in PERSONAL_GROUPS and field.key in personal:
+                    values[field.key] = personal[field.key]
+        return values
 
-    def describe(self, tenant: str) -> list[dict]:
+    def describe(self, tenant: str, principal: str | None = None) -> list[dict]:
         """The catalog joined with current values — what a UI or the
         assistant reads to know what CAN be set and to what."""
-        values = self.effective(tenant)
+        values = self.effective(tenant, principal)
         # Money fields display in the tenant's own regional currency: the
         # "currency" unit sentinel resolves to their chosen code.
         code = str(values.get("account.currency", "USD") or "USD")
@@ -424,7 +472,9 @@ class SettingsNode:
             out.append(item)
         return out
 
-    def set(self, tenant: str, key: str, value: Any) -> Any:
+    def set(
+        self, tenant: str, key: str, value: Any, principal: str | None = None
+    ) -> Any:
         """Apply one setting. Unknown key, out-of-bounds value, or a managed
         field → refused.
 
@@ -432,22 +482,43 @@ class SettingsNode:
         against the declared field, and stores the normalized value. There is
         no branch that executes caller-supplied code or invents a key — and
         no caller (UI, API, or the assistant) can write a managed field.
-        """
+        With a ``principal``, PERSONAL-group keys land on the account's own
+        layer; tenant-group keys always land on the tenant."""
         field = self._writable(key)
         coerced = field.coerce(value)
-        self._store.set_raw(tenant, field.key, coerced)
+        self._store.set_raw(self._scope_for(field, tenant, principal), field.key, coerced)
         return coerced
 
-    def set_many(self, tenant: str, changes: dict[str, Any]) -> dict[str, Any]:
+    def set_many(
+        self,
+        tenant: str,
+        changes: dict[str, Any],
+        principal: str | None = None,
+    ) -> dict[str, Any]:
         """All-or-nothing across the batch: validate every change against the
         catalog first, then commit — a bad key aborts the whole set."""
         validated = {}
         for key, value in changes.items():
             field = self._writable(key)
-            validated[field.key] = field.coerce(value)
-        for key, value in validated.items():
-            self._store.set_raw(tenant, key, value)
-        return validated
+            validated[field.key] = (field, field.coerce(value))
+        for key, (field, value) in validated.items():
+            self._store.set_raw(
+                self._scope_for(field, tenant, principal), key, value
+            )
+        return {key: value for key, (_, value) in validated.items()}
+
+    def erase_personal(self, tenant: str, principal: str) -> int:
+        """The account's personal layer, gone — its share of erasure. The
+        tenant layer stays: it belongs to the tenant, not the account."""
+        return self._store.erase(personal_scope(tenant, principal))
+
+    @staticmethod
+    def _scope_for(
+        field: SettingField, tenant: str, principal: str | None
+    ) -> str:
+        if principal and field.group in PERSONAL_GROUPS:
+            return personal_scope(tenant, principal)
+        return tenant
 
     def reflect(self, tenant: str, key: str, value: Any) -> Any:
         """The owning service's door for a MANAGED field: the subscription

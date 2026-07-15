@@ -117,6 +117,7 @@ class RouteRebuilder(Protocol):
         tenant_id: str,
         route: RoutePlan | None,
         execution: ExecutionRecord | None,
+        principal: str = "",
     ) -> RebuildDecision: ...
 
 
@@ -164,9 +165,20 @@ class LLMRouteRebuilder:
         tenant_id: str,
         route: RoutePlan | None,
         execution: ExecutionRecord | None,
+        principal: str = "",
     ) -> RebuildDecision:
-        if self._consent is not None and not self._consent(tenant_id):
-            return RebuildDecision(reason=f"auto-build is off — {AUTOBUILD_HINT}")
+        # Consent is the ACCOUNT's, personal-first: the resolver may take
+        # (tenant, principal) or just (tenant) — older resolvers keep
+        # working unchanged.
+        if self._consent is not None:
+            try:
+                allowed = self._consent(tenant_id, principal)
+            except TypeError:
+                allowed = self._consent(tenant_id)
+            if not allowed:
+                return RebuildDecision(
+                    reason=f"auto-build is off — {AUTOBUILD_HINT}"
+                )
         if self._model is None:
             return RebuildDecision(
                 reason="no model is configured to plan a rebuild — add a model "

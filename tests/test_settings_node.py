@@ -146,3 +146,111 @@ def test_the_node_has_no_executable_body():
         assert "body" not in dumped and "script" not in dumped
         assert "command" not in dumped and "actions" not in dumped
         assert field_for(field.key) is field
+
+
+# --------------------------------------------------------------------------- #
+# Issue 12: personal settings split per ACCOUNT — carefully.                   #
+# The tenant layer stays as the safe shared base (one place to configure an   #
+# org, and the layer per-tenant caches like the model router build on);       #
+# personal groups (app, account) overlay it per principal.                     #
+# --------------------------------------------------------------------------- #
+def test_personal_settings_never_leak_between_accounts(tmp_path):
+    node, conn = _node(tmp_path)
+    try:
+        node.set("t1", "app.theme", "dark", "alice")
+        # Alice sees her theme; bob still sees the default — and setting
+        # his own never touches hers.
+        assert node.effective("t1", "alice")["app.theme"] == "dark"
+        assert node.effective("t1", "bob")["app.theme"] == "system"
+        node.set("t1", "app.theme", "light", "bob")
+        assert node.effective("t1", "alice")["app.theme"] == "dark"
+        assert node.effective("t1", "bob")["app.theme"] == "light"
+        # The units directive — working style — is personal the same way.
+        node.set("t1", "account.units", "imperial", "alice")
+        assert node.effective("t1", "bob")["account.units"] == "auto"
+    finally:
+        conn.close()
+
+
+def test_the_tenant_layer_is_the_shared_base(tmp_path):
+    node, conn = _node(tmp_path)
+    try:
+        # A tenant-level write (no principal) reaches EVERY account as the
+        # default — operational efficiency: one place configures the org.
+        node.set("t1", "app.language", "fr")
+        assert node.effective("t1", "alice")["app.language"] == "fr"
+        assert node.effective("t1", "bob")["app.language"] == "fr"
+        # A personal override wins for its owner only.
+        node.set("t1", "app.language", "es", "alice")
+        assert node.effective("t1", "alice")["app.language"] == "es"
+        assert node.effective("t1", "bob")["app.language"] == "fr"
+    finally:
+        conn.close()
+
+
+def test_tenant_groups_stay_shared_even_with_a_principal(tmp_path):
+    node, conn = _node(tmp_path)
+    try:
+        # Budget walls and model wiring govern shared money and shared
+        # infrastructure: a principal-tagged write still lands on the
+        # TENANT, so the caches built on them stay valid for everyone.
+        node.set("t1", "budget.hard_cap", 50, "alice")
+        assert node.effective("t1", "bob")["budget.hard_cap"] == 50.0
+        assert node.effective("t1")["budget.hard_cap"] == 50.0
+        node.set("t1", "model.source", "local", "alice")
+        assert node.effective("t1", "bob")["model.source"] == "local"
+    finally:
+        conn.close()
+
+
+def test_erasing_an_account_takes_its_personal_layer_only(tmp_path):
+    node, conn = _node(tmp_path)
+    try:
+        node.set("t1", "app.language", "fr")  # the tenant's
+        node.set("t1", "app.theme", "dark", "alice")  # alice's own
+        assert node.erase_personal("t1", "alice") == 1
+        assert node.effective("t1", "alice")["app.theme"] == "system"
+        # The tenant layer survives — it belongs to the tenant.
+        assert node.effective("t1", "alice")["app.language"] == "fr"
+    finally:
+        conn.close()
+
+
+def test_the_rebuild_consent_is_the_accounts_own(tmp_path):
+    from oolu.orchestrator.rebuild import LLMRouteRebuilder
+
+    node, conn = _node(tmp_path)
+    try:
+        node.set("t1", "account.autobuild_consent", True, "alice")
+
+        def consent(tenant, principal=""):
+            return bool(
+                node.effective(tenant, principal or None).get(
+                    "account.autobuild_consent", False
+                )
+            )
+
+        rebuilder = LLMRouteRebuilder(None, consent=consent)
+        # Alice consented — her run gets past the consent gate (and stops
+        # at "no model", proving the gate opened). Bob's run is refused.
+        alice = rebuilder.rebuild(
+            intent="x", tenant_id="t1", route=None, execution=None,
+            principal="alice",
+        )
+        assert "no model" in alice.reason
+        bob = rebuilder.rebuild(
+            intent="x", tenant_id="t1", route=None, execution=None,
+            principal="bob",
+        )
+        assert "auto-build is off" in bob.reason
+        # An old one-argument resolver still works (tenant layer only).
+        legacy = LLMRouteRebuilder(
+            None, consent=lambda tenant: False
+        )
+        refused = legacy.rebuild(
+            intent="x", tenant_id="t1", route=None, execution=None,
+            principal="alice",
+        )
+        assert "auto-build is off" in refused.reason
+    finally:
+        conn.close()

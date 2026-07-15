@@ -780,9 +780,11 @@ def build_host_runtime(
         LLMRouteRebuilder,
     )
 
-    def _autobuild_consent(tenant: str) -> bool:
+    def _autobuild_consent(tenant: str, principal: str = "") -> bool:
+        # Personal-first: the submitting account's own consent, with the
+        # tenant layer as the shared default.
         return bool(
-            settings_node.effective(tenant or home_tenant).get(
+            settings_node.effective(tenant or home_tenant, principal or None).get(
                 AUTOBUILD_CONSENT_KEY, False
             )
         )
@@ -1053,7 +1055,11 @@ def build_host_runtime(
     from .chat import units_directive
 
     def _representative_units_note(scope: str) -> str | None:
-        effective = settings_node.effective(scope.split(":", 1)[0])
+        # Scope is "tenant:principal": the units the draft speaks are the
+        # ACCOUNT's own (personal layer first, tenant as the shared base) —
+        # the same resolution the chat assistant uses.
+        tenant, _, principal = scope.partition(":")
+        effective = settings_node.effective(tenant, principal or None)
         return units_directive(
             effective.get("account.units", "auto"),
             currency=effective.get("account.currency", "USD"),

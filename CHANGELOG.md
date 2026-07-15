@@ -4,6 +4,31 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Personal settings split per account — with the tenant layer kept as the
+safe shared base:
+
+- **Working-style settings are the ACCOUNT's own.** The `app` and
+  `account` groups — theme, language, notifications, voice, display
+  name, currency, units, log retention, auto-build consent — now store
+  per account (`tenant::principal`) and overlay the tenant layer: on a
+  shared tenant (the Global service), one account's theme, units, or
+  consent can never touch a neighbor's. Threaded end to end: the
+  settings routes, the chat's get/set hands, the units directive on
+  both surfaces (assistant AND representative drafts), the auto-build
+  consent checks, and the LLM rebuild's consent chain (which now knows
+  the submitting principal — an older one-argument resolver still
+  works). The personal layer rides account erasure; the tenant layer
+  survives, because it belongs to the tenant.
+- **Shared where sharing is safe — by design, not accident.** The
+  `subscription`, `model`, and `budget` groups stay tenant-scoped: they
+  govern shared money and shared infrastructure, so the per-tenant
+  caches built on them (the model router, the budget profile) remain
+  valid across accounts — no personal value ever feeds them. And the
+  tenant layer doubles as the shared BASE for personal groups: a value
+  set there (an org-wide language, a default consent) reaches every
+  account as its default until that account overrides — one place to
+  configure an org, zero duplication.
+
 The doors open: message non-friends, register freely, continue with phone:
 
 - **Messaging no longer waits on friendship.** The backend always

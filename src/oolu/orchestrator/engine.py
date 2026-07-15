@@ -484,6 +484,8 @@ class WorkflowOrchestrator:
                 tenant_id=str(state.contract.metadata.get("tenant_id", "")),
                 route=state.route,
                 execution=state.execution,
+                # Consent is the submitting ACCOUNT's, not the tenant's.
+                principal=state.contract.submitted_by,
             )
         except Exception as exc:  # noqa: BLE001 - a broken rebuilder must not
             # kill the run it was trying to save; the incident says why.

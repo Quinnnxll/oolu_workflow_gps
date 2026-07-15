@@ -300,3 +300,51 @@ def test_a_settings_layer_that_lies_is_caught_at_the_tool_boundary():
     )
     assert result.startswith("error:") and "did not stick" in result
     assert action is None
+
+
+def test_two_accounts_on_one_tenant_keep_their_own_settings(tmp_path):
+    """Issue 12, end to end through the routes: each account's working
+    style is its own; the tenant layer stays the shared base."""
+    base, conn, ident = _app(tmp_path)
+    node = SettingsNode(SettingsStore(conn))
+    app = GatewayApp(
+        base._durable,
+        validator=ident.validator,
+        resolver=ident.resolver,
+        files=UserFileStore(conn),
+        settings_node=node,
+    )
+    try:
+        alice, bob = _token("alice"), _token("bob")
+        # Alice flips her units through the chat's deterministic setter.
+        resp = app.handle(
+            _req(
+                "POST",
+                "/v1/chat",
+                token=alice,
+                body={"message": "set my measurement units to imperial"},
+            )
+        )
+        assert resp.status == 200
+        assert "imperial" in resp.body["reply"]
+        # Alice's view changed; bob's did not.
+        a_items = app.handle(_req("GET", "/v1/settings", token=alice)).body["items"]
+        b_items = app.handle(_req("GET", "/v1/settings", token=bob)).body["items"]
+        a_units = next(i for i in a_items if i["key"] == "account.units")
+        b_units = next(i for i in b_items if i["key"] == "account.units")
+        assert a_units["value"] == "imperial" and b_units["value"] == "auto"
+        # The settings ROUTE writes personally too.
+        app.handle(
+            _req("PUT", "/v1/settings", token=bob,
+                 body={"changes": {"app.theme": "light"}})
+        )
+        assert node.effective("t1", "bob")["app.theme"] == "light"
+        assert node.effective("t1", "alice")["app.theme"] == "system"
+        # A tenant-group change is SHARED, whoever set it.
+        app.handle(
+            _req("PUT", "/v1/settings", token=alice,
+                 body={"changes": {"budget.review_threshold": 20}})
+        )
+        assert node.effective("t1", "bob")["budget.review_threshold"] == 20.0
+    finally:
+        conn.close()

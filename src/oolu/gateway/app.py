@@ -1204,7 +1204,9 @@ class GatewayApp:
         # preference wins; "auto" reads the account's spending currency — the
         # same stored signal the representative uses, so both agree.
         effective = (
-            self._settings.effective(session.tenant_id)
+            # Personal-first: the account's own units/currency, falling
+            # back to the tenant layer, then the catalog defaults.
+            self._settings.effective(session.tenant_id, session.principal_id)
             if self._settings is not None
             else {}
         )
@@ -1372,7 +1374,7 @@ class GatewayApp:
                 if not in_node:
                     say = self._offer_growth(say, session, turn.task, run=None)
                 elif self._settings is not None and not self._autobuild_consented(
-                    session.tenant_id
+                    session.tenant_id, session.principal_id
                 ):
                     say += f" If you want me to auto-build what's missing: {AUTOBUILD_HINT}"
         # The conversation survives the device: turns land in the per-
@@ -2294,7 +2296,7 @@ class GatewayApp:
             goal = (goal or "").strip()
             if not goal:
                 return "error: tell me what the node should do"
-            if not self._autobuild_consented(session.tenant_id):
+            if not self._autobuild_consented(session.tenant_id, session.principal_id):
                 return f"error: auto-build is off — {AUTOBUILD_HINT}"
             return self._build_function_node(
                 session, goal, under_entry=entry, under_node_id=node_id
@@ -2395,13 +2397,18 @@ class GatewayApp:
             say += f" {autobuild['hint']}"
         return say
 
-    def _autobuild_consented(self, tenant: str) -> bool:
-        """The tenant's 'Auto-build nodes on my paths' switch, honestly
-        defaulted: no settings node means no consent was ever given."""
+    def _autobuild_consented(
+        self, tenant: str, principal: str | None = None
+    ) -> bool:
+        """The ACCOUNT's 'Auto-build nodes on my paths' switch (personal-
+        first, tenant layer as the shared default), honestly defaulted:
+        no settings node means no consent was ever given."""
         if self._settings is None:
             return False
         return bool(
-            self._settings.effective(tenant).get(AUTOBUILD_CONSENT_KEY, False)
+            self._settings.effective(tenant, principal).get(
+                AUTOBUILD_CONSENT_KEY, False
+            )
         )
 
     def _autobuild_before_run(self, session, goal: str) -> str | None:
@@ -2424,7 +2431,7 @@ class GatewayApp:
             or messaging_intent(goal)
             or self._nodeplace is None
             or self._desk is None
-            or not self._autobuild_consented(session.tenant_id)
+            or not self._autobuild_consented(session.tenant_id, session.principal_id)
             or self._tenant_model(session.tenant_id) is None
             or self._resolve_node_function(session, goal) is not None
             # A near-twin is a QUESTION (reuse or build distinct?), never
@@ -2497,7 +2504,7 @@ class GatewayApp:
             else (
                 AUTOBUILD_HINT
                 if self._settings is not None
-                and not self._autobuild_consented(session.tenant_id)
+                and not self._autobuild_consented(session.tenant_id, session.principal_id)
                 else None
             )
         )
@@ -3340,7 +3347,7 @@ class GatewayApp:
         if self._identity_links is not None:
             export["identity_links"] = self._identity_links.links_for(principal)
         if self._settings is not None:
-            export["settings"] = self._settings.effective(tenant)
+            export["settings"] = self._settings.effective(tenant, principal)
         if self._assistant_history is not None:
             export["chat"] = self._assistant_history.history(
                 tenant=tenant, principal=principal, limit=10_000
@@ -3453,6 +3460,12 @@ class GatewayApp:
         if self._reminders is not None:
             erased["reminders"] = self._reminders.erase(
                 tenant=tenant, principal=principal
+            )
+        if self._settings is not None:
+            # The personal settings layer goes with the account; the
+            # tenant layer stays — it belongs to the tenant.
+            erased["personal_settings"] = self._settings.erase_personal(
+                tenant, principal
             )
         if self._representative is not None:
             # The voice goes with the account: settings, remembered
@@ -3795,7 +3808,8 @@ class GatewayApp:
     def _settings_list(self, request, session, params) -> Response:
         node = self._require_settings()
         return json_response(
-            200, {"items": node.describe(session.tenant_id)}
+            200,
+            {"items": node.describe(session.tenant_id, session.principal_id)},
         )
 
     def _settings_update(self, request, session, params) -> Response:
@@ -3812,10 +3826,13 @@ class GatewayApp:
         if not isinstance(changes, dict) or not changes:
             raise GatewayError(400, "invalid_request", "changes object is required")
         try:
-            node.set_many(session.tenant_id, changes)
+            node.set_many(session.tenant_id, changes, session.principal_id)
         except SettingError as exc:
             raise GatewayError(400, "invalid_request", str(exc)) from exc
-        return json_response(200, {"items": node.describe(session.tenant_id)})
+        return json_response(
+            200,
+            {"items": node.describe(session.tenant_id, session.principal_id)},
+        )
 
     # ------------------------------------------------------------------ #
     # Model keys: the BYO-key door and the per-tenant brain behind chat.  #
@@ -6910,7 +6927,9 @@ class GatewayApp:
             return None
         tenant = str(state.contract.metadata.get("tenant_id", ""))
         consent = bool(
-            self._settings.effective(tenant).get(AUTOBUILD_CONSENT_KEY, False)
+            self._settings.effective(
+                tenant, state.contract.submitted_by or None
+            ).get(AUTOBUILD_CONSENT_KEY, False)
         )
         return {
             "consent": consent,

@@ -814,15 +814,22 @@ class GatewayChatTools(FileChatTools):
     def get_settings(self) -> list[dict]:
         if self._settings is None:
             return []
-        return self._settings.describe(self._chat_tenant)
+        # The ACCOUNT's own view: personal values over the tenant layer.
+        return self._settings.describe(
+            self._chat_tenant, self._principal or None
+        )
 
     def set_setting(self, key: str, value: object) -> str:
         """Apply one setting through the node's bounded door, or report why
-        it was refused — the assistant never gets a code path around it."""
+        it was refused — the assistant never gets a code path around it.
+        Personal-group keys land on THIS account's layer, never a
+        neighbor's."""
         if self._settings is None:
             return "error: settings are not enabled"
         try:
-            applied = self._settings.set(self._chat_tenant, key, value)
+            applied = self._settings.set(
+                self._chat_tenant, key, value, self._principal or None
+            )
         except SettingError as exc:
             return f"error: {exc}"
         return f"set {key} to {applied}"
