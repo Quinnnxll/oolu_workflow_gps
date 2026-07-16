@@ -93,3 +93,91 @@ def report_exception(exc: BaseException) -> None:
         kind=exc.__class__.__name__,
         details={"traceback_tail": tb[-2000:]},
     )
+
+
+# --------------------------------------------------------------------------- #
+# The web hand — the PRODUCER side of the brokered exchange.                   #
+# --------------------------------------------------------------------------- #
+# The sandbox has no network, ever. When the node carries a web grant the
+# host mounts an exchange directory (announced via $OOLU_WEB_EXCHANGE) and a
+# host-side broker answers request files through the machine's guarded HTTP
+# executor — the node's granted hosts, the SSRF guard, every redirect hop
+# re-checked. These constants MUST mirror runtime/webhand.py (a test pins
+# them); they are duplicated because this file may import nothing.
+_WEB_EXCHANGE_ENV = "OOLU_WEB_EXCHANGE"
+_WEB_REQUEST_SUFFIX = ".req.json"
+_WEB_RESPONSE_SUFFIX = ".rsp.json"
+_WEB_POLL_S = 0.05
+
+
+class WebGrantError(RuntimeError):
+    """The script asked for the web and this run carries no way to it."""
+
+
+def http_request(
+    url: str,
+    *,
+    method: str = "GET",
+    headers: dict | None = None,
+    body: Any = None,
+    timeout_s: float = 60.0,
+) -> dict:
+    """One HTTP exchange through the host-side broker — the node's web hand.
+
+    Returns ``{"status", "url", "content_type", "body", "truncated",
+    "error"}``. A refused or failed call comes back with ``status`` 0 and
+    the reason in ``error`` (e.g. the host is outside the node's granted
+    hosts) — read it and either work around it or emit_result the honest
+    partial answer. ``body`` may be a str, or any JSON-serializable value
+    (sent as JSON with a content-type header unless one is already set).
+
+    Raises :class:`WebGrantError` only when the run has no exchange at
+    all — the node has no web grant, so no broker is listening.
+    """
+    import os
+    import time
+    import uuid
+
+    exchange = os.environ.get(_WEB_EXCHANGE_ENV)
+    if not exchange or not os.path.isdir(exchange):
+        raise WebGrantError(
+            "this node has no web grant — its responsible human can grant "
+            "named hosts on the node's account (Work -> the node -> "
+            "network), and the run will find the web hand mounted"
+        )
+    payload_body = body
+    request_headers = dict(headers or {})
+    if body is not None and not isinstance(body, str):
+        payload_body = json.dumps(body, ensure_ascii=False, default=str)
+        if not any(k.lower() == "content-type" for k in request_headers):
+            request_headers["Content-Type"] = "application/json"
+    call_id = uuid.uuid4().hex
+    request = {
+        "id": call_id,
+        "method": str(method or "GET").upper(),
+        "url": str(url),
+        "headers": request_headers,
+        "body": payload_body,
+    }
+    # Atomic hand-off: write whole, then rename onto the watched suffix.
+    temp = os.path.join(exchange, call_id + ".req.tmp")
+    final = os.path.join(exchange, call_id + _WEB_REQUEST_SUFFIX)
+    with open(temp, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(request, ensure_ascii=False))
+    os.replace(temp, final)
+
+    answer_path = os.path.join(exchange, call_id + _WEB_RESPONSE_SUFFIX)
+    deadline = time.monotonic() + max(float(timeout_s), _WEB_POLL_S)
+    while time.monotonic() < deadline:
+        if os.path.exists(answer_path):
+            with open(answer_path, encoding="utf-8") as fh:
+                return json.load(fh)
+        time.sleep(_WEB_POLL_S)
+    return {
+        "status": 0,
+        "url": str(url),
+        "content_type": "",
+        "body": "",
+        "truncated": False,
+        "error": f"the web broker did not answer within {timeout_s:.0f}s",
+    }

@@ -422,18 +422,38 @@ def build_script_executor(
     *,
     cache_path: str | Path = ":memory:",
     synthesizer=None,  # runtime.ScriptSynthesizer, optional
+    environ: dict | None = None,
 ) -> dict[str, ActionExecutor]:
     """The script hand: run planner-provided or synthesized code through the
     configured isolation backend (Docker when configured; the subprocess
     dev fallback otherwise), memoized per node and always verified by
-    execution before anything is trusted."""
+    execution before anything is trusted.
+
+    The backend also gets the WEB HAND: a guarded fetch (same machine
+    policy the http executor reads from the environment) that the web
+    broker answers a granted sandbox's ``http_request`` calls through —
+    the network itself stays severed."""
     settings = settings or Settings()
+    import os as _os
+
     from .cache.store import LocalScriptCache
     from .config import _build_backend
     from .runtime.script_node import NodeScriptRunner
+    from .skills.http_adapter import HttpActionExecutor, HttpExecutionPolicy
 
+    env = environ if environ is not None else _os.environ
+    web_hand = HttpActionExecutor(
+        HttpExecutionPolicy(
+            allow_hosts=frozenset(
+                h.strip().lower()
+                for h in env.get("OOLU_HTTP_ALLOWLIST", "").split(",")
+                if h.strip()
+            ),
+            allow_private=env.get("OOLU_HTTP_ALLOW_PRIVATE") == "1",
+        )
+    )
     runner = NodeScriptRunner(
-        _build_backend(settings.backend),
+        _build_backend(settings.backend, web_fetch=web_hand.request),
         LocalScriptCache(cache_path),
         synthesizer=synthesizer,
         pinned_index_url=settings.backend.pinned_index_url,

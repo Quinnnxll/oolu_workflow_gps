@@ -269,19 +269,25 @@ class WorkflowOrchestrator:
         function = metadata.get("node_function")
         if not isinstance(function, dict) or not function.get("script"):
             return None
+        parameters = {
+            "goal": str(function.get("goal") or state.contract.intent),
+            "script": str(function["script"]),
+            "node_key": str(
+                function.get("node_key")
+                or f"node:{function.get('skill_id', '')}"
+            ),
+            "skill_id": str(function.get("skill_id") or "node-function"),
+        }
+        # The node's egress consent and its staged files ride along when the
+        # gateway attached them — the script hand reads these exact keys.
+        for carried in ("_egress_hosts", "_egress_open", "_egress_blocked", "files"):
+            if carried in function:
+                parameters[carried] = function[carried]
         action = ActionEvent(
             correlation_id="node-function",
             adapter="script",
             operation="run",
-            parameters={
-                "goal": str(function.get("goal") or state.contract.intent),
-                "script": str(function["script"]),
-                "node_key": str(
-                    function.get("node_key")
-                    or f"node:{function.get('skill_id', '')}"
-                ),
-                "skill_id": str(function.get("skill_id") or "node-function"),
-            },
+            parameters=parameters,
         )
         blueprint = Blueprint(
             name=str(function.get("title") or "node function"),

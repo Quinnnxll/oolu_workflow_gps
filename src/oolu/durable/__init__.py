@@ -15,6 +15,7 @@ from .connection import (
     DurableConnection,
 )
 from .files import FileTooLargeError, UserFile, UserFileStore
+from .hooks import NodeHook, NodeHookStore
 from .idempotency import IdempotencyLedger
 from .maintenance import backup, delete_workflow, prune_retention, restore
 from .offers import GrowthOfferStore
@@ -32,6 +33,8 @@ __all__ = [
     "DurableRecordStore",
     "FileTooLargeError",
     "GrowthOfferStore",
+    "NodeHook",
+    "NodeHookStore",
     "UserFile",
     "UserFileStore",
     "DurableRunStateStore",

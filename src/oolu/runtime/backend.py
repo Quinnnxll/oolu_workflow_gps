@@ -52,6 +52,34 @@ class BackendUnavailable(BackendError):
 # --------------------------------------------------------------------------- #
 # Request specs — what the graph asks a backend to run.                        #
 # --------------------------------------------------------------------------- #
+class WebGrant(BaseModel):
+    """The node's consented web, carried INTO the run — never a network.
+
+    The sandbox stays severed; this grant only tells the host-side web
+    broker which hosts it may answer for when the script asks through the
+    shim's ``http_request`` hand. The regimes mirror the egress stamp on
+    http actions exactly:
+
+      * default (``open_web=False``): ``hosts`` is the allow-grant — the
+        exact public hosts the node's responsible human consented to. An
+        empty tuple fails closed: the broker answers every request with
+        the words to fix it, and nothing leaves the machine.
+      * ``open_web=True``: the node stands under a Supernode verified as
+        a legal entity — the web is open minus ``blocked_hosts`` (the
+        org's own refusals), and ``hosts`` is ignored.
+
+    ``max_calls`` bounds one run's appetite so a looping script cannot
+    turn a grant into a flood.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    hosts: tuple[str, ...] = ()
+    open_web: bool = False
+    blocked_hosts: tuple[str, ...] = ()
+    max_calls: int = Field(default=32, gt=0)
+
+
 class ResourceLimits(BaseModel):
     """Hostile-by-default resource ceilings applied to every container.
 
@@ -114,6 +142,18 @@ class ExecutionRequest(BaseModel):
     # Minimal, explicit environment. Never inherits the host environment — that is
     # how secrets leak into untrusted code. Empty by default.
     env: dict[str, str] = Field(default_factory=dict)
+
+    # The node's own code and data files, staged next to user_script.py before
+    # Phase B (relative paths only — the backend refuses anything that would
+    # escape the scratch dir). This is how a node carries real programs: the
+    # script imports or reads them by their staged names.
+    files: dict[str, str] = Field(default_factory=dict)
+
+    # The node's consented web, answered by the host-side broker through the
+    # shim's http_request hand. None = no grant was stamped: the exchange is
+    # never mounted and a script that asks gets the honest refusal. The
+    # network itself stays severed either way.
+    web: WebGrant | None = None
 
 
 # --------------------------------------------------------------------------- #

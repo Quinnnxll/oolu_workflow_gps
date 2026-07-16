@@ -42,7 +42,7 @@ from ..cache.store import ScriptCache
 from ..models import ErrorClass, ExecutionResult, Phase
 from ..nodeplace.screening import screen_script
 from ..skills.models import ActionEvent, ExecutionOutcome, ExecutionStatus
-from .backend import ExecutionBackend, ExecutionRequest, ResourceLimits
+from .backend import ExecutionBackend, ExecutionRequest, ResourceLimits, WebGrant
 from .dependency import classify
 
 logger = logging.getLogger(__name__)
@@ -177,7 +177,44 @@ everything that already works. Same contract as before: ONE complete,
 self-contained Python script in a single ```python fence that performs
 the whole task in one run and calls emit_result exactly once:
     from _oolu_runtime import emit_result
-The sandbox has NO network and NO host credentials at run time."""
+The sandbox has NO host credentials and NO raw network at run time. The
+ONLY way to the web is the brokered hand from the same runtime module —
+    from _oolu_runtime import http_request
+    answer = http_request("https://api.example.com/v1/things")
+— which the host answers for the node's granted hosts alone; a refused
+call returns status 0 with the reason in "error", never an exception."""
+
+
+def _web_grant(action: ActionEvent) -> WebGrant | None:
+    """The node's stamped egress regime, read off the action exactly the
+    way the http hand reads it: ``_egress_open`` beats the allow-grant;
+    a present-but-empty ``_egress_hosts`` fails closed (the broker then
+    answers every call with the words to fix it); no stamp at all means
+    no web hand — the exchange is never even mounted."""
+    if action.parameters.get("_egress_open"):
+        raw = action.parameters.get("_egress_blocked") or []
+        return WebGrant(
+            open_web=True,
+            blocked_hosts=tuple(
+                str(h).strip().lower() for h in raw if str(h).strip()
+            ),
+        )
+    if "_egress_hosts" in action.parameters:
+        raw = action.parameters.get("_egress_hosts") or []
+        return WebGrant(
+            hosts=tuple(str(h).strip().lower() for h in raw if str(h).strip())
+        )
+    return None
+
+
+def _staged_files(action: ActionEvent) -> dict[str, str]:
+    """The node's own files riding the action — programs and data the
+    backend stages next to the script. Shape-checked only; the backend
+    enforces the path and size walls."""
+    raw = action.parameters.get("files")
+    if not isinstance(raw, dict):
+        return {}
+    return {str(name): str(content) for name, content in raw.items()}
 
 
 def render_node_goal(goal: str, bindings: dict[str, Any]) -> str:
@@ -271,13 +308,22 @@ class NodeScriptRunner:
         bindings = dict(action.parameters.get("bindings") or {})
         node_key = str(action.parameters.get("node_key") or goal)
         key = self.cache_key(node_key, bindings)
+        # The node's stamped egress regime and its own staged files ride the
+        # action into EVERY backend run below — cached replay, provided,
+        # repaired, and resynthesized alike.
+        web = _web_grant(action)
+        files = _staged_files(action)
 
         # --- hit path: replay the memoized script, no synthesis paid ----- #
         cached = self._cache.get(key)
         stale_error: str | None = None
         if cached is not None:
             result = self._run_script(
-                cached.script, list(cached.dependencies), idempotency_key
+                cached.script,
+                list(cached.dependencies),
+                idempotency_key,
+                web=web,
+                files=files,
             )
             record = classify(result)
             if record is None:
@@ -312,7 +358,9 @@ class NodeScriptRunner:
             # failure a correct script can legitimately hit on this backend.
             deps: list[str] = []
             for _ in range(3):
-                result = self._run_script(str(provided), deps, idempotency_key)
+                result = self._run_script(
+                    str(provided), deps, idempotency_key, web=web, files=files
+                )
                 record = classify(result)
                 if record is None:
                     self._cache.store_success(
@@ -366,7 +414,9 @@ class NodeScriptRunner:
                     if not edited or edited.strip() == current.strip():
                         break
                     deps = []
-                    result = self._run_script(edited, deps, idempotency_key)
+                    result = self._run_script(
+                        edited, deps, idempotency_key, web=web, files=files
+                    )
                     record = classify(result)
                     if record is None:
                         # The repaired function is the node's function now:
@@ -432,7 +482,11 @@ class NodeScriptRunner:
 
         # Verify with OUR backend before trusting, reporting, or caching.
         result = self._run_script(
-            synthesis.script, list(synthesis.dependencies), idempotency_key
+            synthesis.script,
+            list(synthesis.dependencies),
+            idempotency_key,
+            web=web,
+            files=files,
         )
         record = classify(result)
         if record is not None:
@@ -465,7 +519,13 @@ class NodeScriptRunner:
 
     # ------------------------------------------------------------------ #
     def _run_script(
-        self, script: str, dependencies: list[str], session_id: str
+        self,
+        script: str,
+        dependencies: list[str],
+        session_id: str,
+        *,
+        web: WebGrant | None = None,
+        files: dict[str, str] | None = None,
     ) -> ExecutionResult:
         # The antivirus screen at the last gate: no script — provided,
         # synthesized, repaired, or replayed from cache — reaches the
@@ -486,6 +546,8 @@ class NodeScriptRunner:
                 pinned_index_url=self._pinned_index_url,
                 limits=self._limits,
                 session_id=session_id,
+                web=web,
+                files=dict(files or {}),
             )
         )
 

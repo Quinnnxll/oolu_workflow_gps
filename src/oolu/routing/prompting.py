@@ -54,9 +54,16 @@ module instead of guessing.
 Python standard library available. You may import third-party packages freely: if \
 one is missing it is installed automatically and the script is re-run, so write the \
 natural import and assume the package is present.
-- No runtime network or secrets. During execution the sandbox has NO network access \
-and NO access to host credentials or files outside its working directory. Do not \
-attempt to reach the network or read secrets at run time.
+- No raw network, no secrets. During execution the sandbox has NO network interface \
+and NO access to host credentials or files outside its working directory. The ONE \
+door to the web is the brokered hand from the same runtime module:
+      from _oolu_runtime import http_request
+      page = http_request("https://api.example.com/v1/things")   # method=, headers=, body= as needed
+  It is answered OUTSIDE the sandbox by the host's guarded HTTP executor and reaches \
+only the hosts this node's responsible human granted (a refused call returns \
+status 0 with the reason in "error"; a run with no web grant at all raises \
+WebGrantError). Use it when the task genuinely needs the live web; never try \
+sockets, urllib, or requests against the network directly — there is none.
 - Stay minimal and focused. Aim the script directly at the task. You may print \
 diagnostics to stdout/stderr freely; only the emit_result payload is read as the \
 answer.

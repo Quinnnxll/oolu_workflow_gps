@@ -997,8 +997,22 @@ Otherwise write the node's execution function:
    ```python block that performs the whole task in one run. The script
    MUST import and call emit_result exactly once with its final answer:
        from _oolu_runtime import emit_result
-   Missing third-party packages install automatically; the sandbox has NO
-   network and NO host credentials at run time."""
+   Missing third-party packages install automatically. The sandbox can
+   never touch the backend host: NO host credentials, NO host files, and
+   NO raw network interface. When the task needs the live web — searching,
+   fetching a page or feed, calling an API, posting to a webhook — use the
+   brokered web hand from the same runtime module:
+       from _oolu_runtime import http_request
+       page = http_request("https://api.example.com/v1/things")
+       # method="POST", headers={...}, body=... as the API needs
+   Every call is answered OUTSIDE the sandbox by the host's guarded HTTP
+   executor and reaches ONLY the hosts the node's responsible human
+   granted on its account (or the open web for a verified org). A refused
+   call returns status 0 with the reason in "error" — read it and report
+   honestly. A web-needing task IS executable work: write the function
+   with http_request and let the grant decide at run time; never refuse
+   it as impossible. A node fired by its webhook finds the caller's
+   payload staged at ./webhook_payload.json when one was sent."""
 
 
 _IO_LINE_RE = re.compile(r"^\s*IO:\s*(\{.*\})\s*$", re.M)
@@ -1603,15 +1617,33 @@ def consent_answer(text: str) -> str | None:
 
 # Appended to the model's context when the active router really can search
 # (an Anthropic path with model.web_search on). Without it a keyed install
-# answers "I can't browse the internet" — or worse, hands the search to the
-# engine, whose sandbox has no network, so the task can only ever fail.
+# answers "I can't browse the internet" for the questions it could answer
+# inline. The division of labor: a one-off question is answered in the
+# reply; REPEATABLE web work becomes a task, because the engine's nodes now
+# reach the web through the granted web hand (the brokered http_request).
 WEB_SEARCH_NOTE = (
     "You HAVE live web search in this conversation — it runs inside your own "
-    "reply, on the provider's servers. Questions about current facts (news, "
-    "weather, prices, scores, anything on today's web) you answer DIRECTLY "
-    'in "say", searching as needed. Never set "task" for a web search or '
-    "lookup: the engine's sandbox has no network access, so a searching task "
-    "can only fail."
+    "reply, on the provider's servers. One-off questions about current facts "
+    "(news, weather, prices, scores, anything on today's web) you answer "
+    'DIRECTLY in "say", searching as needed — no task for a question you can '
+    "answer yourself. REPEATABLE web work is different: monitoring a page, "
+    "pulling from an API, posting to a webhook, a fetch the user will want "
+    'again — that belongs in "task", because the engine builds it into a '
+    "node whose function reaches the web through the node's granted web "
+    "hand, and the work becomes a rerunnable, verifiable step instead of a "
+    "one-time answer."
+)
+
+# The always-on counterpart: what the ENGINE can do about web work, stated
+# even when the conversation model itself cannot search. Without this a
+# model with no search tool refuses web tasks as impossible — but building
+# the node was never the model's job, only naming the work.
+WEB_TASK_NOTE = (
+    "Tasks that need the live web (fetching, monitoring, calling APIs, "
+    "webhooks) ARE doable by the engine: a node's function reaches the web "
+    "through a granted, host-guarded HTTP hand even though its sandbox has "
+    'no network of its own. Hand such work to "task" instead of refusing '
+    "it; the node's owner grants the exact hosts on the node's account."
 )
 
 

@@ -45,8 +45,54 @@ from typing import Iterator
 from ..models import ExecutionResult, Phase
 from .backend import BackendError, BackendUnavailable, ExecutionRequest
 from .contract import SHIM_MODULE_NAME, parse_stdout, shim_source_path
+from .webhand import CONTAINER_EXCHANGE, EXCHANGE_ENV, GuardedFetch, serve_web
 
 logger = logging.getLogger(__name__)
+
+# Staged-file ceilings: a node carries programs, not datasets. Large data
+# moves through path-roled slots and the artifact store, never the request.
+_MAX_STAGED_FILES = 32
+_MAX_STAGED_BYTES = 2_000_000
+
+
+def _staged_files(request: ExecutionRequest) -> dict[str, bytes]:
+    """The request's extra files, validated to stay INSIDE the scratch dir.
+
+    Relative POSIX paths only — no absolutes, no ``..``, no drive letters,
+    and never the two names the harness itself owns. A violation is a
+    ``BackendError``: it means the caller (or something hostile upstream)
+    tried to aim a write outside the sandbox, and we refuse rather than
+    normalize.
+    """
+    from pathlib import PurePosixPath
+
+    staged: dict[str, bytes] = {}
+    total = 0
+    if len(request.files) > _MAX_STAGED_FILES:
+        raise BackendError(
+            f"too many staged files ({len(request.files)} > {_MAX_STAGED_FILES})"
+        )
+    for raw_name, content in request.files.items():
+        name = str(raw_name).replace("\\", "/")
+        pure = PurePosixPath(name)
+        if (
+            pure.is_absolute()
+            or not pure.parts
+            or any(part in ("..", "", ".") for part in pure.parts)
+            or ":" in name
+        ):
+            raise BackendError(f"staged file path escapes the sandbox: {raw_name!r}")
+        if pure.parts[0] in (f"{SHIM_MODULE_NAME}.py", "user_script.py"):
+            raise BackendError(f"staged file may not shadow the harness: {raw_name!r}")
+        data = str(content).encode("utf-8")
+        total += len(data)
+        if total > _MAX_STAGED_BYTES:
+            raise BackendError(
+                f"staged files exceed {_MAX_STAGED_BYTES} bytes in total"
+            )
+        staged[str(pure)] = data
+    return staged
+
 
 # Sentinel exit code GNU `timeout` uses when it has to kill the command.
 _TIMEOUT_EXIT_CODE = 124
@@ -197,10 +243,15 @@ class SubprocessBackend(_TwoPhaseBackend):
         *,
         python_executable: str = sys.executable,
         default_index_url: str | None = None,
+        web_fetch: GuardedFetch | None = None,
     ):
         self._python = python_executable
         self._default_index_url = default_index_url
         self._uv = shutil.which("uv")
+        # The host-side guarded fetch the web broker answers through. None
+        # = no web hand on this host; a granted run still gets the honest
+        # refusal from the shim instead of a hang.
+        self._web_fetch = web_fetch
 
     @property
     def name(self) -> str:
@@ -217,10 +268,22 @@ class SubprocessBackend(_TwoPhaseBackend):
         try:
             shutil.copy(shim_source_path(), os.path.join(d, f"{SHIM_MODULE_NAME}.py"))
             Path(d, "user_script.py").write_text(request.script)
+            # The node's own files, staged next to the script (validated to
+            # stay inside the workspace — see _staged_files).
+            for name, data in _staged_files(request).items():
+                target = Path(d, name)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
             os.makedirs(os.path.join(d, "site-packages"), exist_ok=True)
+            if request.web is not None and self._web_fetch is not None:
+                os.makedirs(self._exchange_dir(d), exist_ok=True)
             yield d
         finally:
             shutil.rmtree(d, ignore_errors=True)
+
+    @staticmethod
+    def _exchange_dir(ws: object) -> str:
+        return os.path.join(str(ws), "web-exchange")
 
     def _base_env(self, request: ExecutionRequest) -> dict[str, str]:
         # Dev backend: inherits host env for robustness (it is explicitly not a
@@ -266,20 +329,40 @@ class SubprocessBackend(_TwoPhaseBackend):
         env = self._base_env(request)
         env["PYTHONPATH"] = os.path.join(str(ws), "site-packages")
         env["PYTHONDONTWRITEBYTECODE"] = "1"
+        exchange: Path | None = None
+        if request.web is not None and self._web_fetch is not None:
+            exchange = Path(self._exchange_dir(ws))
+            env[EXCHANGE_ENV] = str(exchange)
         logger.info(
             "subprocess Phase B execute (timeout=%.0fs)", request.limits.wall_timeout_s
         )
-        return _run_command(
-            [self._python, "user_script.py"],
-            cwd=str(ws),
-            env=env,
-            timeout=request.limits.wall_timeout_s,
-        )
+        with serve_web(exchange, request.web, self._web_fetch) as serving:
+            raw = _run_command(
+                [self._python, "user_script.py"],
+                cwd=str(ws),
+                env=env,
+                timeout=request.limits.wall_timeout_s,
+            )
+        if serving.calls:
+            logger.info(
+                "web hand answered %d call(s) for session %s",
+                len(serving.calls),
+                request.session_id,
+            )
+        return raw
 
 
 # --------------------------------------------------------------------------- #
 # LocalDockerBackend — the real isolation boundary (v0 default).              #
 # --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class _DockerWorkspace:
+    """One run's live container plus its (optional) web-exchange mount."""
+
+    container: object
+    exchange_host: str | None = None
+
+
 class LocalDockerBackend(_TwoPhaseBackend):
     """Ephemeral hostile containers via the Docker SDK.
 
@@ -298,6 +381,7 @@ class LocalDockerBackend(_TwoPhaseBackend):
         uv_cache_dir: str | None = None,
         default_index_url: str | None = None,
         run_as_user: str | None = None,
+        web_fetch: GuardedFetch | None = None,
     ):
         try:
             import docker  # lazy: the package must not hard-require docker to import
@@ -315,6 +399,10 @@ class LocalDockerBackend(_TwoPhaseBackend):
         self._uv_cache_dir = uv_cache_dir
         self._default_index_url = default_index_url
         self._run_as_user = run_as_user
+        # The host-side guarded fetch the web broker answers through — the
+        # container itself NEVER gets a network; a web grant only mounts
+        # the file exchange this hand serves.
+        self._web_fetch = web_fetch
 
     @property
     def name(self) -> str:
@@ -350,6 +438,16 @@ class LocalDockerBackend(_TwoPhaseBackend):
             # cache (cold but fully isolated) — the safe default.
             volumes[self._uv_cache_dir] = {"bind": "/uvcache", "mode": "rw"}
 
+        exchange_host: str | None = None
+        if request.web is not None and self._web_fetch is not None:
+            # The web hand's exchange: a bind-mounted directory of JSON
+            # files, NOT a network — severance verification below stays
+            # exactly as strong. World-writable so the container's
+            # non-root user can drop request files.
+            exchange_host = tempfile.mkdtemp(prefix="oolu-web-")
+            os.chmod(exchange_host, 0o777)
+            volumes[exchange_host] = {"bind": CONTAINER_EXCHANGE, "mode": "rw"}
+
         try:
             container = self._client.containers.run(
                 image=self._image,
@@ -371,15 +469,19 @@ class LocalDockerBackend(_TwoPhaseBackend):
                 labels={"app": "oolu", "session": request.session_id},
             )
         except self._docker.errors.ImageNotFound as exc:
+            if exchange_host:
+                shutil.rmtree(exchange_host, ignore_errors=True)
             raise BackendUnavailable(
                 f"sandbox image '{self._image}' not found — build docker/sandbox.Dockerfile"
             ) from exc
         except self._docker.errors.DockerException as exc:
+            if exchange_host:
+                shutil.rmtree(exchange_host, ignore_errors=True)
             raise BackendError(f"failed to start sandbox container: {exc}") from exc
 
         try:
             self._put_files(container, request)
-            yield container
+            yield _DockerWorkspace(container=container, exchange_host=exchange_host)
         finally:
             try:
                 container.remove(force=True)  # ephemeral: one container, one intent
@@ -387,6 +489,8 @@ class LocalDockerBackend(_TwoPhaseBackend):
                 logger.warning(
                     "failed to remove sandbox container %s", container.id[:12]
                 )
+            if exchange_host:
+                shutil.rmtree(exchange_host, ignore_errors=True)
 
     def _put_files(self, container: object, request: ExecutionRequest) -> None:
         # NOTE: we cannot use Docker's put_archive here. With a read-only rootfs the
@@ -410,12 +514,17 @@ class LocalDockerBackend(_TwoPhaseBackend):
         files = {
             f"{SHIM_MODULE_NAME}.py": shim_source_path().read_bytes(),
             "user_script.py": request.script.encode("utf-8"),
+            # The node's own files ride the same staging path (validated to
+            # stay inside /sandbox — see _staged_files).
+            **_staged_files(request),
         }
         for name, data in files.items():
             b64 = base64.b64encode(data).decode("ascii")
             code = (
                 "import base64,pathlib;"
-                f"pathlib.Path('/sandbox/{name}').write_bytes(base64.b64decode('{b64}'))"
+                f"p=pathlib.Path('/sandbox/{name}');"
+                "p.parent.mkdir(parents=True,exist_ok=True);"
+                f"p.write_bytes(base64.b64decode('{b64}'))"
             )
             self._stage_exec(container, ["python", "-c", code])
 
@@ -463,11 +572,11 @@ class LocalDockerBackend(_TwoPhaseBackend):
             cmd += ["--index-url", index]
         cmd += list(request.dependencies)
         env = {"UV_CACHE_DIR": "/uvcache"} if self._uv_cache_dir else {}
-        return self._exec(ws, cmd, env, request.limits.install_timeout_s)
+        return self._exec(ws.container, cmd, env, request.limits.install_timeout_s)
 
     def _sever_network(self, ws: object) -> None:
         """Disconnect every network, then VERIFY none remain. Safety-critical."""
-        container = ws
+        container = ws.container
         try:
             network = self._client.networks.get(self._network_name)
             network.disconnect(container, force=True)
@@ -492,7 +601,21 @@ class LocalDockerBackend(_TwoPhaseBackend):
             "PYTHONDONTWRITEBYTECODE": "1",
             **request.env,
         }
+        exchange: Path | None = None
+        if ws.exchange_host is not None:
+            exchange = Path(ws.exchange_host)
+            env[EXCHANGE_ENV] = CONTAINER_EXCHANGE
         # Run via the baked entrypoint: it makes the shim importable and converts
         # uncaught exceptions into structured error envelopes for the classifier.
         cmd = ["python", _CONTAINER_ENTRYPOINT, "/sandbox/user_script.py"]
-        return self._exec(ws, cmd, env, request.limits.wall_timeout_s)
+        # The web hand serves the HOST side of the exchange while the
+        # container runs — network stays severed; files are the only door.
+        with serve_web(exchange, request.web, self._web_fetch) as serving:
+            raw = self._exec(ws.container, cmd, env, request.limits.wall_timeout_s)
+        if serving.calls:
+            logger.info(
+                "web hand answered %d call(s) for session %s",
+                len(serving.calls),
+                request.session_id,
+            )
+        return raw

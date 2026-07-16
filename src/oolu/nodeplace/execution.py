@@ -116,13 +116,19 @@ def compile_runnable(contract: NodeContract) -> CompiledContract:
     return compiled
 
 
+# The adapters whose actions carry a node's egress consent: the http hand
+# enforces the stamp directly; the script hand passes it to the web broker
+# that answers the sandbox's http_request calls — one consent, two hands.
+_EGRESS_ADAPTERS = ("http", "script")
+
+
 def stamp_egress_grants(
     contract: NodeContract,
     compiled: CompiledContract,
     grants: Mapping[str, tuple[str, ...]],
     open_grants: Mapping[str, tuple[str, ...]] | None = None,
 ) -> CompiledContract:
-    """Stamp each node-owned http action with its node's egress grant.
+    """Stamp each node-owned http and script action with its egress grant.
 
     ``grants`` maps a child's version id to the owning node's consented
     hosts (``WorkDesk.network_grants``) — REGISTERED nodes only. A child
@@ -154,7 +160,7 @@ def stamp_egress_grants(
         action = item.action
         owner = compiled.owners.get(action.id)
         version_id = id_by_name.get(owner or "")
-        if action.adapter == "http" and version_id in open_grants:
+        if action.adapter in _EGRESS_ADAPTERS and version_id in open_grants:
             action = action.model_copy(
                 update={
                     "parameters": {
@@ -166,7 +172,7 @@ def stamp_egress_grants(
             )
             item = item.model_copy(update={"action": action})
             changed = True
-        elif action.adapter == "http" and version_id in grants:
+        elif action.adapter in _EGRESS_ADAPTERS and version_id in grants:
             action = action.model_copy(
                 update={
                     "parameters": {

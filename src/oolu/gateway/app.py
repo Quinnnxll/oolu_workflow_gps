@@ -44,6 +44,7 @@ from ..chat import (
     REP_NEEDS_INFO_ASK,
     REP_WAITING_NOTE,
     WEB_SEARCH_NOTE,
+    WEB_TASK_NOTE,
     ChatAssistant,
     ChatTurn,
     GatewayChatTools,
@@ -63,6 +64,7 @@ from ..durable.files import (
     UserFileStore,
     normalize_folder,
 )
+from ..durable.hooks import NodeHookStore
 from ..durable.idempotency import IdempotencyLedger
 from ..durable.offers import GrowthOfferStore
 from ..durable.service import DurableWorkflowService
@@ -177,6 +179,10 @@ from .webhooks import WebhookVerifier
 # The hold lifecycle as it appears on the audit log — and therefore on the
 # approver's SSE feed. Every transition is one of these; nothing is silent.
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+# The most a node-webhook caller may hand the fired run: a webhook carries
+# an event, not a dataset — big payloads belong in the drawer's blob door.
+_MAX_HOOK_PAYLOAD = 65_536
 
 # An explicit "build me a node ..." request in general chat. It REQUIRES the
 # word "node" so a plain "build me a report" stays ordinary work — only a
@@ -617,6 +623,9 @@ class GatewayApp:
         # runtime's own connection: the question OoLu asked must survive a
         # restart, and the yes must land whichever process serves it.
         self._growth_offers = GrowthOfferStore(durable.conn)
+        # Node webhooks: an outside system's door to ONE node's own
+        # function — token-credentialed, owner-minted, digest-stored.
+        self._node_hooks = NodeHookStore(durable.conn)
         # The Global Project Graph: typed, revisioned truth, changed ONLY
         # through the transaction kernel — every verdict lands in the
         # hash-chained audit log (docs/industrial-vertical-plan.md, 1–2).
@@ -1056,6 +1065,19 @@ class GatewayApp:
             "/v1/work/nodes/{node_id}/imitate/stop",
             self._imitate_stop,
         )
+        # The node's webhook: the owner mints ONE token-credentialed URL;
+        # an outside system POSTing to it fires the node's own function
+        # with the payload staged as a file. Minting again rotates the
+        # token; the fire door is public because the token IS the door.
+        r.add("GET", "/v1/work/nodes/{node_id}/hook", self._node_hook_status)
+        r.add("POST", "/v1/work/nodes/{node_id}/hook", self._node_hook_mint)
+        r.add("DELETE", "/v1/work/nodes/{node_id}/hook", self._node_hook_revoke)
+        r.add(
+            "POST",
+            "/v1/hooks/nodes/{node_id}/{token}",
+            self._node_hook_fire,
+            public=True,
+        )
         r.add("GET", "/v1/work/nodes/{node_id}/kyc", self._kyc_status)
         r.add("POST", "/v1/work/nodes/{node_id}/kyc", self._kyc_apply)
         r.add("POST", "/v1/work/nodes/{node_id}/kyc/decide", self._kyc_decide)
@@ -1229,10 +1251,16 @@ class GatewayApp:
         router = self._tenant_model(session.tenant_id)
         # When the model really can search (an Anthropic path with the
         # web-search door open), the turn says so — otherwise a keyed
-        # install claims it "can't browse", or hands the search to the
-        # engine, whose network-severed sandbox can only fail it.
+        # install claims it "can't browse" the questions it could answer
+        # inline. Either way the turn carries the ENGINE's web truth: web
+        # tasks are buildable — a node's function reaches the web through
+        # the granted, host-guarded hand — so no model refuses them as
+        # beyond the machine.
         searches = getattr(router, "web_search_ready", None)
-        search_note = WEB_SEARCH_NOTE if searches is not None and searches() else None
+        search_note = (
+            WEB_SEARCH_NOTE if searches is not None and searches() else None
+        )
+        web_task_note = WEB_TASK_NOTE
         # OoLu's voice follows its mood: the client sends the avatar's
         # current mood, and the turn is coloured to match the face.
         mood_note = mood_directive(body.get("mood"))
@@ -1275,6 +1303,7 @@ class GatewayApp:
                 for n in (
                     context_note,
                     search_note,
+                    web_task_note,
                     mood_note,
                     units_note,
                     rep_note,
@@ -2829,6 +2858,18 @@ class GatewayApp:
             if under
             else "on your desk, with you as its responsible"
         )
+        # A function that reaches for the web needs the human's egress
+        # consent to actually get there — say so at birth, not at the
+        # first refused run.
+        web_note = (
+            (
+                " Its function uses the web hand: grant the exact hosts it "
+                "may reach on the node's account (network hosts) — until "
+                "you do, every web call fails closed."
+            )
+            if "http_request" in script
+            else ""
+        )
         interface = (
             "consumes "
             + (", ".join(f"{c.name}:{c.value_type}" for c in consumes) or "nothing")
@@ -2844,13 +2885,14 @@ class GatewayApp:
                 "that expands the path. It starts needs-verification and "
                 "becomes a callable, routable step as its runs verify; once "
                 "proven, the two can be merged into one throughout solution."
+                + web_note
                 + cost_note
             )
         return (
             f"Built a NEW node “{name}” ({new_id[:8]}) WITH its own "
             f"execution function ({interface}), {placing}. It starts "
             "needs-verification and becomes a callable, routable step as "
-            "its runs verify." + cost_note
+            "its runs verify." + web_note + cost_note
         )
 
     @staticmethod
@@ -2927,6 +2969,94 @@ class GatewayApp:
                 (action.parameters or {}).get("node_key")
                 or f"node:{skill_id}"
             ),
+            # The node's egress consent and its drawer's src/ programs ride
+            # the function into the run — the same regimes the contract
+            # path stamps, applied to the node-function route.
+            **self._node_function_extras(session, node.node_id),
+        }
+
+    def _node_function_extras(self, session, node_id: str) -> dict:
+        """What a node's own function carries beyond its script: the egress
+        regime the web broker enforces, and the drawer's ``src/`` files the
+        backend stages next to the script.
+
+        Egress mirrors the contract stamp exactly: the open web (minus the
+        org's blocks) for a fleet under a verified Supernode, else the
+        account's granted hosts — empty fails closed at the broker, and a
+        host with no desk at all stamps nothing (no grant, no web hand).
+        """
+        extras: dict = {}
+        if self._desk is not None:
+            verdict = (
+                self._kyc.open_egress(node_id) if self._kyc is not None else None
+            )
+            if verdict is not None:
+                extras["_egress_open"] = True
+                extras["_egress_blocked"] = list(verdict)
+            else:
+                account = self._desk.account_for(node_id)
+                extras["_egress_hosts"] = list(
+                    account.network_hosts if account is not None else ()
+                )
+        if self._files is not None:
+            staged: dict[str, str] = {}
+            for file in self._files.list(
+                tenant=session.tenant_id, node_id=node_id
+            ):
+                if file.blob_ref:
+                    continue  # programs are text; blobs stay in the drawer
+                folder = file.folder
+                if folder == "src":
+                    staged[file.name] = file.content
+                elif folder.startswith("src/"):
+                    staged[f"{folder[4:]}/{file.name}"] = file.content
+            if staged:
+                extras["files"] = staged
+        return extras
+
+    def _function_for_node(self, session, node_id: str) -> dict | None:
+        """:meth:`_resolve_node_function`'s sibling, keyed by node id — the
+        webhook door knows WHICH node it fires, not what goal minted it.
+        Walks the caller's own desk, so a node the minter no longer owns
+        resolves to nothing and the hook goes quiet with it."""
+        if self._nodeplace is None:
+            return None
+        try:
+            nodes = self._nodeplace.list_own_nodes(
+                noder_principal=session.principal_id,
+                tenant_id=session.tenant_id,
+            )
+        except Exception:  # noqa: BLE001 - resolution is best-effort
+            return None
+        node = next((n for n in nodes if n.node_id == node_id), None)
+        if node is None:
+            return None
+        version = self._nodeplace.latest_version(node.node_id)
+        if version is None:
+            return None
+        try:
+            skill = ReusableSkill.model_validate_json(
+                version.sanitized_skill_json
+            )
+        except Exception:  # noqa: BLE001
+            return None
+        action = next(
+            (a for a in skill.actions if a.adapter == "script"), None
+        )
+        script = (action.parameters or {}).get("script") if action else None
+        if not script:
+            return None
+        return {
+            "node_id": node.node_id,
+            "skill_id": node.skill_id,
+            "title": skill.name,
+            "goal": skill.description,
+            "script": str(script),
+            "node_key": str(
+                (action.parameters or {}).get("node_key")
+                or f"node:{node.skill_id}"
+            ),
+            **self._node_function_extras(session, node.node_id),
         }
 
     def _find_similar_function_node(self, session, goal: str) -> dict | None:
@@ -4993,6 +5123,146 @@ class GatewayApp:
                 404, "not_found", "imitation lessons are not enabled here"
             )
         return self._lessons
+
+    # ------------------------------------------------------------------ #
+    # Node webhooks: an outside system's door to one node's own function. #
+    # ------------------------------------------------------------------ #
+    def _node_hook_status(self, request, session, params) -> Response:
+        self._imitate_entry(session, params["node_id"])
+        hook = self._node_hooks.get(params["node_id"])
+        return json_response(
+            200,
+            {
+                "enabled": hook is not None,
+                "created_at": hook.created_at if hook else None,
+            },
+        )
+
+    def _node_hook_mint(self, request, session, params) -> Response:
+        """Mint (or rotate) the node's webhook. The plaintext token is in
+        THIS response and nowhere else ever again — only its digest is
+        stored. The hook fires as the minter: their identity, their
+        quotas, their node's egress grants, and every confirmation wall."""
+        node_id = params["node_id"]
+        self._imitate_entry(session, node_id)
+        if self._function_for_node(session, node_id) is None:
+            raise GatewayError(
+                422,
+                "cannot_execute",
+                "this node has no execution function inside — a webhook "
+                "would fire nothing; build the function first",
+            )
+        token = self._node_hooks.mint(
+            node_id, tenant=session.tenant_id, principal=session.principal_id
+        )
+        self._durable.audit.append(
+            "node.hook_minted",
+            {
+                "node_id": node_id,
+                "tenant": session.tenant_id,
+                "by": session.principal_id,
+            },
+        )
+        return json_response(
+            201,
+            {
+                "token": token,
+                "path": f"/v1/hooks/nodes/{node_id}/{token}",
+                "note": (
+                    "shown once — store it now; minting again rotates it, "
+                    "which is also how a leaked URL is revoked"
+                ),
+            },
+        )
+
+    def _node_hook_revoke(self, request, session, params) -> Response:
+        self._imitate_entry(session, params["node_id"])
+        revoked = self._node_hooks.revoke(params["node_id"])
+        if revoked:
+            self._durable.audit.append(
+                "node.hook_revoked",
+                {
+                    "node_id": params["node_id"],
+                    "tenant": session.tenant_id,
+                    "by": session.principal_id,
+                },
+            )
+        return json_response(200, {"enabled": False, "revoked": revoked})
+
+    def _node_hook_fire(self, request, session, params) -> Response:
+        """The public door: the token IS the credential. A wrong token and
+        a node that never had a hook answer the SAME 404, so the door
+        confirms nothing. The run wears the minter's identity and walls:
+        run quota, egress grants, and the confirmation regime for
+        model-written code all bind exactly as if they pressed run."""
+        from types import SimpleNamespace
+
+        record = self._node_hooks.verify(params["node_id"], params["token"])
+        if record is None:
+            raise GatewayError(404, "not_found", "no such hook")
+        owner = SimpleNamespace(
+            tenant_id=record.tenant, principal_id=record.principal
+        )
+        function = self._function_for_node(owner, record.node_id)
+        if function is None:
+            raise GatewayError(
+                422,
+                "cannot_execute",
+                "the node this hook fires no longer has a function here",
+            )
+        payload = request.body
+        if payload is not None:
+            text = json.dumps(payload, ensure_ascii=False)
+            if len(text.encode("utf-8")) > _MAX_HOOK_PAYLOAD:
+                raise GatewayError(
+                    400,
+                    "invalid_request",
+                    f"webhook payload exceeds {_MAX_HOOK_PAYLOAD} bytes",
+                )
+            files = dict(function.get("files") or {})
+            # The caller's payload, staged where the function was told to
+            # look for it (NODE_FUNCTION_PROMPT names this exact file).
+            files["webhook_payload.json"] = text
+            function["files"] = files
+        tenant_runs = sum(
+            1
+            for s in self._durable.runs.list()
+            if s.contract.metadata.get("tenant_id") == record.tenant
+        )
+        if tenant_runs >= self._config.max_runs_per_tenant:
+            raise GatewayError(429, "quota_exceeded", "tenant run quota exceeded")
+        contract = TaskContract(
+            intent=str(function["goal"]),
+            submitted_by=record.principal,
+            metadata={
+                "tenant_id": record.tenant,
+                "node_function": function,
+                "trigger": "webhook",
+            },
+        )
+        try:
+            state = self._durable.submit(contract, max_recovery_attempts=1)
+        except OrchestratorError as exc:
+            raise GatewayError(422, "cannot_execute", str(exc)) from exc
+        self._metrics["runs_submitted"] += 1
+        self._record_function_verification(state)
+        run = self._run_dict(state)
+        self._durable.audit.append(
+            "node.hook_fired",
+            {
+                "node_id": record.node_id,
+                "tenant": record.tenant,
+                "run_id": run.get("run_id"),
+            },
+        )
+        return json_response(
+            202,
+            {
+                "run_id": run.get("run_id"),
+                "phase": run.get("phase"),
+                "awaiting": run.get("awaiting"),
+            },
+        )
 
     def _imitate_entry(self, session, node_id: str):
         """Imitate happens on the caller's OWN desk — teaching demands

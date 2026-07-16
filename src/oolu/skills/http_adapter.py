@@ -37,6 +37,24 @@ from .models import ActionEvent, ExecutionOutcome, ExecutionStatus
 
 _MAX_REDIRECTS = 3
 
+# What a brokered call (the sandbox's http_request hand) may do. Reads and
+# writes alike pass the grant walls; anything stranger is refused in words.
+_BROKER_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"})
+# A brokered request's own payload cap — a node sends data, not a dataset.
+_MAX_REQUEST_BODY = 262_144
+
+
+def _brokered_error(url: str, reason: str) -> dict[str, Any]:
+    """A refused or failed brokered call, as the same shape a success has."""
+    return {
+        "status": 0,
+        "url": url,
+        "content_type": "",
+        "body": "",
+        "truncated": False,
+        "error": reason,
+    }
+
 
 @dataclass(frozen=True)
 class HttpExecutionPolicy:
@@ -212,6 +230,98 @@ class HttpActionExecutor:
                 "skills may not reach this machine's own network"
             )
         return None
+
+    # ------------------------------------------------------------------ #
+    def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        body: str | None = None,
+        grant: frozenset[str] | None = None,
+        blocked: frozenset[str] | None = None,
+    ) -> dict[str, Any]:
+        """One guarded HTTP exchange as plain data — the web broker's door.
+
+        The sandbox's ``http_request`` hand lands here: same machine
+        policy, same node grant walls, same always-on SSRF guard as the
+        action path — the honest enforcement point does not fork. Beyond
+        the action path's GET, a brokered call may write (POST/PUT/PATCH/
+        DELETE): the method reaches only hosts the node's responsible
+        human granted, and the run itself already passed the approval
+        regime that governs model-written code. Redirects are followed
+        (and re-guarded) for reads only; a write that redirects is
+        refused — a granted URL is written exactly, never re-aimed by
+        the server it was sent to.
+
+        Returns ``{"status", "url", "content_type", "body", "truncated",
+        "error"}`` — never raises for a refused or failed call; the
+        reason travels in ``error`` so the script can read it.
+        """
+        verb = (method or "GET").strip().upper()
+        if verb not in _BROKER_METHODS:
+            return _brokered_error(url, f"method {verb!r} is not supported")
+        if body is not None and len(body.encode("utf-8")) > _MAX_REQUEST_BODY:
+            return _brokered_error(
+                url, f"request body exceeds {_MAX_REQUEST_BODY} bytes"
+            )
+        clean_headers = {str(k): str(v) for k, v in (headers or {}).items()}
+        import httpx
+
+        client = self._client
+        if client is None:
+            client = self._client = httpx.Client(
+                trust_env=True, timeout=self._policy.timeout_s
+            )
+        current = str(url or "").strip()
+        try:
+            for _hop in range(_MAX_REDIRECTS + 1):
+                # Every hop re-passes the same walls as the action path.
+                reason = self._guard(current, grant, blocked)
+                if reason is not None:
+                    return _brokered_error(current, reason)
+                with client.stream(
+                    verb,
+                    current,
+                    headers=clean_headers,
+                    content=body.encode("utf-8") if body is not None else None,
+                    follow_redirects=False,
+                ) as response:
+                    if response.status_code in (301, 302, 303, 307, 308):
+                        if verb not in ("GET", "HEAD"):
+                            return _brokered_error(
+                                current,
+                                "the call redirected and writes never follow "
+                                "a redirect — aim at the final URL directly",
+                            )
+                        location = response.headers.get("location")
+                        if not location:
+                            return _brokered_error(
+                                current, "redirect without a location"
+                            )
+                        current = urljoin(current, location)
+                        continue
+                    payload = bytearray()
+                    for chunk in response.iter_bytes():
+                        payload += chunk
+                        if len(payload) >= self._policy.max_bytes:
+                            break
+                    truncated = len(payload) >= self._policy.max_bytes
+                    return {
+                        "status": response.status_code,
+                        "url": current,
+                        "content_type": response.headers.get("content-type", ""),
+                        "body": bytes(payload[: self._policy.max_bytes]).decode(
+                            "utf-8", errors="replace"
+                        ),
+                        "truncated": truncated,
+                        "error": None,
+                    }
+            return _brokered_error(current, "too many redirects")
+        except Exception as exc:  # noqa: BLE001 - a dead network is an
+            # answered request with a reason, never a crashed broker.
+            return _brokered_error(current, f"{verb} failed: {exc}")
 
     def _fetch(
         self,

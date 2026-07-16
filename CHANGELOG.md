@@ -4,6 +4,55 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+OoLu gets hands: web-capable nodes, files inside the node, and a
+webhook that fires it — the sandbox stays severed:
+
+- **The refusal this closes.** A task beyond the model's own reach — a
+  web search, an API call, anything needing the live web — used to end
+  in "the sandbox has no network, so a searching task can only fail":
+  the conversation was literally instructed never to build such nodes.
+  The boundary was real (and stays), but it was walling off the work
+  instead of the risk.
+- **The web hand: brokered, granted, severed.** A script node's function
+  can now call `http_request(url, method=, headers=, body=)` from the
+  same runtime module `emit_result` lives in. The sandbox NEVER gets a
+  network — a run whose node carries an egress grant gets a bind-mounted
+  file exchange (JSON request/response files; severance verification is
+  untouched), and a host-side broker (`runtime/webhand.py`) answers each
+  request through the SAME guarded HTTP executor http actions use: the
+  machine allowlist, the node's `network_hosts` grant (or the open web
+  minus the org's blocks for a verified Supernode fleet), and the
+  always-on SSRF guard, re-checked on every redirect hop. Writes reach
+  only granted hosts and never follow redirects; bodies and per-run call
+  counts are capped; the broker keeps the honest record of every call.
+  An ungranted run mounts nothing and the shim refuses in the words that
+  fix it. The egress stamp now rides script actions exactly as it rides
+  http actions — one consent, two hands — and the node-function route
+  carries it too, so a chat-built node runs under its account's grants.
+- **A node carries its own programs.** `ExecutionRequest.files` stages
+  named files next to the script in both backends (relative paths only;
+  escapes and harness shadowing are refused loudly; count and bytes are
+  capped). The drawer's `src/` folder is the source: files there ride
+  every run of the node's function, so a node is no longer one string of
+  code but a small program with modules and data it can import and read.
+- **The webhook door.** The node's owner mints ONE token-credentialed
+  URL (`POST /v1/work/nodes/{id}/hook` → `/v1/hooks/nodes/{id}/{token}`);
+  an outside system POSTing there fires the node's own function with the
+  payload staged at `webhook_payload.json`. The token is stored as a
+  digest and compared in constant time; re-minting rotates it; a wrong
+  token and a hookless node answer the same 404. The fired run wears the
+  MINTER's identity — quota, egress grants, and the model-written-code
+  confirmation walls bind unchanged — and every mint/revoke/fire lands
+  in the audit log.
+- **The prompts stopped lying.** The function writer is taught the one
+  honest door to the web (and that a web-needing task IS executable
+  work); the search note now says one-off questions are answered inline
+  while REPEATABLE web work becomes a task; and every chat turn carries
+  the engine's web truth even when the conversation model itself cannot
+  search — so no model refuses web work as beyond the machine. A node
+  born reaching for the web says at birth that its hosts must be granted
+  on its account before the calls pass.
+
 The org runs like an SOP — optional audit under the root, and an
 owner-set execution order:
 
