@@ -260,6 +260,76 @@ def test_reset_confirm_refuses_junk(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# Forgot password, one step: the server e-mails a fresh password.              #
+# --------------------------------------------------------------------------- #
+def _password_in(mail: dict) -> str:
+    match = re.search(r"new\s+password:\s*(\S+)", mail["body"])
+    assert match, mail["body"]
+    return match.group(1)
+
+
+def test_email_new_password_sets_it_and_signs_in(tmp_path):
+    gateway, outbox, closers = _host(tmp_path)
+    _register(gateway)  # never verified — then the user forgets the password
+    outbox.sent.clear()
+
+    sent = gateway.handle(
+        _req("POST", "/v1/auth/reset/password", body={"email": EMAIL})
+    )
+    assert sent.status == 202
+    assert sent.body == {"status": "sent"}
+    assert [m["to"] for m in outbox.sent] == [EMAIL]
+    new_password = _password_in(outbox.sent[0])
+
+    # The old password is dead; the e-mailed one works — and receiving it
+    # counted as verification, so the door is open even though the account
+    # was never verified before.
+    assert _login(gateway, "quinn", PASSWORD).status == 401
+    assert _login(gateway, "quinn", new_password).status == 200
+    for closer in closers:
+        closer.close()
+
+
+def test_email_new_password_never_enumerates_accounts(tmp_path):
+    gateway, outbox, closers = _host(tmp_path)
+    _register(gateway)
+    outbox.sent.clear()
+
+    unknown = gateway.handle(
+        _req("POST", "/v1/auth/reset/password", body={"email": "nobody@mphepo.io"})
+    )
+    known = gateway.handle(
+        _req("POST", "/v1/auth/reset/password", body={"email": EMAIL})
+    )
+    assert unknown.status == known.status == 202
+    assert unknown.body == known.body == {"status": "sent"}
+    # Only the real account got a mail; the unknown address got silence.
+    assert [m["to"] for m in outbox.sent] == [EMAIL]
+    for closer in closers:
+        closer.close()
+
+
+def test_email_new_password_needs_a_mail_sender(tmp_path):
+    app, conn, ident = _app(tmp_path)
+    users = LocalUserStore(":memory:")
+    accounts = LocalAccountService(users, ident.store, ident._signer)
+    # A host with accounts but no mail door: the route is honestly 404.
+    gateway = GatewayApp(
+        app._durable,
+        validator=ident.validator,
+        resolver=ident.resolver,
+        approval_authority=ident.authority,
+        accounts=accounts,
+        config=GatewayConfig(registration_tenant="t1", open_registration=True),
+    )
+    resp = gateway.handle(
+        _req("POST", "/v1/auth/reset/password", body={"email": EMAIL})
+    )
+    assert resp.status == 404
+    conn.close()
+
+
+# --------------------------------------------------------------------------- #
 # The code store itself.                                                       #
 # --------------------------------------------------------------------------- #
 def test_codes_expire_and_are_single_use(tmp_path):

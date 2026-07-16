@@ -1680,10 +1680,16 @@ def _cmd_host(args, out) -> int:
     from .sms import build_sms_sender
 
     mail = build_mail_sender(os.environ)
-    # The phone door: OOLU_SMS=console for development, OOLU_SMS_URL +
-    # OOLU_SMS_KEY + OOLU_SMS_FROM for a real provider; absent, the
-    # phone routes answer 404 and the app hides the button.
-    sms = build_sms_sender(os.environ)
+    # The phone door: OOLU_SMS=console for development; Twilio via
+    # OOLU_TWILIO_ACCOUNT_SID + OOLU_TWILIO_AUTH_TOKEN + OOLU_SMS_FROM;
+    # or a generic JSON provider via OOLU_SMS_URL + OOLU_SMS_KEY +
+    # OOLU_SMS_FROM. Absent, the phone routes answer 404 and the app
+    # hides the button. A half-configured Twilio raises here rather than
+    # silently falling back to a door it cannot speak through.
+    try:
+        sms = build_sms_sender(os.environ)
+    except ValueError as exc:
+        raise _CliError(str(exc)) from exc
     if args.global_service and args.open_registration and mail is None:
         raise _CliError(
             "--global-service with --open-registration needs a mail sender:"

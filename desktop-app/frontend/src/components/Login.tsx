@@ -5,6 +5,7 @@ import {
   api,
   clientConfig,
   confirmReset,
+  emailNewPassword,
   isRemote,
   login,
   phoneStart,
@@ -98,6 +99,23 @@ export function Login({
       onSignedIn();
     } catch (err) {
       setError(err instanceof Error ? err.message : tr("login.googleFailed"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Forgot password, one step: the server generates a new password and
+  // e-mails it. Same 202-either-way answer as the code request, so the
+  // notice never reveals whether the address has an account.
+  async function sendNewPassword() {
+    setError("");
+    setBusy(true);
+    try {
+      await emailNewPassword(username, authTarget());
+      setNotice(tr("login.newPasswordSent"));
+      setView("signin");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : tr("login.registerFailed"));
     } finally {
       setBusy(false);
     }
@@ -394,6 +412,20 @@ export function Login({
                 onClick={onSignedIn}
               >
                 {tr("login.keepTexted")}
+              </button>
+            ) : null}
+            {view === "reset" && !resetSent ? (
+              // The one-step forgot-password: skip the code and have the
+              // server e-mail a fresh password straight to the address.
+              <button
+                type="button"
+                className="linklike"
+                disabled={busy}
+                onClick={() => void sendNewPassword()}
+              >
+                {busy
+                  ? tr("login.sendingNewPassword")
+                  : tr("login.emailNewPassword")}
               </button>
             ) : null}
 

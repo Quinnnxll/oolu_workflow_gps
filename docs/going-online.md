@@ -34,6 +34,9 @@ export OOLU_GOOGLE_CLIENT_SECRET="GOCSPX-..."                    # optional
 export OOLU_MAIL_URL="https://api.resend.com/emails"             # outbound mail
 export OOLU_MAIL_KEY="re_..."                                    #  (Resend-style
 export OOLU_MAIL_FROM="OoLu <hello@oolu.example>"                #   JSON API)
+export OOLU_TWILIO_ACCOUNT_SID="AC..."           # phone sign-up (Twilio SMS)
+export OOLU_TWILIO_AUTH_TOKEN="..."              #  + its auth token
+export OOLU_SMS_FROM="+15550100000"              #  a Twilio number or MG... SID
 export OOLU_PLATFORM_ANTHROPIC_KEY="sk-ant-..."   # the hosted subscription
 export OOLU_PLATFORM_OPENAI_KEY="sk-..."          #  brain's keys (optional)
 export OOLU_STRIPE_KEY="sk_live_..."              # real payments (optional)
@@ -55,12 +58,28 @@ Notes:
   sender configured (the three `OOLU_MAIL_*` variables, or
   `OOLU_MAIL=console` to log mail during development) registration is
   verification-first: the account gets no session until the mailed
-  6-digit code comes back through `POST /v1/auth/verify`, and "Forgot
-  password?" works via `/v1/auth/reset/request` + `/v1/auth/reset/confirm`.
-  Without a mail sender the register route still answers with an
-  immediate token (fine for private testing); a `--global-service` host
-  refuses that combination outright — public registration requires
-  verified e-mail. Leave it off for a private host.
+  6-digit code comes back through `POST /v1/auth/verify`. **Forgot
+  password** has two doors, both live once a mail sender exists: the
+  code flow (`/v1/auth/reset/request` → `/v1/auth/reset/confirm`, where
+  the user picks their own new password), and the one-step flow
+  (`/v1/auth/reset/password`), where the server generates a fresh
+  password, sets it, and e-mails it — the user signs in with it and
+  changes it in Settings. Both answer `202` for any address, so nothing
+  enumerates accounts. Without a mail sender the register route still
+  answers with an immediate token (fine for private testing); a
+  `--global-service` host refuses that combination outright — public
+  registration requires verified e-mail. Leave it off for a private host.
+- **Continue with phone (SMS sign-up).** Set the three `OOLU_TWILIO_*`/
+  `OOLU_SMS_FROM` variables above and the phone door lights up:
+  `/v1/auth/phone/start` texts a code, `/v1/auth/phone/verify` signs an
+  existing number in or creates the account for a new one (a temporary
+  password is texted over). `OOLU_SMS_FROM` is a Twilio number in E.164
+  or a Messaging Service SID (`MG...`). For local testing without a
+  provider, `OOLU_SMS=console` logs the code to the server output. A
+  non-Twilio provider that speaks a plain `{from,to,body}` JSON API with
+  a bearer key can use `OOLU_SMS_URL` + `OOLU_SMS_KEY` + `OOLU_SMS_FROM`
+  instead. Without any SMS sender the phone routes answer `404` and the
+  app hides the button.
 - The gateway already honours `x-forwarded-proto`, so behind TLS the
   Google redirect URI derives as `https://...` automatically.
 - **The hosted subscription brain**: set `OOLU_PLATFORM_ANTHROPIC_KEY`

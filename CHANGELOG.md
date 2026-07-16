@@ -4,6 +4,41 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The doors back in actually open: a Twilio SMS phone sign-up that
+reaches a real provider, and a one-step forgot-password that e-mails a
+fresh password:
+
+- **Phone sign-up now reaches a real provider.** "Registration through
+  phone with an SMS code is not functional" had one honest cause: the
+  generic SMS sender speaks JSON + Bearer, and Twilio — the provider
+  nearly every deployer reaches for — speaks form-encoded + HTTP Basic
+  against a per-account message resource, and 401s the other shape. A
+  first-class `TwilioSmsSender` sends exactly what Twilio expects
+  (`To`/`Body`/`From` or `MessagingServiceSid`, Basic auth from the
+  account SID + token, the derived `Messages.json` endpoint) and
+  surfaces Twilio's own error message when a send is refused.
+  `build_sms_sender` picks it whenever Twilio is configured
+  (`OOLU_TWILIO_ACCOUNT_SID` + `OOLU_TWILIO_AUTH_TOKEN` +
+  `OOLU_SMS_FROM`), asked for (`OOLU_SMS_PROVIDER=twilio`), or pointed
+  at a twilio.com URL — and a half-configured Twilio now fails loudly at
+  startup instead of silently falling back to a door it cannot speak
+  through. The generic JSON door and `OOLU_SMS=console` (dev) stay.
+- **Forgot password, one step: the server e-mails a new password.** A
+  new `POST /v1/auth/reset/password` looks the address up, generates a
+  secure password, sets it, and e-mails it — the user signs in with it
+  and changes it in Settings, no code round-trip. It answers `202` for
+  any address (no account enumeration), only ever resets a real
+  e-mail-linked account, and receiving the new password counts as
+  address verification, so a forgotten-password user is never also
+  stuck behind the verification wall. The existing code-based reset
+  (`/v1/auth/reset/request` → `/confirm`, user picks their own new
+  password) stays alongside it.
+- **The sign-in screen and docs follow.** The reset view gains an
+  "e-mail me a new password" option next to the code flow; the phone
+  door lights up the moment Twilio is configured; and
+  `docs/going-online.md` documents the Twilio variables and both reset
+  doors.
+
 OoLu gets hands: web-capable nodes, files inside the node, and a
 webhook that fires it — the sandbox stays severed:
 

@@ -1145,6 +1145,10 @@ class GatewayApp:
         r.add("POST", "/v1/auth/phone/verify", self._phone_verify, public=True)
         r.add("POST", "/v1/auth/reset/request", self._reset_request, public=True)
         r.add("POST", "/v1/auth/reset/confirm", self._reset_confirm, public=True)
+        # The one-step forgot-password: the server generates a NEW password,
+        # sets it, and e-mails it — no code round-trip. Alongside the
+        # code-based reset above, not instead of it.
+        r.add("POST", "/v1/auth/reset/password", self._reset_email_password, public=True)
         # Sign in with Google (RFC 8252): the app begins and polls; only
         # the browser's leg touches Google. All three answer 404 when no
         # Google client is configured on this host.
@@ -7259,6 +7263,47 @@ class GatewayApp:
         # Inbox control proven: the address counts as verified too.
         self._mail_codes.mark_verified(email, "verify")
         return json_response(200, {"status": "password_changed"})
+
+    def _reset_email_password(self, request, session, params) -> Response:
+        """Forgot password, the one-step way: the server GENERATES a new
+        password, sets it on the account, and e-mails it — the user signs
+        in with it and changes it in Settings. No code to type back.
+
+        Always 202: an unknown address gets the same answer as a known one,
+        so nothing enumerates accounts. Only a real, e-mail-linked account
+        is actually reset, and the temporary password reaches only the
+        inbox that owns the address."""
+        accounts = self._require_accounts()
+        if self._mail is None or self._mail_codes is None:
+            raise GatewayError(404, "not_found", "password reset is not enabled")
+        body = request.body or {}
+        email = str(body.get("email", "")).strip().lower()
+        link = (
+            self._identity_links.lookup("email", email)
+            if self._identity_links is not None and _EMAIL_RE.match(email)
+            else None
+        )
+        if link is not None:
+            # A real, changeable password — texted-password parity for mail.
+            password = secrets.token_urlsafe(9)
+            if accounts.change_password(link["username"], password):
+                self._mail.send(
+                    to=email,
+                    subject="Your new OoLu password",
+                    body=(
+                        f"Your OoLu account {link['username']} has a new "
+                        f"password: {password}\n\n"
+                        "Sign in with it and change it in Settings whenever "
+                        "you like. If you didn't ask for this, change your "
+                        "password now — someone knows your address."
+                    ),
+                )
+                # Receiving the new password proves inbox control, so the
+                # address counts as verified — a forgotten-password user is
+                # never also stuck behind the verification wall.
+                self._mail_codes.mark_verified(email, "verify")
+                self._metrics["password_resets"] += 1
+        return json_response(202, {"status": "sent"})
 
     # ------------------------------------------------------------------ #
     # Sign in with Google.                                                #

@@ -1613,6 +1613,24 @@ const STRINGS: Record<string, Entry> = {
     es: "Enviando código…",
     fr: "Envoi du code…",
   },
+  "login.emailNewPassword": {
+    en: "Or e-mail me a new password",
+    zh: "或者给我发送一个新密码",
+    es: "O enviarme una nueva contraseña por correo",
+    fr: "Ou envoyez-moi un nouveau mot de passe par e-mail",
+  },
+  "login.sendingNewPassword": {
+    en: "Sending a new password…",
+    zh: "正在发送新密码…",
+    es: "Enviando una nueva contraseña…",
+    fr: "Envoi d'un nouveau mot de passe…",
+  },
+  "login.newPasswordSent": {
+    en: "If that address has an account, a new password is on its way — check your inbox, then change it in Settings.",
+    zh: "如果该邮箱有账户，新密码已发出——请查收邮件，然后在设置中修改。",
+    es: "Si esa dirección tiene una cuenta, una nueva contraseña está en camino — revisa tu bandeja y cámbiala en Ajustes.",
+    fr: "Si cette adresse a un compte, un nouveau mot de passe arrive — vérifiez votre boîte, puis changez-le dans les Réglages.",
+  },
   "login.google": {
     en: "Continue with Google",
     zh: "使用 Google 继续",

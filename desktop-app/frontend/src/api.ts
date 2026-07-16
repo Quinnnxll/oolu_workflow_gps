@@ -290,6 +290,21 @@ export async function confirmReset(
   );
 }
 
+// Forgot password, one step: the server generates a new password and e-mails
+// it. Answers 202 whether or not the address exists (no enumeration), so the
+// UI just says "check your inbox" either way.
+export async function emailNewPassword(
+  email: string,
+  server?: string,
+): Promise<void> {
+  await authPost(
+    authBase(server) + "/v1/auth/reset/password",
+    { email },
+    "could not send a new password",
+    "this server does not offer password reset yet",
+  );
+}
+
 // Sign in with Google (RFC 8252): begin on the server, open the consent
 // page in the system browser, then poll finish until the browser leg lands.
 // The session token travels only on this channel — never through the browser.
