@@ -88,12 +88,17 @@ is the function's home:
 - other `src/` files stage into the sandbox beside it, so a node is a
   small program, not one string.
 
-One code path this deliberately does NOT change: the in-run repair loop
-(`node.repair`'s runtime half) verifies and caches its edits under the
-node's key but does not write back to the drawer — the run must not
-mutate files mid-flight. Its healed code shows in run evidence
-(`cache: repaired`); promoting it into `src/main.py` is a human's (or a
-future seated call's) explicit act.
+The in-run repair loop keeps its discipline and completes its circle.
+Mid-run, `node.repair`'s runtime half still touches no files: it edits,
+verifies by execution, and caches — under the failing code's key (so
+the exact broken script heals on replay) and under the healed code's
+own fingerprint (so the promoted file's runs hit a warm cache). The
+healed code rides the outcome evidence (`repaired_script`), and **after
+the run completes** the gateway performs the promotion the seat
+reserved: `src/main.py` is rewritten with the healed code through the
+`node.repair` seat — scope-checked, audited as `model.seat`, exactly
+once per run, and only for the node-function action itself, never for
+some other script the route carried. A failed repair promotes nothing.
 
 ## Seated today / to be seated
 
@@ -102,7 +107,7 @@ future seated call's) explicit act.
 | Node-function author (build doors) | `node.build` | **seated** — writes `src/main.py` via `DeskFiles`, audited |
 | Chat conversation | `chat.turn` | declared — tools already walled by `ChatTools` (tenant/owner walls); listed hands are the contract |
 | Script synthesizer | `plan.synthesize` | declared — no file access by design; sandbox-verified |
-| In-run repair | `node.repair` | declared — cache-level only (see above) |
+| In-run repair | `node.repair` | **seated** — file-silent mid-run; the gateway promotes the healed code into `src/main.py` after a COMPLETED run, via `DeskFiles`, audited |
 | Planning intake / route | `plan.intake` / `plan.route` | declared — read-only by design |
 | LLM rebuild | `plan.rebuild` | declared — consent enforced in `LLMRouteRebuilder` |
 | Representative drafts | `rep.draft` | declared — drafts only; the human's send is the send |

@@ -4,6 +4,30 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The in-run repair loop closes its circle: healed code comes home:
+
+- **A run that heals its own function now writes the fix to the
+  drawer.** When a node's stored function fails at run time, the model
+  edits it, the edit is verified by execution, and — as before — it is
+  cached so the run still succeeds. What was missing: the healed code
+  never reached `src/main.py`, so the drawer (the function's home since
+  the model-seats work) drifted from what actually ran. Now, **after a
+  COMPLETED run**, the gateway promotes the healed code into
+  `src/main.py` through the `node.repair` seat — scope-checked and
+  audited as a `model.seat` event, exactly once per run, and only for
+  the node's OWN function (never some other script the route carried).
+  A failed repair promotes nothing.
+- **The run still never mutates files mid-flight.** The discipline
+  holds: the repair loop touches no files while executing; the healed
+  code rides the outcome evidence (`repaired_script`) and the gateway
+  performs the explicit write afterwards. The runner also caches the
+  heal under the healed code's own fingerprint, so the promoted file's
+  very next run hits a warm cache instead of re-verifying — one heal,
+  one execution.
+- `node.repair` is now a **seated** call in `docs/model-seats.md`, not
+  just a declared one; the migration table and the promotion flow are
+  documented there.
+
 The node's code becomes a file, and every model call gets a seat:
 
 - **The bug: built nodes left no source file.** Building "succeeded" —

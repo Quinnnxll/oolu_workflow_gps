@@ -433,10 +433,19 @@ class NodeScriptRunner:
                     record = classify(result)
                     if record is None:
                         # The repaired function is the node's function now:
-                        # cached under the node's own key, so every later
-                        # run executes the healed code.
+                        # cached under the FAILING code's key (so this exact
+                        # provided script heals on replay) AND under its own
+                        # fingerprint (so once the healed code is promoted
+                        # into the drawer, its runs hit the cache at once).
                         self._cache.store_success(
                             key,
+                            script=edited,
+                            dependencies=deps,
+                            tier="repaired",
+                            model="chat-router",
+                        )
+                        self._cache.store_success(
+                            self.cache_key(node_key, bindings, script=edited),
                             script=edited,
                             dependencies=deps,
                             tier="repaired",
@@ -451,6 +460,12 @@ class NodeScriptRunner:
                                 "cache": "repaired",
                                 "cache_key": key,
                                 "repair_rounds": attempt,
+                                # The healed code itself — the channel the
+                                # gateway promotes into the node's drawer
+                                # (src/main.py) through the node.repair
+                                # seat, AFTER the run: the run itself never
+                                # mutates files mid-flight.
+                                "repaired_script": edited,
                                 "result": result.contract_payload,
                             },
                         )

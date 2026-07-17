@@ -153,7 +153,7 @@ from ..providers.chatmodel import ChatModelRouter
 from ..providers.keyring import PROVIDERS, ModelKeyring
 from ..providers.vault import SecretVault
 from ..representative import pair_exchanges as pair_representative_exchanges
-from ..seats import SEATS, DeskFiles
+from ..seats import SEATS, DeskFiles, SeatViolation
 from ..settings_node import SettingError, SettingsNode
 from ..skills.contract import (
     ContractEdge,
@@ -7693,6 +7693,9 @@ class GatewayApp:
         # Same hook, sibling concern: a completed REBUILT route persists
         # as a real node on the desk before any evidence bookkeeping.
         self._persist_rebuilt_route(state)
+        # And a run that healed its own function promotes the healed code
+        # into the drawer — the node.repair seat's write, after the run.
+        self._promote_repaired_function(state)
         if self._metering is None or self._nodeplace is None:
             return
         if state.phase is Phase.COMPLETED:
@@ -7724,6 +7727,74 @@ class GatewayApp:
         # and error/restricted states are never healed here either way.
         if recorded and outcome == "succeeded" and self._desk is not None:
             self._desk.mark_verified(node_id)
+
+    def _promote_repaired_function(self, state: RunState) -> None:
+        """A COMPLETED run that healed its own function writes the healed
+        code home: ``src/main.py`` in the node's drawer, through the
+        ``node.repair`` seat — scope-checked and audited like every seated
+        model act.
+
+        This is the promotion `docs/model-seats.md` reserved: the RUN
+        never mutates files mid-flight (the repair loop verifies and
+        caches only); the gateway performs the explicit act afterwards,
+        exactly once per run (idempotent on the audit log), and only for
+        the node-function action itself — never for some other script a
+        route happened to carry. From the next run on, the drawer copy —
+        now the healed code — is what resolves, and its cache entry is
+        already warm."""
+        if self._files is None or state.phase is not Phase.COMPLETED:
+            return
+        function = (state.contract.metadata or {}).get("node_function")
+        if not isinstance(function, dict) or not function.get("node_id"):
+            return
+        execution = state.execution
+        if execution is None:
+            return
+        repaired: str | None = None
+        for outcome in execution.action_outcomes:
+            if outcome.status is not ExecutionStatus.SUCCEEDED:
+                continue
+            if outcome.skill_id != str(function.get("skill_id") or ""):
+                continue  # only the node's OWN function promotes its drawer
+            script = (outcome.evidence or {}).get("repaired_script")
+            if script:
+                repaired = str(script)
+        if not repaired:
+            return
+        # Exactly once per run: a resume or retry that lands here again
+        # finds the act already on the log and leaves it there.
+        for record in self._durable.audit.records(run_id=state.run_id):
+            if (
+                record.event_type == "model.seat"
+                and record.payload.get("purpose") == "node.repair"
+            ):
+                return
+        tenant = str(state.contract.metadata.get("tenant_id", ""))
+        node_id = str(function["node_id"])
+        try:
+            desk_files = DeskFiles(
+                self._files,
+                tenant=tenant,
+                node_id=node_id,
+                seat=SEATS["node.repair"],
+            )
+            desk_files.write("src/main.py", repaired)
+        except SeatViolation:  # a seat refusal never breaks the run's answer
+            logging.getLogger("oolu.gateway").warning(
+                "repair promotion refused by the seat", exc_info=True
+            )
+            return
+        self._durable.audit.append(
+            "model.seat",
+            {
+                "purpose": "node.repair",
+                "tenant": tenant,
+                "by": state.contract.submitted_by,
+                "node_id": node_id,
+                "run_id": state.run_id,
+                "written": desk_files.written,
+            },
+        )
 
     def _run_dict(self, state: RunState) -> dict:
         return {

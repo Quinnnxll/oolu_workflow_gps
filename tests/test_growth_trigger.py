@@ -50,16 +50,20 @@ GOAL = "normalize invoice csv files"
 TASK_TURN = '{"say": "On it!", "task": "' + GOAL + '"}'
 
 
-def _rig(tmp_path):
+def _rig(tmp_path, script_exec=None):
     """A gateway whose engine executes ONLY a goal's own node function.
 
     The stub scenario would happily run any plain intent, so the machine
     under test is made honest: a goal with no node function raises the
     same ``cannot_execute`` a real install raises when no capable node
-    reaches it — the exact wall the growth trigger exists to open."""
+    reaches it — the exact wall the growth trigger exists to open.
+
+    ``script_exec`` swaps the recording stub for a real script hand (a
+    ``NodeScriptRunner``) where a test needs actual execute/repair
+    behavior behind the same gateway."""
     ident = _Identity(tmp_path)
     brief, blueprint, executor, grounding = _autonomous()
-    script_exec = _ScriptExec()
+    script_exec = script_exec if script_exec is not None else _ScriptExec()
 
     def build(events):
         return WorkflowOrchestrator(
