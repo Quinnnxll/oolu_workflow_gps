@@ -4,6 +4,30 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Warm bundle tier: the packed tree survives a restart:
+
+- **The in-memory prepared cache was forgetful.** Bundles pack once and
+  reuse across runs — but only within one process. A deploy or restart
+  lost every packed bundle, so the first run of each warm node after a
+  bounce re-read its whole tree from the CAS and re-packed it, exactly
+  the boot cost bundles exist to flatten.
+- **`PreparedBundleCache` is now two-tier** (`docs/node-bundles.md`):
+  a bounded in-memory LRU in front of a bounded on-disk **warm tier**
+  (`WarmBundleTier`) of packed tars under the data dir. A miss in both
+  reads the manifest and blobs and packs once, then writes back up both
+  tiers; a node that ran before a restart stages warm on its very first
+  run after it — no CAS re-read, no re-pack. Resolution is memory →
+  disk → CAS, and the hit counters (`hits`, `warm_hits`, `misses`) tell
+  the three apart.
+- **The warm tier is safe by construction.** Each tar is self-verifying:
+  its `bundle_id` fixes the tree it must contain, so a truncated or
+  tampered file is detected on read and re-prepared, never trusted.
+  Writes are atomic (a reader never sees a partial tar), and the
+  directory is bounded and evicted least-recently-used, so it never
+  grows without limit. The CAS is always the durable truth — a corrupt
+  or evicted warm tar costs one re-pack, never correctness. Budget:
+  `OOLU_BUNDLE_CACHE_MB` (default 1024 MiB; `0` disables the disk tier).
+
 Node bundles: boot speed and idle efficiency at codebase scale:
 
 - **The scaling problem.** A node grew from one `src/main.py` into a

@@ -27,6 +27,7 @@ from oolu.runtime.bundle import (
     BundleResolver,
     BundleStore,
     PreparedBundleCache,
+    WarmBundleTier,
     freeze_tree,
     pack_tar,
     unpack_tar,
@@ -156,6 +157,94 @@ def test_an_unknown_bundle_resolves_to_none(tmp_path):
     try:
         resolver = BundleResolver(PreparedBundleCache(store))
         assert resolver("deadbeef" * 8) is None
+    finally:
+        conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# The warm tier: the packed tar survives the process.                          #
+# --------------------------------------------------------------------------- #
+def test_the_warm_tier_survives_a_restart(tmp_path):
+    conn, store = _store(tmp_path)
+    try:
+        bundle_id = store.freeze({"a.py": "A\n", "pkg/b.py": "B\n"}).bundle_id
+        warm_dir = tmp_path / "warm"
+
+        # First process: cold everywhere -> packs from the CAS, warms disk.
+        cache1 = PreparedBundleCache(store, warm=WarmBundleTier(warm_dir))
+        assert cache1.get(bundle_id) is not None
+        assert cache1.misses == 1 and cache1.warm_hits == 0
+
+        # A restart: a brand-new cache with an empty memory tier over the
+        # SAME disk dir stages warm on the very first get — no CAS re-pack.
+        cache2 = PreparedBundleCache(store, warm=WarmBundleTier(warm_dir))
+        prepared = cache2.get(bundle_id)
+        assert prepared is not None
+        assert cache2.warm_hits == 1 and cache2.misses == 0
+        assert set(unpack_tar(prepared.tar)) == {"a.py", "pkg/b.py"}
+    finally:
+        conn.close()
+
+
+def test_memory_beats_disk_beats_cas(tmp_path):
+    conn, store = _store(tmp_path)
+    try:
+        bundle_id = store.freeze({"x.py": "X\n"}).bundle_id
+        cache = PreparedBundleCache(store, warm=WarmBundleTier(tmp_path / "warm"))
+        cache.get(bundle_id)  # miss -> CAS, warms both tiers
+        cache.get(bundle_id)  # memory hit
+        cache.get(bundle_id)  # memory hit
+        assert (cache.hits, cache.warm_hits, cache.misses) == (2, 0, 1)
+    finally:
+        conn.close()
+
+
+def test_a_corrupt_warm_tar_is_detected_and_repacked(tmp_path):
+    conn, store = _store(tmp_path)
+    try:
+        bundle_id = store.freeze({"a.py": "A\n"}).bundle_id
+        warm = WarmBundleTier(tmp_path / "warm")
+        warm.put(bundle_id, store.prepare(bundle_id).tar)
+        # Bit-rot: overwrite the warm tar with a lie about its own contents.
+        target = warm._path(bundle_id)
+        target.write_bytes(pack_tar({"a.py": b"TAMPERED\n"}))
+        # The tier re-hashes and refuses the mismatch (returns a miss and
+        # deletes it); the two-tier cache then re-packs from the CAS.
+        assert warm.get(bundle_id) is None
+        assert not target.exists()
+        prepared = PreparedBundleCache(store, warm=warm).get(bundle_id)
+        assert unpack_tar(prepared.tar) == {"a.py": b"A\n"}
+    finally:
+        conn.close()
+
+
+def test_the_warm_tier_evicts_to_its_disk_budget(tmp_path):
+    conn, store = _store(tmp_path)
+    try:
+        ids = [store.freeze({f"f{i}.py": "x" * 4000}).bundle_id for i in range(4)]
+        unit = len(store.prepare(ids[0]).tar)
+        warm = WarmBundleTier(tmp_path / "warm", max_bytes=2 * unit)
+        for bundle_id in ids:
+            warm.put(bundle_id, store.prepare(bundle_id).tar)
+        # The budget holds ~two tars; the directory never exceeds it.
+        assert warm.resident_bytes <= 2 * unit
+        # The most-recently written survive; the oldest were evicted.
+        assert warm.get(ids[-1]) is not None
+        assert warm.get(ids[0]) is None
+    finally:
+        conn.close()
+
+
+def test_the_disk_tier_can_be_turned_off(tmp_path):
+    conn, store = _store(tmp_path)
+    try:
+        bundle_id = store.freeze({"a.py": "A\n"}).bundle_id
+        cache = PreparedBundleCache(store, warm=None)  # memory only
+        assert cache.get(bundle_id) is not None
+        # A fresh memory-only cache re-packs from the CAS (nothing survived).
+        cache2 = PreparedBundleCache(store, warm=None)
+        cache2.get(bundle_id)
+        assert cache2.misses == 1 and cache2.warm_hits == 0
     finally:
         conn.close()
 

@@ -35,12 +35,18 @@ Three properties fall straight out:
 1. **Ship the reference, not the bytes.** A run carries the 64-char
    `bundle_id` and its small manifest, never the tree's contents, so the
    durable `RunState` stays tiny no matter how large the node is.
-2. **Pack once, reuse across runs.** Materializing a bundle produces a
-   single deterministic tar of the whole tree; that tar is cached by
-   `bundle_id` in a bounded, idle-evictable LRU (`PreparedBundleCache`).
-   The first run of a node packs its tree once; every later run of the
-   same unchanged node reuses the packed archive with no CAS read and no
-   re-pack.
+2. **Pack once, reuse across runs — even across restarts.** Materializing
+   a bundle produces a single deterministic tar of the whole tree, cached
+   by `bundle_id` in a two-tier `PreparedBundleCache`: a bounded in-memory
+   LRU, and — behind it — a bounded on-disk **warm tier**
+   (`WarmBundleTier`) of packed tars that outlive the process. The first
+   run of a node packs its tree once; every later run of the same
+   unchanged node reuses the packed archive with no CAS read and no
+   re-pack, and a node that ran before a deploy or restart stages warm on
+   its very first run *after* it, instead of re-reading its whole tree
+   from the CAS. Each warm tar is self-verifying — its `bundle_id` fixes
+   the tree it must contain, so a truncated or tampered file is caught on
+   read and simply re-prepared.
 3. **Stage in one operation.** The sandbox extracts the whole tree in a
    single archive extraction — one container `exec`, not one per file.
    Staging cost no longer grows with the file count. This one-shot
@@ -65,9 +71,11 @@ build / repair  ──►  drawer  ──►  freeze  ──►  ship id  ──
   or cached.
 - **Resolve** happens in the script runner (`NodeScriptRunner`): an
   action carrying a `bundle` id is resolved through a `BundleResolver`
-  (cache-first) to a `PreparedBundle` — the packed tar — once per run,
-  and handed to every backend attempt (cached replay, provided, repaired,
-  resynthesized) alongside the script.
+  (cache-first: memory → disk → CAS) to a `PreparedBundle` — the packed
+  tar — once per run, and handed to every backend attempt (cached replay,
+  provided, repaired, resynthesized) alongside the script. The warm tier's
+  disk budget is `OOLU_BUNDLE_CACHE_MB` (default 1024 MiB; `0` disables the
+  disk tier and keeps memory only).
 - **Stage** happens in the backend (`LocalDockerBackend` /
   `SubprocessBackend`): the harness pair and any inline files pack into
   one tar and extract in one step; the bundle tar extracts in one more.
@@ -87,10 +95,10 @@ code, never a new trust path:
   verified by execution.
 - The `bundle_id` joins the script cache key, so an edited tree (a new
   id) re-verifies rather than replaying against a tree it never ran with.
-- The durable truth is always the CAS. The prepared cache is a pure
-  accelerator: an eviction costs the next run one re-pack, never
-  correctness, so a busy host with thousands of nodes bounds its memory
-  freely.
+- The durable truth is always the CAS. Both tiers of the prepared cache
+  are pure accelerators: an eviction (or a corrupt warm tar) costs the
+  next run one re-pack, never correctness, so a busy host with thousands
+  of nodes bounds both its memory and its disk cache freely.
 
 ## Ceilings
 

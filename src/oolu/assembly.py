@@ -327,6 +327,21 @@ def build_intake_model(
     )
 
 
+def _bundle_cache_mb() -> int:
+    """The warm bundle tier's disk budget in MiB (``OOLU_BUNDLE_CACHE_MB``,
+    default 1024; 0 disables the disk tier). A bad value falls back to the
+    default rather than failing the boot."""
+    import os as _os
+
+    raw = _os.environ.get("OOLU_BUNDLE_CACHE_MB", "").strip()
+    if not raw:
+        return 1024
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 1024
+
+
 def blob_store_from_env(data_dir: str | Path, env: dict | None = None):
     """Where the blob layer lives: Cloudflare R2 / S3 when the bucket is
     named in the environment, the local filesystem otherwise. One
@@ -850,10 +865,27 @@ def build_host_runtime(
     # freezes a node's src/ tree and ships its id) and the script runner
     # (which resolves that id to one packed archive, cache-first). A node's
     # codebase is frozen once and re-staged near-instantly forever after.
-    from .runtime.bundle import BundleResolver, BundleStore, PreparedBundleCache
+    from .runtime.bundle import (
+        BundleResolver,
+        BundleStore,
+        PreparedBundleCache,
+        WarmBundleTier,
+    )
 
     bundle_store = BundleStore(conn, blob_store_from_env(data))
-    bundle_resolver = BundleResolver(PreparedBundleCache(bundle_store))
+    # The warm tier: packed tars on disk under the data dir, so a node that
+    # ran before a restart stages warm on its first run after it (no CAS
+    # re-read, no re-pack). Bounded by OOLU_BUNDLE_CACHE_MB (default 1 GiB);
+    # 0 turns the disk tier off (memory only).
+    _cache_mb = _bundle_cache_mb()
+    warm = (
+        WarmBundleTier(data / "bundle-cache", max_bytes=_cache_mb * 1024 * 1024)
+        if _cache_mb > 0
+        else None
+    )
+    bundle_resolver = BundleResolver(
+        PreparedBundleCache(bundle_store, warm=warm)
+    )
     if require_isolation and settings.backend.kind != "docker":
         logging.getLogger(__name__).warning(
             "public host without an isolation backend (backend.kind=%s): "

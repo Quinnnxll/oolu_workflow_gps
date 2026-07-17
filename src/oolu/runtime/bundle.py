@@ -291,27 +291,143 @@ class BundleStore:
 
 
 # --------------------------------------------------------------------------- #
-# The prepared cache — pack once, reuse across runs, evict when idle.          #
+# The warm tier - packed tars on disk, surviving restart.                       #
 # --------------------------------------------------------------------------- #
-class PreparedBundleCache:
-    """A bounded, in-memory LRU of packed bundles, keyed by ``bundle_id``.
+class WarmBundleTier:
+    """A bounded, on-disk store of packed bundle tars, keyed by ``bundle_id``.
 
-    The boot-speed win for repeated runs: the first run of a node packs its
-    tree once and lands it here; every later run of the SAME (unchanged)
-    node reuses the packed tar with no CAS read and no re-pack. Bounded by
-    total packed bytes and evicted least-recently-used, so a busy host with
-    thousands of nodes never grows the cache without limit — the durable
-    truth is always the CAS, so an eviction only costs the next run one
-    re-pack, never correctness.
+    The in-memory tier is fast but forgetful: a restart or a deploy loses
+    every packed bundle, so the first run of each node after a bounce
+    re-reads the whole tree from the CAS and re-packs it. This tier is the
+    memory the process does not have - packed tars land in a content-
+    addressed directory and outlive the process, so a node that ran before
+    the restart stages warm on its very first run after it.
+
+    Bounded by total bytes and evicted least-recently-used (by file mtime,
+    which every read touches), so the directory never grows without limit.
+    Each tar is self-verifying: its ``bundle_id`` fixes the tree it must
+    contain, so a truncated or tampered file is detected on read and simply
+    re-prepared - the CAS is always the durable truth, the disk tier only
+    an accelerator that can be wrong without ever being unsafe.
     """
 
-    def __init__(self, store: BundleStore, *, max_bytes: int = 256 * 1024 * 1024) -> None:
+    def __init__(self, root, *, max_bytes: int = 1024 * 1024 * 1024) -> None:
+        from pathlib import Path
+
+        self._root = Path(root)
+        self._root.mkdir(parents=True, exist_ok=True)
+        self._max = max_bytes
+
+    def _path(self, bundle_id: str):
+        # Shard by the first two hex chars so one directory never holds a
+        # host's every bundle.
+        return self._root / bundle_id[:2] / f"{bundle_id}.tar"
+
+    def get(self, bundle_id: str) -> bytes | None:
+        path = self._path(bundle_id)
+        try:
+            tar = path.read_bytes()
+        except (FileNotFoundError, NotADirectoryError):
+            return None
+        # Self-verify: the tar must contain exactly the tree the id names.
+        if not _tar_matches_bundle(tar, bundle_id):
+            path.unlink(missing_ok=True)
+            return None
+        _touch(path)  # LRU-on-read
+        return tar
+
+    def put(self, bundle_id: str, tar: bytes) -> None:
+        if len(tar) > self._max:
+            return  # one tar larger than the whole budget is never warmed
+        path = self._path(bundle_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tar.tmp")
+        tmp.write_bytes(tar)
+        tmp.replace(path)  # atomic: a reader never sees a partial tar
+        self._evict_to_budget()
+
+    def _evict_to_budget(self) -> None:
+        files = [p for p in self._root.glob("*/*.tar") if p.is_file()]
+        total = sum(p.stat().st_size for p in files)
+        if total <= self._max:
+            return
+        for path in sorted(files, key=lambda p: p.stat().st_mtime):
+            if total <= self._max:
+                break
+            size = path.stat().st_size
+            path.unlink(missing_ok=True)
+            total -= size
+
+    @property
+    def resident_bytes(self) -> int:
+        return sum(
+            p.stat().st_size for p in self._root.glob("*/*.tar") if p.is_file()
+        )
+
+
+def _touch(path) -> None:
+    import os
+    import time
+
+    try:
+        os.utime(path, (time.time(), time.time()))
+    except OSError:
+        pass
+
+
+def _tar_matches_bundle(tar: bytes, bundle_id: str) -> bool:
+    """True iff ``tar`` unpacks to exactly the tree ``bundle_id`` names -
+    the disk tier's integrity check, so a corrupt warm file is caught and
+    re-prepared instead of trusted."""
+    try:
+        tree = unpack_tar(tar)
+    except Exception:  # noqa: BLE001 - an unreadable tar is simply a miss
+        return False
+    entries = [
+        BundleEntry(path=path, sha256=hashlib.sha256(data).hexdigest(), size=len(data))
+        for path, data in tree.items()
+    ]
+    recomputed = hashlib.sha256(
+        _canonical_manifest(entries).encode("utf-8")
+    ).hexdigest()
+    return recomputed == bundle_id
+
+
+# --------------------------------------------------------------------------- #
+# The prepared cache - pack once, reuse across runs, evict when idle.          #
+# --------------------------------------------------------------------------- #
+class PreparedBundleCache:
+    """A two-tier cache of packed bundles, keyed by ``bundle_id``.
+
+    The boot-speed win for repeated runs, made durable:
+
+    - **Memory** - a bounded in-process LRU: the fastest path, where a hot
+      node stages with no I/O at all.
+    - **Disk** (optional ``warm``) - packed tars that outlive the process,
+      so the first run of a node AFTER a restart still stages warm instead
+      of re-reading its whole tree from the CAS.
+    - **CAS** - the durable truth. A miss in both tiers reads the manifest
+      and blobs and packs the tar once, then writes it back UP both tiers.
+
+    Every tier is bounded and freely evictable: an eviction only costs the
+    next run one re-pack, never correctness.
+    """
+
+    def __init__(
+        self,
+        store: BundleStore,
+        *,
+        max_bytes: int = 256 * 1024 * 1024,
+        warm: "WarmBundleTier | None" = None,
+    ) -> None:
         self._store = store
         self._max = max_bytes
+        self._warm = warm
         self._entries: OrderedDict[str, PreparedBundle] = OrderedDict()
         self._bytes = 0
-        self.hits = 0
-        self.misses = 0
+        self.hits = 0  # memory hits
+        self.warm_hits = 0  # disk hits (a restart-surviving reuse)
+        self.misses = 0  # neither tier had it - packed from the CAS
 
     def get(self, bundle_id: str) -> PreparedBundle | None:
         cached = self._entries.get(bundle_id)
@@ -319,15 +435,35 @@ class PreparedBundleCache:
             self._entries.move_to_end(bundle_id)
             self.hits += 1
             return cached
+        # The disk tier: a packed tar that survived the process.
+        if self._warm is not None:
+            tar = self._warm.get(bundle_id)
+            if tar is not None:
+                prepared = self._from_tar(bundle_id, tar)
+                self.warm_hits += 1
+                self._admit(prepared, warm=False)  # already on disk
+                return prepared
         prepared = self._store.prepare(bundle_id)
         self.misses += 1
         if prepared is not None:
-            self._admit(prepared)
+            self._admit(prepared, warm=True)
         return prepared
 
-    def _admit(self, prepared: PreparedBundle) -> None:
+    @staticmethod
+    def _from_tar(bundle_id: str, tar: bytes) -> PreparedBundle:
+        tree = unpack_tar(tar)
+        return PreparedBundle(
+            bundle_id=bundle_id,
+            tar=tar,
+            file_count=len(tree),
+            total_bytes=sum(len(v) for v in tree.values()),
+        )
+
+    def _admit(self, prepared: PreparedBundle, *, warm: bool) -> None:
+        if warm and self._warm is not None:
+            self._warm.put(prepared.bundle_id, prepared.tar)
         # A single bundle larger than the whole budget is served but never
-        # cached — it would evict everything and still not fit.
+        # cached in memory - it would evict everything and still not fit.
         if len(prepared.tar) > self._max:
             return
         self._entries[prepared.bundle_id] = prepared

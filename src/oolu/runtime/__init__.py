@@ -15,6 +15,7 @@ from .bundle import (
     BundleStore,
     PreparedBundle,
     PreparedBundleCache,
+    WarmBundleTier,
     freeze_tree,
 )
 from .script_node import (
@@ -39,6 +40,7 @@ __all__ = [
     "NodeSynthesis",
     "PreparedBundle",
     "PreparedBundleCache",
+    "WarmBundleTier",
     "ResourceLimits",
     "ScriptSynthesizer",
     "StubBackend",
