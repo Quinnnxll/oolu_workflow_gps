@@ -303,6 +303,12 @@ class NodeplaceService:
     def list_own_nodes(self, *, noder_principal: str, tenant_id: str) -> list[Node]:
         return self._store.list_nodes(tenant_id, noder_principal)
 
+    def all_nodes(self) -> list[Node]:
+        """Every node on the install — the field of view a store-wide
+        maintenance pass (e.g. the bundle sweep computing which trees are
+        still live) needs."""
+        return self._store.all_nodes()
+
     def latest_version(self, node_id: str) -> NodeVersion | None:
         """The node's newest version — its current function."""
         versions = self._store.list_versions(node_id)

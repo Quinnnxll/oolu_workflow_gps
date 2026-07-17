@@ -4,6 +4,34 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The sweep: reclaiming the shared bundle store, safely:
+
+- **Idle growth, unbounded until now.** The bundle tiers made boot fast
+  but nothing made idle lean: every edited node re-freezes to a new
+  bundle and leaves the old manifest behind, and blobs for files no node
+  references anymore sit forever. `oolu.runtime.sweep.CasSweep` reclaims
+  those dead frozen trees.
+- **Safe on a SHARED store — the whole point.** The CAS holds bundle
+  blobs, the file drawer's blobs, and CAD exports as one content-
+  addressed store, so identical bytes are one object. Two rules keep the
+  sweep from corrupting a neighbor: (1) its authority is limited to blobs
+  a now-dead bundle introduced — a CAD export or drawer-only upload is
+  never even a candidate; (2) a candidate is deleted only if NO reference
+  source holds it (the live bundles' blobs unioned with the drawer's
+  `all_blob_refs()`), and a blob younger than the grace window, or whose
+  age can't be read, is kept. Live-ness is recomputed from each node's
+  CURRENT `src/` tree (idempotent re-freeze), so a bundle referenced by
+  nothing is genuinely dead. The CAS stays the durable truth — a deletion
+  costs only a re-freeze, so the rule errs toward keeping.
+- **Dry-run first, platform-gated, audited.** `GET /v1/work/bundles/sweep`
+  returns the exact plan (dead manifests, orphan blobs, reclaimable
+  bytes, kept count) touching nothing; `POST` applies it under approve
+  authority — the same gate the hygiene sweep uses — and records
+  `bundles.swept` on the audit log. No CLI, by design: a destructive
+  store operation stays behind the approval flow. A store adapter that
+  can't cheaply enumerate its objects is reported unsweepable rather than
+  swept on a guess.
+
 Mounted bundle tier: mount the tree, stop extracting it per run:
 
 - **The next lever after the warm tier.** The warm tier saved the

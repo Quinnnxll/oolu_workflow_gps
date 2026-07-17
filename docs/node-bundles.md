@@ -137,6 +137,46 @@ code, never a new trust path:
   next run one re-pack, never correctness, so a busy host with thousands
   of nodes bounds both its memory and its disk cache freely.
 
+## The sweep — reclaiming dead trees, safely
+
+The tiers made boot fast; the sweep makes idle lean. Every edited node
+re-freezes to a NEW bundle and leaves the old manifest behind, so without
+a sweep the store grows forever. `oolu.runtime.sweep.CasSweep` reclaims
+the dead trees — and its whole design is dominated by one hazard: the CAS
+is **shared**. Bundle blobs, the file drawer's blobs, and the CAD hand's
+exports are all one content-addressed store, so identical bytes are ONE
+object. A node whose file happens to equal a drawer upload shares that
+blob; deleting it because the bundle died would corrupt the drawer.
+
+Two rules keep the sweep safe:
+
+1. **Authority is limited to what a dead bundle introduced.** The only
+   deletion candidates are blobs a now-dead bundle's manifest referenced.
+   A blob no dead bundle introduced — a CAD export, a durable artifact, a
+   drawer-only upload — is never a candidate, so the sweep cannot touch
+   what it did not create.
+2. **A candidate is deleted only if NO source references it.** Every
+   subsystem that puts bytes in the store declares its live refs through a
+   `ReferenceSource`; the sweep marks their union (the live bundles' blobs
+   plus the drawer's `all_blob_refs()`) and deletes only candidates
+   outside it. A blob whose age it cannot read, or that is younger than
+   the grace window (a freeze or run may be in flight), is kept.
+
+Live-ness is recomputed, not remembered: `_bundle_live_ids` re-freezes
+each node's CURRENT `src/` tree (freezing is idempotent and self-heals a
+missing blob), so a bundle absent from that set is referenced by nothing.
+The CAS remains the durable truth — a deletion only ever costs a
+re-freeze, which is why the rule errs toward keeping.
+
+The sweep is **dry-run first**. `GET /v1/work/bundles/sweep` returns the
+exact plan (`dead_manifests`, `orphan_blobs`, `reclaimed_bytes`,
+`kept_blobs`) touching nothing; `POST` applies it under approve authority
+— the same platform gate the hygiene sweep uses — and records
+`bundles.swept` on the audit log. There is deliberately no CLI: a
+destructive store operation stays behind the approval flow. A store
+adapter that cannot cheaply enumerate its objects (a future S3 backend
+without a listing) is reported unsweepable rather than swept on a guess.
+
 ## Ceilings
 
 A node's tree is programs and data, not a data lake:

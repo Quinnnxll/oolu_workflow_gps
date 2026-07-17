@@ -1129,6 +1129,16 @@ class GatewayApp:
         r.add("GET", "/v1/work/policy", self._node_policy)
         r.add("GET", "/v1/work/hygiene", self._hygiene_inspect)
         r.add("POST", "/v1/work/hygiene/sweep", self._hygiene_sweep)
+        # The bundle sweep: reclaim the content-addressed store's dead
+        # frozen trees. GET is a dry run (the plan); POST applies it under
+        # approve authority, like the hygiene sweep.
+        r.add(
+            "GET",
+            "/v1/work/bundles/sweep",
+            self._bundle_sweep_inspect,
+            requires_permission="hygiene:sweep",
+        )
+        r.add("POST", "/v1/work/bundles/sweep", self._bundle_sweep_apply)
         r.add("POST", "/v1/nodeplace", self._contribute)
         r.add("POST", "/v1/nodeplace/{node_id}/revoke", self._revoke_node)
         r.add("GET", "/v1/listings", self._discover_listings)
@@ -3057,13 +3067,67 @@ class GatewayApp:
         function = _drawer_function(function)
         files = function.get("files")
         if files and self._bundle_store is not None:
-            try:
-                manifest = self._bundle_store.freeze(files)
-            except BundleError:
-                return function  # oversized/unsafe stays inline; backend still guards
-            function = {k: v for k, v in function.items() if k != "files"}
-            function["bundle"] = manifest.bundle_id
+            bundle_id = self._freeze_tree(files)
+            if bundle_id is not None:
+                function = {k: v for k, v in function.items() if k != "files"}
+                function["bundle"] = bundle_id
         return function
+
+    def _freeze_tree(self, files: dict) -> str | None:
+        """Freeze one node's ``src/`` tree (minus main.py) into the bundle
+        store, returning its id — or None when it cannot be a bundle
+        (oversized/unsafe: it stays inline, still sandbox-guarded)."""
+        if not files or self._bundle_store is None:
+            return None
+        try:
+            return self._bundle_store.freeze(files).bundle_id
+        except BundleError:
+            return None
+
+    def _node_src_bundle_tree(self, tenant: str, node_id: str) -> dict:
+        """A node's ``src/`` tree MINUS ``main.py`` (the entry becomes the
+        script, never part of the bundle) — the exact tree the run-time
+        path freezes, so recomputing it yields the same bundle id."""
+        if self._files is None:
+            return {}
+        tree: dict[str, str] = {}
+        for file in self._files.list(tenant=tenant, node_id=node_id):
+            if file.blob_ref:
+                continue
+            folder = file.folder
+            if folder == "src":
+                name = file.name
+            elif folder.startswith("src/"):
+                name = f"{folder[4:]}/{file.name}"
+            else:
+                continue
+            if name == "main.py":
+                continue
+            tree[name] = file.content
+        return tree
+
+    def _bundle_live_ids(self) -> set[str]:
+        """Every bundle id a live node would freeze to right now — the
+        sweep's reachability roots. Recomputed from each node's CURRENT
+        drawer tree (freezing is idempotent and self-heals a missing
+        blob), so a bundle absent here is genuinely referenced by nothing."""
+        live: set[str] = set()
+        if self._nodeplace is None or self._bundle_store is None:
+            return live
+        for node in self._nodeplace.all_nodes():
+            tree = self._node_src_bundle_tree(node.tenant_id, node.node_id)
+            bundle_id = self._freeze_tree(tree)
+            if bundle_id is not None:
+                live.add(bundle_id)
+        return live
+
+    def _drawer_blob_refs(self) -> set[str]:
+        """Every CAS ref the file drawer still holds — the reference source
+        that keeps the sweep from deleting a blob a node happens to share
+        with someone's uploaded file (content addressing makes them one)."""
+        if self._files is None:
+            return set()
+        return self._files.all_blob_refs()
 
     def _node_function_extras(self, session, node_id: str) -> dict:
         """What a node's own function carries beyond its script: the egress
@@ -5967,6 +6031,62 @@ class GatewayApp:
         return json_response(
             200, {"items": [f.model_dump(mode="json") for f in acted]}
         )
+
+    def _bundle_sweep(self):
+        """The configured CAS sweep, or None when the bundle store isn't
+        wired (a minimal install has no frozen trees to reclaim)."""
+        if self._bundle_store is None or self._files is None:
+            return None
+        from ..runtime.sweep import CallableSource, CasSweep
+
+        return CasSweep(
+            self._bundle_store,
+            # The CAS the bundle blobs live in — the same object store the
+            # drawer's blobs use in a real install, so the drawer reference
+            # source is valid against it.
+            self._bundle_store.artifacts,
+            sources=[CallableSource("drawer", self._drawer_blob_refs)],
+            live_bundle_ids=self._bundle_live_ids,
+        )
+
+    def _bundle_sweep_inspect(self, request, session, params) -> Response:
+        """Dry run: exactly what the sweep WOULD reclaim, touching nothing."""
+        sweep = self._bundle_sweep()
+        if sweep is None:
+            raise GatewayError(404, "not_found", "the bundle store is not enabled")
+        return json_response(200, sweep.inspect().as_dict())
+
+    def _bundle_sweep_apply(self, request, session, params) -> Response:
+        """Reclaim the store's dead frozen trees. A platform move — approve
+        authority required, like the hygiene sweep — and the outcome lands
+        in the audit trail."""
+        sweep = self._bundle_sweep()
+        if sweep is None:
+            raise GatewayError(404, "not_found", "the bundle store is not enabled")
+        if self._approval is None:
+            raise GatewayError(404, "not_found", "approval authority is not configured")
+        try:
+            self._approval.approve(
+                session,
+                run_id="bundles:sweep",
+                policy="bundles.sweep",
+                requester_id="",
+                now=request.now or self._clock(),
+            )
+        except AuthorizationError as exc:
+            raise GatewayError(403, "forbidden", str(exc)) from exc
+        plan = sweep.collect()
+        self._durable.audit.append(
+            "bundles.swept",
+            {
+                "run_id": "bundles:sweep",
+                "by": session.principal_id,
+                "dead_manifests": len(plan.dead_manifests),
+                "orphan_blobs": len(plan.orphan_blobs),
+                "reclaimed_bytes": plan.reclaimed_bytes,
+            },
+        )
+        return json_response(200, plan.as_dict())
 
     def _list_own_nodes(self, request, session, params) -> Response:
         nodeplace = self._require_nodeplace()

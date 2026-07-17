@@ -218,6 +218,20 @@ class UserFileStore:
             self._artifacts.delete(doomed.blob_ref)
         return deleted
 
+    def all_blob_refs(self) -> set[str]:
+        """Every CAS ref the drawer holds across all tenants — the live set
+        a shared-store sweep must never delete out from under a file."""
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                "SELECT payload_json FROM user_files"
+            ).fetchall()
+        refs: set[str] = set()
+        for row in rows:
+            ref = UserFile.model_validate_json(row["payload_json"]).blob_ref
+            if ref:
+                refs.add(ref)
+        return refs
+
     def _blob_in_use(self, blob_ref: str) -> bool:
         with self._conn.lock:
             rows = self._conn.db.execute(

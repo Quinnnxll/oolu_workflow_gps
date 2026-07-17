@@ -239,6 +239,12 @@ class BundleStore:
         with self._conn.transaction() as db:
             db.execute(_SCHEMA)
 
+    @property
+    def artifacts(self):
+        """The content-addressed store this bundle store's blobs live in —
+        what a sweep walks to reclaim dead bytes."""
+        return self._artifacts
+
     def freeze(self, files: dict[str, str | bytes]) -> BundleManifest:
         """Freeze a tree, storing any not-yet-stored blobs and the manifest."""
         manifest, blobs = freeze_tree(files)
@@ -267,6 +273,46 @@ class BundleStore:
                 (bundle_id,),
             ).fetchone()
         return BundleManifest.from_json(row["manifest_json"]) if row else None
+
+    def manifests(self):
+        """Every stored manifest with its ``created_at`` string, oldest
+        first — the sweep's worklist for deciding which frozen trees are
+        still reachable."""
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                "SELECT manifest_json, created_at FROM node_bundles"
+                " ORDER BY created_at"
+            ).fetchall()
+        out = []
+        for row in rows:
+            out.append(
+                (BundleManifest.from_json(row["manifest_json"]), row["created_at"])
+            )
+        return out
+
+    def blob_refs_of(self, bundle_ids) -> set[str]:
+        """Every CAS ref (``sha256:...``) the named bundles' manifests
+        reference — the sweep marks these reachable so a live bundle's
+        bytes are never swept."""
+        wanted = set(bundle_ids)
+        refs: set[str] = set()
+        for manifest, _created in self.manifests():
+            if manifest.bundle_id in wanted:
+                for entry in manifest.entries:
+                    refs.add(f"sha256:{entry.sha256}")
+        return refs
+
+    def forget(self, bundle_ids) -> int:
+        """Drop dead manifest rows (the blobs are the CAS sweep's job).
+        Returns how many manifests were removed."""
+        removed = 0
+        with self._conn.transaction() as db:
+            for bundle_id in set(bundle_ids):
+                cursor = db.execute(
+                    "DELETE FROM node_bundles WHERE bundle_id = ?", (bundle_id,)
+                )
+                removed += int(getattr(cursor, "rowcount", 0) or 0)
+        return removed
 
     def materialize(self, manifest: BundleManifest) -> dict[str, bytes]:
         """The tree's bytes, read from the CAS — the slow path a prepared

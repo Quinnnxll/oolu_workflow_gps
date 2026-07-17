@@ -58,6 +58,16 @@ class FilesystemArtifactStore:
         meta.unlink(missing_ok=True)
         return existed
 
+    def refs(self):
+        """Every stored blob as ``(ref, size_bytes, mtime)`` — the walk a
+        reachability sweep needs. Filesystem adapter only; an object-store
+        adapter without cheap enumeration simply doesn't offer this, and
+        the sweep reports blobs as unsupported there instead of guessing."""
+        for blob in sorted(self._root.rglob("*")):
+            if blob.is_file() and blob.suffix not in {".meta", ".tmp"}:
+                stat = blob.stat()
+                yield (f"sha256:{blob.name}", stat.st_size, stat.st_mtime)
+
     def prune(self, *, older_than_seconds: float) -> int:
         """Delete blobs whose last modification is older than the cutoff."""
         cutoff = time.time() - older_than_seconds
