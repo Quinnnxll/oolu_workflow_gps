@@ -342,6 +342,28 @@ def _bundle_cache_mb() -> int:
         return 1024
 
 
+def _materialized_bundle_dir(data: Path):
+    """The mounted bundle tier, when the operator opts in via
+    ``OOLU_BUNDLE_MOUNT`` (truthy). Default OFF: bundles extract per run,
+    the pre-mount behavior, so no existing deployment changes silently. The
+    disk budget is ``OOLU_BUNDLE_MOUNT_MB`` (default 2048 MiB)."""
+    import os as _os
+
+    flag = _os.environ.get("OOLU_BUNDLE_MOUNT", "").strip().lower()
+    if flag not in {"1", "true", "yes", "on"}:
+        return None
+    from .runtime.bundle import MaterializedBundleDir
+
+    raw = _os.environ.get("OOLU_BUNDLE_MOUNT_MB", "").strip()
+    try:
+        mb = max(64, int(raw)) if raw else 2048
+    except ValueError:
+        mb = 2048
+    return MaterializedBundleDir(
+        data / "bundle-mounted", max_bytes=mb * 1024 * 1024
+    )
+
+
 def blob_store_from_env(data_dir: str | Path, env: dict | None = None):
     """Where the blob layer lives: Cloudflare R2 / S3 when the bucket is
     named in the environment, the local filesystem otherwise. One
@@ -439,6 +461,7 @@ def build_script_executor(
     synthesizer=None,  # runtime.ScriptSynthesizer, optional
     environ: dict | None = None,
     bundle_resolver=None,  # runtime.BundleResolver: id -> PreparedBundle
+    materialized_dir=None,  # runtime.MaterializedBundleDir: the mounted tier
 ) -> dict[str, ActionExecutor]:
     """The script hand: run planner-provided or synthesized code through the
     configured isolation backend (Docker when configured; the subprocess
@@ -469,7 +492,11 @@ def build_script_executor(
         )
     )
     runner = NodeScriptRunner(
-        _build_backend(settings.backend, web_fetch=web_hand.request),
+        _build_backend(
+            settings.backend,
+            web_fetch=web_hand.request,
+            materialized_dir=materialized_dir,
+        ),
         LocalScriptCache(cache_path),
         synthesizer=synthesizer,
         pinned_index_url=settings.backend.pinned_index_url,
@@ -886,6 +913,11 @@ def build_host_runtime(
     bundle_resolver = BundleResolver(
         PreparedBundleCache(bundle_store, warm=warm)
     )
+    # The mounted tier (opt-in via OOLU_BUNDLE_MOUNT): materialize each
+    # bundle to a read-only host dir once and stage it by symlink (subprocess)
+    # or read-only bind-mount (Docker), skipping per-run extraction. Default
+    # OFF so existing deployments are untouched until an operator opts in.
+    materialized_dir = _materialized_bundle_dir(data)
     if require_isolation and settings.backend.kind != "docker":
         logging.getLogger(__name__).warning(
             "public host without an isolation backend (backend.kind=%s): "
@@ -905,6 +937,7 @@ def build_host_runtime(
                         _planning_router("plan.synthesize")
                     ),
                     bundle_resolver=bundle_resolver,
+                    materialized_dir=materialized_dir,
                 )
             )
         except Exception as exc:  # noqa: BLE001 - hosts without a script

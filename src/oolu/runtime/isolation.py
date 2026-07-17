@@ -44,7 +44,7 @@ from typing import Iterator
 
 from ..models import ExecutionResult, Phase
 from .backend import BackendError, BackendUnavailable, ExecutionRequest
-from .bundle import pack_tar
+from .bundle import CONTAINER_BUNDLE_ROOT, pack_tar, symlink_stage_cmd
 from .contract import SHIM_MODULE_NAME, parse_stdout, shim_source_path
 from .webhand import CONTAINER_EXCHANGE, EXCHANGE_ENV, GuardedFetch, serve_web
 
@@ -259,6 +259,7 @@ class SubprocessBackend(_TwoPhaseBackend):
         python_executable: str = sys.executable,
         default_index_url: str | None = None,
         web_fetch: GuardedFetch | None = None,
+        materialized_dir=None,  # runtime.bundle.MaterializedBundleDir | None
     ):
         self._python = python_executable
         self._default_index_url = default_index_url
@@ -267,6 +268,11 @@ class SubprocessBackend(_TwoPhaseBackend):
         # = no web hand on this host; a granted run still gets the honest
         # refusal from the shim instead of a hang.
         self._web_fetch = web_fetch
+        # The mounted tier: when set, a bundle is materialized to a
+        # read-only dir once and STAGED BY SYMLINK into the workspace,
+        # skipping the per-run tar extraction. None -> unpack the tar
+        # inline, as before.
+        self._materialized_dir = materialized_dir
 
     @property
     def name(self) -> str:
@@ -289,16 +295,32 @@ class SubprocessBackend(_TwoPhaseBackend):
                 target = Path(d, name)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(data)
-            # A large tree rides as one pre-packed bundle tar — unpacked in
-            # a single pass here, no per-file cost.
+            # A large tree rides as one pre-packed bundle tar. With the
+            # mounted tier, materialize it ONCE to a read-only dir and
+            # symlink its entries in (no byte copy); otherwise unpack the
+            # tar inline, a single pass.
             if request.bundle is not None:
-                _unpack_into(Path(d), request.bundle.tar)
+                self._stage_bundle(Path(d), request.bundle)
             os.makedirs(os.path.join(d, "site-packages"), exist_ok=True)
             if request.web is not None and self._web_fetch is not None:
                 os.makedirs(self._exchange_dir(d), exist_ok=True)
             yield d
         finally:
             shutil.rmtree(d, ignore_errors=True)
+
+    def _stage_bundle(self, workspace: Path, bundle) -> None:
+        """Stage a bundle into the workspace: symlink from the mounted,
+        read-only materialized dir when one is configured (no byte copy);
+        otherwise unpack the tar inline."""
+        if self._materialized_dir is None:
+            _unpack_into(workspace, bundle.tar)
+            return
+        source = self._materialized_dir.ensure(bundle.bundle_id, bundle.tar)
+        for name in self._materialized_dir.top_level(bundle.bundle_id):
+            link = workspace / name
+            if link.exists() or link.is_symlink():
+                link.unlink()
+            link.symlink_to(source / name)
 
     @staticmethod
     def _exchange_dir(ws: object) -> str:
@@ -376,10 +398,12 @@ class SubprocessBackend(_TwoPhaseBackend):
 # --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
 class _DockerWorkspace:
-    """One run's live container plus its (optional) web-exchange mount."""
+    """One run's live container plus its (optional) web-exchange mount and
+    read-only bundle mount path (inside the container)."""
 
     container: object
     exchange_host: str | None = None
+    bundle_mount: str | None = None
 
 
 class LocalDockerBackend(_TwoPhaseBackend):
@@ -401,6 +425,7 @@ class LocalDockerBackend(_TwoPhaseBackend):
         default_index_url: str | None = None,
         run_as_user: str | None = None,
         web_fetch: GuardedFetch | None = None,
+        materialized_dir=None,  # runtime.bundle.MaterializedBundleDir | None
     ):
         try:
             import docker  # lazy: the package must not hard-require docker to import
@@ -422,6 +447,12 @@ class LocalDockerBackend(_TwoPhaseBackend):
         # container itself NEVER gets a network; a web grant only mounts
         # the file exchange this hand serves.
         self._web_fetch = web_fetch
+        # The mounted tier: when set, a bundle is materialized to a host
+        # directory once and bind-mounted READ-ONLY into the container,
+        # then symlinked into /sandbox — no per-run tar extraction, and the
+        # OS page cache keeps a hot bundle resident across containers. None
+        # -> extract the bundle tar per run, as before.
+        self._materialized_dir = materialized_dir
 
     @property
     def name(self) -> str:
@@ -467,6 +498,18 @@ class LocalDockerBackend(_TwoPhaseBackend):
             os.chmod(exchange_host, 0o777)
             volumes[exchange_host] = {"bind": CONTAINER_EXCHANGE, "mode": "rw"}
 
+        # The mounted bundle tier: materialize the tree to a host dir once
+        # and bind-mount it READ-ONLY. Never a network, so severance below
+        # is untouched; read-only, so the tree stays immutable. Staged into
+        # /sandbox by symlink after the container is up.
+        bundle_mount: str | None = None
+        if request.bundle is not None and self._materialized_dir is not None:
+            source = self._materialized_dir.ensure(
+                request.bundle.bundle_id, request.bundle.tar
+            )
+            bundle_mount = f"{CONTAINER_BUNDLE_ROOT}/{request.bundle.bundle_id}"
+            volumes[str(source)] = {"bind": bundle_mount, "mode": "ro"}
+
         try:
             container = self._client.containers.run(
                 image=self._image,
@@ -476,6 +519,9 @@ class LocalDockerBackend(_TwoPhaseBackend):
                 tmpfs={
                     "/sandbox": f"size={limits.writable_scratch_mb}m,exec,mode=1777"
                 },
+                # The web-exchange and read-only bundle bind mounts. Empty
+                # when neither is in play — the default hostile container.
+                volumes=volumes or None,
                 mem_limit=f"{limits.memory_mb}m",
                 nano_cpus=int(limits.cpus * 1_000_000_000),
                 pids_limit=limits.pids_limit,
@@ -499,8 +545,12 @@ class LocalDockerBackend(_TwoPhaseBackend):
             raise BackendError(f"failed to start sandbox container: {exc}") from exc
 
         try:
-            self._put_files(container, request)
-            yield _DockerWorkspace(container=container, exchange_host=exchange_host)
+            self._put_files(container, request, bundle_mount=bundle_mount)
+            yield _DockerWorkspace(
+                container=container,
+                exchange_host=exchange_host,
+                bundle_mount=bundle_mount,
+            )
         finally:
             try:
                 container.remove(force=True)  # ephemeral: one container, one intent
@@ -511,7 +561,13 @@ class LocalDockerBackend(_TwoPhaseBackend):
             if exchange_host:
                 shutil.rmtree(exchange_host, ignore_errors=True)
 
-    def _put_files(self, container: object, request: ExecutionRequest) -> None:
+    def _put_files(
+        self,
+        container: object,
+        request: ExecutionRequest,
+        *,
+        bundle_mount: str | None = None,
+    ) -> None:
         # NOTE: we cannot use Docker's put_archive here. With a read-only rootfs the
         # daemon refuses the copy API ("container rootfs is marked read-only") even
         # when the destination is the writable /sandbox tmpfs. So we stage files
@@ -539,10 +595,19 @@ class LocalDockerBackend(_TwoPhaseBackend):
             **_staged_files(request),
         }
         self._extract_archive(container, pack_tar(harness))
-        # A large tree rides as a pre-packed bundle tar — extracted in this
-        # ONE more exec regardless of how many files it holds.
+        # The node's tree. With the mounted tier it is bind-mounted
+        # read-only and symlinked into /sandbox in ONE exec — no byte copy,
+        # and the OS page cache keeps it hot across containers. Otherwise a
+        # pre-packed bundle tar is extracted in this one more exec.
         bundle = request.bundle
-        if bundle is not None:
+        if bundle is None:
+            return
+        if bundle_mount is not None:
+            entries = self._materialized_dir.top_level(bundle.bundle_id)
+            self._stage_exec(
+                container, symlink_stage_cmd(entries, bundle_mount)
+            )
+        else:
             self._extract_archive(container, bundle.tar)
 
     def _extract_archive(self, container: object, archive: bytes) -> None:

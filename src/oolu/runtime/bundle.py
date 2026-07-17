@@ -478,6 +478,177 @@ class PreparedBundleCache:
         return self._bytes
 
 
+# --------------------------------------------------------------------------- #
+# The mounted tier — an extracted, read-only tree the sandbox mounts.          #
+# --------------------------------------------------------------------------- #
+# Where the sandbox symlinks a mounted bundle's entries from (Docker mount).
+CONTAINER_BUNDLE_ROOT = "/opt/oolu/bundles"
+
+
+class MaterializedBundleDir:
+    """A bundle extracted ONCE to a read-only directory, keyed by id.
+
+    The warm tier saves the pack; this saves the *unpack*. A large tree
+    still costs one archive extraction per run when a backend unpacks its
+    tar into the workspace. Materializing extracts the tree exactly once
+    into ``<root>/<bundle_id>/`` — read-only, content-addressed, atomic —
+    and every later run STAGES it by symlink (subprocess) or read-only
+    bind-mount (Docker), touching no bytes. The OS page cache then keeps a
+    hot bundle resident across ephemeral containers: the boot cost of a
+    professional-library node stops being paid per run at all.
+
+    Immutable by construction: files land ``0444`` and directories
+    ``0555``, so a sandboxed script that writes THROUGH a staged symlink
+    hits a read-only file and fails — a bundle is an input, never a
+    scratchpad. Presence is readiness: a tree only appears at its final
+    path via an atomic rename after full extraction, so a run never sees a
+    half-materialized dir. Bounded and evicted least-recently-used, and a
+    dir touched within a short grace window is spared (it may back a live
+    run); the CAS is the durable truth, so an eviction only costs one
+    re-extract.
+    """
+
+    def __init__(
+        self,
+        root,
+        *,
+        max_bytes: int = 2 * 1024 * 1024 * 1024,
+        # Comfortably above the install + execute wall ceilings so a dir
+        # backing a live run is never evicted out from under it (eviction
+        # only fires on a new materialize under budget pressure anyway).
+        grace_seconds: float = 900.0,
+    ) -> None:
+        from pathlib import Path
+
+        self._root = Path(root)
+        self._root.mkdir(parents=True, exist_ok=True)
+        self._max = max_bytes
+        self._grace = grace_seconds
+
+    def path_for(self, bundle_id: str):
+        return self._root / bundle_id
+
+    def ensure(self, bundle_id: str, tar: bytes):
+        """The tree's read-only directory, extracting it once if needed."""
+        import tempfile
+
+        final = self._root / bundle_id
+        if final.is_dir():
+            _touch(final)  # LRU-on-use
+            return final
+        staging = tempfile.mkdtemp(prefix=".materialize-", dir=self._root)
+        try:
+            _extract_readonly(tar, staging)
+            try:
+                import os
+
+                os.rename(staging, final)  # atomic publish
+            except OSError:
+                # A concurrent materialize won the race: use the winner,
+                # discard ours.
+                _rmtree_readonly(staging)
+                if not final.is_dir():
+                    raise
+        except BaseException:
+            _rmtree_readonly(staging)
+            raise
+        _touch(final)
+        self._evict_to_budget(keep=bundle_id)
+        return final
+
+    def top_level(self, bundle_id: str) -> list[str]:
+        """The tree's top-level entries — what a backend symlinks in."""
+        import os
+
+        target = self._root / bundle_id
+        return sorted(os.listdir(target)) if target.is_dir() else []
+
+    def _evict_to_budget(self, *, keep: str) -> None:
+        import time
+
+        dirs = [p for p in self._root.iterdir() if p.is_dir()]
+        sized = [(p, _dir_size(p), p.stat().st_mtime) for p in dirs]
+        total = sum(size for _, size, _ in sized)
+        if total <= self._max:
+            return
+        now = time.time()
+        for path, size, mtime in sorted(sized, key=lambda t: t[2]):
+            if total <= self._max:
+                break
+            if path.name == keep or (now - mtime) < self._grace:
+                continue  # never the just-made one, nor a possibly-live one
+            _rmtree_readonly(path)
+            total -= size
+
+    @property
+    def resident_bytes(self) -> int:
+        return sum(_dir_size(p) for p in self._root.iterdir() if p.is_dir())
+
+
+def _extract_readonly(tar: bytes, dest: str) -> None:
+    """Extract a bundle tar under ``dest`` (escape-checked), then lock the
+    tree read-only so a staged symlink into it can never be written back."""
+    import os
+    from pathlib import Path
+
+    base = Path(dest).resolve()
+    for path, data in unpack_tar(tar).items():
+        target = (base / path).resolve()
+        if base not in target.parents:
+            raise BundleError(f"bundle path escapes the materialized dir: {path!r}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+    # Files 0444, dirs 0555 — read + traverse, never write.
+    for dirpath, dirnames, filenames in os.walk(base):
+        for name in filenames:
+            os.chmod(os.path.join(dirpath, name), 0o444)
+        for name in dirnames:
+            os.chmod(os.path.join(dirpath, name), 0o555)
+    os.chmod(base, 0o555)
+
+
+def _rmtree_readonly(path) -> None:
+    import shutil
+    import stat
+
+    def _chmod_and_retry(func, p, _exc):
+        import os
+
+        os.chmod(p, stat.S_IWUSR | stat.S_IRUSR | stat.S_IXUSR)
+        func(p)
+
+    shutil.rmtree(path, onerror=_chmod_and_retry)
+
+
+def _dir_size(path) -> int:
+    import os
+
+    total = 0
+    for dirpath, _dirnames, filenames in os.walk(path):
+        for name in filenames:
+            try:
+                total += os.path.getsize(os.path.join(dirpath, name))
+            except OSError:
+                pass
+    return total
+
+
+def symlink_stage_cmd(entries: list[str], mount_path: str) -> list[str]:
+    """The single container exec that symlinks a mounted bundle's top-level
+    entries into ``/sandbox`` (the CWD) — so imports and relative reads
+    resolve transparently into the read-only mount, with no byte copy.
+
+    A pure function of its inputs so the Docker wiring it drives is unit-
+    testable without a daemon."""
+    lines = []
+    for name in sorted(entries):
+        # Each name is a bundle top-level entry — already escape-checked at
+        # freeze and extraction; single-quote it against shell surprises.
+        safe = "'" + name.replace("'", "'\\''") + "'"
+        lines.append(f"ln -sfn {mount_path}/{safe} /sandbox/{safe}")
+    return ["sh", "-c", "; ".join(lines) if lines else "true"]
+
+
 @dataclass(frozen=True, slots=True)
 class BundleResolver:
     """The seam the script runner holds: id -> PreparedBundle, cache-first.

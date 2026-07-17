@@ -4,6 +4,41 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Mounted bundle tier: mount the tree, stop extracting it per run:
+
+- **The next lever after the warm tier.** The warm tier saved the
+  *pack*; a large tree still cost one archive *extraction* per run when a
+  backend unpacked its tar into the sandbox. The optional mounted tier
+  (`MaterializedBundleDir`, opt-in via `OOLU_BUNDLE_MOUNT`, default off)
+  removes that too: a bundle is extracted ONCE to a read-only,
+  content-addressed host directory (`<data>/bundle-mounted/<bundle_id>/`,
+  `0444` files / `0555` dirs, published by atomic rename) and then staged
+  by *reference* — a read-only bind-mount in Docker, a symlink in the dev
+  backend. A run copies no bytes at all, and the OS page cache keeps a
+  hot bundle resident across ephemeral containers, so the boot cost of a
+  professional-library node stops being paid per run entirely.
+- **Docker: kernel-enforced and severance-safe.** The materialized dir
+  bind-mounts read-only at `/opt/oolu/bundles/<bundle_id>`, and one
+  `exec` symlinks its top-level entries into `/sandbox` so `import pkg`
+  and `open('data.csv')` resolve transparently into the mount. The
+  read-only mount is kernel-enforced (even root in the container cannot
+  write back through a symlink — the tree is immutable), and a mounted
+  directory is not a network, so the Phase-B network severance and its
+  verification are untouched. `symlink_stage_cmd` is a pure function,
+  unit-tested without a daemon.
+- **A latent Docker bug fixed on the way.** `containers.run` was never
+  passed its computed `volumes`, so the web-hand exchange bind-mount was
+  silently dropped (undetected: the Docker backend has no daemon-backed
+  tests here). Both the exchange and the new bundle mount now mount
+  correctly.
+- **Bounded and safe to evict.** The materialized dir is capped
+  (`OOLU_BUNDLE_MOUNT_MB`, default 2048 MiB) and evicted
+  least-recently-used, with a grace window (default 900 s, above the
+  install + execute ceilings) that never evicts a directory that may
+  back a live run. The CAS stays the durable truth: an eviction costs
+  one re-extract, never correctness. The tier is default-off, so no
+  existing deployment changes until an operator opts in.
+
 Warm bundle tier: the packed tree survives a restart:
 
 - **The in-memory prepared cache was forgetful.** Bundles pack once and

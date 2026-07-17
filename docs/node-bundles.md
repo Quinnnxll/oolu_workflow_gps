@@ -52,6 +52,14 @@ Three properties fall straight out:
    Staging cost no longer grows with the file count. This one-shot
    staging applies even to small inline trees: N per-file round-trips
    became one tar.
+4. **Or don't extract at all — mount it.** With the optional **mounted
+   tier** (`MaterializedBundleDir`, opt-in via `OOLU_BUNDLE_MOUNT`), a
+   bundle is extracted ONCE to a read-only host directory keyed by
+   `bundle_id` and then staged by *reference*: a read-only bind-mount in
+   Docker, a symlink in the dev backend. A run copies no bytes at all,
+   and the OS page cache keeps a hot bundle resident across ephemeral
+   containers — the boot cost of a professional-library node stops being
+   paid per run entirely.
 
 ## The path end to end
 
@@ -80,7 +88,36 @@ build / repair  ──►  drawer  ──►  freeze  ──►  ship id  ──
   `SubprocessBackend`): the harness pair and any inline files pack into
   one tar and extract in one step; the bundle tar extracts in one more.
   Every member is re-checked against the sandbox root — belt-and-braces
-  over the freeze-time path check.
+  over the freeze-time path check. With the mounted tier on, the bundle
+  is instead materialized once and staged by reference (mount + symlink),
+  extracting nothing per run.
+
+## The mounted tier — mount the tree, don't re-extract it
+
+`OOLU_BUNDLE_MOUNT` (truthy; default off) turns on `MaterializedBundleDir`:
+each bundle is extracted exactly once into `<data>/bundle-mounted/<bundle_id>/`
+— read-only (`0444` files, `0555` dirs), content-addressed, published by an
+atomic rename so a run never sees a half-materialized tree. From then on:
+
+- **Docker** bind-mounts that directory **read-only** at
+  `/opt/oolu/bundles/<bundle_id>` and, in one `exec`, symlinks its
+  top-level entries into `/sandbox` (the CWD) — so `import pkg` and
+  `open('data.csv')` resolve transparently into the mount with no byte
+  copy. The read-only bind mount is kernel-enforced, so even a root
+  process in the container cannot write back through a symlink; the tree
+  is immutable, and severance is untouched (a directory is not a
+  network).
+- **The subprocess dev backend** symlinks the same way from the
+  materialized dir. This is a convenience for the dev/fallback path;
+  its `0444` files bind a non-root writer, but — like everything about
+  the subprocess backend — it is **not** an isolation boundary. The
+  kernel-enforced guarantee is the Docker read-only mount.
+
+The materialized dir is bounded (`OOLU_BUNDLE_MOUNT_MB`, default 2048 MiB)
+and evicted least-recently-used, with a grace window (default 900 s, well
+above the install + execute ceilings) that never evicts a directory that
+may back a live run. The CAS remains the durable truth: an eviction costs
+one re-extract, never correctness.
 
 ## What does not change
 

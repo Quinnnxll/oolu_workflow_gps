@@ -192,10 +192,13 @@ def build_oolu(
     )
 
 
-def _build_backend(bs: BackendSettings, *, web_fetch=None):
+def _build_backend(bs: BackendSettings, *, web_fetch=None, materialized_dir=None):
     # ``web_fetch`` is the host-side guarded HTTP hand the web broker
     # answers a granted sandbox through (runtime.webhand). None = no web
     # hand: granted runs still get the honest refusal from the shim.
+    # ``materialized_dir`` is the mounted bundle tier (runtime.bundle): when
+    # set, a bundle is materialized once and staged by symlink / read-only
+    # bind-mount instead of extracted per run.
     if bs.kind == "docker":
         from .runtime.isolation import LocalDockerBackend  # lazy: docker optional
 
@@ -206,7 +209,12 @@ def _build_backend(bs: BackendSettings, *, web_fetch=None):
             default_index_url=bs.pinned_index_url,
             run_as_user=bs.run_as_user,
             web_fetch=web_fetch,
+            materialized_dir=materialized_dir,
         )
     from .runtime.isolation import SubprocessBackend
 
-    return SubprocessBackend(default_index_url=bs.pinned_index_url, web_fetch=web_fetch)
+    return SubprocessBackend(
+        default_index_url=bs.pinned_index_url,
+        web_fetch=web_fetch,
+        materialized_dir=materialized_dir,
+    )

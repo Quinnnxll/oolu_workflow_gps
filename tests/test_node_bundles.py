@@ -26,10 +26,13 @@ from oolu.runtime.bundle import (
     BundleError,
     BundleResolver,
     BundleStore,
+    MaterializedBundleDir,
+    PreparedBundle,
     PreparedBundleCache,
     WarmBundleTier,
     freeze_tree,
     pack_tar,
+    symlink_stage_cmd,
     unpack_tar,
 )
 from oolu.runtime.isolation import SubprocessBackend
@@ -324,6 +327,137 @@ def test_many_inline_files_stage_in_one_pass(tmp_path):
 def test_make_success_helper_still_shapes_a_result():
     # Guards the StubBackend contract the bundle tests lean on elsewhere.
     assert make_success({"ok": 1}).contract_payload == {"ok": 1}
+
+
+# --------------------------------------------------------------------------- #
+# The mounted tier: extract once, stage by symlink, never re-copy.             #
+# --------------------------------------------------------------------------- #
+def _prepared(tree: dict[str, str]) -> PreparedBundle:
+    manifest, blobs = freeze_tree(tree)
+    packed = pack_tar({e.path: blobs[e.sha256] for e in manifest.entries})
+    return PreparedBundle(
+        bundle_id=manifest.bundle_id,
+        tar=packed,
+        file_count=manifest.file_count,
+        total_bytes=manifest.total_bytes,
+    )
+
+
+def test_materialize_is_idempotent_and_read_only(tmp_path):
+    import os
+
+    prepared = _prepared({"pkg/__init__.py": "", "pkg/lib.py": "V=1\n", "d.txt": "x"})
+    md = MaterializedBundleDir(tmp_path / "mnt")
+    first = md.ensure(prepared.bundle_id, prepared.tar)
+    second = md.ensure(prepared.bundle_id, prepared.tar)  # no re-extract
+    assert first == second
+    assert md.top_level(prepared.bundle_id) == ["d.txt", "pkg"]
+    # Files land read-only: a bundle is an input, never a scratchpad.
+    assert oct(os.stat(first / "d.txt").st_mode)[-3:] == "444"
+    assert oct(os.stat(first / "pkg").st_mode)[-3:] == "555"
+
+
+def test_a_mounted_bundle_imports_and_reads_through_the_symlink(tmp_path):
+    prepared = _prepared(
+        {
+            "pkg/__init__.py": "",
+            "pkg/calc.py": "def add(a, b):\n    return a + b\n",
+            "data.txt": "42",
+        }
+    )
+    md = MaterializedBundleDir(tmp_path / "mnt")
+    backend = SubprocessBackend(materialized_dir=md)
+    script = (
+        "import sys; sys.path.insert(0, '.')\n"
+        "from pkg.calc import add\n"
+        "value = int(open('data.txt').read())\n"
+        "from _oolu_runtime import emit_result\n"
+        "emit_result({'sum': add(2, 3), 'value': value})\n"
+    )
+    result = backend.run(ExecutionRequest(script=script, bundle=prepared))
+    assert result.contract_ok, result.stderr
+    assert result.contract_payload == {"sum": 5, "value": 42}
+    # A second run reuses the SAME materialized dir (no re-extract): the
+    # dir's contents are untouched and still answer.
+    again = backend.run(ExecutionRequest(script=script, bundle=prepared))
+    assert again.contract_payload == {"sum": 5, "value": 42}
+
+
+def test_a_script_cannot_write_through_a_mounted_symlink(tmp_path):
+    # The immutability mechanism is 0444 files. That binds a non-root
+    # writer (and, in the real Docker sandbox, the kernel-level read-only
+    # bind mount binds even root); root in this dev-backend test bypasses
+    # mode bits, so the behavioral assertion is skipped there.
+    import os
+
+    if os.geteuid() == 0:
+        pytest.skip("root bypasses file-mode bits; Docker ro-mount is the real wall")
+    prepared = _prepared({"config.ini": "readonly\n"})
+    md = MaterializedBundleDir(tmp_path / "mnt")
+    backend = SubprocessBackend(materialized_dir=md)
+    script = (
+        "from _oolu_runtime import emit_result\n"
+        "try:\n"
+        "    open('config.ini', 'w').write('tampered')\n"
+        "    emit_result({'wrote': True})\n"
+        "except OSError:\n"
+        "    emit_result({'wrote': False})\n"
+    )
+    result = backend.run(ExecutionRequest(script=script, bundle=prepared))
+    assert result.contract_ok, result.stderr
+    # The read-only file refused the write; the bundle stayed immutable.
+    assert result.contract_payload == {"wrote": False}
+
+
+def test_the_mounted_tier_evicts_cold_dirs_to_its_budget(tmp_path):
+    preps = [_prepared({f"f{i}.py": "x" * 4000}) for i in range(4)]
+    unit = 4000  # roughly one tree's on-disk size
+    # Zero grace so this test can evict immediately; budget ~two trees.
+    md = MaterializedBundleDir(
+        tmp_path / "mnt", max_bytes=2 * unit + 2000, grace_seconds=0
+    )
+    for prep in preps:
+        md.ensure(prep.bundle_id, prep.tar)
+    assert md.resident_bytes <= 2 * unit + 2000
+    # The newest survived; the oldest was evicted.
+    assert md.path_for(preps[-1].bundle_id).is_dir()
+    assert not md.path_for(preps[0].bundle_id).is_dir()
+
+
+def test_a_recent_dir_is_never_evicted_even_over_budget(tmp_path):
+    # The grace window protects a dir that may back a live run.
+    preps = [_prepared({f"f{i}.py": "x" * 4000}) for i in range(3)]
+    md = MaterializedBundleDir(
+        tmp_path / "mnt", max_bytes=1, grace_seconds=3600
+    )
+    for prep in preps:
+        md.ensure(prep.bundle_id, prep.tar)
+    # Over budget, but every dir is within the grace window -> all kept.
+    assert all(md.path_for(p.bundle_id).is_dir() for p in preps)
+
+
+# --------------------------------------------------------------------------- #
+# The Docker staging command — a pure function, testable without a daemon.     #
+# --------------------------------------------------------------------------- #
+def test_the_symlink_stage_command_links_each_top_level_entry():
+    cmd = symlink_stage_cmd(["pkg", "data.csv"], "/opt/oolu/bundles/abc")
+    assert cmd[:2] == ["sh", "-c"]
+    body = cmd[2]
+    assert "ln -sfn /opt/oolu/bundles/abc/'pkg' /sandbox/'pkg'" in body
+    assert "ln -sfn /opt/oolu/bundles/abc/'data.csv' /sandbox/'data.csv'" in body
+
+
+def test_the_symlink_stage_command_is_safe_when_empty():
+    assert symlink_stage_cmd([], "/opt/oolu/bundles/abc") == ["sh", "-c", "true"]
+
+
+def test_the_symlink_stage_command_quotes_hostile_names():
+    # A name is already escape-checked at freeze, but the shell command
+    # single-quotes it regardless — defense in depth.
+    cmd = symlink_stage_cmd(["a b", "x'y"], "/mnt")
+    body = cmd[2]
+    assert "'a b'" in body
+    assert "x'\\''y" in body  # the embedded quote is escaped, not closed
 
 
 # --------------------------------------------------------------------------- #
