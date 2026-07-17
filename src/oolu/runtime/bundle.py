@@ -1,0 +1,356 @@
+"""Node bundles — content-addressed, frozen source trees for fast boots.
+
+A node can grow from one ``src/main.py`` into a whole tree: a cloned
+professional library, hundreds of modules and data files. Staging that
+tree the naive way — read every drawer row inline on every run, serialize
+the bytes into the run state, and copy them into the sandbox one file at a
+time — makes boot cost grow with the codebase and re-pays the whole price
+on every idle re-run. This module is the architecture that flattens both
+curves.
+
+The unit is a **bundle**: a node's ``src/`` tree frozen once into an
+immutable, content-addressed object.
+
+* **Freeze once, address by content.** Each file's bytes are hashed and
+  stored in the content-addressed object store (the same CAS that backs
+  the file drawer's blobs); the *manifest* — the sorted list of
+  ``(path, sha256, size)`` — is itself hashed to a ``bundle_id``. Two
+  nodes cloned from the same software share every identical blob, and two
+  identical trees are the same bundle: dedup is free and automatic.
+
+* **Ship the reference, not the bytes.** A run carries the ``bundle_id``
+  and its small manifest, never the tree's contents, so the durable run
+  state stays tiny no matter how large the node is.
+
+* **Pack once, reuse across runs.** Materializing a bundle for the sandbox
+  produces a single tar of the whole tree; that tar is cached by
+  ``bundle_id`` (a bounded, idle-evictable LRU), so an unchanged node is
+  packed exactly once and every later run reuses it. Staging then costs
+  ONE archive extraction in the container, not one round-trip per file.
+
+The security posture is unchanged: bundle bytes are the same ``src/``
+files that already passed the drawer's walls, they are still extracted
+into the network-severed sandbox's writable scratch, and the script that
+imports them is still screened and verified by execution. A bundle is a
+faster shape for trusted-by-the-same-rules code, not a new trust path.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import io
+import json
+import tarfile
+from collections import OrderedDict
+from dataclasses import dataclass, field
+from pathlib import PurePosixPath
+
+# A node's tree is programs and data, not a data lake. These ceilings keep a
+# runaway clone from turning a bundle into a denial-of-service; large binary
+# payloads belong in path-roled slots and the blob door, not the code tree.
+MAX_BUNDLE_FILES = 4096
+MAX_BUNDLE_BYTES = 64 * 1024 * 1024  # 64 MiB of source across the whole tree
+
+
+class BundleError(ValueError):
+    """A tree that cannot be a bundle: too big, or an unsafe path."""
+
+
+@dataclass(frozen=True, slots=True)
+class BundleEntry:
+    """One file in a frozen tree: where it sits, and what it is."""
+
+    path: str  # drawer-relative POSIX path, e.g. "pkg/util.py"
+    sha256: str  # of the file's bytes — the CAS key
+    size: int
+
+
+@dataclass(frozen=True, slots=True)
+class BundleManifest:
+    """The whole frozen tree, by reference — small enough to ship anywhere.
+
+    ``bundle_id`` is the sha256 of the canonical manifest, so it changes iff
+    any path or any file's content changes: the identity a run ships and the
+    prepared cache keys on.
+    """
+
+    bundle_id: str
+    entries: tuple[BundleEntry, ...]
+    total_bytes: int
+    file_count: int
+
+    def to_json(self) -> str:
+        return json.dumps(
+            {
+                "bundle_id": self.bundle_id,
+                "entries": [
+                    {"path": e.path, "sha256": e.sha256, "size": e.size}
+                    for e in self.entries
+                ],
+                "total_bytes": self.total_bytes,
+                "file_count": self.file_count,
+            },
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+
+    @classmethod
+    def from_json(cls, blob: str) -> "BundleManifest":
+        data = json.loads(blob)
+        return cls(
+            bundle_id=data["bundle_id"],
+            entries=tuple(
+                BundleEntry(path=e["path"], sha256=e["sha256"], size=e["size"])
+                for e in data["entries"]
+            ),
+            total_bytes=int(data["total_bytes"]),
+            file_count=int(data["file_count"]),
+        )
+
+
+def _safe_path(raw: str) -> str:
+    """A drawer-relative POSIX path that cannot escape the tree — the same
+    discipline the sandbox staging enforces, applied at freeze time so an
+    unsafe path never even becomes a bundle."""
+    name = str(raw).replace("\\", "/")
+    pure = PurePosixPath(name)
+    if pure.is_absolute() or any(part in ("..", "", ".") for part in pure.parts):
+        raise BundleError(f"unsafe bundle path: {raw!r}")
+    if ":" in name:
+        raise BundleError(f"unsafe bundle path: {raw!r}")
+    return str(pure)
+
+
+def _canonical_manifest(entries: list[BundleEntry]) -> str:
+    """The bytes the bundle_id hashes — sorted, so tree identity is order-
+    independent (the same files always freeze to the same id)."""
+    ordered = sorted(entries, key=lambda e: e.path)
+    return json.dumps(
+        [[e.path, e.sha256, e.size] for e in ordered],
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+
+
+def freeze_tree(files: dict[str, str | bytes]) -> tuple[BundleManifest, dict[str, bytes]]:
+    """Freeze a ``{path: content}`` tree into a manifest plus the blobs to
+    store, keyed by digest (so identical files are stored once).
+
+    Raises :class:`BundleError` for an unsafe path or a tree over the
+    ceilings — the freeze is where a bad tree is refused, before any run
+    ever carries it."""
+    entries: list[BundleEntry] = []
+    blobs: dict[str, bytes] = {}
+    total = 0
+    for raw_path, content in files.items():
+        path = _safe_path(raw_path)
+        data = content.encode("utf-8") if isinstance(content, str) else bytes(content)
+        digest = hashlib.sha256(data).hexdigest()
+        total += len(data)
+        entries.append(BundleEntry(path=path, sha256=digest, size=len(data)))
+        blobs[digest] = data
+    if len(entries) > MAX_BUNDLE_FILES:
+        raise BundleError(
+            f"a bundle holds at most {MAX_BUNDLE_FILES} files ({len(entries)} given)"
+        )
+    if total > MAX_BUNDLE_BYTES:
+        raise BundleError(
+            f"a bundle holds at most {MAX_BUNDLE_BYTES} bytes ({total} given)"
+        )
+    bundle_id = hashlib.sha256(_canonical_manifest(entries).encode("utf-8")).hexdigest()
+    manifest = BundleManifest(
+        bundle_id=bundle_id,
+        entries=tuple(sorted(entries, key=lambda e: e.path)),
+        total_bytes=total,
+        file_count=len(entries),
+    )
+    return manifest, blobs
+
+
+# --------------------------------------------------------------------------- #
+# Packing — the whole tree as one deterministic archive.                       #
+# --------------------------------------------------------------------------- #
+def pack_tar(tree: dict[str, bytes]) -> bytes:
+    """One tar of a ``{path: bytes}`` tree — deterministic (sorted, fixed
+    mtime/mode), so the same tree always packs to identical bytes. This is
+    the single object the sandbox extracts in one step."""
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as tar:
+        for path in sorted(tree):
+            data = tree[path]
+            info = tarfile.TarInfo(name=path)
+            info.size = len(data)
+            info.mtime = 0
+            info.mode = 0o644
+            info.uid = info.gid = 0
+            tar.addfile(info, io.BytesIO(data))
+    return buffer.getvalue()
+
+
+def unpack_tar(archive: bytes) -> dict[str, bytes]:
+    """The inverse of :func:`pack_tar` — used by the subprocess backend and
+    by tests to read a packed tree back."""
+    out: dict[str, bytes] = {}
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r") as tar:
+        for member in tar.getmembers():
+            if not member.isfile():
+                continue
+            _safe_path(member.name)  # a tar must not carry an escaping path
+            extracted = tar.extractfile(member)
+            out[member.name] = extracted.read() if extracted else b""
+    return out
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedBundle:
+    """A bundle ready to stage: its id and the single packed tar of the tree.
+
+    The heavy, reusable artifact — built once per ``bundle_id`` and handed
+    to the backend, which extracts it in one operation."""
+
+    bundle_id: str
+    tar: bytes
+    file_count: int
+    total_bytes: int
+
+
+# --------------------------------------------------------------------------- #
+# The store — bytes in the CAS, manifests in a small table.                    #
+# --------------------------------------------------------------------------- #
+_SCHEMA = """CREATE TABLE IF NOT EXISTS node_bundles (
+    bundle_id TEXT PRIMARY KEY,
+    manifest_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+)"""
+
+
+class BundleStore:
+    """Freezes trees into the content-addressed store and reads them back.
+
+    Blobs live in the ``artifacts`` CAS (dedup across every node and
+    version); manifests live in one small table keyed by ``bundle_id``.
+    ``freeze`` is idempotent: an unchanged tree re-freezes to the same id
+    and stores nothing new.
+    """
+
+    def __init__(self, conn, artifacts) -> None:
+        self._conn = conn
+        self._artifacts = artifacts  # durable.FilesystemArtifactStore (CAS)
+        with self._conn.transaction() as db:
+            db.execute(_SCHEMA)
+
+    def freeze(self, files: dict[str, str | bytes]) -> BundleManifest:
+        """Freeze a tree, storing any not-yet-stored blobs and the manifest."""
+        manifest, blobs = freeze_tree(files)
+        by_path = {e.path: e for e in manifest.entries}
+        for path, entry in by_path.items():
+            ref = f"sha256:{entry.sha256}"
+            if not self._artifacts.exists(ref):
+                self._artifacts.put(
+                    entry.sha256, blobs[entry.sha256], media_type="application/octet-stream"
+                )
+        from datetime import UTC, datetime
+
+        with self._conn.transaction() as db:
+            db.execute(
+                """INSERT INTO node_bundles (bundle_id, manifest_json, created_at)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(bundle_id) DO NOTHING""",
+                (manifest.bundle_id, manifest.to_json(), datetime.now(UTC).isoformat()),
+            )
+        return manifest
+
+    def manifest(self, bundle_id: str) -> BundleManifest | None:
+        with self._conn.lock:
+            row = self._conn.db.execute(
+                "SELECT manifest_json FROM node_bundles WHERE bundle_id = ?",
+                (bundle_id,),
+            ).fetchone()
+        return BundleManifest.from_json(row["manifest_json"]) if row else None
+
+    def materialize(self, manifest: BundleManifest) -> dict[str, bytes]:
+        """The tree's bytes, read from the CAS — the slow path a prepared
+        cache exists to spare repeated runs."""
+        return {
+            e.path: self._artifacts.get(f"sha256:{e.sha256}")
+            for e in manifest.entries
+        }
+
+    def prepare(self, bundle_id: str) -> PreparedBundle | None:
+        """Read a bundle from storage and pack it — the cache-miss path."""
+        manifest = self.manifest(bundle_id)
+        if manifest is None:
+            return None
+        tree = self.materialize(manifest)
+        return PreparedBundle(
+            bundle_id=bundle_id,
+            tar=pack_tar(tree),
+            file_count=manifest.file_count,
+            total_bytes=manifest.total_bytes,
+        )
+
+
+# --------------------------------------------------------------------------- #
+# The prepared cache — pack once, reuse across runs, evict when idle.          #
+# --------------------------------------------------------------------------- #
+class PreparedBundleCache:
+    """A bounded, in-memory LRU of packed bundles, keyed by ``bundle_id``.
+
+    The boot-speed win for repeated runs: the first run of a node packs its
+    tree once and lands it here; every later run of the SAME (unchanged)
+    node reuses the packed tar with no CAS read and no re-pack. Bounded by
+    total packed bytes and evicted least-recently-used, so a busy host with
+    thousands of nodes never grows the cache without limit — the durable
+    truth is always the CAS, so an eviction only costs the next run one
+    re-pack, never correctness.
+    """
+
+    def __init__(self, store: BundleStore, *, max_bytes: int = 256 * 1024 * 1024) -> None:
+        self._store = store
+        self._max = max_bytes
+        self._entries: OrderedDict[str, PreparedBundle] = OrderedDict()
+        self._bytes = 0
+        self.hits = 0
+        self.misses = 0
+
+    def get(self, bundle_id: str) -> PreparedBundle | None:
+        cached = self._entries.get(bundle_id)
+        if cached is not None:
+            self._entries.move_to_end(bundle_id)
+            self.hits += 1
+            return cached
+        prepared = self._store.prepare(bundle_id)
+        self.misses += 1
+        if prepared is not None:
+            self._admit(prepared)
+        return prepared
+
+    def _admit(self, prepared: PreparedBundle) -> None:
+        # A single bundle larger than the whole budget is served but never
+        # cached — it would evict everything and still not fit.
+        if len(prepared.tar) > self._max:
+            return
+        self._entries[prepared.bundle_id] = prepared
+        self._entries.move_to_end(prepared.bundle_id)
+        self._bytes += len(prepared.tar)
+        while self._bytes > self._max and len(self._entries) > 1:
+            _, evicted = self._entries.popitem(last=False)
+            self._bytes -= len(evicted.tar)
+
+    @property
+    def resident_bytes(self) -> int:
+        return self._bytes
+
+
+@dataclass(frozen=True, slots=True)
+class BundleResolver:
+    """The seam the script runner holds: id -> PreparedBundle, cache-first.
+
+    A tiny wrapper so the runner depends on one callable, not on the store
+    and cache directly — and so an install without a bundle store simply
+    has no resolver and falls back to inline files."""
+
+    cache: PreparedBundleCache = field()
+
+    def __call__(self, bundle_id: str) -> PreparedBundle | None:
+        return self.cache.get(bundle_id)

@@ -153,6 +153,7 @@ from ..providers.chatmodel import ChatModelRouter
 from ..providers.keyring import PROVIDERS, ModelKeyring
 from ..providers.vault import SecretVault
 from ..representative import pair_exchanges as pair_representative_exchanges
+from ..runtime.bundle import BundleError, BundleStore
 from ..seats import SEATS, DeskFiles, SeatViolation
 from ..settings_node import SettingError, SettingsNode
 from ..skills.contract import (
@@ -521,6 +522,8 @@ class GatewayApp:
         kyc=None,  # nodeplace.KycService: Supernode legal-entity verification
         hygiene=None,  # nodeplace.NodeHygieneService: clone/fraud/zombie
         files: UserFileStore | None = None,  # user documents/sheets
+        bundle_store: BundleStore | None = None,  # content-addressed src trees:
+        # freeze a node's src/ tree once and ship its id, not its bytes
         settings_node: SettingsNode | None = None,  # the settings node
         payments: PaymentMethodsService | None = None,  # card on file
         launch_guard: LaunchGuard | None = None,  # pre-launch charge gate
@@ -617,6 +620,7 @@ class GatewayApp:
         self._kyc = kyc
         self._hygiene = hygiene
         self._files = files
+        self._bundle_store = bundle_store
         self._settings = settings_node
         self._payments = payments
         self._launch_guard = launch_guard
@@ -3022,7 +3026,7 @@ class GatewayApp:
         script = (action.parameters or {}).get("script") if action else None
         if not script:
             return None
-        return _drawer_function(
+        return self._finalize_function(
             {
                 "node_id": node.node_id,
                 "skill_id": skill_id,
@@ -3039,6 +3043,27 @@ class GatewayApp:
                 **self._node_function_extras(session, node.node_id),
             }
         )
+
+    def _finalize_function(self, function: dict) -> dict:
+        """Shape a resolved function for execution: promote the drawer's
+        ``src/main.py`` to the script, then — when a tree of OTHER files
+        remains and a bundle store exists — FREEZE that tree into a
+        content-addressed bundle and ship its id in place of the inline
+        bytes. A large node then travels as a 64-char reference, not its
+        whole codebase, and the runner stages it from one packed archive.
+
+        No store (a minimal install, or a test): the tree stays inline —
+        the same bytes, the same walls, just not deduplicated or cached."""
+        function = _drawer_function(function)
+        files = function.get("files")
+        if files and self._bundle_store is not None:
+            try:
+                manifest = self._bundle_store.freeze(files)
+            except BundleError:
+                return function  # oversized/unsafe stays inline; backend still guards
+            function = {k: v for k, v in function.items() if k != "files"}
+            function["bundle"] = manifest.bundle_id
+        return function
 
     def _node_function_extras(self, session, node_id: str) -> dict:
         """What a node's own function carries beyond its script: the egress
@@ -3111,7 +3136,7 @@ class GatewayApp:
         script = (action.parameters or {}).get("script") if action else None
         if not script:
             return None
-        return _drawer_function(
+        return self._finalize_function(
             {
                 "node_id": node.node_id,
                 "skill_id": node.skill_id,

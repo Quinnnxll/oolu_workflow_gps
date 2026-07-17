@@ -258,6 +258,7 @@ class NodeScriptRunner:
         backend_kind: str | None = None,
         backend_image: str | None = None,
         environment_fingerprint: str = "",
+        bundle_resolver=None,  # (bundle_id) -> PreparedBundle | None
     ):
         self._backend = backend
         self._cache = cache
@@ -267,6 +268,11 @@ class NodeScriptRunner:
         self._backend_kind = backend_kind or type(backend).__name__
         self._backend_image = backend_image
         self._environment = environment_fingerprint
+        # The seam to the bundle layer: an action carrying a ``bundle`` id
+        # is resolved to a packed ``PreparedBundle`` (cache-first) and
+        # staged in one archive. No resolver -> the inline ``files`` path
+        # stands, so a minimal install (or a test) needs nothing extra.
+        self._bundle_resolver = bundle_resolver
         self._completed: dict[str, ExecutionOutcome] = {}
 
     def capabilities(self) -> frozenset[str]:
@@ -319,6 +325,11 @@ class NodeScriptRunner:
         bindings = dict(action.parameters.get("bindings") or {})
         node_key = str(action.parameters.get("node_key") or goal)
         provided = action.parameters.get("script")
+        # The tree's identity joins the key: an edited bundle (new
+        # bundle_id) re-verifies rather than replaying against a tree it
+        # was never run with.
+        bundle_id = action.parameters.get("bundle")
+        node_key = f"{node_key}#bundle:{bundle_id}" if bundle_id else node_key
         key = self.cache_key(
             node_key, bindings, script=str(provided) if provided else None
         )
@@ -327,6 +338,12 @@ class NodeScriptRunner:
         # repaired, and resynthesized alike.
         web = _web_grant(action)
         files = _staged_files(action)
+        # A large tree rides as a content-addressed bundle: resolve its id
+        # to a packed archive (cache-first) once, here, and hand it to every
+        # backend run below instead of a per-file dict.
+        bundle = None
+        if bundle_id and self._bundle_resolver is not None:
+            bundle = self._bundle_resolver(str(bundle_id))
 
         # --- hit path: replay the memoized script, no synthesis paid ----- #
         cached = self._cache.get(key)
@@ -338,6 +355,7 @@ class NodeScriptRunner:
                 idempotency_key,
                 web=web,
                 files=files,
+                bundle=bundle,
             )
             record = classify(result)
             if record is None:
@@ -372,7 +390,12 @@ class NodeScriptRunner:
             deps: list[str] = []
             for _ in range(3):
                 result = self._run_script(
-                    str(provided), deps, idempotency_key, web=web, files=files
+                    str(provided),
+                    deps,
+                    idempotency_key,
+                    web=web,
+                    files=files,
+                    bundle=bundle,
                 )
                 record = classify(result)
                 if record is None:
@@ -428,7 +451,12 @@ class NodeScriptRunner:
                         break
                     deps = []
                     result = self._run_script(
-                        edited, deps, idempotency_key, web=web, files=files
+                        edited,
+                        deps,
+                        idempotency_key,
+                        web=web,
+                        files=files,
+                        bundle=bundle,
                     )
                     record = classify(result)
                     if record is None:
@@ -515,6 +543,7 @@ class NodeScriptRunner:
             idempotency_key,
             web=web,
             files=files,
+            bundle=bundle,
         )
         record = classify(result)
         if record is not None:
@@ -554,6 +583,7 @@ class NodeScriptRunner:
         *,
         web: WebGrant | None = None,
         files: dict[str, str] | None = None,
+        bundle=None,
     ) -> ExecutionResult:
         # The antivirus screen at the last gate: no script — provided,
         # synthesized, repaired, or replayed from cache — reaches the
@@ -576,6 +606,7 @@ class NodeScriptRunner:
                 session_id=session_id,
                 web=web,
                 files=dict(files or {}),
+                bundle=bundle,
             )
         )
 

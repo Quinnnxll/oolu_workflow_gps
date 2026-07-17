@@ -423,6 +423,7 @@ def build_script_executor(
     cache_path: str | Path = ":memory:",
     synthesizer=None,  # runtime.ScriptSynthesizer, optional
     environ: dict | None = None,
+    bundle_resolver=None,  # runtime.BundleResolver: id -> PreparedBundle
 ) -> dict[str, ActionExecutor]:
     """The script hand: run planner-provided or synthesized code through the
     configured isolation backend (Docker when configured; the subprocess
@@ -461,6 +462,7 @@ def build_script_executor(
         backend_image=(
             settings.backend.image if settings.backend.kind == "docker" else None
         ),
+        bundle_resolver=bundle_resolver,
     )
     return {runner.name: runner}
 
@@ -842,6 +844,23 @@ def build_host_runtime(
             "unsandboxed on a public host",
             settings.backend.kind,
         )
+    # The node-bundle layer: one content-addressed store (blobs in the same
+    # CAS the drawer's blobs use, manifests in the durable db) plus a
+    # bounded prepared-archive cache, SHARED between the gateway (which
+    # freezes a node's src/ tree and ships its id) and the script runner
+    # (which resolves that id to one packed archive, cache-first). A node's
+    # codebase is frozen once and re-staged near-instantly forever after.
+    from .runtime.bundle import BundleResolver, BundleStore, PreparedBundleCache
+
+    bundle_store = BundleStore(conn, blob_store_from_env(data))
+    bundle_resolver = BundleResolver(PreparedBundleCache(bundle_store))
+    if require_isolation and settings.backend.kind != "docker":
+        logging.getLogger(__name__).warning(
+            "public host without an isolation backend (backend.kind=%s): "
+            "the script hand stays OFF — synthesized code never runs "
+            "unsandboxed on a public host",
+            settings.backend.kind,
+        )
     elif "script" not in run_executors:
         try:
             from .runtime.script_node import ChatModelSynthesizer
@@ -853,6 +872,7 @@ def build_host_runtime(
                     synthesizer=ChatModelSynthesizer(
                         _planning_router("plan.synthesize")
                     ),
+                    bundle_resolver=bundle_resolver,
                 )
             )
         except Exception as exc:  # noqa: BLE001 - hosts without a script
@@ -1115,6 +1135,7 @@ def build_host_runtime(
         # real binaries (PDF/DOCX/MP4/...) as content-addressed files on
         # disk — the database never swallows a video.
         files=UserFileStore(conn, artifacts=blob_store_from_env(data)),
+        bundle_store=bundle_store,
         settings_node=settings_node,
         # The brain behind chat: the same keyring/meter planning uses —
         # pasted keys survive restarts encrypted, every consultation is

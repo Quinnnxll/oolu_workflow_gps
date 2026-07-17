@@ -9,6 +9,14 @@ from .backend import (
     StubBackend,
     WebGrant,
 )
+from .bundle import (
+    BundleManifest,
+    BundleResolver,
+    BundleStore,
+    PreparedBundle,
+    PreparedBundleCache,
+    freeze_tree,
+)
 from .script_node import (
     ChatModelSynthesizer,
     GraphEngineSynthesizer,
@@ -20,17 +28,23 @@ from .script_node import (
 from .webhand import WebBroker, serve_web
 
 __all__ = [
+    "BundleManifest",
+    "BundleResolver",
+    "BundleStore",
     "ChatModelSynthesizer",
     "ExecutionBackend",
     "ExecutionRequest",
     "GraphEngineSynthesizer",
     "NodeScriptRunner",
     "NodeSynthesis",
+    "PreparedBundle",
+    "PreparedBundleCache",
     "ResourceLimits",
     "ScriptSynthesizer",
     "StubBackend",
     "WebBroker",
     "WebGrant",
+    "freeze_tree",
     "render_node_goal",
     "serve_web",
 ]

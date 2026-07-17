@@ -44,6 +44,7 @@ from typing import Iterator
 
 from ..models import ExecutionResult, Phase
 from .backend import BackendError, BackendUnavailable, ExecutionRequest
+from .bundle import pack_tar
 from .contract import SHIM_MODULE_NAME, parse_stdout, shim_source_path
 from .webhand import CONTAINER_EXCHANGE, EXCHANGE_ENV, GuardedFetch, serve_web
 
@@ -53,6 +54,20 @@ logger = logging.getLogger(__name__)
 # moves through path-roled slots and the artifact store, never the request.
 _MAX_STAGED_FILES = 32
 _MAX_STAGED_BYTES = 2_000_000
+
+
+def _unpack_into(root: Path, archive: bytes) -> None:
+    """Extract a bundle tar under ``root``, refusing any escaping member —
+    the subprocess backend's one-pass staging of a large tree."""
+    from .bundle import unpack_tar
+
+    base = root.resolve()
+    for name, data in unpack_tar(archive).items():
+        target = (root / name).resolve()
+        if base not in target.parents:
+            raise BackendError(f"bundle path escapes the workspace: {name!r}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
 
 
 def _staged_files(request: ExecutionRequest) -> dict[str, bytes]:
@@ -274,6 +289,10 @@ class SubprocessBackend(_TwoPhaseBackend):
                 target = Path(d, name)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(data)
+            # A large tree rides as one pre-packed bundle tar — unpacked in
+            # a single pass here, no per-file cost.
+            if request.bundle is not None:
+                _unpack_into(Path(d), request.bundle.tar)
             os.makedirs(os.path.join(d, "site-packages"), exist_ok=True)
             if request.web is not None and self._web_fetch is not None:
                 os.makedirs(self._exchange_dir(d), exist_ok=True)
@@ -511,22 +530,42 @@ class LocalDockerBackend(_TwoPhaseBackend):
                 "/sandbox/.cache/uv",
             ],
         )
-        files = {
+        # The harness pair plus any small inline tree: one archive, one
+        # extraction. Even without a bundle this collapses N per-file execs
+        # (the old shape, one round-trip per staged file) into a single tar.
+        harness = {
             f"{SHIM_MODULE_NAME}.py": shim_source_path().read_bytes(),
             "user_script.py": request.script.encode("utf-8"),
-            # The node's own files ride the same staging path (validated to
-            # stay inside /sandbox — see _staged_files).
             **_staged_files(request),
         }
-        for name, data in files.items():
-            b64 = base64.b64encode(data).decode("ascii")
-            code = (
-                "import base64,pathlib;"
-                f"p=pathlib.Path('/sandbox/{name}');"
-                "p.parent.mkdir(parents=True,exist_ok=True);"
-                f"p.write_bytes(base64.b64decode('{b64}'))"
-            )
-            self._stage_exec(container, ["python", "-c", code])
+        self._extract_archive(container, pack_tar(harness))
+        # A large tree rides as a pre-packed bundle tar — extracted in this
+        # ONE more exec regardless of how many files it holds.
+        bundle = request.bundle
+        if bundle is not None:
+            self._extract_archive(container, bundle.tar)
+
+    def _extract_archive(self, container: object, archive: bytes) -> None:
+        """Write one tar into the container and extract it in a single exec.
+
+        The bytes travel base64 on argv (the read-only rootfs refuses the
+        Docker copy API even onto the writable tmpfs), but as ONE object:
+        the per-file round-trips are gone, so staging cost no longer grows
+        with the file count."""
+        b64 = base64.b64encode(archive).decode("ascii")
+        code = (
+            "import base64,io,tarfile,pathlib;"
+            "buf=io.BytesIO(base64.b64decode('" + b64 + "'));"
+            "t=tarfile.open(fileobj=buf,mode='r');"
+            "base=pathlib.Path('/sandbox').resolve();"
+            "ms=[m for m in t.getmembers() if m.isfile()];"
+            # Defense in depth: refuse any member that would land outside
+            # /sandbox, even though freeze/pack already forbid such paths.
+            "assert all(base in (base/ m.name).resolve().parents for m in ms),"
+            "'archive path escapes /sandbox';"
+            "t.extractall('/sandbox',members=ms)"
+        )
+        self._stage_exec(container, ["python", "-c", code])
 
     def _stage_exec(self, container: object, cmd: list[str]) -> None:
         """Run a staging command inside the container, raising on failure."""

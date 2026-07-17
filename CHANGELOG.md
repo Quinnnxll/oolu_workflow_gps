@@ -4,6 +4,46 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Node bundles: boot speed and idle efficiency at codebase scale:
+
+- **The scaling problem.** A node grew from one `src/main.py` into a
+  whole tree — a cloned professional library, hundreds of modules. The
+  old staging path did not scale: every run re-read *every* `src/` row
+  inline, carried the bytes through the durable run state, and copied
+  them into the sandbox **one file at a time** (one container round-trip
+  per file). Nothing was reused between runs, and each file's bytes
+  lived inline in its own DB row with no dedup — two nodes cloned from
+  the same software stored two full copies.
+- **Content-addressed bundles (`oolu/runtime/bundle.py`,
+  `docs/node-bundles.md`).** A node's `src/` tree (minus the `main.py`
+  entry) now freezes ONCE into an immutable, content-addressed bundle:
+  file bytes in the same CAS that backs the drawer's blobs (identical
+  files across any nodes or versions store once), and a manifest —
+  sorted `(path, sha256, size)` — hashed to a `bundle_id`. Freezing is
+  idempotent; two identical trees are the same bundle.
+- **Ship the reference, not the bytes.** A run now carries the 64-char
+  `bundle_id` and its small manifest, never the tree's contents, so the
+  durable `RunState` stays tiny no matter how large the node is. The
+  gateway freezes at `_finalize_function` and ships the id; a single-file
+  node ships nothing extra; an install with no bundle store keeps the
+  tree inline (same bytes, same walls).
+- **Pack once, reuse across runs, stage in one operation.** Materializing
+  a bundle produces one deterministic tar, cached by `bundle_id` in a
+  bounded, idle-evictable LRU (`PreparedBundleCache`) — the first run
+  packs the tree once, every later run of the unchanged node reuses it
+  with no CAS read and no re-pack. Staging extracts the whole tree in a
+  SINGLE archive extraction instead of one round-trip per file; the same
+  one-shot staging now also collapses small inline trees (N per-file
+  execs became one tar).
+- **Same trust, faster shape.** The bytes are the same `src/` files that
+  already passed the drawer's walls; freezing re-checks every path and
+  refuses an unsafe one; the tree still extracts into the
+  network-severed sandbox and the script is still screened and verified
+  by execution; the `bundle_id` joins the script cache key so an edited
+  tree re-verifies. The CAS is the durable truth — the prepared cache is
+  a pure accelerator, so an eviction costs one re-pack, never
+  correctness. Ceilings (4096 files, 64 MiB/tree) are enforced at freeze.
+
 The in-run repair loop closes its circle: healed code comes home:
 
 - **A run that heals its own function now writes the fix to the

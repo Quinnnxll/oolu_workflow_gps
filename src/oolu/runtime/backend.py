@@ -146,8 +146,16 @@ class ExecutionRequest(BaseModel):
     # The node's own code and data files, staged next to user_script.py before
     # Phase B (relative paths only — the backend refuses anything that would
     # escape the scratch dir). This is how a node carries real programs: the
-    # script imports or reads them by their staged names.
+    # script imports or reads them by their staged names. Small trees ride
+    # here inline; a large tree rides as ``bundle`` instead (one packed tar,
+    # extracted in one operation) and this stays empty.
     files: dict[str, str] = Field(default_factory=dict)
+
+    # A frozen, content-addressed source tree, packed once and staged in a
+    # single archive extraction — the fast path for large node codebases.
+    # Held opaquely (arbitrary type) so this module keeps depending only on
+    # ``models``; the concrete type is ``runtime.bundle.PreparedBundle``.
+    bundle: object | None = None
 
     # The node's consented web, answered by the host-side broker through the
     # shim's http_request hand. None = no grant was stamped: the exchange is
