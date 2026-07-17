@@ -4,6 +4,47 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The node's code becomes a file, and every model call gets a seat:
+
+- **The bug: built nodes left no source file.** Building "succeeded" —
+  the model planned the function, the node was created — but nothing
+  ever appeared in the node's drawer, because no call site owned the
+  duty of materializing the model's output: the function lived only
+  inside the version's JSON snapshot, and the drawer's `src/` folder
+  was a run-time input nobody wrote. Building now writes the authored
+  function to **`src/main.py`** in the node's own drawer (the drawer
+  speaks `.py` natively now), so the code is a real file a human can
+  open, read, and change.
+- **The drawer copy is the function's HOME.** Runs resolve the function
+  drawer-first: `src/main.py`, when present, IS the script (the
+  version's snapshot answers only for a deleted drawer copy), and the
+  promoted file leaves the staged set — it becomes `user_script.py`
+  itself, never also a sibling. The script cache now keys on the
+  function's own fingerprint, closing the second half of "building
+  keeps failing": an edited or re-authored function was previously
+  SHADOWED by the cache-hit path replaying the old verified code until
+  it failed twice — new code, new key, and the edit takes effect on its
+  very next run while still re-earning trust by verified execution.
+- **Model seats (`oolu/seats.py`, `docs/model-seats.md`).** Models are
+  interchangeable — the tenant's Anthropic key today, OpenAI or a local
+  model tomorrow — so everything that must NOT change with the model is
+  now defined once, per call site, in a seat: the files it may read and
+  write, the hands it holds, the charge it answers for, and the consent
+  switch, meter purpose, and audit that govern it. The registry speaks
+  the SAME purpose vocabulary the model router meters under
+  (`chat.turn`, `plan.intake`, `plan.route`, `plan.synthesize`,
+  `plan.rebuild`, `node.build`, `node.repair`, `rep.draft`), so
+  accounting and governance agree on names. `DeskFiles` is the
+  enforcement: one node's drawer held through one seat — writes outside
+  the seat's scope are refused whatever the model asks for, a
+  consent-gated seat will not open without the caller's attestation,
+  and every seated write lands on the hash-chained audit log as a
+  `model.seat` event (purpose, node, files written). The node-function
+  author is the first fully seated call; the migration map for the rest
+  is in the doc. A seat bounds what a call can REACH — verification
+  (safety screen, severed sandbox, verified-by-execution, human
+  confirmation) still decides what its output is WORTH.
+
 The doors back in actually open: a Twilio SMS phone sign-up that
 reaches a real provider, and a one-step forgot-password that e-mails a
 fresh password:

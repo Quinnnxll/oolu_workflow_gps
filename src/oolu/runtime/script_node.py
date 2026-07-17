@@ -37,6 +37,7 @@ from ..cache.signature import (
     NodeScriptSignature,
     bindings_fingerprint,
     make_node_script_cache_key,
+    script_fingerprint,
 )
 from ..cache.store import ScriptCache
 from ..models import ErrorClass, ExecutionResult, Phase
@@ -275,7 +276,16 @@ class NodeScriptRunner:
         """Backend runs are bounded by their own resource limits."""
 
     # ------------------------------------------------------------------ #
-    def cache_key(self, node_key: str, bindings: dict[str, Any]) -> str:
+    def cache_key(
+        self,
+        node_key: str,
+        bindings: dict[str, Any],
+        *,
+        script: str | None = None,
+    ) -> str:
+        # ``script`` is the PROVIDED function, when there is one: its
+        # fingerprint joins the key so an edited function is never
+        # shadowed by the cache of the code it replaced.
         return make_node_script_cache_key(
             NodeScriptSignature(
                 node_key=node_key,
@@ -284,6 +294,7 @@ class NodeScriptRunner:
                 backend_kind=self._backend_kind,
                 backend_image=self._backend_image,
                 pinned_index_url=self._pinned_index_url,
+                script_fingerprint=script_fingerprint(script),
             )
         )
 
@@ -307,7 +318,10 @@ class NodeScriptRunner:
             )
         bindings = dict(action.parameters.get("bindings") or {})
         node_key = str(action.parameters.get("node_key") or goal)
-        key = self.cache_key(node_key, bindings)
+        provided = action.parameters.get("script")
+        key = self.cache_key(
+            node_key, bindings, script=str(provided) if provided else None
+        )
         # The node's stamped egress regime and its own staged files ride the
         # action into EVERY backend run below — cached replay, provided,
         # repaired, and resynthesized alike.
@@ -352,7 +366,6 @@ class NodeScriptRunner:
             logger.info("node cache stale for %s (%s)", node_key, stale_error)
 
         # --- provided path: a planner-supplied script is a proposal ------ #
-        provided = action.parameters.get("script")
         if provided:
             # Missing imports heal in-place (bounded): the one recalculable
             # failure a correct script can legitimately hit on this backend.

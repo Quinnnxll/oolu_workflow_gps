@@ -153,6 +153,7 @@ from ..providers.chatmodel import ChatModelRouter
 from ..providers.keyring import PROVIDERS, ModelKeyring
 from ..providers.vault import SecretVault
 from ..representative import pair_exchanges as pair_representative_exchanges
+from ..seats import SEATS, DeskFiles
 from ..settings_node import SettingError, SettingsNode
 from ..skills.contract import (
     ContractEdge,
@@ -212,6 +213,29 @@ def explicit_node_build_goal(message: str | None) -> str | None:
     if match is None:
         return None
     return match.group("goal").strip(" .!?")
+
+
+def _drawer_function(function: dict) -> dict:
+    """The drawer's ``src/main.py`` IS the node's function when present.
+
+    Building writes the authored function there; from then on the FILE is
+    the home the runs read first, so a human (or a seated model) editing
+    it edits the node — the version's JSON snapshot is the fallback for
+    nodes whose drawer copy was deleted. The promoted file leaves the
+    staged-files set (it becomes ``user_script.py`` itself, not a
+    sibling), and the cache keys on the script's own fingerprint, so an
+    edit takes effect on its very next run — still through the same
+    safety screen and sandbox verification as any other code."""
+    files = dict(function.get("files") or {})
+    main = files.pop("main.py", None)
+    updated = {**function}
+    if main:
+        updated["script"] = str(main)
+    if files:
+        updated["files"] = files
+    else:
+        updated.pop("files", None)
+    return updated
 
 
 def _tz_minutes(raw) -> int:
@@ -425,6 +449,7 @@ class _TokenBucket:
 # else rides as a data URL and is typed honestly by extension so viewers,
 # players, and the download door all know what they are holding.
 _MEDIA_TYPES: dict[str, str] = {
+    ".py": "text/x-python",
     ".csv": "text/csv",
     ".tsv": "text/csv",
     ".json": "application/json",
@@ -2863,6 +2888,33 @@ class GatewayApp:
         except (ContributionError, OwnershipError, ValueError) as exc:
             return f"error: {exc}"
         new_id = result.node.node_id
+        # The function becomes a FILE the human can open: src/main.py in
+        # the node's own drawer — written through the node.build SEAT, so
+        # the write is scope-checked, attested, and audited like every
+        # seated model act. The drawer copy is the function's HOME from
+        # here on: runs read it first, so editing the file edits the node.
+        if self._files is not None:
+            desk_files = DeskFiles(
+                self._files,
+                tenant=session.tenant_id,
+                node_id=new_id,
+                seat=SEATS["node.build"],
+                # Consent was the door that let this builder run at all —
+                # the settings switch, the growth-offer "yes", or the
+                # user's explicit "build me a node"; the caller attests.
+                consented=True,
+            )
+            desk_files.write("src/main.py", script)
+            self._durable.audit.append(
+                "model.seat",
+                {
+                    "purpose": "node.build",
+                    "tenant": session.tenant_id,
+                    "by": session.principal_id,
+                    "node_id": new_id,
+                    "written": desk_files.written,
+                },
+            )
         placing = (
             "under this Supernode — it starts UNCLAIMED: share its node "
             "id only with the person who should onboard it"
@@ -2970,21 +3022,23 @@ class GatewayApp:
         script = (action.parameters or {}).get("script") if action else None
         if not script:
             return None
-        return {
-            "node_id": node.node_id,
-            "skill_id": skill_id,
-            "title": skill.name,
-            "goal": skill.description,
-            "script": str(script),
-            "node_key": str(
-                (action.parameters or {}).get("node_key")
-                or f"node:{skill_id}"
-            ),
-            # The node's egress consent and its drawer's src/ programs ride
-            # the function into the run — the same regimes the contract
-            # path stamps, applied to the node-function route.
-            **self._node_function_extras(session, node.node_id),
-        }
+        return _drawer_function(
+            {
+                "node_id": node.node_id,
+                "skill_id": skill_id,
+                "title": skill.name,
+                "goal": skill.description,
+                "script": str(script),
+                "node_key": str(
+                    (action.parameters or {}).get("node_key")
+                    or f"node:{skill_id}"
+                ),
+                # The node's egress consent and its drawer's src/ programs
+                # ride the function into the run — the same regimes the
+                # contract path stamps, applied to the node-function route.
+                **self._node_function_extras(session, node.node_id),
+            }
+        )
 
     def _node_function_extras(self, session, node_id: str) -> dict:
         """What a node's own function carries beyond its script: the egress
@@ -3057,18 +3111,20 @@ class GatewayApp:
         script = (action.parameters or {}).get("script") if action else None
         if not script:
             return None
-        return {
-            "node_id": node.node_id,
-            "skill_id": node.skill_id,
-            "title": skill.name,
-            "goal": skill.description,
-            "script": str(script),
-            "node_key": str(
-                (action.parameters or {}).get("node_key")
-                or f"node:{node.skill_id}"
-            ),
-            **self._node_function_extras(session, node.node_id),
-        }
+        return _drawer_function(
+            {
+                "node_id": node.node_id,
+                "skill_id": node.skill_id,
+                "title": skill.name,
+                "goal": skill.description,
+                "script": str(script),
+                "node_key": str(
+                    (action.parameters or {}).get("node_key")
+                    or f"node:{node.skill_id}"
+                ),
+                **self._node_function_extras(session, node.node_id),
+            }
+        )
 
     def _find_similar_function_node(self, session, goal: str) -> dict | None:
         """The twin guard's lookup: the user's own function node whose goal
