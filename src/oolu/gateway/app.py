@@ -68,6 +68,7 @@ from ..durable.hooks import NodeHookStore
 from ..durable.idempotency import IdempotencyLedger
 from ..durable.offers import GrowthOfferStore
 from ..durable.service import DurableWorkflowService
+from ..identity.accounts import PendingPasswordStore
 from ..identity.apikeys import KEY_PREFIX, ApiKeyError, ApiKeyService, scope_allows
 from ..identity.errors import AuthenticationError, AuthorizationError
 from ..identity.google_signin import (
@@ -82,6 +83,7 @@ from ..identity.service import IdentityApprovalAuthority
 from ..identity.sessions import default_assurance
 from ..identity.tokens import OidcValidator
 from ..knowledge.traces import TraceStore
+from ..mail import SendThrottle
 from ..metering.attribution import AttributionStore
 from ..metering.models import MeteringEvent
 from ..metering.store import MeteringLedger
@@ -626,6 +628,11 @@ class GatewayApp:
         # Node webhooks: an outside system's door to ONE node's own
         # function — token-credentialed, owner-minted, digest-stored.
         self._node_hooks = NodeHookStore(durable.conn)
+        # Forgot-password's staged key: the e-mailed password waits here
+        # beside the real one — nobody is locked out by a stranger's
+        # request — and the outbound doors are paced per address.
+        self._pending_passwords = PendingPasswordStore(durable.conn)
+        self._send_throttle = SendThrottle(durable.conn)
         # The Global Project Graph: typed, revisioned truth, changed ONLY
         # through the transaction kernel — every verdict lands in the
         # hash-chained audit log (docs/industrial-vertical-plan.md, 1–2).
@@ -6915,10 +6922,18 @@ class GatewayApp:
             raise GatewayError(
                 400, "invalid_request", "username and password are required"
             )
+        now = request.now or self._clock()
+        # Forgot-password promotion: the e-mailed password was STAGED, not
+        # set — using it is what makes it real (and what proves control of
+        # the inbox, so the address counts as verified from here on).
+        if self._pending_passwords.take(username, password, now=now):
+            accounts.change_password(username, password)
+            if self._mail_codes is not None and self._identity_links is not None:
+                email = self._identity_links.email_of(username)
+                if email:
+                    self._mail_codes.mark_verified(email, "verify")
         try:
-            result = accounts.login(
-                username, password, now=request.now or self._clock()
-            )
+            result = accounts.login(username, password, now=now)
         except AuthenticationError as exc:
             raise GatewayError(401, "unauthorized", str(exc)) from exc
         # A verification-first host holds the door until the address is
@@ -6937,6 +6952,10 @@ class GatewayApp:
                     "verify your e-mail first — we sent a code when you "
                     "registered (or use 'Forgot password?' to get a new one)",
                 )
+        # The owner is in with their CURRENT password: any staged key —
+        # theirs or a stranger's — is dead weight now, and clearing it
+        # closes the window a mailed password would otherwise hold open.
+        self._pending_passwords.clear(username)
         return json_response(
             200,
             {
@@ -6994,7 +7013,10 @@ class GatewayApp:
     def _phone_start(self, request, session, params) -> Response:
         """Text a one-time code to the number — the same hashed, expiring,
         attempt-limited store the mail door uses. The answer never says
-        whether the number has an account (no enumeration)."""
+        whether the number has an account (no enumeration) — and it stays
+        identical when the throttle skips a send: every text costs the
+        host real provider money, so one number cannot be a billing lever
+        (the code from moments ago still works anyway)."""
         self._require_phone_door()
         from ..sms import normalize_phone
 
@@ -7002,12 +7024,19 @@ class GatewayApp:
             phone = normalize_phone((request.body or {}).get("phone"))
         except ValueError as exc:
             raise GatewayError(400, "invalid_request", str(exc)) from exc
-        code = self._mail_codes.issue(phone, "phone")
-        self._sms.send(
-            to=phone,
-            body=f"Your OoLu sign-in code is {code}. It expires in 30 "
-            "minutes. If you didn't request it, ignore this text.",
-        )
+        if self._send_throttle.allow(
+            phone,
+            "phone-code",
+            cooldown_s=60,
+            per_day=10,
+            now=request.now or self._clock(),
+        ):
+            code = self._mail_codes.issue(phone, "phone")
+            self._sms.send(
+                to=phone,
+                body=f"Your OoLu sign-in code is {code}. It expires in 30 "
+                "minutes. If you didn't request it, ignore this text.",
+            )
         return json_response(200, {"sent": True})
 
     def _phone_verify(self, request, session, params) -> Response:
@@ -7215,8 +7244,9 @@ class GatewayApp:
         )
 
     def _reset_request(self, request, session, params) -> Response:
-        """Start a password reset. Always 202 — an unknown address looks
-        exactly like a known one, so nothing enumerates accounts."""
+        """Start a password reset. Always 202 — an unknown address, a
+        throttled one, and a fresh send all look identical, so nothing
+        enumerates accounts (and nobody's inbox becomes a target)."""
         if self._mail is None or self._mail_codes is None:
             raise GatewayError(404, "not_found", "password reset is not enabled")
         body = request.body or {}
@@ -7226,7 +7256,13 @@ class GatewayApp:
             if self._identity_links is not None and _EMAIL_RE.match(email)
             else None
         )
-        if link is not None:
+        if link is not None and self._send_throttle.allow(
+            email,
+            "reset-code",
+            cooldown_s=60,
+            per_day=10,
+            now=request.now or self._clock(),
+        ):
             code = self._mail_codes.issue(email, "reset")
             self._mail.send(
                 to=email,
@@ -7266,43 +7302,49 @@ class GatewayApp:
 
     def _reset_email_password(self, request, session, params) -> Response:
         """Forgot password, the one-step way: the server GENERATES a new
-        password, sets it on the account, and e-mails it — the user signs
-        in with it and changes it in Settings. No code to type back.
+        password and e-mails it — the user signs in with it and changes it
+        in Settings. No code to type back.
 
-        Always 202: an unknown address gets the same answer as a known one,
-        so nothing enumerates accounts. Only a real, e-mail-linked account
-        is actually reset, and the temporary password reaches only the
-        inbox that owns the address."""
-        accounts = self._require_accounts()
+        Hardened on two axes. The mailed password is STAGED, never set:
+        the current password keeps working untouched until the new one is
+        actually used (its first sign-in promotes it and proves inbox
+        control), so a stranger who knows the address can lock nobody out
+        — and the mail can honestly say "if you didn't ask, nothing has
+        changed". And the door is paced per address (cooldown + daily cap)
+        so it cannot be turned into a mail cannon.
+
+        Always 202: an unknown address, a throttled one, and a fresh send
+        all answer identically, so nothing enumerates accounts."""
+        self._require_accounts()
         if self._mail is None or self._mail_codes is None:
             raise GatewayError(404, "not_found", "password reset is not enabled")
         body = request.body or {}
         email = str(body.get("email", "")).strip().lower()
+        now = request.now or self._clock()
         link = (
             self._identity_links.lookup("email", email)
             if self._identity_links is not None and _EMAIL_RE.match(email)
             else None
         )
-        if link is not None:
-            # A real, changeable password — texted-password parity for mail.
+        if link is not None and self._send_throttle.allow(
+            email, "reset-password", cooldown_s=600, per_day=5, now=now
+        ):
             password = secrets.token_urlsafe(9)
-            if accounts.change_password(link["username"], password):
-                self._mail.send(
-                    to=email,
-                    subject="Your new OoLu password",
-                    body=(
-                        f"Your OoLu account {link['username']} has a new "
-                        f"password: {password}\n\n"
-                        "Sign in with it and change it in Settings whenever "
-                        "you like. If you didn't ask for this, change your "
-                        "password now — someone knows your address."
-                    ),
-                )
-                # Receiving the new password proves inbox control, so the
-                # address counts as verified — a forgotten-password user is
-                # never also stuck behind the verification wall.
-                self._mail_codes.mark_verified(email, "verify")
-                self._metrics["password_resets"] += 1
+            self._pending_passwords.stage(link["username"], password, now=now)
+            self._mail.send(
+                to=email,
+                subject="Your new OoLu password",
+                body=(
+                    f"A new password for your OoLu account "
+                    f"{link['username']}: {password}\n\n"
+                    "It works for the next 30 minutes. Your current "
+                    "password keeps working until you sign in with this "
+                    "new one — so if you didn't ask for this, just ignore "
+                    "it: nothing has changed. After signing in, change it "
+                    "in Settings whenever you like."
+                ),
+            )
+            self._metrics["password_resets"] += 1
         return json_response(202, {"status": "sent"})
 
     # ------------------------------------------------------------------ #

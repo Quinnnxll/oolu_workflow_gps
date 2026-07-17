@@ -26,6 +26,23 @@ Script-bodied nodes reach the web through the same enforcement point, never arou
 
 Inbound node webhooks (`POST /v1/hooks/nodes/{id}/{token}`) are token-credentialed: the token is minted by the node's own human, stored only as a SHA-256 digest, compared in constant time, rotated by re-minting, and a wrong token answers the same 404 as a missing hook. A fired run wears the minter's identity — their run quota, their node's egress grants, and the confirmation walls for model-written code bind unchanged — and the payload is size-capped and staged as a file, never interpolated into a prompt or a command.
 
+## Account recovery (forgot password)
+
+Two reset doors, both fail-safe and non-enumerating (every request answers
+`202` whether or not the address exists). The code flow e-mails a one-time
+code; nothing changes until the code is redeemed with a chosen new password.
+The one-step flow e-mails a server-generated password, but **stages** it
+rather than setting it: the account's current password keeps working until
+the new one is first used, and a sign-in with the current password clears
+any staged key. This removes the lockout/griefing lever a set-on-request
+design would hand anyone who knows an address — a stranger's reset changes
+nothing the owner will notice, and the staged key expires (30 minutes) and
+is single-use. Both doors, and the phone sign-in SMS, are rate-limited per
+identifier (a cooldown between sends plus a daily cap) so they cannot be
+turned into a mail cannon or an SMS-billing lever; the throttle never
+changes the response, so it is not an enumeration oracle. Password-reset
+codes and staged passwords are stored only as hashes.
+
 ## Cache poisoning
 
 A successful run is not proof that a script is benign for every equivalent-looking task. Cache keys include intent, engine and cache-schema versions, prompt policy, routing models, backend identity, and package index. Cached scripts are bypassed after two recorded failures. Local database permissions, provenance, integrity checks, inspection, expiry, and revocation should be strengthened before shared caches are introduced.

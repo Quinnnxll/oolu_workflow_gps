@@ -263,12 +263,12 @@ def test_reset_confirm_refuses_junk(tmp_path):
 # Forgot password, one step: the server e-mails a fresh password.              #
 # --------------------------------------------------------------------------- #
 def _password_in(mail: dict) -> str:
-    match = re.search(r"new\s+password:\s*(\S+)", mail["body"])
+    match = re.search(r"account\s+\S+:\s*(\S+)", mail["body"])
     assert match, mail["body"]
     return match.group(1)
 
 
-def test_email_new_password_sets_it_and_signs_in(tmp_path):
+def test_email_new_password_stages_it_and_first_use_promotes(tmp_path):
     gateway, outbox, closers = _host(tmp_path)
     _register(gateway)  # never verified — then the user forgets the password
     outbox.sent.clear()
@@ -281,11 +281,68 @@ def test_email_new_password_sets_it_and_signs_in(tmp_path):
     assert [m["to"] for m in outbox.sent] == [EMAIL]
     new_password = _password_in(outbox.sent[0])
 
-    # The old password is dead; the e-mailed one works — and receiving it
-    # counted as verification, so the door is open even though the account
-    # was never verified before.
+    # The e-mailed password is STAGED, not set: the ORIGINAL password still
+    # works... but using the new one is what promotes it. Sign in with the
+    # new one first, so we can prove the promotion happened.
+    signed_in = _login(gateway, "quinn", new_password)
+    assert signed_in.status == 200, signed_in.body  # promoted + verified
+
+    # Now the promotion is real: the new password is the account's, the old
+    # one is gone, and the staged key is single-use (a replay fails).
     assert _login(gateway, "quinn", PASSWORD).status == 401
     assert _login(gateway, "quinn", new_password).status == 200
+    for closer in closers:
+        closer.close()
+
+
+def test_a_stranger_reset_cannot_lock_the_owner_out(tmp_path):
+    """The hardening's whole point: a reset requested by someone who only
+    knows the address changes NOTHING for the owner. The current password
+    keeps working, and signing in with it clears the stranger's staged key
+    — so the mailed password can never be used after."""
+    gateway, outbox, closers = _host(tmp_path)
+    _register(gateway)
+    # Prove the address first, so the verification wall isn't the thing
+    # under test here.
+    code = _code_in(outbox.sent[0])
+    gateway.handle(
+        _req(
+            "POST",
+            "/v1/auth/verify",
+            body={"email": EMAIL, "code": code, "password": PASSWORD},
+        )
+    )
+    outbox.sent.clear()
+
+    # A stranger triggers "e-mail me a new password".
+    gateway.handle(_req("POST", "/v1/auth/reset/password", body={"email": EMAIL}))
+    stranger_password = _password_in(outbox.sent[0])
+
+    # The owner, oblivious, signs in with their REAL password — it still
+    # works, and that sign-in clears the staged key.
+    assert _login(gateway, "quinn", PASSWORD).status == 200
+    # The mailed password is now dead weight: it never becomes the account's.
+    assert _login(gateway, "quinn", stranger_password).status == 401
+    assert _login(gateway, "quinn", PASSWORD).status == 200
+    for closer in closers:
+        closer.close()
+
+
+def test_email_new_password_is_throttled_per_address(tmp_path):
+    gateway, outbox, closers = _host(tmp_path)
+    _register(gateway)
+    outbox.sent.clear()
+
+    # Two requests in immediate succession: the first mails, the second is
+    # paced — but BOTH answer 202, so the pacing never leaks.
+    first = gateway.handle(
+        _req("POST", "/v1/auth/reset/password", body={"email": EMAIL})
+    )
+    second = gateway.handle(
+        _req("POST", "/v1/auth/reset/password", body={"email": EMAIL})
+    )
+    assert first.status == second.status == 202
+    assert len(outbox.sent) == 1  # only one mail actually went out
     for closer in closers:
         closer.close()
 

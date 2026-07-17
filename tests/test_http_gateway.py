@@ -251,12 +251,17 @@ def _app(tmp_path, scenario=_autonomous, *, ident=None, config=None, path=None):
     return app, conn, ident
 
 
-def _req(method, path, *, token=None, body=None, query=None, headers=None):
+def _req(method, path, *, token=None, body=None, query=None, headers=None, now=None):
     hdrs = dict(headers or {})
     if token:
         hdrs["Authorization"] = f"Bearer {token}"
     return Request(
-        method=method, path=path, headers=hdrs, query=query or {}, body=body, now=NOW
+        method=method,
+        path=path,
+        headers=hdrs,
+        query=query or {},
+        body=body,
+        now=now or NOW,
     )
 
 

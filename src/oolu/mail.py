@@ -189,6 +189,83 @@ class MailCodeStore:
         return bool(row and row["verified_at"])
 
 
+_THROTTLE_SCHEMA = """CREATE TABLE IF NOT EXISTS send_throttle (
+    identifier TEXT NOT NULL,
+    purpose TEXT NOT NULL,
+    last_at TEXT NOT NULL,
+    day_start TEXT NOT NULL,
+    day_count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (identifier, purpose)
+)"""
+
+
+class SendThrottle:
+    """Pacing for the outbound doors — mail and SMS alike.
+
+    Every public route that SENDS something on request (a reset mail, a
+    sign-in text) is a lever a stranger can pull with nothing but an
+    address: mail-bombing a victim's inbox, or running up the host's SMS
+    bill one code at a time. This ledger bounds the lever per identifier
+    and purpose: a cooldown between sends, and a daily cap. Refusals are
+    the CALLER's to keep silent — the route answers exactly as if it had
+    sent, so the throttle never becomes an enumeration oracle.
+    """
+
+    def __init__(self, conn, *, clock=None) -> None:
+        self._conn = conn
+        self._clock = clock or (lambda: datetime.now(UTC))
+        with self._conn.transaction() as db:
+            db.execute(_THROTTLE_SCHEMA)
+
+    def allow(
+        self,
+        identifier: str,
+        purpose: str,
+        *,
+        cooldown_s: float,
+        per_day: int,
+        now: datetime | None = None,
+    ) -> bool:
+        """True (and the send is recorded) iff this send may go out now."""
+        moment = now or self._clock()
+        with self._conn.transaction() as db:
+            row = db.execute(
+                "SELECT last_at, day_start, day_count FROM send_throttle"
+                " WHERE identifier = ? AND purpose = ?",
+                (identifier, purpose),
+            ).fetchone()
+            if row is None:
+                db.execute(
+                    """INSERT INTO send_throttle
+                         (identifier, purpose, last_at, day_start, day_count)
+                       VALUES (?, ?, ?, ?, 1)""",
+                    (identifier, purpose, moment.isoformat(), moment.isoformat()),
+                )
+                return True
+            last_at = datetime.fromisoformat(row["last_at"])
+            if (moment - last_at).total_seconds() < cooldown_s:
+                return False
+            day_start = datetime.fromisoformat(row["day_start"])
+            day_count = int(row["day_count"])
+            if (moment - day_start) >= timedelta(days=1):
+                day_start, day_count = moment, 0
+            if day_count >= per_day:
+                return False
+            db.execute(
+                """UPDATE send_throttle
+                   SET last_at = ?, day_start = ?, day_count = ?
+                   WHERE identifier = ? AND purpose = ?""",
+                (
+                    moment.isoformat(),
+                    day_start.isoformat(),
+                    day_count + 1,
+                    identifier,
+                    purpose,
+                ),
+            )
+            return True
+
+
 def build_mail_sender(environ: dict[str, Any]) -> MailSender | None:
     """The host's outbound door from environment configuration:
     OOLU_MAIL_URL + OOLU_MAIL_KEY + OOLU_MAIL_FROM → HttpMailSender;

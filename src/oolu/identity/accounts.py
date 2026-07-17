@@ -380,3 +380,92 @@ class LocalAccountService:
                 locked_until = moment + timedelta(seconds=LOCKOUT_SECONDS)
                 count = 0  # a lockout served is a slate cleaned
             self._failures[username] = (count, locked_until)
+
+
+# --------------------------------------------------------------------------- #
+# Forgot-password's staged key.                                                #
+# --------------------------------------------------------------------------- #
+PENDING_PASSWORD_TTL_MINUTES = 30
+
+
+class PendingPasswordStore:
+    """The e-mailed new password waits HERE — it never replaces the real one.
+
+    The one-step forgot-password flow used to set the account's password
+    the moment anyone asked, which handed strangers a lockout lever:
+    knowing an address was enough to force-reset its account. Staging
+    closes that: the mailed password is a SECOND key with a short life
+    (:data:`PENDING_PASSWORD_TTL_MINUTES`), the current password keeps
+    working untouched, and the staged one becomes real only when its
+    owner actually signs in with it — which is also the moment inbox
+    control is proven. A sign-in with the CURRENT password clears any
+    staged key, so an attacker's request dies the moment the real owner
+    shows up. Hashes only, same scrypt scheme as the account store.
+    """
+
+    _SCHEMA = """CREATE TABLE IF NOT EXISTS pending_passwords (
+        username TEXT PRIMARY KEY,
+        password_hash TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )"""
+
+    def __init__(self, conn, *, clock: Callable[[], datetime] | None = None) -> None:
+        self._conn = conn
+        self._clock = clock or (lambda: datetime.now(UTC))
+        with self._conn.transaction() as db:
+            db.execute(self._SCHEMA)
+
+    def stage(
+        self, username: str, password: str, *, now: datetime | None = None
+    ) -> None:
+        """Park a fresh password beside the real one (replacing any prior
+        staged key), alive for the TTL."""
+        moment = now or self._clock()
+        expires = moment + timedelta(minutes=PENDING_PASSWORD_TTL_MINUTES)
+        with self._conn.transaction() as db:
+            db.execute(
+                """INSERT INTO pending_passwords
+                     (username, password_hash, expires_at, created_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(username) DO UPDATE SET
+                     password_hash = excluded.password_hash,
+                     expires_at = excluded.expires_at,
+                     created_at = excluded.created_at""",
+                (
+                    username,
+                    hash_password(password),
+                    expires.isoformat(),
+                    moment.isoformat(),
+                ),
+            )
+
+    def take(
+        self, username: str, password: str, *, now: datetime | None = None
+    ) -> bool:
+        """True iff ``password`` is the staged, unexpired key — and spend
+        it: a staged password promotes exactly once. Expired rows die on
+        the way through; a mismatch leaves the row (the real owner's mail
+        may still be in flight while a stranger guesses)."""
+        moment = now or self._clock()
+        with self._conn.lock:
+            row = self._conn.db.execute(
+                "SELECT password_hash, expires_at FROM pending_passwords"
+                " WHERE username = ?",
+                (username,),
+            ).fetchone()
+        if row is None:
+            return False
+        if moment > datetime.fromisoformat(row["expires_at"]):
+            self.clear(username)
+            return False
+        if not verify_password(password, row["password_hash"]):
+            return False
+        self.clear(username)
+        return True
+
+    def clear(self, username: str) -> None:
+        with self._conn.transaction() as db:
+            db.execute(
+                "DELETE FROM pending_passwords WHERE username = ?", (username,)
+            )

@@ -38,6 +38,22 @@ fresh password:
   door lights up the moment Twilio is configured; and
   `docs/going-online.md` documents the Twilio variables and both reset
   doors.
+- **The one-step reset is hardened against griefing.** Setting a
+  password the moment anyone asked handed strangers a lockout lever:
+  knowing an address was enough to force-reset its account. Now the
+  mailed password is **staged**, not set — it waits in a new
+  `PendingPasswordStore` (hashed, 30-minute TTL) beside the real one,
+  which keeps working untouched; the staged key becomes the account's
+  password only on its first successful sign-in (which is also what
+  proves inbox control and clears the verification wall), and a sign-in
+  with the *current* password dispels any staged key. A stranger's
+  reset now changes nothing the owner will notice, and the mail says so
+  ("if you didn't ask, nothing has changed"). All three outbound doors —
+  reset code, reset password, and the phone sign-in SMS — are paced per
+  address/number by a new `SendThrottle` (a cooldown plus a daily cap),
+  so none can be turned into a mail cannon or an SMS-billing lever, and
+  the pacing never changes the `202`/`200` response, so it is not an
+  enumeration oracle.
 
 OoLu gets hands: web-capable nodes, files inside the node, and a
 webhook that fires it — the sandbox stays severed:

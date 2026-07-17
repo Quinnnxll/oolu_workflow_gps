@@ -80,8 +80,19 @@ def test_a_new_number_gets_an_account_and_a_texted_password(tmp_path):
         assert login.status == 200, login.body
 
         # The SAME number next time: sign-in, never a second account.
+        # (Past the send cooldown — a second text moments later is paced.)
+        from datetime import timedelta
+
+        from test_http_gateway import NOW
+
+        later = NOW + timedelta(minutes=2)
         code2_start = gateway.handle(
-            _req("POST", "/v1/auth/phone/start", body={"phone": "+15550100000"})
+            _req(
+                "POST",
+                "/v1/auth/phone/start",
+                body={"phone": "+15550100000"},
+                now=later,
+            )
         )
         assert code2_start.status == 200
         code2 = next(

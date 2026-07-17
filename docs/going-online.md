@@ -63,9 +63,16 @@ Notes:
   code flow (`/v1/auth/reset/request` → `/v1/auth/reset/confirm`, where
   the user picks their own new password), and the one-step flow
   (`/v1/auth/reset/password`), where the server generates a fresh
-  password, sets it, and e-mails it — the user signs in with it and
-  changes it in Settings. Both answer `202` for any address, so nothing
-  enumerates accounts. Without a mail sender the register route still
+  password and e-mails it — the user signs in with it and changes it in
+  Settings. Both answer `202` for any address, so nothing enumerates
+  accounts. The one-step flow is hardened against griefing: the mailed
+  password is **staged**, not set — the current password keeps working
+  untouched until the new one is actually used (its first sign-in
+  promotes it and proves inbox control), and it expires in 30 minutes —
+  so a stranger who knows an address can lock nobody out. All three
+  outbound doors (reset code, reset password, phone code) are paced per
+  address/number with a cooldown and a daily cap, so none can be turned
+  into a mail cannon or an SMS-billing lever. Without a mail sender the register route still
   answers with an immediate token (fine for private testing); a
   `--global-service` host refuses that combination outright — public
   registration requires verified e-mail. Leave it off for a private host.
