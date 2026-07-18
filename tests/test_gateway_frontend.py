@@ -58,6 +58,7 @@ def test_every_path_the_frontend_calls_is_a_real_route():
         "/v1/metrics",
         "/v1/work/bundles/sweep",
         "/v1/work/bundles/schedule",
+        "/v1/work/bundles/audit",
     }
     for path in called:
         assert path in html, f"frontend no longer calls {path}"
@@ -202,6 +203,8 @@ def test_the_sweep_routine_is_operable_from_the_browser(host_server):
         # The dry-run report renders even on an empty store: honest zeros.
         expect(page.get_by_text("dead frozen trees: 0")).to_be_visible()
         expect(page.get_by_text("reclaimable: 0 B")).to_be_visible()
+        # A fresh host has no sweep story to tell yet.
+        expect(page.get_by_text("No sweep activity")).to_be_visible()
 
         # Enable = the standing consent, with a chosen interval.
         page.get_by_label("Interval (hours)").fill("6")
@@ -209,15 +212,20 @@ def test_the_sweep_routine_is_operable_from_the_browser(host_server):
         expect(page.get_by_text("enabled", exact=True)).to_be_visible()
         expect(page.get_by_text("every 6 h")).to_be_visible()
         expect(page.get_by_text("consent granted by admin")).to_be_visible()
+        # The grant is already on the history card.
+        expect(page.get_by_text("admin granted the standing consent")).to_be_visible()
 
         # A manual sweep applies from the same screen and reports back.
         page.get_by_role("button", name="Sweep now").click()
         expect(page.get_by_text("applied", exact=True)).to_be_visible()
         expect(page.get_by_text("reclaimed: 0 B")).to_be_visible()
 
-        # Revoking the consent returns the card to its unscheduled state.
+        # Revoking the consent returns the card to its unscheduled state —
+        # and the refreshed history now tells the whole story, newest first.
         page.get_by_role("button", name="Disable").click()
         expect(page.get_by_text("not scheduled")).to_be_visible()
+        expect(page.get_by_text("admin revoked the standing consent")).to_be_visible()
+        expect(page.get_by_text("manual sweep by admin")).to_be_visible()
         browser.close()
 
 

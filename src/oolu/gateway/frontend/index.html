@@ -698,9 +698,52 @@ async function sweepCard() {
     err, out);
 }
 
+function sweepEventLine(item) {
+  if (item.event_type === "bundles.sweep_scheduled") {
+    return item.by + " granted the standing consent · interval "
+      + item.interval_hours + " h";
+  }
+  if (item.event_type === "bundles.sweep_unscheduled") {
+    return item.by + " revoked the standing consent";
+  }
+  return (item.scheduled
+      ? "scheduled firing under " + item.granted_by + "'s consent"
+      : "manual sweep by " + item.by)
+    + " · reclaimed " + bytes(item.reclaimed_bytes)
+    + " · dead trees " + item.dead_manifests
+    + " · orphan blobs " + item.orphan_blobs;
+}
+
+async function historyCard() {
+  let data;
+  try { data = await api("GET", "/v1/work/bundles/audit"); }
+  catch (e) {
+    return h("div", { class: "card" }, h("h2", {}, "sweep history"),
+      e.status === 404 ? notEnabled() : h("div", { class: "error" }, e.message));
+  }
+  const label = {
+    "bundles.swept": "swept",
+    "bundles.sweep_scheduled": "granted",
+    "bundles.sweep_unscheduled": "revoked",
+  };
+  return h("div", { class: "card" },
+    h("h2", {}, "sweep history"),
+    data.items.length
+      ? h("table", {},
+          h("tr", {}, h("th", {}, "at"), h("th", {}, "event"),
+            h("th", {}, "what happened")),
+          data.items.map((item) => h("tr", {},
+            h("td", { class: "muted" }, item.at),
+            h("td", {}, badge(label[item.event_type] || item.event_type,
+              item.event_type === "bundles.sweep_unscheduled" ? "bad"
+                : item.event_type === "bundles.swept" ? "ok" : undefined)),
+            h("td", {}, sweepEventLine(item)))))
+      : h("p", { class: "muted" }, "No sweep activity has been recorded yet."));
+}
+
 async function storageScreen() {
   const view = await api("GET", "/v1/work/bundles/schedule");
-  return h("div", {}, routineCard(view), await sweepCard());
+  return h("div", {}, routineCard(view), await sweepCard(), await historyCard());
 }
 
 /* ---- router ---- */

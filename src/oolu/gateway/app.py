@@ -1165,6 +1165,14 @@ class GatewayApp:
         )
         r.add("POST", "/v1/work/bundles/schedule", self._sweep_schedule_set)
         r.add("DELETE", "/v1/work/bundles/schedule", self._sweep_schedule_clear)
+        # The sweep's history: every consent granted or revoked and every
+        # firing, straight off the hash-chained audit log.
+        r.add(
+            "GET",
+            "/v1/work/bundles/audit",
+            self._bundle_sweep_audit,
+            requires_permission="hygiene:sweep",
+        )
         r.add("POST", "/v1/nodeplace", self._contribute)
         r.add("POST", "/v1/nodeplace/{node_id}/revoke", self._revoke_node)
         r.add("GET", "/v1/listings", self._discover_listings)
@@ -6186,6 +6194,35 @@ class GatewayApp:
                 {"run_id": "bundles:schedule", "by": session.principal_id},
             )
         return json_response(200, {"enabled": False, "disabled": disabled})
+
+    def _bundle_sweep_audit(self, request, session, params) -> Response:
+        """The sweep's whole history, straight off the hash-chained audit
+        log: consents granted and revoked, and every firing — manual or
+        scheduled — newest first, capped small. No new bookkeeping: the
+        records were already being written; this reads them back."""
+        records = [
+            record
+            for run_id in ("bundles:sweep", "bundles:schedule")
+            for record in self._durable.audit.records(run_id=run_id)
+        ]
+        records.sort(key=lambda record: record.seq, reverse=True)
+        return json_response(
+            200,
+            {
+                "items": [
+                    {
+                        "at": record.at.isoformat(),
+                        "event_type": record.event_type,
+                        **{
+                            key: value
+                            for key, value in record.payload.items()
+                            if key != "run_id"
+                        },
+                    }
+                    for record in records[:50]
+                ]
+            },
+        )
 
     def _maybe_scheduled_sweep(self, request) -> None:
         """The lazy tick: cheap by construction. A monotonic gate bounds

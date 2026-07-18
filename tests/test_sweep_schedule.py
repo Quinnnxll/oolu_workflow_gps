@@ -173,6 +173,81 @@ def test_the_schedule_routes_are_approve_gated_and_audited(tmp_path):
         conn.close()
 
 
+def test_the_audit_route_replays_the_sweeps_history(tmp_path):
+    """GET /v1/work/bundles/audit reads the story back off the hash-chained
+    log — grant, manual sweep, scheduled firing, revocation — newest first,
+    behind the same hygiene:sweep authority as the other read routes."""
+    from oolu.identity import AuthorityGrant, Role
+
+    app, conn, ident, desk = _scheduled_rig(tmp_path)
+    try:
+        member = ident.token("user-1", "t1")
+        refused = app.handle(_req("GET", "/v1/work/bundles/audit", token=member))
+        assert refused.status == 403  # no hygiene:sweep, no history
+
+        # A steward with both hats: approve authority for the writes,
+        # hygiene:sweep for the reads.
+        _grant_approver(ident, "steward", "t1")
+        ident.store.add_role(
+            Role(
+                tenant_id="t1",
+                name="janitor",
+                permissions=frozenset({"hygiene:sweep"}),
+            )
+        )
+        ident.store.add_grant(
+            AuthorityGrant(
+                tenant_id="t1",
+                principal_id="steward",
+                role_name="janitor",
+                granted_by="x",
+            )
+        )
+        steward = ident.token("steward", "t1")
+        assert (
+            app.handle(
+                _req(
+                    "POST",
+                    "/v1/work/bundles/schedule",
+                    token=steward,
+                    body={"interval_hours": 6},
+                )
+            ).status
+            == 200
+        )
+        assert (
+            app.handle(_req("POST", "/v1/work/bundles/sweep", token=steward)).status
+            == 200
+        )
+        app._scheduled_sweep_tick(NOW + timedelta(hours=7))
+        assert (
+            app.handle(
+                _req("DELETE", "/v1/work/bundles/schedule", token=steward)
+            ).status
+            == 200
+        )
+
+        listed = app.handle(_req("GET", "/v1/work/bundles/audit", token=steward))
+        assert listed.status == 200
+        events = [item["event_type"] for item in listed.body["items"]]
+        assert events == [  # newest first
+            "bundles.sweep_unscheduled",
+            "bundles.swept",
+            "bundles.swept",
+            "bundles.sweep_scheduled",
+        ]
+        fired = listed.body["items"][1]  # the scheduled firing names whose
+        assert fired["scheduled"] is True  # consent it ran under
+        assert fired["granted_by"] == "steward"
+        manual = listed.body["items"][2]
+        assert "scheduled" not in manual and manual["by"] == "steward"
+        granted = listed.body["items"][3]
+        assert granted["interval_hours"] == 6
+        assert all("run_id" not in item for item in listed.body["items"])
+    finally:
+        conn.close()
+
+
 # --------------------------------------------------------------------------- #
 # The firing: a due tick sweeps under the standing consent, exactly once.      #
 # --------------------------------------------------------------------------- #

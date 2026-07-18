@@ -4,6 +4,25 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The sweep's history, read back off the audit chain:
+
+- **`GET /v1/work/bundles/audit`.** The trail was already being written
+  — `bundles.sweep_scheduled`, `bundles.swept` (manual or `scheduled:
+  true` with the grantor's name), `bundles.sweep_unscheduled` — this
+  route just reads it back: the records under the sweep's two audit
+  run-ids, merged, newest first, capped at fifty. No new bookkeeping,
+  and the same `hygiene:sweep` authority as the other read routes.
+- **A history card on the Storage tab.** Under the Routine and the
+  dry-run report, the whole story as one table: who granted the
+  standing consent and at what interval, every firing (manual sweeps
+  name the operator; scheduled firings name whose consent they ran
+  under, with reclaimed bytes and counts), and every revocation.
+- **Tested at both layers.** A gateway test replays the full arc —
+  grant, manual sweep, scheduled firing, revocation — and asserts the
+  route returns it newest-first behind the permission wall; the
+  Playwright flow now also watches the history card fill in live as
+  the admin grants, sweeps, and revokes from the browser.
+
 The Routine gets a face: sweep reports in the operator UI:
 
 - **A Storage screen on the operator page.** The gateway front-end grows
