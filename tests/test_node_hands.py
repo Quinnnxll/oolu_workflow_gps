@@ -406,6 +406,81 @@ def test_every_chat_turn_carries_the_engines_web_truth(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# Proactive surfacing: the chat OFFERS to build, and only a yes starts work.   #
+# --------------------------------------------------------------------------- #
+def test_the_builder_note_teaches_offer_then_consent():
+    from oolu.chat import BUILDER_OFFER_NOTE, DEFAULT_RULES
+
+    # The capabilities are named truthfully — program files, the guarded
+    # web hand, the webhook door, self-repair, the sandbox wall — and the
+    # discipline is offer-then-consent, never offer-as-work.
+    for fact in ("src/", "webhook", "repaired", "sandbox"):
+        assert fact in BUILDER_OFFER_NOTE
+    assert "OFFER" in BUILDER_OFFER_NOTE
+    assert 'keep "task" null until the user agrees' in BUILDER_OFFER_NOTE
+    # The model-free door tells the same story: the deterministic
+    # capabilities reply names the building hands too.
+    help_rule = next(r for r in DEFAULT_RULES if r.id == "capabilities")
+    assert "automation" in help_rule.reply
+
+
+def test_every_chat_turn_carries_the_builder_offer(tmp_path):
+    from oolu.chat import BUILDER_OFFER_NOTE
+
+    app, conn, ident = _app(tmp_path)
+    model = _FakeModel(['{"say": "Sure!", "task": null}'])
+    app._tenant_model = lambda tenant: model
+    try:
+        response = app.handle(
+            _req(
+                "POST",
+                "/v1/chat",
+                token=ident.token("user-1", "t1"),
+                body={
+                    "message": "every friday I copy rates into a sheet",
+                    "history": [],
+                },
+            )
+        )
+        assert response.status == 200, response.body
+        [messages] = model.calls
+        notes = [m["content"] for m in messages if m.get("role") == "system"]
+        assert any(BUILDER_OFFER_NOTE in note for note in notes)
+    finally:
+        conn.close()
+
+
+def test_an_offer_is_words_until_the_user_agrees():
+    # The shape the note teaches, at the assistant level: the offering
+    # turn is pure conversation (nothing runs), and the user's yes is
+    # where the work actually starts.
+    from oolu.chat import ChatAssistant
+
+    model = _FakeModel(
+        [
+            '{"say": "I could build you a little automation for that — '
+            'want me to?", "task": null}',
+            '{"say": "On it!", '
+            '"task": "build a node that pulls the rates every friday"}',
+        ]
+    )
+    assistant = ChatAssistant(model=model)
+    offer = assistant.respond("every friday I copy exchange rates into a sheet")
+    assert offer.task is None  # the offer itself starts nothing
+    accepted = assistant.respond(
+        "yes please",
+        history=[
+            {
+                "role": "user",
+                "content": "every friday I copy exchange rates into a sheet",
+            },
+            {"role": "assistant", "content": offer.say},
+        ],
+    )
+    assert accepted.task == "build a node that pulls the rates every friday"
+
+
+# --------------------------------------------------------------------------- #
 # The consent chain, end to end: build in chat, run through the node's own     #
 # function, the grant stamped onto the executed action.                        #
 # --------------------------------------------------------------------------- #

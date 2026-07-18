@@ -38,6 +38,7 @@ from ..billing import (
 from ..billing.launch import LaunchGuard
 from ..billing.subscription import SubscriptionError, SubscriptionService
 from ..chat import (
+    BUILDER_OFFER_NOTE,
     GROWTH_BUILD_INSTEAD,
     GROWTH_OFFER,
     GROWTH_REUSE_OFFER,
@@ -1353,6 +1354,11 @@ class GatewayApp:
             WEB_SEARCH_NOTE if searches is not None and searches() else None
         )
         web_task_note = WEB_TASK_NOTE
+        # And the builder's truth, always on: the engine can BUILD — real
+        # program files, guarded web/API/webhook hands, self-repair — and
+        # the model should OFFER that for repeatable chores (words only;
+        # work starts on the user's yes, never on the offer).
+        builder_note = BUILDER_OFFER_NOTE
         # OoLu's voice follows its mood: the client sends the avatar's
         # current mood, and the turn is coloured to match the face.
         mood_note = mood_directive(body.get("mood"))
@@ -1396,6 +1402,7 @@ class GatewayApp:
                     context_note,
                     search_note,
                     web_task_note,
+                    builder_note,
                     mood_note,
                     units_note,
                     rep_note,

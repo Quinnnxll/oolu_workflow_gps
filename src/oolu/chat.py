@@ -152,7 +152,10 @@ message, call rep_ignore — it is marked read, with no reply."""
 
 _HELP = (
     "I'm OoLu — your get-it-done sidekick! ⚡ Tell me what you need and I'll "
-    "run with it. I learn as we go, so the stuff we've done before only gets "
+    "run with it. For anything repeatable I can build you a real automation: "
+    "a little program of its own that can call APIs, catch webhooks, and "
+    "crunch your files — running safely sandboxed, and fixing itself when it "
+    "trips. I learn as we go, so the stuff we've done before only gets "
     "faster. What are we tackling first?"
 )
 
@@ -1644,6 +1647,30 @@ WEB_TASK_NOTE = (
     "through a granted, host-guarded HTTP hand even though its sandbox has "
     'no network of its own. Hand such work to "task" instead of refusing '
     "it; the node's owner grants the exact hosts on the node's account."
+)
+
+# Proactive surfacing: most users never learn the engine can BUILD until
+# they happen to phrase a request as work. This note teaches the model to
+# spot buildable chores and name the possibility — as an OFFER in words.
+# The system prompt's "never invent work" rule stands: an offer keeps
+# "task" null, and only the user's yes starts anything (the same
+# one-message consent shape the engine's own growth offers use).
+BUILDER_OFFER_NOTE = (
+    "The engine behind you builds REAL automations, and most users have no "
+    "idea: a node carries its own program files (a src/ tree the builder "
+    "writes and keeps maintaining), installs the third-party packages it "
+    "needs, and runs in a sandbox that cannot touch anything else. Its "
+    "function can call APIs and the live web through a granted, "
+    "host-guarded HTTP hand; an inbound webhook can fire it from outside; "
+    "and code that fails mid-run is repaired, with the fix kept for next "
+    "time. Be PROACTIVE about this: when the user describes work that "
+    "repeats or could run on its own — a chore they do every week, steps "
+    "they keep redoing by hand, something they wish just happened — OFFER, "
+    'in "say" and in one short sentence, to build it as an automation. An '
+    'offer is words only: keep "task" null until the user agrees, and only '
+    'then hand the work to "task". Never present an offer as done work, '
+    "and if they decline or ignore it, drop it — one offer per chore, "
+    "not a campaign."
 )
 
 

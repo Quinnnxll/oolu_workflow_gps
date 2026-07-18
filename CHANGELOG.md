@@ -4,6 +4,36 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The chat offers its hands: proactive node-building, on consent:
+
+- **The gap.** The engine can build real automations — program files,
+  guarded web/API/webhook hands, self-repair — but a user only found
+  out if they happened to phrase a request as work. The chat knew how
+  to accept building; it never *offered* it.
+- **`BUILDER_OFFER_NOTE`, on every chat turn.** A standing system note
+  (the `WEB_TASK_NOTE` idiom) that tells the model two things. What is
+  true: a node carries its own `src/` tree the builder writes and keeps
+  maintaining, installs the packages it needs, runs in a sandbox that
+  cannot touch anything else, reaches APIs and the live web through the
+  granted host-guarded hand, can be fired from outside by its webhook,
+  and is repaired mid-run when its code trips. And what to do about it:
+  when the user describes work that repeats or could run on its own,
+  OFFER — one short sentence, in words — to build it. The offer
+  discipline keeps the prompt's "never invent work" rule intact:
+  `task` stays null until the user agrees; only their yes starts
+  anything (the same one-message consent shape the engine's own growth
+  offers use); a declined or ignored offer is dropped, one offer per
+  chore, never a campaign.
+- **The model-free door says it too.** The deterministic "what can you
+  do" reply now names the building hands — automations with their own
+  programs that call APIs, catch webhooks, crunch files, sandboxed and
+  self-fixing — so even a keyless install stops hiding the light under
+  the bushel.
+- **Tests.** The note's facts and discipline are pinned; a gateway test
+  proves every `/v1/chat` turn carries it; and an assistant-level test
+  walks the shape end to end — the offering turn starts nothing, the
+  user's yes is where the work begins.
+
 The frozen trees themselves: a bundle inventory on the Storage tab:
 
 - **`GET /v1/work/bundles`.** Every stored manifest with its file
