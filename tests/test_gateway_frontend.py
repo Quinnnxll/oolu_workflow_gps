@@ -56,6 +56,8 @@ def test_every_path_the_frontend_calls_is_a_real_route():
         "/v1/payout-accounts",
         "/v1/worker-health",
         "/v1/metrics",
+        "/v1/work/bundles/sweep",
+        "/v1/work/bundles/schedule",
     }
     for path in called:
         assert path in html, f"frontend no longer calls {path}"
@@ -181,6 +183,60 @@ def test_members_see_screens_degrade_honestly(host_server):
         # that change and only now runs in CI, where it caught up.
         page.get_by_role("link", name="Earnings").click()
         expect(page.get_by_text("No earnings yet.")).to_be_visible()
+        browser.close()
+
+
+def test_the_sweep_routine_is_operable_from_the_browser(host_server):
+    """The Storage screen closes the loop on the sweep Routine: an admin
+    stands up the standing consent, reads the dry-run report, applies a
+    sweep, and revokes the consent — all from the operator UI, all against
+    the same approve-gated endpoints the API exposes."""
+    with sync_playwright() as p:
+        browser = _launch(p)
+        page = browser.new_page()
+        _sign_in(page, host_server.url, "admin", "first-pass")
+
+        page.get_by_role("link", name="Storage").click()
+        expect(page.get_by_text("not scheduled")).to_be_visible()
+        expect(page.get_by_text("has not fired yet")).to_be_visible()
+        # The dry-run report renders even on an empty store: honest zeros.
+        expect(page.get_by_text("dead frozen trees: 0")).to_be_visible()
+        expect(page.get_by_text("reclaimable: 0 B")).to_be_visible()
+
+        # Enable = the standing consent, with a chosen interval.
+        page.get_by_label("Interval (hours)").fill("6")
+        page.get_by_role("button", name="Enable").click()
+        expect(page.get_by_text("enabled", exact=True)).to_be_visible()
+        expect(page.get_by_text("every 6 h")).to_be_visible()
+        expect(page.get_by_text("consent granted by admin")).to_be_visible()
+
+        # A manual sweep applies from the same screen and reports back.
+        page.get_by_role("button", name="Sweep now").click()
+        expect(page.get_by_text("applied", exact=True)).to_be_visible()
+        expect(page.get_by_text("reclaimed: 0 B")).to_be_visible()
+
+        # Revoking the consent returns the card to its unscheduled state.
+        page.get_by_role("button", name="Disable").click()
+        expect(page.get_by_text("not scheduled")).to_be_visible()
+        browser.close()
+
+
+def test_members_cannot_read_the_sweep_screen(host_server):
+    with sync_playwright() as p:
+        browser = _launch(p)
+        page = browser.new_page()
+        _sign_in(page, host_server.url, "admin", "first-pass")
+        page.get_by_role("link", name="Users").click()
+        page.get_by_label("Username").fill("dave")
+        page.get_by_label("Password").fill("daves-password")
+        page.get_by_role("button", name="Create user").click()
+        expect(page.get_by_role("cell", name="dave", exact=True)).to_be_visible()
+        page.get_by_role("link", name="sign out").click()
+
+        # No hygiene:sweep permission → the screen says so, plainly.
+        _sign_in(page, host_server.url, "dave", "daves-password")
+        page.get_by_role("link", name="Storage").click()
+        expect(page.get_by_text("Your account does not have authority")).to_be_visible()
         browser.close()
 
 

@@ -67,6 +67,14 @@ const badge = (text, cls) =>
   h("span", { class: "badge" + (cls ? " " + cls : "") }, text);
 const money = (v) => (v == null ? "—" : "$" + Number(v).toFixed(4));
 const percent = (v) => (v == null ? "—" : Math.round(v * 100) + "%");
+const bytes = (v) => {
+  if (v == null) return "—";
+  let n = Number(v);
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i += 1; }
+  return (i ? n.toFixed(1) : String(n)) + " " + units[i];
+};
 
 /* ---- session: the bearer token lives for this browser tab only ---- */
 const session = {
@@ -591,6 +599,110 @@ async function healthScreen() {
         h("tr", {}, h("td", {}, k), h("td", {}, String(v))))));
 }
 
+/* ---- storage: the frozen-tree store's sweep and its Routine ---- */
+function sweepReport(plan) {
+  return h("ul", { class: "plain" },
+    h("li", {},
+      "dead frozen trees: " + plan.dead_manifests.length
+      + " · orphan blobs: " + plan.orphan_blobs.length),
+    h("li", {},
+      (plan.applied ? "reclaimed: " : "reclaimable: ") + bytes(plan.reclaimed_bytes)),
+    h("li", { class: "muted" },
+      "kept (referenced or in grace): " + plan.kept_blobs
+      + " · tier copies purged: " + plan.tier_discards),
+    plan.sources && plan.sources.length
+      ? h("li", { class: "muted" },
+          "reference sources honored: " + plan.sources.join(", "))
+      : null);
+}
+
+function routineCard(view) {
+  const err = h("div", { class: "error" });
+  const interval = h("input", {
+    id: "sweep-interval", value: String(view.interval_hours || 24),
+  });
+  async function enable(event) {
+    event.preventDefault();
+    err.textContent = "";
+    try {
+      await api("POST", "/v1/work/bundles/schedule",
+        { interval_hours: Number(interval.value) });
+      render();
+    } catch (e) { err.textContent = e.message; }
+  }
+  async function revoke() {
+    err.textContent = "";
+    try { await api("DELETE", "/v1/work/bundles/schedule"); render(); }
+    catch (e) { err.textContent = e.message; }
+  }
+  const summary = view.last_summary;
+  return h("div", { class: "card" },
+    h("h2", {}, "sweep Routine"),
+    view.enabled
+      ? h("div", {}, badge("enabled", "ok"),
+          h("span", { class: "muted" },
+            " every " + view.interval_hours + " h · consent granted by "
+            + view.granted_by
+            + (view.granted_at ? " at " + view.granted_at : "")))
+      : h("div", {}, badge("not scheduled"),
+          h("span", { class: "muted" },
+            " enabling is the audited standing consent"
+            + " for every unattended firing")),
+    view.last_finished_at
+      ? h("div", {},
+          h("div", { class: "muted" },
+            "last firing finished " + view.last_finished_at),
+          summary ? h("div", { class: "muted" },
+            "reclaimed " + bytes(summary.reclaimed_bytes)
+            + " · dead trees " + summary.dead_manifests
+            + " · orphan blobs " + summary.orphan_blobs
+            + " · tier copies purged " + summary.tier_discards) : null,
+          view.last_error ? h("div", { class: "error" },
+            "last firing failed: " + view.last_error) : null)
+      : h("p", { class: "muted" }, "The Routine has not fired yet."),
+    h("form", { onsubmit: enable },
+      h("label", { for: "sweep-interval" }, "Interval (hours)"), interval,
+      h("button", { type: "submit", class: "small" },
+        view.enabled ? "Retune" : "Enable"),
+      view.enabled
+        ? [" ", h("button", { type: "button", class: "small", onclick: revoke },
+            "Disable")]
+        : null),
+    err);
+}
+
+async function sweepCard() {
+  let plan;
+  try { plan = await api("GET", "/v1/work/bundles/sweep"); }
+  catch (e) {
+    return h("div", { class: "card" }, h("h2", {}, "sweep report"),
+      e.status === 404 ? notEnabled() : h("div", { class: "error" }, e.message));
+  }
+  const err = h("div", { class: "error" });
+  const out = h("div", {});
+  async function sweepNow() {
+    err.textContent = "";
+    out.replaceChildren(h("p", { class: "muted" }, "sweeping…"));
+    try {
+      const applied = await api("POST", "/v1/work/bundles/sweep", {});
+      out.replaceChildren(badge("applied", "ok"), sweepReport(applied));
+    } catch (e) {
+      out.replaceChildren();
+      err.textContent = e.message;
+    }
+  }
+  return h("div", { class: "card" },
+    h("h2", {}, "sweep report (dry run)"),
+    sweepReport(plan),
+    h("button", { class: "small", onclick: sweepNow }, "Sweep now"),
+    err, out);
+}
+
+async function storageScreen() {
+  const view = await api("GET", "/v1/work/bundles/schedule");
+  return h("div", {}, routineCard(view), await sweepCard());
+}
+
 /* ---- router ---- */
 const ROUTES = [
   ["#/runs", "Runs", runsScreen],
@@ -599,6 +711,7 @@ const ROUTES = [
   ["#/skills", "Skills", skillsScreen],
   ["#/earnings", "Earnings", earningsScreen],
   ["#/users", "Users", usersScreen],
+  ["#/storage", "Storage", storageScreen],
   ["#/health", "Health", healthScreen],
 ];
 

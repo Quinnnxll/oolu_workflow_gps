@@ -4,6 +4,34 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The Routine gets a face: sweep reports in the operator UI:
+
+- **A Storage screen on the operator page.** The gateway front-end grows
+  a `Storage` tab (behind the same `hygiene:sweep` authority the API
+  demands; members without it see the honest "no authority" message).
+  Two cards, both against the existing endpoints — nothing new on the
+  wire:
+  - **sweep Routine** — the standing consent at a glance: enabled or
+    not, the interval, who granted it and when, the last firing's
+    finish time and its summary (reclaimed bytes, dead trees, orphan
+    blobs, tier copies purged) or its recorded error. Enabling (or
+    retuning the interval) submits `POST /v1/work/bundles/schedule` —
+    the approve-gated act that IS the consent — and `Disable` revokes
+    it via `DELETE`, same authority. The card is explicit that enabling
+    consents to every unattended firing.
+  - **sweep report (dry run)** — `GET /v1/work/bundles/sweep` rendered
+    as honest numbers: dead frozen trees, orphan blobs, reclaimable
+    bytes, what was kept (referenced or within the grace) and which
+    reference sources were honored — the union-of-sources safety made
+    visible. `Sweep now` applies it (`POST`, approve-gated) and the
+    applied plan replaces the estimate.
+- **Proven in a real browser.** New Playwright tests drive the whole
+  loop end to end against the real host runtime: an admin enables the
+  Routine at 6 h, reads the empty store's zeros, applies a sweep, sees
+  the applied report, and revokes the consent; a freshly provisioned
+  member opens Storage and is told plainly they lack the authority.
+  The route-coverage test now pins both bundle endpoints to the page.
+
 The sweep becomes a Routine: standing consent, fleet-safe firings:
 
 - **The tension, resolved by moving consent up a level.** The manual
