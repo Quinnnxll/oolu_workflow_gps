@@ -33,8 +33,10 @@ in exactly that direction.
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Callable, Protocol, runtime_checkable
 
 
@@ -230,3 +232,138 @@ class CasSweep:
                 except OSError:  # a busy NFS dir waits for the next pass
                     continue
         return discards
+
+
+# --------------------------------------------------------------------------- #
+# The Routine: a standing, consented, fleet-safe schedule for the sweep.       #
+# --------------------------------------------------------------------------- #
+MIN_SWEEP_INTERVAL_HOURS = 1.0
+DEFAULT_SWEEP_INTERVAL_HOURS = 24.0
+
+_SCHEDULE_SCHEMA = """CREATE TABLE IF NOT EXISTS sweep_schedule (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    enabled INTEGER NOT NULL DEFAULT 0,
+    interval_hours REAL NOT NULL,
+    granted_by TEXT NOT NULL,
+    tenant TEXT NOT NULL,
+    granted_at TEXT NOT NULL,
+    last_started_at TEXT,
+    last_finished_at TEXT,
+    last_summary_json TEXT,
+    last_error TEXT
+)"""
+
+
+class SweepScheduleStore:
+    """The sweep's recurring Routine — consent that stands until revoked.
+
+    The manual sweep is approve-gated because it deletes; a SCHEDULE means
+    unattended firings, so the consent moves up a level: ENABLING the
+    schedule is the approved, audited act (who, when, how often), each
+    firing runs under that standing grant, and revoking it stops the next
+    firing cold. The row is durable and single (id=1): on a fleet sharing
+    one database, every host reads the same Routine.
+
+    Fleet-safe by construction: ``claim_due`` advances ``last_started_at``
+    in ONE conditional UPDATE, so when many hosts tick at once exactly one
+    wins the firing and the rest see the claim already taken — no locks,
+    no coordinator, the database's own atomicity.
+    """
+
+    def __init__(self, conn) -> None:
+        self._conn = conn
+        with self._conn.transaction() as db:
+            db.execute(_SCHEDULE_SCHEMA)
+
+    def enable(
+        self,
+        *,
+        interval_hours: float,
+        granted_by: str,
+        tenant: str,
+        now: datetime,
+    ) -> dict:
+        """Set (or retune) the standing schedule. The caller has already
+        passed the approve gate — this records whose consent stands."""
+        interval = max(MIN_SWEEP_INTERVAL_HOURS, float(interval_hours))
+        with self._conn.transaction() as db:
+            db.execute(
+                """INSERT INTO sweep_schedule
+                     (id, enabled, interval_hours, granted_by, tenant,
+                      granted_at, last_started_at)
+                   VALUES (1, 1, ?, ?, ?, ?, NULL)
+                   ON CONFLICT(id) DO UPDATE SET
+                     enabled = 1,
+                     interval_hours = excluded.interval_hours,
+                     granted_by = excluded.granted_by,
+                     tenant = excluded.tenant,
+                     granted_at = excluded.granted_at""",
+                (interval, granted_by, tenant, now.isoformat()),
+            )
+        return self.view()
+
+    def disable(self) -> bool:
+        with self._conn.transaction() as db:
+            cursor = db.execute(
+                "UPDATE sweep_schedule SET enabled = 0 WHERE id = 1 AND enabled = 1"
+            )
+            return int(getattr(cursor, "rowcount", 0) or 0) > 0
+
+    def view(self) -> dict | None:
+        with self._conn.lock:
+            row = self._conn.db.execute(
+                "SELECT * FROM sweep_schedule WHERE id = 1"
+            ).fetchone()
+        if row is None:
+            return None
+        summary = row["last_summary_json"]
+        return {
+            "enabled": bool(row["enabled"]),
+            "interval_hours": row["interval_hours"],
+            "granted_by": row["granted_by"],
+            "tenant": row["tenant"],
+            "granted_at": row["granted_at"],
+            "last_started_at": row["last_started_at"],
+            "last_finished_at": row["last_finished_at"],
+            "last_summary": json.loads(summary) if summary else None,
+            "last_error": row["last_error"],
+        }
+
+    def claim_due(self, now: datetime) -> bool:
+        """True iff the schedule is enabled, the interval has elapsed, and
+        THIS caller won the firing — one conditional UPDATE, so a fleet of
+        ticking hosts fires exactly once per due interval."""
+        view = self.view()
+        if view is None or not view["enabled"]:
+            return False
+        cutoff = (
+            now - timedelta(hours=float(view["interval_hours"]))
+        ).isoformat()
+        with self._conn.transaction() as db:
+            cursor = db.execute(
+                """UPDATE sweep_schedule
+                   SET last_started_at = ?
+                   WHERE id = 1 AND enabled = 1
+                     AND (last_started_at IS NULL OR last_started_at <= ?)""",
+                (now.isoformat(), cutoff),
+            )
+            return int(getattr(cursor, "rowcount", 0) or 0) > 0
+
+    def record_result(
+        self,
+        now: datetime,
+        *,
+        summary: dict | None = None,
+        error: str | None = None,
+    ) -> None:
+        with self._conn.transaction() as db:
+            db.execute(
+                """UPDATE sweep_schedule
+                   SET last_finished_at = ?, last_summary_json = ?, last_error = ?
+                   WHERE id = 1""",
+                (
+                    now.isoformat(),
+                    json.dumps(summary) if summary is not None else None,
+                    error,
+                ),
+            )

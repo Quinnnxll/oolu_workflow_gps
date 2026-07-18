@@ -4,6 +4,27 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The sweep becomes a Routine: standing consent, fleet-safe firings:
+
+- **The tension, resolved by moving consent up a level.** The manual
+  sweep is approve-gated because it deletes; a schedule means unattended
+  firings. So ENABLING the Routine is the approved act:
+  `POST /v1/work/bundles/schedule` passes the same approve gate as a
+  manual sweep, records who granted the standing consent and how often
+  (min 1 h), and audits `bundles.sweep_scheduled`. `DELETE` revokes it
+  (same authority, audited) and stops the next firing cold; `GET` shows
+  the Routine — interval, grantor, last firing, last summary or error.
+- **Lazy tick, atomic claim.** Firing uses the platform's own idiom
+  (hold expiry): ordinary traffic advances the clock. Each request runs
+  a due-check bounded to once a minute per host; the host that wins the
+  one-conditional-`UPDATE` claim over the shared database performs the
+  sweep — a whole fleet fires exactly once per due interval with no
+  coordinator. Every scheduled firing audits as `bundles.swept` with
+  `scheduled: true` and the grantor's name; a failed firing records its
+  error on the Routine and waits for the next interval, never surfacing
+  into a request. A quiet host fires late — the same honest trade the
+  hold-expiry sweep makes.
+
 Fleets share one materialized root — and the sweep is its one remover:
 
 - **`OOLU_BUNDLE_MOUNT_DIR`: a network root every host mounts.** A

@@ -625,6 +625,12 @@ class GatewayApp:
         self._files = files
         self._bundle_store = bundle_store
         self._bundle_tiers = list(bundle_tiers or [])
+        # The sweep's recurring Routine (durable, single-row, fleet-shared).
+        from ..runtime.sweep import SweepScheduleStore
+
+        self._sweep_schedule = SweepScheduleStore(durable.conn)
+        # The tick's cheap gate: at most one due-check per minute per host.
+        self._sweep_gate = 0.0
         self._settings = settings_node
         self._payments = payments
         self._launch_guard = launch_guard
@@ -711,6 +717,11 @@ class GatewayApp:
     # ------------------------------------------------------------------ #
     def handle(self, request: Request) -> Response:
         self._metrics["requests"] += 1
+        # The Routine's lazy tick, the same idiom as hold expiry: ordinary
+        # traffic advances the clock. Gated to one due-check per minute per
+        # host; the claim makes a whole fleet fire exactly once per due
+        # interval; a tick failure never reaches the client.
+        self._maybe_scheduled_sweep(request)
         try:
             response = self._route(request)
         except GatewayError as exc:
@@ -1143,6 +1154,17 @@ class GatewayApp:
             requires_permission="hygiene:sweep",
         )
         r.add("POST", "/v1/work/bundles/sweep", self._bundle_sweep_apply)
+        # The sweep's recurring Routine: enabling is the approved, audited
+        # standing consent; each due firing runs under it (fleet-safe: one
+        # host wins the claim); revoking stops the next firing cold.
+        r.add(
+            "GET",
+            "/v1/work/bundles/schedule",
+            self._sweep_schedule_view,
+            requires_permission="hygiene:sweep",
+        )
+        r.add("POST", "/v1/work/bundles/schedule", self._sweep_schedule_set)
+        r.add("DELETE", "/v1/work/bundles/schedule", self._sweep_schedule_clear)
         r.add("POST", "/v1/nodeplace", self._contribute)
         r.add("POST", "/v1/nodeplace/{node_id}/revoke", self._revoke_node)
         r.add("GET", "/v1/listings", self._discover_listings)
@@ -6092,6 +6114,130 @@ class GatewayApp:
             },
         )
         return json_response(200, plan.as_dict())
+
+    # ------------------------------------------------------------------ #
+    # The sweep's recurring Routine.                                       #
+    # ------------------------------------------------------------------ #
+    def _sweep_schedule_view(self, request, session, params) -> Response:
+        view = self._sweep_schedule.view()
+        return json_response(200, view or {"enabled": False})
+
+    def _sweep_schedule_set(self, request, session, params) -> Response:
+        """Stand up (or retune) the Routine. This is where the consent for
+        every future unattended firing is given, so it passes the same
+        approve gate as a manual sweep — once, audited, revocable."""
+        if self._bundle_store is None or self._files is None:
+            raise GatewayError(404, "not_found", "the bundle store is not enabled")
+        if self._approval is None:
+            raise GatewayError(404, "not_found", "approval authority is not configured")
+        now = request.now or self._clock()
+        try:
+            self._approval.approve(
+                session,
+                run_id="bundles:schedule",
+                policy="bundles.sweep",
+                requester_id="",
+                now=now,
+            )
+        except AuthorizationError as exc:
+            raise GatewayError(403, "forbidden", str(exc)) from exc
+        raw = (request.body or {}).get("interval_hours", 24)
+        try:
+            interval = float(raw)
+        except (TypeError, ValueError) as exc:
+            raise GatewayError(
+                400, "invalid_request", "interval_hours must be a number"
+            ) from exc
+        view = self._sweep_schedule.enable(
+            interval_hours=interval,
+            granted_by=session.principal_id,
+            tenant=session.tenant_id,
+            now=now,
+        )
+        self._durable.audit.append(
+            "bundles.sweep_scheduled",
+            {
+                "run_id": "bundles:schedule",
+                "by": session.principal_id,
+                "tenant": session.tenant_id,
+                "interval_hours": view["interval_hours"],
+            },
+        )
+        return json_response(200, view)
+
+    def _sweep_schedule_clear(self, request, session, params) -> Response:
+        """Revoke the standing consent — same authority that granted it."""
+        if self._approval is None:
+            raise GatewayError(404, "not_found", "approval authority is not configured")
+        try:
+            self._approval.approve(
+                session,
+                run_id="bundles:schedule",
+                policy="bundles.sweep",
+                requester_id="",
+                now=request.now or self._clock(),
+            )
+        except AuthorizationError as exc:
+            raise GatewayError(403, "forbidden", str(exc)) from exc
+        disabled = self._sweep_schedule.disable()
+        if disabled:
+            self._durable.audit.append(
+                "bundles.sweep_unscheduled",
+                {"run_id": "bundles:schedule", "by": session.principal_id},
+            )
+        return json_response(200, {"enabled": False, "disabled": disabled})
+
+    def _maybe_scheduled_sweep(self, request) -> None:
+        """The lazy tick: cheap by construction. A monotonic gate bounds
+        due-checks to one per minute per host; the durable claim decides
+        the actual firing; and nothing in here may raise into the request."""
+        import time as time_module
+
+        try:
+            now_mono = time_module.monotonic()
+            if now_mono < self._sweep_gate:
+                return
+            self._sweep_gate = now_mono + 60.0
+            self._scheduled_sweep_tick(request.now or self._clock())
+        except Exception:  # noqa: BLE001 - maintenance never breaks serving
+            logging.getLogger("oolu.gateway").exception("scheduled sweep tick failed")
+
+    def _scheduled_sweep_tick(self, now) -> None:
+        """One due-check and, when this host wins the claim, one sweep —
+        under the schedule's standing consent, audited like a manual run."""
+        if not self._sweep_schedule.claim_due(now):
+            return
+        schedule = self._sweep_schedule.view() or {}
+        sweep = self._bundle_sweep()
+        if sweep is None:
+            self._sweep_schedule.record_result(
+                now, error="the bundle store is not enabled"
+            )
+            return
+        try:
+            plan = sweep.collect()
+        except Exception as exc:  # noqa: BLE001 - the Routine records its
+            # own failure and waits for the next interval; it never raises.
+            self._sweep_schedule.record_result(now, error=str(exc))
+            logging.getLogger("oolu.gateway").exception("scheduled sweep failed")
+            return
+        summary = {
+            "dead_manifests": len(plan.dead_manifests),
+            "orphan_blobs": len(plan.orphan_blobs),
+            "reclaimed_bytes": plan.reclaimed_bytes,
+            "tier_discards": plan.tier_discards,
+        }
+        self._sweep_schedule.record_result(now, summary=summary)
+        self._durable.audit.append(
+            "bundles.swept",
+            {
+                "run_id": "bundles:schedule",
+                "scheduled": True,
+                # The firing runs under the STANDING consent — name whose.
+                "granted_by": schedule.get("granted_by", ""),
+                **summary,
+            },
+        )
 
     def _list_own_nodes(self, request, session, params) -> Response:
         nodeplace = self._require_nodeplace()

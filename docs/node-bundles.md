@@ -145,7 +145,34 @@ honestly second-order.
 
 `OOLU_BUNDLE_MOUNT_SHARED=0` overrides the implication for the odd case
 of a host-private dir at a custom path; `OOLU_BUNDLE_MOUNT_SHARED=1`
-forces shared semantics onto the default path. Residual risk, stated
+forces shared semantics onto the default path.
+
+## The Routine — the sweep on a schedule
+
+A fleet whose only remover is the sweep needs the sweep to actually run.
+The Routine is its standing schedule, and its design resolves the one
+tension a schedule creates: the manual sweep is approve-gated *because it
+deletes*, and a schedule means unattended firings. So the consent moves
+up one level — **enabling the Routine is the approved act**:
+
+- `POST /v1/work/bundles/schedule` (`{"interval_hours": 24}`) passes the
+  same approve gate as a manual sweep, records WHO granted the standing
+  consent and how often, and lands `bundles.sweep_scheduled` on the audit
+  log. `DELETE` revokes it (same authority, audited), stopping the next
+  firing cold. `GET` shows the Routine: interval, grantor, last firing,
+  last summary or error.
+- **Firing is the lazy-tick idiom** the platform already uses for hold
+  expiry: ordinary traffic advances the clock. Each request runs a
+  due-check bounded to once a minute per host; when the interval has
+  elapsed, the host that wins the **atomic claim** (one conditional
+  `UPDATE` over the shared database) performs the sweep — so a whole
+  fleet fires exactly once per due interval, with no coordinator. Every
+  scheduled firing audits as `bundles.swept` with `scheduled: true` and
+  the grantor's name; a failed firing records its error on the Routine
+  and waits for the next interval, never surfacing into a request.
+- A quiet host fires late (lazy ticks need traffic) — the same honest
+  trade the hold-expiry sweep makes, and harmless here: the store just
+  stays unswept until someone knocks. Residual risk, stated
 plainly: a run that holds a mounted tree longer than the grace window
 while its bundle goes dead fleet-wide could lose the tree at the next
 sweep — the default grace sits above the install + execute ceilings, and
