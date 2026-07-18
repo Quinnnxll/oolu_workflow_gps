@@ -73,6 +73,7 @@ class SweepPlan:
     orphan_blobs: tuple[str, ...] = ()  # CAS refs referenced by no source
     reclaimed_bytes: int = 0
     kept_blobs: int = 0  # blobs spared (referenced, or within the grace)
+    tier_discards: int = 0  # warm tars / materialized trees purged with the dead
     sources: tuple[str, ...] = ()  # the reference sources consulted
     applied: bool = False  # False for inspect (dry run), True for collect
 
@@ -82,6 +83,7 @@ class SweepPlan:
             "orphan_blobs": list(self.orphan_blobs),
             "reclaimed_bytes": self.reclaimed_bytes,
             "kept_blobs": self.kept_blobs,
+            "tier_discards": self.tier_discards,
             "sources": list(self.sources),
             "applied": self.applied,
         }
@@ -104,6 +106,11 @@ class CasSweep:
         *,
         sources: list[ReferenceSource] | None = None,
         live_bundle_ids: Callable[[], set[str]] | None = None,
+        # Accelerator tiers (WarmBundleTier, MaterializedBundleDir, or
+        # anything with discard(bundle_id)) to purge alongside a dead
+        # manifest — on a FLEET's shared materialized root this is the only
+        # remover there is, since per-host eviction is off in shared mode.
+        tiers: list | None = None,
         grace_seconds: float = 3600.0,
         clock: Callable[[], float] = time.time,
     ) -> None:
@@ -114,6 +121,7 @@ class CasSweep:
         # bundle absent from this set (and past the grace) is dead: its
         # manifest is dropped and its bytes become sweep candidates.
         self._live_bundle_ids = live_bundle_ids or (lambda: set())
+        self._tiers = list(tiers or [])
         self._grace = grace_seconds
         self._clock = clock
 
@@ -149,8 +157,12 @@ class CasSweep:
         # candidate, so this sweep cannot touch what it did not create.
         candidates = self._bundles.blob_refs_of(dead_ids)
         if not candidates:
+            discards = self._purge_tiers(dead_ids) if apply else 0
+            if apply and dead_ids:
+                self._bundles.forget(dead_ids)
             return SweepPlan(
                 dead_manifests=tuple(sorted(dead_ids)),
+                tier_discards=discards,
                 sources=tuple(s.name for s in self._sources),
                 applied=apply,
             )
@@ -186,17 +198,35 @@ class CasSweep:
             orphans.append(ref)
             reclaimed += meta[0]
 
+        discards = 0
         if apply:
             if dead_ids:
                 self._bundles.forget(dead_ids)
             for ref in orphans:
                 self._artifacts.delete(ref)
+            discards = self._purge_tiers(dead_ids)
 
         return SweepPlan(
             dead_manifests=tuple(sorted(dead_ids)),
             orphan_blobs=tuple(sorted(orphans)),
             reclaimed_bytes=reclaimed,
             kept_blobs=kept,
+            tier_discards=discards,
             sources=tuple(s.name for s in self._sources),
             applied=apply,
         )
+
+    def _purge_tiers(self, dead_ids) -> int:
+        """Drop the accelerator copies of dead bundles — warm tars and
+        materialized trees. Each tier's own discard() applies its own
+        safety (the materialized dir refuses within its grace window), so
+        the sweep asks, never forces."""
+        discards = 0
+        for bundle_id in dead_ids:
+            for tier in self._tiers:
+                try:
+                    if tier.discard(bundle_id):
+                        discards += 1
+                except OSError:  # a busy NFS dir waits for the next pass
+                    continue
+        return discards

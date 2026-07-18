@@ -346,11 +346,21 @@ def _materialized_bundle_dir(data: Path):
     """The mounted bundle tier, when the operator opts in via
     ``OOLU_BUNDLE_MOUNT`` (truthy). Default OFF: bundles extract per run,
     the pre-mount behavior, so no existing deployment changes silently. The
-    disk budget is ``OOLU_BUNDLE_MOUNT_MB`` (default 2048 MiB)."""
+    disk budget is ``OOLU_BUNDLE_MOUNT_MB`` (default 2048 MiB).
+
+    FLEETS: ``OOLU_BUNDLE_MOUNT_DIR`` names a NETWORK root (NFS/EFS-style)
+    every host mounts — a bundle extracted by any host is instantly warm
+    for all of them, and naming a shared dir implies SHARED semantics:
+    per-host budget eviction turns off (a host cannot judge the fleet's
+    usage, and deleting a tree another host has bind-mounted would pull it
+    out from under a running container) — removal belongs to the sweep
+    alone. ``OOLU_BUNDLE_MOUNT_SHARED=0`` overrides for the odd case of a
+    host-private dir at a custom path."""
     import os as _os
 
     flag = _os.environ.get("OOLU_BUNDLE_MOUNT", "").strip().lower()
-    if flag not in {"1", "true", "yes", "on"}:
+    custom_dir = _os.environ.get("OOLU_BUNDLE_MOUNT_DIR", "").strip()
+    if flag not in {"1", "true", "yes", "on"} and not custom_dir:
         return None
     from .runtime.bundle import MaterializedBundleDir
 
@@ -359,8 +369,16 @@ def _materialized_bundle_dir(data: Path):
         mb = max(64, int(raw)) if raw else 2048
     except ValueError:
         mb = 2048
+    shared_raw = _os.environ.get("OOLU_BUNDLE_MOUNT_SHARED", "").strip().lower()
+    shared = (
+        shared_raw in {"1", "true", "yes", "on"}
+        if shared_raw
+        else bool(custom_dir)  # a named network root is shared by default
+    )
     return MaterializedBundleDir(
-        data / "bundle-mounted", max_bytes=mb * 1024 * 1024
+        Path(custom_dir) if custom_dir else data / "bundle-mounted",
+        max_bytes=mb * 1024 * 1024,
+        shared=shared,
     )
 
 
@@ -1201,6 +1219,10 @@ def build_host_runtime(
         # disk — the database never swallows a video.
         files=UserFileStore(conn, artifacts=blob_store_from_env(data)),
         bundle_store=bundle_store,
+        # The accelerator tiers the sweep purges alongside dead manifests —
+        # on a fleet's shared materialized root, the sweep is the ONLY
+        # remover (per-host eviction is off in shared mode).
+        bundle_tiers=[t for t in (warm, materialized_dir) if t is not None],
         settings_node=settings_node,
         # The brain behind chat: the same keyring/meter planning uses —
         # pasted keys survive restarts encrypted, every consultation is

@@ -524,6 +524,9 @@ class GatewayApp:
         files: UserFileStore | None = None,  # user documents/sheets
         bundle_store: BundleStore | None = None,  # content-addressed src trees:
         # freeze a node's src/ tree once and ship its id, not its bytes
+        bundle_tiers: list | None = None,  # warm/materialized accelerators the
+        # sweep purges alongside dead manifests (the only remover on a
+        # fleet-shared materialized root)
         settings_node: SettingsNode | None = None,  # the settings node
         payments: PaymentMethodsService | None = None,  # card on file
         launch_guard: LaunchGuard | None = None,  # pre-launch charge gate
@@ -621,6 +624,7 @@ class GatewayApp:
         self._hygiene = hygiene
         self._files = files
         self._bundle_store = bundle_store
+        self._bundle_tiers = list(bundle_tiers or [])
         self._settings = settings_node
         self._payments = payments
         self._launch_guard = launch_guard
@@ -6047,6 +6051,7 @@ class GatewayApp:
             self._bundle_store.artifacts,
             sources=[CallableSource("drawer", self._drawer_blob_refs)],
             live_bundle_ids=self._bundle_live_ids,
+            tiers=self._bundle_tiers,
         )
 
     def _bundle_sweep_inspect(self, request, session, params) -> Response:

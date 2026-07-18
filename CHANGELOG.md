@@ -4,6 +4,34 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Fleets share one materialized root — and the sweep is its one remover:
+
+- **`OOLU_BUNDLE_MOUNT_DIR`: a network root every host mounts.** A
+  multi-host fleet (many gateways/workers over one database and one
+  object store) now shares the mounted bundle tier too: a bundle
+  extracted by ANY host is instantly warm for all of them. The
+  atomic-rename publish already made concurrent materialization
+  race-safe (the loser discards its staging and uses the winner's tree),
+  and freezing was already fleet-safe (idempotent CAS puts,
+  `INSERT … DO NOTHING` manifests) — the shared root is the missing
+  piece that makes the extraction cost fleet-wide-once.
+- **Shared semantics: a host never evicts on its own judgement.** Naming
+  a shared dir implies shared mode (override with
+  `OOLU_BUNDLE_MOUNT_SHARED`), and shared mode turns per-host budget
+  eviction OFF: one host cannot see the fleet's usage, and deleting a
+  tree another host has bind-mounted read-only would pull it out from
+  under a running container. Removal belongs to the sweep alone.
+- **The sweep now purges the accelerator tiers with the dead.**
+  `CasSweep` takes the tiers (warm tars, materialized trees) and, on
+  apply, discards each dead bundle's copies — grace-checked (`discard`
+  refuses a tree touched within the grace window, since `ensure`
+  touches on every use on every host), counted in the plan as
+  `tier_discards`, and dry-run-first like everything else about the
+  sweep. `WarmBundleTier.discard` and `MaterializedBundleDir.discard`
+  are the tier-side hands; a busy NFS dir simply waits for the next
+  pass. Other hosts' private warm tars for dead bundles age out under
+  their own budgets — bounded, and honestly second-order.
+
 The sweep: reclaiming the shared bundle store, safely:
 
 - **Idle growth, unbounded until now.** The bundle tiers made boot fast

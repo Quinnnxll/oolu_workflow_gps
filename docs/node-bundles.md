@@ -119,6 +119,39 @@ above the install + execute ceilings) that never evicts a directory that
 may back a live run. The CAS remains the durable truth: an eviction costs
 one re-extract, never correctness.
 
+## Fleets — one materialized root, many hosts, one remover
+
+A multi-host fleet (several gateways/workers over one shared database and
+one object store) shares the materialized tier too: point
+`OOLU_BUNDLE_MOUNT_DIR` at a network root every host mounts (NFS/EFS-
+style), and a bundle extracted by ANY host is instantly warm for all of
+them — the atomic-rename publish already makes concurrent materialization
+race-safe (the loser discards its staging and uses the winner's tree),
+and `freeze` was already fleet-safe (idempotent CAS puts, `INSERT … DO
+NOTHING` manifests, one shared database).
+
+Naming a shared dir implies **shared semantics**, and shared mode changes
+exactly one thing: **a host never evicts on its own budget judgement.**
+A single host cannot see the fleet's usage, and deleting a tree another
+host has bind-mounted read-only would pull it out from under a running
+container. Removal belongs to the **sweep alone**: `CasSweep` now purges
+the accelerator tiers (warm tars and materialized trees) alongside each
+dead manifest — grace-checked (`discard` refuses a tree touched within
+the grace window, since `ensure` touches on every use on every host),
+approve-gated, audited, and counted in the plan as `tier_discards`. The
+sweeping host also cleans its own warm tier; other hosts' private warm
+tars for dead bundles age out under their own budgets — bounded, and
+honestly second-order.
+
+`OOLU_BUNDLE_MOUNT_SHARED=0` overrides the implication for the odd case
+of a host-private dir at a custom path; `OOLU_BUNDLE_MOUNT_SHARED=1`
+forces shared semantics onto the default path. Residual risk, stated
+plainly: a run that holds a mounted tree longer than the grace window
+while its bundle goes dead fleet-wide could lose the tree at the next
+sweep — the default grace sits above the install + execute ceilings, and
+every `ensure` refreshes it, so this requires a run outliving its own
+wall limits.
+
 ## What does not change
 
 The bundle is a faster *shape* for the same trusted-by-the-same-rules

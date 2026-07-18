@@ -392,6 +392,16 @@ class WarmBundleTier:
         tmp.replace(path)  # atomic: a reader never sees a partial tar
         self._evict_to_budget()
 
+    def discard(self, bundle_id: str) -> bool:
+        """Drop one bundle's warm tar — the sweep's hand: when a bundle's
+        manifest dies, its accelerator copies should not linger until
+        budget pressure happens to reach them. Missing is fine (another
+        host, or eviction, got there first)."""
+        path = self._path(bundle_id)
+        existed = path.is_file()
+        path.unlink(missing_ok=True)
+        return existed
+
     def _evict_to_budget(self) -> None:
         files = [p for p in self._root.glob("*/*.tar") if p.is_file()]
         total = sum(p.stat().st_size for p in files)
@@ -563,6 +573,14 @@ class MaterializedBundleDir:
         # backing a live run is never evicted out from under it (eviction
         # only fires on a new materialize under budget pressure anyway).
         grace_seconds: float = 900.0,
+        # FLEET mode: the root is a network share several hosts mount (the
+        # same trees serve every host, extracted once fleet-wide). A host
+        # must then never evict on its own budget judgement — it cannot see
+        # the fleet's usage, and deleting a dir another host has mounted
+        # read-only would pull a running container's tree out from under
+        # it. Removal belongs to the SWEEP alone (grace-checked, approve-
+        # gated, audited), so shared mode turns per-host eviction off.
+        shared: bool = False,
     ) -> None:
         from pathlib import Path
 
@@ -570,6 +588,11 @@ class MaterializedBundleDir:
         self._root.mkdir(parents=True, exist_ok=True)
         self._max = max_bytes
         self._grace = grace_seconds
+        self._shared = shared
+
+    @property
+    def shared(self) -> bool:
+        return self._shared
 
     def path_for(self, bundle_id: str):
         return self._root / bundle_id
@@ -609,9 +632,30 @@ class MaterializedBundleDir:
         target = self._root / bundle_id
         return sorted(os.listdir(target)) if target.is_dir() else []
 
+    def discard(self, bundle_id: str) -> bool:
+        """Remove one bundle's materialized tree — the sweep's hand.
+
+        Grace-checked even here: ``ensure`` touches a dir on every use
+        (on every host of a shared root), so a tree touched within the
+        grace window may back a run in flight somewhere in the fleet and
+        is left alone; the sweep's next pass collects it once it has
+        truly gone quiet. Missing is fine (another sweep, or a per-host
+        eviction on an unshared root, got there first)."""
+        import time
+
+        target = self._root / bundle_id
+        if not target.is_dir():
+            return False
+        if (time.time() - target.stat().st_mtime) < self._grace:
+            return False  # possibly backing a live run; next pass gets it
+        _rmtree_readonly(target)
+        return True
+
     def _evict_to_budget(self, *, keep: str) -> None:
         import time
 
+        if self._shared:
+            return  # fleet roots are the sweep's to clean, never a host's
         dirs = [p for p in self._root.iterdir() if p.is_dir()]
         sized = [(p, _dir_size(p), p.stat().st_mtime) for p in dirs]
         total = sum(size for _, size, _ in sized)

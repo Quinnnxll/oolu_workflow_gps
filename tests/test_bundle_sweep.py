@@ -214,3 +214,127 @@ def test_the_apply_route_is_platform_gated(tmp_path):
         assert resp.status == 403
     finally:
         conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# The fleet: one shared materialized root, many hosts, one remover — the sweep.#
+# --------------------------------------------------------------------------- #
+def test_two_hosts_share_one_materialized_root(tmp_path, monkeypatch):
+    # Two hosts (two MaterializedBundleDir instances) mount one network
+    # root: the first extracts; the second finds the tree already there and
+    # extracts NOTHING.
+    import oolu.runtime.bundle as bundle_mod
+    from oolu.runtime.bundle import MaterializedBundleDir, freeze_tree, pack_tar
+
+    manifest, blobs = freeze_tree({"pkg/__init__.py": "", "pkg/v.py": "V=9\n"})
+    tar = pack_tar({e.path: blobs[e.sha256] for e in manifest.entries})
+
+    extractions = []
+    real = bundle_mod._extract_readonly
+
+    def counting(tar_bytes, dest):
+        extractions.append(dest)
+        return real(tar_bytes, dest)
+
+    monkeypatch.setattr(bundle_mod, "_extract_readonly", counting)
+    shared_root = tmp_path / "fleet-mount"
+    host_a = MaterializedBundleDir(shared_root, shared=True)
+    host_b = MaterializedBundleDir(shared_root, shared=True)
+
+    path_a = host_a.ensure(manifest.bundle_id, tar)
+    path_b = host_b.ensure(manifest.bundle_id, tar)
+    assert path_a == path_b  # one tree serves the whole fleet
+    assert len(extractions) == 1  # host B extracted nothing
+    assert host_b.top_level(manifest.bundle_id) == ["pkg"]
+
+
+def test_shared_mode_never_evicts_on_a_hosts_own_judgement(tmp_path):
+    from oolu.runtime.bundle import MaterializedBundleDir, freeze_tree, pack_tar
+
+    # A tiny budget and zero grace would evict aggressively in host-private
+    # mode; in SHARED mode a host must never remove fleet trees itself.
+    md = MaterializedBundleDir(
+        tmp_path / "fleet", max_bytes=1, grace_seconds=0, shared=True
+    )
+    ids = []
+    for i in range(3):
+        m, blobs = freeze_tree({f"f{i}.py": "x" * 4000})
+        tar = pack_tar({e.path: blobs[e.sha256] for e in m.entries})
+        md.ensure(m.bundle_id, tar)
+        ids.append(m.bundle_id)
+    assert all(md.path_for(b).is_dir() for b in ids)  # nothing evicted
+
+
+def test_discard_respects_the_grace_window(tmp_path):
+    from oolu.runtime.bundle import MaterializedBundleDir, freeze_tree, pack_tar
+
+    m, blobs = freeze_tree({"a.py": "A\n"})
+    tar = pack_tar({e.path: blobs[e.sha256] for e in m.entries})
+    # Within the grace: the tree may back a run somewhere — discard refuses.
+    guarded = MaterializedBundleDir(tmp_path / "g", grace_seconds=3600, shared=True)
+    guarded.ensure(m.bundle_id, tar)
+    assert guarded.discard(m.bundle_id) is False
+    assert guarded.path_for(m.bundle_id).is_dir()
+    # Past the grace (zero window): discard removes it.
+    open_dir = MaterializedBundleDir(tmp_path / "o", grace_seconds=0, shared=True)
+    open_dir.ensure(m.bundle_id, tar)
+    assert open_dir.discard(m.bundle_id) is True
+    assert not open_dir.path_for(m.bundle_id).is_dir()
+
+
+def test_the_sweep_purges_dead_accelerators_and_spares_live_ones(tmp_path):
+    from oolu.runtime.bundle import (
+        MaterializedBundleDir,
+        WarmBundleTier,
+        pack_tar,
+    )
+
+    conn, cas, bundles, _files = _wire(tmp_path)
+    try:
+        live = bundles.freeze({"main.py": "L\n"})
+        dead = bundles.freeze({"main.py": "D\n"})
+        warm = WarmBundleTier(tmp_path / "warm")
+        mounted = MaterializedBundleDir(
+            tmp_path / "fleet", grace_seconds=0, shared=True
+        )
+        for manifest in (live, dead):
+            tree = bundles.materialize(manifest)
+            warm.put(manifest.bundle_id, pack_tar(tree))
+            mounted.ensure(manifest.bundle_id, pack_tar(tree))
+
+        sweep = CasSweep(
+            bundles,
+            cas,
+            live_bundle_ids=lambda: {live.bundle_id},
+            tiers=[warm, mounted],
+            grace_seconds=0,
+        )
+        # Dry run touches no tier.
+        assert sweep.inspect().tier_discards == 0
+        assert warm.get(dead.bundle_id) is not None
+
+        plan = sweep.collect()
+        assert plan.tier_discards == 2  # dead's warm tar + materialized tree
+        assert warm.get(dead.bundle_id) is None
+        assert not mounted.path_for(dead.bundle_id).is_dir()
+        # The live bundle's accelerators are untouched.
+        assert warm.get(live.bundle_id) is not None
+        assert mounted.path_for(live.bundle_id).is_dir()
+    finally:
+        conn.close()
+
+
+def test_the_gateway_hands_its_tiers_to_the_sweep(tmp_path):
+    from test_node_hands import _grown_web_node
+
+    from oolu.runtime.bundle import WarmBundleTier
+
+    app, conn, ident, desk, script_exec, agreed = _grown_web_node(tmp_path)
+    try:
+        app._bundle_store = BundleStore(conn, FilesystemArtifactStore(tmp_path / "cas"))
+        warm = WarmBundleTier(tmp_path / "warm")
+        app._bundle_tiers = [warm]
+        sweep = app._bundle_sweep()
+        assert sweep._tiers == [warm]
+    finally:
+        conn.close()
