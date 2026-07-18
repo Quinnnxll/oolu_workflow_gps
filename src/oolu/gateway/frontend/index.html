@@ -741,9 +741,39 @@ async function historyCard() {
       : h("p", { class: "muted" }, "No sweep activity has been recorded yet."));
 }
 
+async function inventoryCard() {
+  let data;
+  try { data = await api("GET", "/v1/work/bundles"); }
+  catch (e) {
+    return h("div", { class: "card" }, h("h2", {}, "frozen trees"),
+      e.status === 404 ? notEnabled() : h("div", { class: "error" }, e.message));
+  }
+  return h("div", { class: "card" },
+    h("h2", {}, "frozen trees"),
+    h("div", { class: "muted" },
+      data.count + " stored · " + bytes(data.total_bytes)
+      + " logical (the store dedups shared blobs)"),
+    data.items.length
+      ? h("table", {},
+          h("tr", {}, h("th", {}, "bundle"), h("th", {}, "files"),
+            h("th", {}, "size"), h("th", {}, "frozen at"), h("th", {}, "status")),
+          data.items.map((item) => h("tr", {},
+            h("td", {}, h("code", {}, item.bundle_id.slice(0, 12))),
+            h("td", {}, item.file_count),
+            h("td", {}, bytes(item.total_bytes)),
+            h("td", { class: "muted" }, item.created_at),
+            h("td", {}, item.live
+              ? [badge("live", "ok"), h("span", { class: "muted" },
+                  " " + item.held_by.join(", "))]
+              : badge("unreferenced")))))
+      : h("p", { class: "muted" },
+          "No frozen trees yet — they appear when a node grows src files."));
+}
+
 async function storageScreen() {
   const view = await api("GET", "/v1/work/bundles/schedule");
-  return h("div", {}, routineCard(view), await sweepCard(), await historyCard());
+  return h("div", {}, routineCard(view), await sweepCard(),
+    await inventoryCard(), await historyCard());
 }
 
 /* ---- router ---- */

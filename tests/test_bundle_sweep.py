@@ -196,6 +196,73 @@ def test_the_gateway_recomputes_live_ids_from_current_drawers(tmp_path):
         conn.close()
 
 
+def test_the_inventory_route_lists_trees_with_their_holders(tmp_path):
+    """GET /v1/work/bundles: every frozen tree with its size, age, and
+    holder — ``live`` computed exactly like the sweep's reachability, so
+    the inventory and the sweep can never disagree about what is dead.
+    Behind the same hygiene:sweep permission as the other read routes."""
+    from test_node_hands import _grown_web_node
+
+    from oolu.identity import AuthorityGrant, Role
+
+    app, conn, ident, desk, script_exec, agreed = _grown_web_node(tmp_path)
+    try:
+        node_id = desk.overview(principal="user-1", tenant="t1")[0].node_id
+        app._bundle_store = BundleStore(conn, FilesystemArtifactStore(tmp_path / "cas"))
+        app._files.save(
+            UserFile(
+                tenant_id="t1",
+                node_id=node_id,
+                folder="src",
+                name="helper.py",
+                content="H = 1\n",
+            )
+        )
+        stale = app._bundle_store.freeze({"old.py": "OLD\n"})
+
+        member = ident.token("user-1", "t1")
+        assert (
+            app.handle(_req("GET", "/v1/work/bundles", token=member)).status == 403
+        )
+
+        ident.store.add_role(
+            Role(
+                tenant_id="t1",
+                name="janitor",
+                permissions=frozenset({"hygiene:sweep"}),
+            )
+        )
+        ident.store.add_grant(
+            AuthorityGrant(
+                tenant_id="t1",
+                principal_id="steward",
+                role_name="janitor",
+                granted_by="x",
+            )
+        )
+        listed = app.handle(
+            _req("GET", "/v1/work/bundles", token=ident.token("steward", "t1"))
+        )
+        assert listed.status == 200, listed.body
+        assert listed.body["count"] == 2  # the stale tree + the node's live one
+        by_id = {item["bundle_id"]: item for item in listed.body["items"]}
+        stale_item = by_id[stale.bundle_id]
+        assert stale_item["live"] is False and stale_item["held_by"] == []
+        live_item = next(
+            item
+            for item in listed.body["items"]
+            if item["bundle_id"] != stale.bundle_id
+        )
+        assert live_item["live"] is True
+        assert live_item["held_by"]  # names the node's skill
+        assert live_item["file_count"] == 1  # helper.py; main.py never bundles
+        assert listed.body["total_bytes"] == sum(
+            item["total_bytes"] for item in listed.body["items"]
+        )
+    finally:
+        conn.close()
+
+
 def test_the_apply_route_is_platform_gated(tmp_path):
     # POST reclaims real bytes: it requires approve authority, exactly like
     # the hygiene sweep. An ordinary member is refused.

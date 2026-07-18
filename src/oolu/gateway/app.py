@@ -1144,6 +1144,14 @@ class GatewayApp:
         r.add("GET", "/v1/work/policy", self._node_policy)
         r.add("GET", "/v1/work/hygiene", self._hygiene_inspect)
         r.add("POST", "/v1/work/hygiene/sweep", self._hygiene_sweep)
+        # The bundle inventory: every frozen tree, its size and age, and
+        # whether a live node still freezes to it.
+        r.add(
+            "GET",
+            "/v1/work/bundles",
+            self._bundle_inventory,
+            requires_permission="hygiene:sweep",
+        )
         # The bundle sweep: reclaim the content-addressed store's dead
         # frozen trees. GET is a dry run (the plan); POST applies it under
         # approve authority, like the hygiene sweep.
@@ -6082,6 +6090,43 @@ class GatewayApp:
             sources=[CallableSource("drawer", self._drawer_blob_refs)],
             live_bundle_ids=self._bundle_live_ids,
             tiers=self._bundle_tiers,
+        )
+
+    def _bundle_inventory(self, request, session, params) -> Response:
+        """The frozen trees themselves: every stored manifest with its
+        size, age, and which nodes freeze to it right now. ``live`` here
+        is EXACTLY the sweep's reachability — the same recomputation from
+        each node's current drawer — so a bundle shown unreferenced is one
+        the next sweep would reap (once its blobs age past the grace)."""
+        if self._bundle_store is None:
+            raise GatewayError(404, "not_found", "the bundle store is not enabled")
+        holders: dict[str, list[str]] = {}
+        if self._nodeplace is not None:
+            for node in self._nodeplace.all_nodes():
+                tree = self._node_src_bundle_tree(node.tenant_id, node.node_id)
+                bundle_id = self._freeze_tree(tree)
+                if bundle_id is not None:
+                    holders.setdefault(bundle_id, []).append(node.skill_id)
+        stored = self._bundle_store.manifests()
+        items = [
+            {
+                "bundle_id": manifest.bundle_id,
+                "file_count": manifest.file_count,
+                "total_bytes": manifest.total_bytes,
+                "created_at": created,
+                "live": manifest.bundle_id in holders,
+                "held_by": sorted(holders.get(manifest.bundle_id, ())),
+            }
+            for manifest, created in stored
+        ]
+        items.reverse()  # newest first, like the history card
+        return json_response(
+            200,
+            {
+                "items": items,
+                "count": len(items),
+                "total_bytes": sum(m.total_bytes for m, _ in stored),
+            },
         )
 
     def _bundle_sweep_inspect(self, request, session, params) -> Response:

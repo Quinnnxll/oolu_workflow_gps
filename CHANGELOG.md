@@ -4,6 +4,32 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The frozen trees themselves: a bundle inventory on the Storage tab:
+
+- **`GET /v1/work/bundles`.** Every stored manifest with its file
+  count, logical size, freeze time, and — the part that matters —
+  whether a live node still freezes to it and which (by skill). The
+  `live` flag is EXACTLY the sweep's reachability, computed by the same
+  recomputation from each node's current drawer tree, so the inventory
+  and the sweep can never disagree about what is dead: a bundle shown
+  `unreferenced` is one the next sweep would reap once its blobs age
+  past the grace. Same `hygiene:sweep` authority as the other read
+  routes; totals come with an honest caveat (logical bytes — the
+  content-addressed store dedups shared blobs).
+- **A "frozen trees" card between the sweep report and the history.**
+  One table: short bundle id, files, size, frozen-at, and a `live`
+  badge naming the holding skills or an `unreferenced` badge for what
+  the sweep will claim. The Storage tab now shows the whole lifecycle
+  in one screen: what exists, what a sweep would do about it, the
+  Routine that will do it unattended, and the audit trail of every time
+  it happened.
+- **Tested at both layers.** A gateway test freezes a stale tree next
+  to a node's live one and asserts the route reports the stale one
+  unreferenced, the live one held by the node's skill (with main.py
+  correctly absent from the bundle), and the totals adding up — behind
+  the permission wall. The browser flow checks the fresh host's honest
+  empty state ("0 stored", no trees yet).
+
 The sweep's history, read back off the audit chain:
 
 - **`GET /v1/work/bundles/audit`.** The trail was already being written

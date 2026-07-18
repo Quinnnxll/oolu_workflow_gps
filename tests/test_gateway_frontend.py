@@ -56,6 +56,7 @@ def test_every_path_the_frontend_calls_is_a_real_route():
         "/v1/payout-accounts",
         "/v1/worker-health",
         "/v1/metrics",
+        "/v1/work/bundles",
         "/v1/work/bundles/sweep",
         "/v1/work/bundles/schedule",
         "/v1/work/bundles/audit",
@@ -205,6 +206,9 @@ def test_the_sweep_routine_is_operable_from_the_browser(host_server):
         expect(page.get_by_text("reclaimable: 0 B")).to_be_visible()
         # A fresh host has no sweep story to tell yet.
         expect(page.get_by_text("No sweep activity")).to_be_visible()
+        # And no frozen trees either — the inventory says so, with totals.
+        expect(page.get_by_text("0 stored")).to_be_visible()
+        expect(page.get_by_text("No frozen trees yet")).to_be_visible()
 
         # Enable = the standing consent, with a chosen interval.
         page.get_by_label("Interval (hours)").fill("6")
