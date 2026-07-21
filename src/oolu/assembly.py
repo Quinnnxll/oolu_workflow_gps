@@ -1218,6 +1218,8 @@ def build_host_runtime(
         # real binaries (PDF/DOCX/MP4/...) as content-addressed files on
         # disk — the database never swallows a video.
         files=UserFileStore(conn, artifacts=blob_store_from_env(data)),
+        # The investor metrics tracker's daily ledger.
+        metrics_store=_metrics_store(conn),
         bundle_store=bundle_store,
         # The accelerator tiers the sweep purges alongside dead manifests —
         # on a fleet's shared materialized root, the sweep is the ONLY
@@ -1321,3 +1323,9 @@ def build_host_runtime(
         conn=conn,
         _closers=(users, identity, price_book, traces),
     )
+
+
+def _metrics_store(conn):
+    from .telemetry.investor import MetricsSnapshotStore
+
+    return MetricsSnapshotStore(conn)

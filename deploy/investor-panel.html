@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>OoLu — Investor Metrics</title>
+<style>
+  :root { color-scheme: light dark;
+    --line: #8884; --muted: #888; --accent: #46f; }
+  body { font-family: system-ui, sans-serif; max-width: 1080px;
+    margin: 1.5rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.25rem; }
+  h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.6px;
+    color: var(--muted); margin: 1.6rem 0 0.6rem; }
+  .grid { display: grid; gap: 0.8rem;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+  .tile { border: 1px solid var(--line); border-radius: 10px;
+    padding: 0.8rem 1rem; }
+  .tile .value { font-size: 1.6rem; font-weight: 650; margin: 0.2rem 0; }
+  .tile .label { font-size: 0.9rem; }
+  .muted { color: var(--muted); font-size: 0.8rem; }
+  .badge { display: inline-block; border: 1px solid var(--line);
+    border-radius: 999px; padding: 0 0.5rem; font-size: 0.7rem;
+    color: var(--muted); }
+  form { display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center;
+    border: 1px solid var(--line); border-radius: 10px; padding: 0.7rem; }
+  input { font: inherit; padding: 0.4rem; flex: 1; min-width: 200px; }
+  button { font: inherit; padding: 0.4rem 0.9rem; cursor: pointer; }
+  .error { color: #d44; margin-top: 0.6rem; }
+</style>
+</head>
+<body>
+<h1>OoLu — Investor Metrics</h1>
+<p class="muted">
+  Live off the app's own books via <code>GET /v1/platform/metrics</code>
+  (a token with <code>metrics:view</code> authority). The
+  <code>/history</code> endpoint behind the same wall carries the daily
+  series for charts and analysis reports.
+</p>
+<form id="conf">
+  <input id="server" placeholder="https://api.your-oolu-host" />
+  <input id="token" placeholder="bearer token (metrics:view)" />
+  <button type="submit">Connect</button>
+  <span class="muted">refreshes every 60&thinsp;s</span>
+</form>
+<div id="board"></div>
+<div id="err" class="error"></div>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const conf = {
+  get server() { return localStorage.getItem("oolu_metrics_server") || ""; },
+  get token() { return localStorage.getItem("oolu_metrics_token") || ""; },
+  set(server, token) {
+    localStorage.setItem("oolu_metrics_server", server);
+    localStorage.setItem("oolu_metrics_token", token);
+  },
+};
+function fmt(item) {
+  if (item.value == null) return "—";
+  const v = item.value;
+  const n = Math.abs(v) >= 1000 ? Math.round(v).toLocaleString()
+    : Math.round(v * 100) / 100;
+  return item.unit === "USD" ? "$" + n : n + (item.unit ? " " + item.unit : "");
+}
+async function refresh() {
+  $("err").textContent = "";
+  if (!conf.server || !conf.token) return;
+  try {
+    const res = await fetch(conf.server + "/v1/platform/metrics", {
+      headers: { Authorization: "Bearer " + conf.token },
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    const groups = {};
+    for (const item of data.items) {
+      (groups[item.group] = groups[item.group] || []).push(item);
+    }
+    const board = $("board");
+    board.replaceChildren();
+    for (const [group, items] of Object.entries(groups)) {
+      const h = document.createElement("h2");
+      h.textContent = group;
+      const grid = document.createElement("div");
+      grid.className = "grid";
+      for (const item of items) {
+        const tile = document.createElement("div");
+        tile.className = "tile";
+        const label = document.createElement("div");
+        label.className = "label";
+        label.textContent = item.label;
+        const value = document.createElement("div");
+        value.className = "value";
+        value.textContent = fmt(item);
+        const foot = document.createElement("div");
+        foot.className = "muted";
+        foot.textContent = (item.as_of ? "as of " + item.as_of + " " : "");
+        if (item.source === "manual") {
+          const badge = document.createElement("span");
+          badge.className = "badge";
+          badge.textContent = "manual";
+          foot.append(badge);
+        }
+        tile.append(label, value, foot);
+        tile.title = item.description || item.key;
+        grid.append(tile);
+      }
+      board.append(h, grid);
+    }
+  } catch (e) { $("err").textContent = e.message; }
+}
+$("conf").addEventListener("submit", (e) => {
+  e.preventDefault();
+  conf.set($("server").value.trim().replace(/\/+$/, ""), $("token").value.trim());
+  refresh();
+});
+$("server").value = conf.server;
+$("token").value = conf.token;
+refresh();
+setInterval(refresh, 60000);
+</script>
+</body>
+</html>

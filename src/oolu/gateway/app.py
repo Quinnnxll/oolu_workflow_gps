@@ -559,6 +559,7 @@ class GatewayApp:
         # brain (platform keys + per-tenant monthly allowance); None on
         # every self-hosted install
         model_usage=None,  # billing.ModelUsageStore: per-tenant durable books
+        metrics_store=None,  # telemetry.investor.MetricsSnapshotStore
         stripe_webhooks=None,  # gateway.StripeWebhookVerifier: real Stripe
         # events land at /v1/webhooks/stripe only when this is configured
         google_signin: GoogleSignIn | None = None,  # "Continue with Google"
@@ -668,6 +669,7 @@ class GatewayApp:
         self._model_transport = model_transport
         self._subscription = subscription
         self._model_usage = model_usage
+        self._metrics_store = metrics_store
         self._stripe_webhooks = stripe_webhooks
         # Keyed (tenant, purpose): the conversation and the node author
         # ride separate routers so their consultations enter the books
@@ -1220,6 +1222,28 @@ class GatewayApp:
             requires_permission="finance:view",
         )
         r.add("POST", "/v1/platform/usage/giveback", self._usage_giveback)
+        # The investor metrics tracker: the live catalog view, the daily
+        # snapshot tick, the charted history, and the manual-record door
+        # for sources the app cannot see (commits, SEO, capital raises).
+        r.add(
+            "GET",
+            "/v1/platform/metrics",
+            self._metrics_view,
+            requires_permission="metrics:view",
+        )
+        r.add(
+            "GET",
+            "/v1/platform/metrics/history",
+            self._metrics_history,
+            requires_permission="metrics:view",
+        )
+        r.add(
+            "POST",
+            "/v1/platform/metrics/snapshot",
+            self._metrics_snapshot,
+            requires_permission="metrics:view",
+        )
+        r.add("PUT", "/v1/platform/metrics/{key}", self._metrics_record)
         r.add("POST", "/v1/nodeplace", self._contribute)
         r.add("POST", "/v1/nodeplace/{node_id}/revoke", self._revoke_node)
         r.add("GET", "/v1/listings", self._discover_listings)
@@ -7931,6 +7955,156 @@ class GatewayApp:
             commit_prices=bool(body.get("commit_prices", False)),
         )
         return json_response(200, quote.model_dump(mode="json"))
+
+    def _investor_metrics(self):
+        """The metrics service over this host's REAL stores — readers are
+        closures on what the gateway already holds; a store this host
+        lacks simply leaves its metrics to the manual door."""
+        if self._metrics_store is None:
+            return None
+        from datetime import UTC, datetime, timedelta
+
+        from ..telemetry.investor import InvestorMetricsService
+
+        def _runs():
+            return [
+                s
+                for s in self._durable.runs.list(limit=10_000)
+                if s.contract.metadata.get("tenant_id")
+            ]
+
+        def _active_since(days: int) -> set[str]:
+            floor = datetime.now(UTC) - timedelta(days=days)
+            return {
+                s.contract.submitted_by
+                for s in _runs()
+                if s.updated_at >= floor and s.contract.submitted_by
+            }
+
+        def _avg_daily_minutes() -> float:
+            floor = datetime.now(UTC) - timedelta(days=1)
+            spans: dict[str, list] = {}
+            for s in _runs():
+                if s.updated_at < floor or not s.contract.submitted_by:
+                    continue
+                spans.setdefault(s.contract.submitted_by, []).extend(
+                    (s.created_at, s.updated_at)
+                )
+            if not spans:
+                return 0.0
+            minutes = [
+                (max(stamps) - min(stamps)).total_seconds() / 60
+                for stamps in spans.values()
+            ]
+            return sum(minutes) / len(minutes)
+
+        def _model_totals(field: str) -> float:
+            usage = self._model_usage
+            if usage is None:
+                raise LookupError("no model usage books on this host")
+            total = 0.0
+            for tenant in usage.tenants():
+                line = usage.all_time(tenant)
+                total += (
+                    line["prompt_tokens"] + line["completion_tokens"]
+                    if field == "tokens"
+                    else line[field]
+                )
+            return total
+
+        def _capital() -> float:
+            billing = self._billing
+            if billing is None:
+                raise LookupError("no earnings books on this host")
+            micros = 0
+            for principal in billing.principals():
+                balance = billing.balance(principal)
+                micros += (
+                    balance.available_micros
+                    + balance.pending_micros
+                    + balance.reserved_micros
+                )
+            return micros / 1_000_000
+
+        today = datetime.now(UTC).date()
+        readers = {
+            "users.daily_active": lambda: len(_active_since(1)),
+            "users.weekly_active": lambda: len(_active_since(7)),
+            "engagement.avg_daily_minutes": _avg_daily_minutes,
+            "executions.total": lambda: len(_runs()),
+            "executions.daily": lambda: len(
+                [s for s in _runs() if s.created_at.date() == today]
+            ),
+            "model.tokens_total": lambda: _model_totals("tokens"),
+            "model.calls_total": lambda: _model_totals("calls"),
+            "model.spend_usd": lambda: _model_totals("cost_usd"),
+            "capital.in_app_usd": _capital,
+        }
+        if self._nodeplace is not None:
+            readers["nodes.total"] = lambda: len(self._nodeplace.all_nodes())
+        return InvestorMetricsService(self._metrics_store, readers=readers)
+
+    def _require_metrics(self):
+        service = self._investor_metrics()
+        if service is None:
+            raise GatewayError(
+                404, "not_found", "the metrics tracker is not enabled here"
+            )
+        return service
+
+    def _metrics_view(self, request, session, params) -> Response:
+        return json_response(200, self._require_metrics().view())
+
+    def _metrics_history(self, request, session, params) -> Response:
+        self._require_metrics()
+        days = max(1, min(3650, int(request.query.get("days", "90"))))
+        return json_response(
+            200, {"series": self._metrics_store.history(days=days)}
+        )
+
+    def _metrics_snapshot(self, request, session, params) -> Response:
+        """The daily tick: collect and file every auto metric — the call
+        a Routine (or the panel itself) makes to keep the series alive."""
+        collected = self._require_metrics().collect()
+        return json_response(200, {"collected": collected})
+
+    def _metrics_record(self, request, session, params) -> Response:
+        """The manual door: an approved, audited recording for sources
+        the app cannot see — commits, SEO, capital raises."""
+        service = self._require_metrics()
+        if self._approval is None:
+            raise GatewayError(404, "not_found", "approval authority is not configured")
+        try:
+            self._approval.approve(
+                session,
+                run_id=f"metrics:{params['key']}",
+                policy="metrics.record",
+                requester_id="",
+                now=request.now or self._clock(),
+            )
+        except AuthorizationError as exc:
+            raise GatewayError(403, "forbidden", str(exc)) from exc
+        body = request.body or {}
+        try:
+            value = float(body["value"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise GatewayError(
+                400, "invalid_request", 'give the number: {"value": …}'
+            ) from exc
+        try:
+            spec = service.record_manual(params["key"], value)
+        except KeyError as exc:
+            raise GatewayError(404, "not_found", str(exc)) from exc
+        self._durable.audit.append(
+            "metrics.recorded",
+            {
+                "run_id": f"metrics:{spec.key}",
+                "metric": spec.key,
+                "value": value,
+                "by": session.principal_id,
+            },
+        )
+        return json_response(200, {"key": spec.key, "value": value})
 
     def _platform_finance(self, request, session, params) -> Response:
         """The operator's two-sided ledger, straight off the books: what

@@ -4,6 +4,33 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The investor metrics tracker: one catalog, one daily ledger, live:
+
+- **`telemetry/investor.py`.** A declarative metric CATALOG (engagement,
+  nodes, executions, model, capital, code, SEO — one line to register
+  the hundredth metric), a daily snapshot ledger (`metric_snapshots`,
+  one honest point per metric per day), and a collection service whose
+  readers are closures over the app's REAL stores: DAU/WAU and average
+  daily use time off the run books, node totals off the registry,
+  executions daily/all-time, token/call/spend totals off the model
+  usage books, capital-in-app off the earnings balances. A broken
+  reader is skipped, never a blanked panel; an unwired metric shows
+  honest absence, never a fake zero.
+- **The routes.** `GET /v1/platform/metrics` (the grouped catalog view),
+  `GET /v1/platform/metrics/history` (the charted series), `POST
+  /v1/platform/metrics/snapshot` (the daily tick a Routine can drive) —
+  all behind `metrics:view` like the other operator screens — and `PUT
+  /v1/platform/metrics/{key}`, the approved, audited manual door for
+  sources the app cannot see: GitHub commits, SEO, capital raises.
+- **The panel seed.** `deploy/investor-panel.html`: a single
+  self-contained page for the investors domain — server + token
+  configured on the page, grouped stat tiles refreshed each minute,
+  manual sources badged. The history endpoint is the substrate the
+  full monitor panel and analysis reports build on.
+- **Tests.** One point per day in the ledger; the broken-reader and
+  honest-absence rules; and the gateway walls, real-book reads, manual
+  recording with audit, the snapshot tick, and the history read.
+
 Work reads like Life: the fold, the tags, the order, the margins:
 
 - **The fold, top-left.** The Work sidebar gains the same fold/unfold
