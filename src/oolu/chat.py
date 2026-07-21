@@ -1152,6 +1152,7 @@ class NodeChatTools(GatewayChatTools):
         holds_decide,  # (pending_id, approved, signature) -> str
         holds_reply,  # (pending_id, message) -> str
         builder,  # (goal) -> str
+        reviser=None,  # (change) -> str; None = revision not wired here
     ):
         super().__init__(
             store,
@@ -1168,6 +1169,7 @@ class NodeChatTools(GatewayChatTools):
         self._holds_decide = holds_decide
         self._holds_reply = holds_reply
         self._builder = builder
+        self._reviser = reviser
 
     def list_files(self) -> list[UserFile]:
         """The interact window's file hands reach THIS NODE's drawer —
@@ -1233,6 +1235,11 @@ class NodeChatTools(GatewayChatTools):
     def build_node(self, goal: str) -> str:
         return self._builder(goal)
 
+    def revise_node(self, change: str) -> str:
+        if self._reviser is None:
+            return "error: revising this node's function is not wired here"
+        return self._reviser(change)
+
 
 @runtime_checkable
 class NodeTools(Protocol):
@@ -1248,6 +1255,7 @@ class NodeTools(Protocol):
     ) -> str: ...
     def reply_hold(self, pending_id: str, message: str) -> str: ...
     def build_node(self, goal: str) -> str: ...
+    def revise_node(self, change: str) -> str: ...
 
 
 def _resolve_hold(holds: list[dict], ref: str) -> list[dict]:
@@ -1279,6 +1287,15 @@ _SIGN_RE = re.compile(r"^sign\s+(.+?)\s+as\s+(.+?)\s*$", re.I)
 _DECIDE_RE = re.compile(r"^(allow|approve|reject|decline)\s+(.+?)\s*$", re.I)
 _HOLD_REPLY_RE = re.compile(r"^reply\s+([^:]+):\s*(.+)$", re.I | re.S)
 _BUILD_RE = re.compile(r"^build\s+(?:a\s+node\s+(?:for|to)\s+)?(.+?)\s*$", re.I)
+# "revise …"/"recode …": change THIS node's own function. The verb is
+# deliberately narrow — "update the file x" and friends stay ordinary
+# conversation; only an explicit revise/recode reaches the author.
+_REVISE_RE = re.compile(
+    r"^(?:revise|recode)\s+"
+    r"(?:(?:this|the)\s+(?:node|function|code|script)\s*)?"
+    r"(?:to\s+|so\s+(?:that\s+)?|:\s*)?(.+?)\s*$",
+    re.I,
+)
 _PENDING_PHRASES = frozenset(
     {"pending", "holds", "pending requests", "show pending", "what is pending",
      "what's pending"}
@@ -1440,6 +1457,17 @@ def _node_command(text: str, tools: "NodeTools") -> ChatTurn | None:
             )
         return ChatTurn(
             say=result, source="tool", actions=[{"tool": "build_node"}]
+        )
+
+    revise = _REVISE_RE.match(text)
+    if revise:
+        result = tools.revise_node(revise.group(1).strip())
+        if result.startswith("error:"):
+            return ChatTurn(
+                say=f"I couldn't: {result[7:].strip()}", source="tool"
+            )
+        return ChatTurn(
+            say=result, source="tool", actions=[{"tool": "revise_node"}]
         )
     return None
 
@@ -2293,6 +2321,12 @@ def _run_tool(tools: ChatTools, call: _ToolCall) -> tuple[str, dict | None]:
     if call.name == "build_node" and isinstance(tools, NodeTools):
         result = tools.build_node(str(call.args.get("goal", "")).strip())
         action = None if result.startswith("error:") else {"tool": "build_node"}
+        return result, action
+    if call.name == "revise_node" and isinstance(tools, NodeTools):
+        result = tools.revise_node(str(call.args.get("change", "")).strip())
+        action = (
+            None if result.startswith("error:") else {"tool": "revise_node"}
+        )
         return result, action
     if call.name == "send_message" and isinstance(tools, MessagingTools):
         wanted = str(call.args.get("to", "")).strip()

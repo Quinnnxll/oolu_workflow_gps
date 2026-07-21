@@ -2499,6 +2499,17 @@ class GatewayApp:
                 session, goal, under_entry=entry, under_node_id=node_id
             )
 
+        def reviser(change: str) -> str:
+            change = (change or "").strip()
+            if not change:
+                return "error: tell me how the function should change"
+            # The same consent door as building: model-written code enters
+            # this node only under the standing auto-build consent, whether
+            # the ask came typed or from the model's own initiative.
+            if not self._autobuild_consented(session.tenant_id, session.principal_id):
+                return f"error: auto-build is off — {AUTOBUILD_HINT}"
+            return self._revise_node_function(session, node_id, entry, change)
+
         health = entry.health
         verified = health.verified_successes + health.verified_failures
         reliability = (
@@ -2528,13 +2539,19 @@ class GatewayApp:
             "hands at all. build_node NEVER changes THIS node's code (a "
             "public-safety rule): it always creates a SEPARATE new node "
             "that expands the path, which can be merged in later once "
-            "proven. Extra tools available ONLY here:\n"
+            "proven. When the user asks to change THIS node's OWN "
+            "function, use revise_node: the seated author rewrites "
+            "src/main.py under the same consent, the change is audited, "
+            "and the node's next run executes the updated code. Extra "
+            "tools available ONLY here:\n"
             '  {"tool": "node_holds", "args": {}}\n'
             '  {"tool": "decide_hold", "args": {"pending_id": "<id>", '
             '"approved": true, "signature": "<typed name, optional>"}}\n'
             '  {"tool": "reply_hold", "args": {"pending_id": "<id>", '
             '"message": "<text>"}}\n'
             '  {"tool": "build_node", "args": {"goal": "<what it must do>"}}\n'
+            '  {"tool": "revise_node", "args": {"change": "<what must '
+            'change in THIS node\'s function>"}}\n'
             "Never decide or sign a held request the user did not ask you "
             "to. When automation fails, give the user the error code so "
             "they can fix it later."
@@ -2558,6 +2575,7 @@ class GatewayApp:
             holds_decide=holds_decide,
             holds_reply=holds_reply,
             builder=builder,
+            reviser=reviser,
         )
         return tools, context_note
 
@@ -3024,6 +3042,131 @@ class GatewayApp:
             "needs-verification and becomes a callable, routable step as "
             "its runs verify." + web_note + cost_note
         )
+
+    def _revise_node_function(self, session, node_id: str, entry, change: str) -> str:
+        """Rewrite THIS node's own execution function on the user's ask —
+        the interact window's counterpart to build. The drawer's
+        ``src/main.py`` is the function's home (runs read it first), so
+        the revision lands there through the ``node.build`` seat and is
+        audited like every seated model act; the caller already attested
+        the auto-build consent. Returns words; ``error: …`` is refusal."""
+        if obviously_chat(change):
+            return (
+                "error: that reads as conversation, not a change to the "
+                "function — tell me what the code should do differently"
+            )
+        if self._files is None:
+            return (
+                "error: this host stores no node files, so there is no "
+                "function to revise"
+            )
+        author = self._node_function_author(session.tenant_id)
+        if author is None:
+            return (
+                "error: revising a node means rewriting its execution "
+                "function, and no model is configured to write it — add "
+                "a model key (or a local model) in Settings"
+            )
+        current = self._node_current_script(session, node_id) or ""
+        goal = (
+            "Revise this node's execution function.\n"
+            f"Node: {entry.title}\n"
+            f"Requested change: {change}\n\n"
+            "Rewrite the COMPLETE function with the change applied — the "
+            "whole script, never a diff or a fragment.\n"
+            "Current function (src/main.py):\n"
+            f"```python\n{current}\n```"
+        )
+        meter = getattr(self, "_model_meter", None)
+        spent_before = len(meter.charges()) if meter is not None else 0
+        script, io, refusal = self._author_function(
+            session,
+            author,
+            goal,
+            None,
+            read_file=lambda path: self._node_drawer_read(
+                session, node_id, path
+            ),
+        )
+        if script is None:
+            return f"error: {refusal}"
+        cost_note = self._build_cost_note(meter, spent_before)
+        desk_files = DeskFiles(
+            self._files,
+            tenant=session.tenant_id,
+            node_id=node_id,
+            seat=SEATS["node.build"],
+            # The reviser closure held the consent door; the seat records
+            # the attestation, the audit line below records the act.
+            consented=True,
+        )
+        desk_files.write("src/main.py", script)
+        self._durable.audit.append(
+            "model.seat",
+            {
+                "purpose": "node.build",
+                "tenant": session.tenant_id,
+                "by": session.principal_id,
+                "node_id": node_id,
+                "revision": True,
+                "written": desk_files.written,
+            },
+        )
+        web_note = (
+            (
+                " The revised function uses the web hand: make sure the "
+                "hosts it reaches are granted on the node's account "
+                "(network hosts) — ungranted calls fail closed."
+            )
+            if "http_request" in script
+            else ""
+        )
+        return (
+            f"Revised “{entry.title}” — its execution function "
+            "(src/main.py) was rewritten with the change applied, through "
+            "the node.build seat, and the act is audited. The node's next "
+            "run executes the updated code." + web_note + cost_note
+        )
+
+    def _node_current_script(self, session, node_id: str) -> str | None:
+        """The node's function as it stands: the drawer's ``src/main.py``
+        first (the runtime home), the latest version's stored script as
+        the fallback — the same precedence runs apply."""
+        drawer = self._node_drawer_read(session, node_id, "src/main.py")
+        if drawer:
+            return drawer
+        if self._nodeplace is None:
+            return None
+        try:
+            version = self._nodeplace.latest_version(node_id)
+            if version is None:
+                return None
+            skill = ReusableSkill.model_validate_json(
+                version.sanitized_skill_json
+            )
+        except Exception:  # noqa: BLE001 - a broken record revises from blank
+            return None
+        action = next(
+            (a for a in skill.actions if a.adapter == "script"), None
+        )
+        script = (action.parameters or {}).get("script") if action else None
+        return str(script) if script else None
+
+    def _node_drawer_read(self, session, node_id: str, path: str) -> str | None:
+        """A seat-scoped read of one node's drawer for the author's hand —
+        refused paths and missing stores answer None, never an exception."""
+        if self._files is None:
+            return None
+        try:
+            return DeskFiles(
+                self._files,
+                tenant=session.tenant_id,
+                node_id=node_id,
+                seat=SEATS["node.build"],
+                consented=True,
+            ).read(path)
+        except SeatViolation:
+            return None
 
     @staticmethod
     def _build_cost_note(meter, before_count: int) -> str:
@@ -4324,18 +4467,20 @@ class GatewayApp:
         model) can supply their own."""
         return self._tenant_model(tenant, purpose="node.build")
 
-    def _author_function(self, session, author, goal, demonstrated):
+    def _author_function(self, session, author, goal, demonstrated, *, read_file=None):
         """``(script, io, refusal)`` through the strongest path the seated
         model supports: a tool-calling brain works as the
         :class:`NodeAuthorAgent` — the desk's contracts and upstream
-        outputs in hand — while a plain ``reply`` model keeps the one-shot
-        ``author_node_function`` gates unchanged."""
+        outputs in hand, plus a drawer read for revisions — while a plain
+        ``reply`` model keeps the one-shot ``author_node_function`` gates
+        unchanged."""
         if not hasattr(author, "consult"):
             return author_node_function(author, goal, demonstrated=demonstrated)
         agent = NodeAuthorAgent(
             author,
             catalog=lambda: self._author_catalog(session),
             outputs=lambda node_id: self._author_node_outputs(session, node_id),
+            read_file=read_file,
         )
         authored = agent.author(goal, demonstrated=demonstrated)
         return authored.script, authored.io, authored.refusal

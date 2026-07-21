@@ -348,3 +348,68 @@ def test_the_operator_charter_rides_the_models_context(tmp_path):
         assert "reach THIS node's own drawer" in notes
     finally:
         conn.close()
+
+
+def test_revise_rewrites_this_nodes_own_function_under_consent(tmp_path):
+    """Issue: asking the interact window to change the node's code either
+    spawned a SEPARATE node (build_node's public-safety rule) or depended
+    on the model volunteering file writes. ``revise …`` now goes to the
+    seated author, rewrites THIS node's src/main.py, and is audited —
+    behind the same auto-build consent as building."""
+    from oolu.seats import SEATS, DeskFiles
+
+    app, conn, ident, registry, desk, node_id, pending_id = _rig(tmp_path)
+    try:
+        # Consent off: the refusal names the settings switch.
+        refused = _chat(app, ident, node_id, "revise this node to trim rows")
+        assert "Auto-build nodes on my paths" in refused.body["reply"]
+
+        from oolu.settings_node import SettingsNode, SettingsStore
+
+        settings = SettingsNode(SettingsStore(conn))
+        settings.set("t1", "account.autobuild_consent", True)
+        app._settings = settings
+
+        # Conversation is never a code change.
+        chatty = _chat(app, ident, node_id, "revise what is the weather?")
+        assert "conversation" in chatty.body["reply"]
+
+        # No model: no function writer, so nothing changes.
+        no_model = _chat(app, ident, node_id, "revise this node to trim rows")
+        assert "no model is configured to write it" in no_model.body["reply"]
+
+        # A reply-only author takes the one-shot door and the revision
+        # lands in THIS node's drawer.
+        author = FakeAuthor()
+        app._node_function_author = lambda tenant: author
+        revised = _chat(app, ident, node_id, "revise this node to trim rows")
+        assert revised.status == 200, revised.body
+        assert "Revised" in revised.body["reply"]
+        assert "src/main.py" in revised.body["reply"]
+        assert revised.body["actions"] == [{"tool": "revise_node"}]
+        drawer = DeskFiles(
+            app._files,
+            tenant="t1",
+            node_id=node_id,
+            seat=SEATS["node.build"],
+            consented=True,
+        )
+        assert drawer.read("src/main.py") == (
+            "from _oolu_runtime import emit_result\nemit_result('tidy')"
+        )
+        # The author SAW the change request and the current-function frame.
+        [consultation] = author.calls
+        asked = consultation[1]["content"]
+        assert "trim rows" in asked
+        assert "Current function (src/main.py)" in asked
+        # The act entered the audit log as a seated revision.
+        seat_events = [
+            e
+            for e in app._durable.audit.records()
+            if e.event_type == "model.seat"
+        ]
+        assert seat_events[-1].payload["revision"] is True
+        assert seat_events[-1].payload["node_id"] == node_id
+        assert seat_events[-1].payload["written"] == ["src/main.py"]
+    finally:
+        conn.close()

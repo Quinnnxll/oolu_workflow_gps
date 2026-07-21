@@ -4,6 +4,36 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The interact window learns to revise: THIS node's code, on your ask:
+
+- **The gap.** Asking a node's interact window to change its code went
+  nowhere honest: `build_node` refuses to touch the current node (its
+  public-safety rule mints a separate sibling), and any direct edit
+  depended on the chat model volunteering `write_file` calls. The one
+  thing the user actually asked — "change this node's function" — had
+  no hand.
+- **`revise_node`.** A new interact-window hand, typed (`revise …` /
+  `recode …`) or model-called: the seated author rewrites THIS node's
+  `src/main.py` — the function's runtime home, so the next run executes
+  the updated code. The change request rides with the current function
+  framed in the goal; a tool-calling model works as the
+  `NodeAuthorAgent` with a seat-scoped drawer read added to its hands,
+  a reply-only model takes the one-shot door with the same context.
+- **The same walls.** Revision sits behind the auto-build consent
+  exactly like building (the model cannot rewrite code mid-conversation
+  uninvited), writes only through the `node.build` seat (scope-checked,
+  attested), and lands a `model.seat` audit line marked `revision` with
+  the files written. Conversation is refused in words; no model, no
+  files, no store — every dead end names itself.
+- **The charter tells the model.** The interact context note now
+  distinguishes the two doors: `build_node` for a separate new node,
+  `revise_node` for this node's own function.
+- **Tests.** The full consent ladder in the window (off → named switch;
+  conversation → refused; no model → named; reply-only author →
+  revision lands, audited), and the agent path: `recode …` seats the
+  author with the drawer read, the change and current function frame
+  the goal, and the rewritten script lands through the seat.
+
 The node author becomes an agent: the library in hand, seated apart:
 
 - **The gap.** A node's function was written from one thing — the goal

@@ -238,3 +238,46 @@ def test_a_reply_only_author_keeps_the_one_shot_path(tmp_path):
         assert len(author.calls) == 1
     finally:
         conn.close()
+
+
+def test_revise_in_the_interact_window_seats_the_agent_with_a_drawer_read(tmp_path):
+    from test_node_interact import _chat as _node_chat
+    from test_node_interact import _rig as _node_rig
+
+    from oolu.settings_node import SettingsNode, SettingsStore
+
+    app, conn, ident, registry, desk, node_id, pending_id = _node_rig(tmp_path)
+    try:
+        settings = SettingsNode(SettingsStore(conn))
+        settings.set("t1", "account.autobuild_consent", True)
+        app._settings = settings
+        model = ConsultModel([
+            _call("read_file", {"path": "src/main.py"}),
+            _finish(),
+        ])
+        app._node_function_author = lambda tenant: model
+
+        response = _node_chat(
+            app, ident, node_id, "recode the function: trim whitespace first"
+        )
+
+        assert response.status == 200, response.body
+        assert "Revised" in response.body["reply"]
+        # The agent held the drawer read alongside the library hands.
+        assert "read_file" in model.tool_sets[0]
+        assert "list_nodes" in model.tool_sets[0]
+        # The revision landed in THIS node's drawer through the seat.
+        drawer = DeskFiles(
+            app._files,
+            tenant="t1",
+            node_id=node_id,
+            seat=SEATS["node.build"],
+            consented=True,
+        )
+        assert drawer.read("src/main.py") == SCRIPT
+        # The goal named the change and framed the current function.
+        asked = model.transcripts[0][1]["content"]
+        assert "trim whitespace first" in asked
+        assert "Current function (src/main.py)" in asked
+    finally:
+        conn.close()
