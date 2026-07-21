@@ -2351,3 +2351,48 @@ button.ghost {
   min-width: 0;
   flex: 1;
 }
+
+
+/* The Code tab: the node read like a repo. */
+.code-view {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 0;
+  overflow-y: auto;
+}
+
+.code-row {
+  width: 100%;
+  background: none;
+  border: none;
+  border-top: 1px solid var(--line);
+  color: var(--fg);
+  cursor: pointer;
+  text-align: left;
+}
+
+.code-row:hover {
+  background: var(--panel);
+}
+
+.code-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.code-file-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.code-content {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  overflow-x: auto;
+  font-size: 12px;
+  line-height: 1.5;
+}

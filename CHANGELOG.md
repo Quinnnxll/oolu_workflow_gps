@@ -4,6 +4,27 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The node read like a repo, speaking the mainstream languages:
+
+- **The Code tab.** The node card grows a Code tab that reads like a
+  repository: the description up top (what the node was built to do —
+  now riding the work-nodes payload from the registry), then every
+  drawer file with a language badge and its size, each opening
+  read-only with the path and badge on its head.
+- **Mainstream languages, one contract.** The sandbox still speaks one
+  contract — a Python script calling emit_result — but the FUNCTION may
+  now be JavaScript (main.js/main.mjs), C (main.c), C++ (main.cpp), or
+  shell (main.sh): a generated Python wrapper drives the toolchain
+  inside the same sandbox and speaks the contract on the program's
+  behalf — stdout becomes the result; a non-zero exit or a missing
+  toolchain is an honest emit_error, never a silent nothing. main.py
+  stays native and wrapper-free, and always wins over siblings. JSON,
+  HTML, Markdown, and React sources are assets a node creates and
+  stages, not entry points.
+- **Tests.** Python stays native; every foreign entry generates a
+  wrapper that passes the same safety screen; data and markup stay
+  assets; and the Code tab end to end — description, badges, content.
+
 Access gets its own desk: one tab for who and what may reach a node:
 
 - **The Access tab.** The node card grows a fourth tab holding

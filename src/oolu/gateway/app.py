@@ -230,11 +230,24 @@ def _drawer_function(function: dict) -> dict:
     sibling), and the cache keys on the script's own fingerprint, so an
     edit takes effect on its very next run — still through the same
     safety screen and sandbox verification as any other code."""
+    from ..runtime.polyglot import polyglot_entry, polyglot_wrapper
+
     files = dict(function.get("files") or {})
     main = files.pop("main.py", None)
     updated = {**function}
     if main:
         updated["script"] = str(main)
+    else:
+        # Mainstream languages behind the one contract: a drawer whose
+        # entry is main.js / main.c / main.cpp / main.sh runs through a
+        # generated Python wrapper that drives the toolchain in the same
+        # sandbox and speaks emit_result for it. The source stays STAGED
+        # (it is the program the wrapper runs), and the cache still keys
+        # on the wrapper+files fingerprint, so an edit takes effect on
+        # its next run.
+        entry = polyglot_entry(files)
+        if entry is not None:
+            updated["script"] = polyglot_wrapper(entry)
     if files:
         updated["files"] = files
     else:
@@ -5595,9 +5608,27 @@ class GatewayApp:
         entries = desk.overview(
             principal=session.principal_id, tenant=session.tenant_id
         )
-        return json_response(
-            200, {"items": [e.model_dump(mode="json") for e in entries]}
-        )
+        items = []
+        for e in entries:
+            item = e.model_dump(mode="json")
+            # The node's own description — what it was built to do — for
+            # the Code tab's README-like head. Best-effort: a node whose
+            # registry record is unreadable simply shows no description.
+            if self._nodeplace is not None:
+                try:
+                    version = self._nodeplace.latest_version(e.node_id)
+                    skill = (
+                        ReusableSkill.model_validate_json(
+                            version.sanitized_skill_json
+                        )
+                        if version is not None
+                        else None
+                    )
+                    item["summary"] = skill.description if skill else ""
+                except Exception:  # noqa: BLE001
+                    item["summary"] = ""
+            items.append(item)
+        return json_response(200, {"items": items})
 
     _FIXED_ACCOUNT_TRAITS = (
         "policy_version",

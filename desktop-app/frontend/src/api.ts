@@ -844,6 +844,8 @@ export interface WorkNode {
   node_id: string;
   title: string;
   status: string;
+  // What the node was built to do — the Code tab's README-like head.
+  summary?: string;
   account: NodeAccountView;
   earnings_micros: number;
   health: {

@@ -870,6 +870,44 @@ describe("the SOP dial: a member's execution order", () => {
     expect(posted?.body).toEqual({ order: 2 });
   });
 
+  it("the Code tab reads like a repo: description, files, content", async () => {
+    routes["GET /v1/work/nodes/n1/activity"] = {
+      status: 200,
+      body: { items: [] },
+    };
+    routes["GET /v1/files"] = {
+      status: 200,
+      body: {
+        items: [
+          { file_id: "f1", node_id: "n1", name: "main.js", folder: "src",
+            media_type: "text/javascript", size: 120 },
+          { file_id: "f2", node_id: "n1", name: "layout.html", folder: "src",
+            media_type: "text/html", size: 300 },
+        ],
+      },
+    };
+    routes["GET /v1/files/f1"] = {
+      status: 200,
+      body: { file_id: "f1", node_id: "n1", name: "main.js", folder: "src",
+        media_type: "text/javascript", size: 120,
+        content: "console.log('tidy')" },
+    };
+    const described = workNode({ summary: "normalize invoice csv files" });
+    render(<NodeThread node={described} allNodes={[described]} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Code" }));
+
+    // The README head: the description of what was built.
+    expect(
+      await screen.findByText("normalize invoice csv files"),
+    ).toBeTruthy();
+    // The repo list wears language badges.
+    expect(await screen.findByText(/JavaScript · 120 B/)).toBeTruthy();
+    expect(screen.getByText(/HTML · 300 B/)).toBeTruthy();
+    // Opening a file shows its content read-only.
+    fireEvent.click(screen.getByText("src/main.js"));
+    expect(await screen.findByText("console.log('tidy')")).toBeTruthy();
+  });
+
   it("a member's name is the door to its own node card", async () => {
     routes["GET /v1/work/nodes/sn1/activity"] = {
       status: 200,

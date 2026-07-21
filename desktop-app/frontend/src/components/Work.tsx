@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api, isRemote } from "../api";
 import type {
+  FileDoc,
+  FileMeta,
   HoldItem,
   KycApplication,
   KycView,
@@ -650,7 +652,7 @@ export function NodeThread({
   const [activity, setActivity] = useState<NodeRunSteps[] | null>(null);
   const [holds, setHolds] = useState<HoldItem[]>([]);
   const [tab, setTab] = useState<
-    "activity" | "interact" | "files" | "access"
+    "activity" | "interact" | "files" | "access" | "code"
   >("activity");
   // The Access tab's create-a-member form (Supernodes only).
   const [memberTitle, setMemberTitle] = useState("");
@@ -782,6 +784,12 @@ export function NodeThread({
           onClick={() => setTab("files")}
         >
           {tr("files")}
+        </button>
+        <button
+          className={tab === "code" ? "on" : ""}
+          onClick={() => setTab("code")}
+        >
+          {tr("work.tabCode")}
         </button>
         <button
           className={tab === "access" ? "on" : ""}
@@ -939,6 +947,7 @@ export function NodeThread({
         </div>
       )}
 
+      {tab === "code" && <CodeView node={node} />}
       {tab === "interact" && <NodeInteract node={node} />}
       {tab === "files" && <FilesPane nodeId={node.node_id} />}
 
@@ -990,6 +999,130 @@ export function NodeThread({
 }
 
 // ---- the node's egress consent: exact hosts, given and withdrawable -------
+// The Code tab: what is actually BUILT in this node, read like a repo —
+// the description up top (the README's first line), then the drawer's
+// files with language badges, each opening read-only. Any mainstream
+// language may live here: Python runs natively; JavaScript, C, C++ and
+// shell entries run through the sandbox's polyglot wrapper; JSON, HTML,
+// Markdown and React sources ride as staged assets.
+const LANGUAGE_BADGES: Record<string, string> = {
+  py: "Python",
+  js: "JavaScript",
+  mjs: "JavaScript",
+  jsx: "React",
+  tsx: "React",
+  ts: "TypeScript",
+  c: "C",
+  cpp: "C++",
+  cc: "C++",
+  h: "C/C++",
+  sh: "Shell",
+  json: "JSON",
+  html: "HTML",
+  htm: "HTML",
+  css: "CSS",
+  md: "Markdown",
+};
+
+export function languageOf(name: string): string {
+  const ext = name.includes(".") ? name.split(".").pop()!.toLowerCase() : "";
+  return LANGUAGE_BADGES[ext] ?? (ext ? ext.toUpperCase() : "file");
+}
+
+export function CodeView({ node }: { node: WorkNode }) {
+  const tr = useT();
+  const [files, setFiles] = useState<FileMeta[] | null>(null);
+  const [openFile, setOpenFile] = useState<FileDoc | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .files(node.node_id)
+      .then((r) => {
+        if (cancelled) return;
+        const sorted = [...r.items].sort((a, b) =>
+          `${a.folder ?? ""}/${a.name}`.localeCompare(
+            `${b.folder ?? ""}/${b.name}`,
+          ),
+        );
+        setFiles(sorted);
+      })
+      .catch(() => {
+        if (!cancelled) setFiles([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [node.node_id]);
+
+  async function view(meta: FileMeta) {
+    setError("");
+    try {
+      setOpenFile(await api.file(meta.file_id));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  if (openFile) {
+    return (
+      <div className="code-view">
+        <div className="code-file-head">
+          <button
+            type="button"
+            className="linklike"
+            onClick={() => setOpenFile(null)}
+          >
+            ‹ {tr("work.codeAllFiles")}
+          </button>
+          <span className="code-path">
+            {openFile.folder ? `${openFile.folder}/` : ""}
+            {openFile.name}
+          </span>
+          <span className="badge">{languageOf(openFile.name)}</span>
+        </div>
+        <pre className="code-content">{openFile.content}</pre>
+      </div>
+    );
+  }
+  return (
+    <div className="code-view">
+      {/* The README head: the name and what it was built to do. */}
+      <div className="code-readme">
+        <div className="run-card-intent">{displayNodeName(node.title)}</div>
+        <p className="muted">{node.summary || tr("work.codeNoSummary")}</p>
+      </div>
+      {files === null && <div className="muted">…</div>}
+      {files !== null && files.length === 0 && (
+        <p className="muted">{tr("work.codeEmpty")}</p>
+      )}
+      {files !== null && files.length > 0 && (
+        <div className="code-list">
+          {files.map((f) => (
+            <button
+              key={f.file_id}
+              type="button"
+              className="commit-row code-row"
+              onClick={() => void view(f)}
+            >
+              <span className="code-path">
+                {f.folder ? `${f.folder}/` : ""}
+                {f.name}
+              </span>
+              <span className="muted">
+                {languageOf(f.name)} · {f.size.toLocaleString()} B
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+      <p className="muted fixed-note">{tr("work.codeLanguagesNote")}</p>
+      {error && <div className="error">{error}</div>}
+    </div>
+  );
+}
+
 function NetworkGrant({
   nodeId,
   account,

@@ -2173,6 +2173,31 @@ const STRINGS: Record<string, Entry> = {
     fr: "Mot de passe défini — la prochaine fois, connectez-vous avec votre identifiant et lui.",
   },
   "friends.save": { en: "Save", zh: "保存", es: "Guardar", fr: "Enregistrer" },
+  "work.tabCode": { en: "Code", zh: "代码", es: "Código", fr: "Code" },
+  "work.codeAllFiles": {
+    en: "all files",
+    zh: "全部文件",
+    es: "todos los archivos",
+    fr: "tous les fichiers",
+  },
+  "work.codeNoSummary": {
+    en: "No description recorded for this node yet.",
+    zh: "此节点暂无描述。",
+    es: "Este nodo aún no tiene descripción.",
+    fr: "Aucune description enregistrée pour ce nœud.",
+  },
+  "work.codeEmpty": {
+    en: "Nothing built here yet — the node's function and assets will appear as files.",
+    zh: "尚未构建任何内容——节点的函数与资源会以文件形式出现在这里。",
+    es: "Aún no hay nada construido: la función y los recursos del nodo aparecerán como archivos.",
+    fr: "Rien de construit ici pour l'instant — la fonction et les ressources du nœud apparaîtront comme des fichiers.",
+  },
+  "work.codeLanguagesNote": {
+    en: "Nodes speak the mainstream languages: Python runs natively; JavaScript (main.js), C (main.c), C++ (main.cpp) and shell entries run through the sandbox's toolchains; JSON, HTML, Markdown and React sources ride as staged assets.",
+    zh: "节点支持主流语言：Python 原生运行；JavaScript（main.js）、C（main.c）、C++（main.cpp）与 shell 入口经沙箱工具链运行；JSON、HTML、Markdown 与 React 源码作为随行资源。",
+    es: "Los nodos hablan los lenguajes principales: Python se ejecuta de forma nativa; JavaScript (main.js), C (main.c), C++ (main.cpp) y shell pasan por las herramientas del sandbox; JSON, HTML, Markdown y fuentes React viajan como recursos.",
+    fr: "Les nœuds parlent les langages courants : Python s'exécute nativement ; JavaScript (main.js), C (main.c), C++ (main.cpp) et shell passent par les outils du bac à sable ; JSON, HTML, Markdown et les sources React voyagent comme ressources.",
+  },
   "work.tabAccess": {
     en: "Access",
     zh: "访问",
