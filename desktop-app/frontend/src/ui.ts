@@ -2173,6 +2173,36 @@ const STRINGS: Record<string, Entry> = {
     fr: "Mot de passe défini — la prochaine fois, connectez-vous avec votre identifiant et lui.",
   },
   "friends.save": { en: "Save", zh: "保存", es: "Guardar", fr: "Enregistrer" },
+  "work.tabAccess": {
+    en: "Access",
+    zh: "访问",
+    es: "Acceso",
+    fr: "Accès",
+  },
+  "work.newMemberName": {
+    en: "new member node name",
+    zh: "新成员节点名称",
+    es: "nombre del nuevo nodo miembro",
+    fr: "nom du nouveau nœud membre",
+  },
+  "work.memberSupernode": {
+    en: "Supernode member",
+    zh: "超级节点成员",
+    es: "Miembro supernodo",
+    fr: "Membre supernœud",
+  },
+  "work.createMember": {
+    en: "Create member",
+    zh: "创建成员",
+    es: "Crear miembro",
+    fr: "Créer le membre",
+  },
+  "net.globalOpenNote": {
+    en: "Signed in to the global service, the web is open by default — no grants needed. Add hosts here only to NARROW what this node may reach; block lists always bind.",
+    zh: "登录全局服务后，网络默认全部开放——无需授权。在此添加主机只会收窄此节点可访问的范围；屏蔽列表始终生效。",
+    es: "Con sesión en el servicio global, la web está abierta por defecto: sin permisos previos. Añade hosts aquí solo para ACOTAR lo que este nodo alcanza; las listas de bloqueo siempre rigen.",
+    fr: "Connecté au service global, le web est ouvert par défaut — aucune autorisation requise. Ajoutez des hôtes ici uniquement pour RESTREINDRE ce que ce nœud atteint ; les listes de blocage s'appliquent toujours.",
+  },
   "profile.open": {
     en: "Profile of",
     zh: "查看资料：",

@@ -4,6 +4,30 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Access gets its own desk: one tab for who and what may reach a node:
+
+- **The Access tab.** The node card grows a fourth tab holding
+  everything about reach — KYC verification, the org template, the
+  member roster, the block lists (hosts and users), and the egress
+  grant — so none of it ever crowds the activity log again. The
+  Activity tab is the execution feed and the holds desk, nothing else.
+- **Members are doors, and minted here.** A member node's name in the
+  roster is now a link that opens that node's own card. Creating a
+  node under a Supernode happens on the Supernode's own Access desk
+  (name, optional Supernode mark, authority level) — the sidebar's +
+  makes standalone nodes only, and lost its under-Supernode selects.
+- **The global service opens the web by default.** A signed-in global
+  account needs no per-host grants: `open_egress` gains a
+  `default_open` stance the gateway sets from `global_service`, so
+  every node's web stands open minus the chain's block lists —
+  verification or none. Edge and local installs keep the allow-grant
+  regime unchanged, and the grant UI on a remote build now says the
+  default is open and grants only narrow.
+- **Tests.** The default-open stance (blocks still bind, Edge
+  unchanged); the Access desk end to end — sections live there, a
+  nested Supernode minted from the member form, the member link opens
+  the node — and the + creating standalone nodes only.
+
 The operator's two-sided ledger, and the give-back that refills it:
 
 - **`GET /v1/platform/finance`.** One screen, both sides of the books,

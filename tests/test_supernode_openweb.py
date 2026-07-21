@@ -312,3 +312,31 @@ def test_a_blocked_user_cannot_message_the_org(tmp_path):
         assert not heard.startswith("error:"), heard
     finally:
         conn.close()
+
+
+def test_default_open_is_the_global_services_stance(tmp_path):
+    """On the global service a signed-in account needs no grants: the web
+    stands open by default — verification or none — and the block lists
+    along the chain remain the one restriction that always binds."""
+    app, conn, ident, registry, desk, kyc, plans = _kyc_rig(
+        tmp_path, plans={"t1": "pro"}
+    )
+    try:
+        super_id, member_id = _seed_supernode(app, ident, registry, desk)
+        # Unverified, but the global stance opens the web anyway.
+        assert kyc.open_egress(super_id, default_open=True) == ()
+        assert kyc.open_egress(member_id, default_open=True) == ()
+        # The org's own blocks still bind, unioned down the chain.
+        desk.update_account(
+            super_id,
+            principal="noder-export",
+            tenant="t1",
+            blocked_hosts=["tracker.example"],
+        )
+        assert kyc.open_egress(member_id, default_open=True) == (
+            "tracker.example",
+        )
+        # Without the global stance, nothing changed: grants still rule.
+        assert kyc.open_egress(member_id) is None
+    finally:
+        conn.close()

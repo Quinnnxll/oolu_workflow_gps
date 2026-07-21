@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { api } from "../api";
+import { api, isRemote } from "../api";
 import type {
   HoldItem,
   KycApplication,
@@ -141,7 +141,6 @@ export function Work({ onLife }: { onLife: () => void }) {
         </div>
         {selected === "add" && (
           <AddNode
-            supernodes={nodes.filter((n) => n.account.is_supernode)}
             onDone={(nodeId) => {
               void refresh();
               setSelected(nodeId);
@@ -149,7 +148,13 @@ export function Work({ onLife }: { onLife: () => void }) {
           />
         )}
         {active && (
-          <NodeThread key={active.node_id} node={active} allNodes={nodes} />
+          <NodeThread
+            key={active.node_id}
+            node={active}
+            allNodes={nodes}
+            onOpenNode={(id) => open(id)}
+            onChanged={refresh}
+          />
         )}
         {!selected && (
           <div className="pane-empty">
@@ -233,10 +238,8 @@ function healthLabel(n: WorkNode): string {
 
 // ---- create (regime fixed forever) / onboard (no choices) -----------------
 export function AddNode({
-  supernodes,
   onDone,
 }: {
-  supernodes: WorkNode[];
   onDone: (nodeId: string) => void;
 }) {
   const tr = useT();
@@ -245,8 +248,6 @@ export function AddNode({
   const [summary, setSummary] = useState("");
   const [nodeId, setNodeId] = useState("");
   const [isSupernode, setIsSupernode] = useState(false);
-  const [under, setUnder] = useState("");
-  const [authority, setAuthority] = useState(1);
   const [audit, setAudit] = useState(false);
   const [autoGrow, setAutoGrow] = useState(true);
   const [policyOk, setPolicyOk] = useState(false);
@@ -282,13 +283,13 @@ export function AddNode({
       ).node_id;
       await api.workAccountCreate(id, {
         is_supernode: isSupernode,
-        supernode_id: under || null,
-        // An org's ROOT Supernode always audits — humans in full
-        // control. Under a Supernode the creator chooses: not every
-        // node in an org needs a human countersigning every run.
-        audit_mode: isSupernode && !under ? true : audit,
+        // Membership is minted on the Supernode's own Access desk, so
+        // the + makes standalone nodes (and org roots, which always
+        // audit — humans in full control).
+        supernode_id: null,
+        audit_mode: isSupernode ? true : audit,
         allow_autodev_data: autoGrow,
-        authority_level: under ? authority : null,
+        authority_level: null,
         accept_policy: policyOk,
       });
       onDone(id);
@@ -376,50 +377,13 @@ export function AddNode({
             {tr("work.supernodeCheck")}
           </label>
 
-          {supernodes.length > 0 && (
-            <>
-              <label htmlFor="node-under">{tr("work.underSupernode")}</label>
-              <select
-                id="node-under"
-                value={under}
-                onChange={(e) => setUnder(e.target.value)}
-              >
-                <option value="">{tr("work.noneStandalone")}</option>
-                {supernodes.map((s) => (
-                  <option key={s.node_id} value={s.node_id}>
-                    {displayNodeName(s.title)}
-                  </option>
-                ))}
-              </select>
-            </>
-          )}
-
-          {under && (
-            <label htmlFor="node-authority">
-              {tr("work.authority")}
-              <select
-                id="node-authority"
-                value={authority}
-                onChange={(e) => setAuthority(Number(e.target.value))}
-              >
-                {[1, 2, 3, 4, 5].map((level) => (
-                  <option key={level} value={level}>
-                    L{level}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-
-          {under && !isSupernode && (
-            <p className="muted fixed-note">{tr("work.claimNote")}</p>
-          )}
-
+          {/* Membership is minted on the Supernode's own Access desk
+              (Access → member nodes); the + makes standalone nodes. */}
           <label className="checkline">
             <input
               type="checkbox"
-              checked={isSupernode && !under ? true : audit}
-              disabled={isSupernode && !under}
+              checked={isSupernode ? true : audit}
+              disabled={isSupernode}
               onChange={(e) => setAudit(e.target.checked)}
             />
             {tr("work.auditCheck")}
@@ -672,16 +636,28 @@ export function ImitatePanel({
 export function NodeThread({
   node,
   allNodes,
+  onOpenNode = () => {},
+  onChanged = () => {},
 }: {
   node: WorkNode;
   allNodes: WorkNode[];
+  // Access tab hands: open a member node's own card; tell the parent
+  // the roster changed (a member was created here).
+  onOpenNode?: (nodeId: string) => void;
+  onChanged?: () => void;
 }) {
   const tr = useT();
   const [activity, setActivity] = useState<NodeRunSteps[] | null>(null);
   const [holds, setHolds] = useState<HoldItem[]>([]);
-  const [tab, setTab] = useState<"activity" | "interact" | "files">(
-    "activity",
-  );
+  const [tab, setTab] = useState<
+    "activity" | "interact" | "files" | "access"
+  >("activity");
+  // The Access tab's create-a-member form (Supernodes only).
+  const [memberTitle, setMemberTitle] = useState("");
+  const [memberAuthority, setMemberAuthority] = useState(1);
+  const [memberSuper, setMemberSuper] = useState(false);
+  const [memberBusy, setMemberBusy] = useState(false);
+  const [memberError, setMemberError] = useState("");
   // A large fleet folds away for a clear view of the thread itself.
   const [showMembers, setShowMembers] = useState(true);
   // Imitate: the guided lesson recording in THIS node's window, if any.
@@ -779,51 +755,6 @@ export function NodeThread({
         )}
       </div>
 
-      {tab !== "interact" && account.is_supernode && (
-        <KycSection nodeId={node.node_id} />
-      )}
-
-      {/* The template button: read the org's description, resolve a lean
-          working structure (recorded once, never re-reasoned), import the
-          missing seats as member nodes. */}
-      {tab === "activity" && account.is_supernode && account.responsible && (
-        <OrgTemplateSection nodeId={node.node_id} onImported={refresh} />
-      )}
-
-      {/* The fleet roster lives on the Activity tab only — the Files tab
-          already answered "which nodes" there; repeating the list is
-          noise, not orientation. */}
-      {tab === "activity" && account.is_supernode && members.length > 0 && (
-        <div className="commits">
-          <button
-            className="convo-group toggle"
-            aria-expanded={showMembers}
-            onClick={() => setShowMembers((s) => !s)}
-          >
-            {showMembers ? "▾" : "▸"} {tr("work.memberNodes")} (
-            {members.length})
-          </button>
-          {showMembers && (
-            <p className="muted fixed-note">{tr("work.orderHint")}</p>
-          )}
-          {showMembers &&
-            members.map((m) => (
-              <div key={m.node_id} className="commit-row">
-                <span>
-                  {displayNodeName(m.title)} ·{" "}
-                  {m.account.responsible || tr("work.keepIdPrivate")}
-                </span>
-                {/* Fixed at creation, authority included: display only. */}
-                <span className="muted">{regimeTag(m.account)}</span>
-                {/* The SOP dial is the one MUTABLE knob on a member:
-                    the owner's execution order — serial by number,
-                    parallel on ties, on-demand when empty. */}
-                <MemberOrderDial member={m} />
-              </div>
-            ))}
-        </div>
-      )}
-
       {tab !== "interact" && watchesHolds && holds.length > 0 && (
         <div className="commits">
           <div className="convo-group">{tr("work.pending")}</div>
@@ -852,6 +783,12 @@ export function NodeThread({
         >
           {tr("files")}
         </button>
+        <button
+          className={tab === "access" ? "on" : ""}
+          onClick={() => setTab("access")}
+        >
+          {tr("work.tabAccess")}
+        </button>
         {/* Imitate rides the tab row's right edge: the guided lesson —
             name the goal, describe each step, run the real work through
             this node — that builds a capable node from the demonstration. */}
@@ -870,18 +807,137 @@ export function NodeThread({
         <ImitatePanel node={node} lesson={lesson} onLesson={setLesson} />
       )}
 
-      {/* Egress consent lives with the rest of the human desk: what this
-          node may reach on the web, granted and withdrawable here. A
-          Supernode edits its block lists instead — a verified org's web
-          stands open, so its choice is what to REFUSE (hosts) and whom
-          not to hear (users). */}
-      {tab === "activity" &&
-        account.responsible &&
-        (account.is_supernode ? (
-          <SupernodeBlocks nodeId={node.node_id} account={account} />
-        ) : (
-          <NetworkGrant nodeId={node.node_id} account={account} />
-        ))}
+      {/* The Access tab: everything about WHO and WHAT may reach this
+          node — org verification, the template, the member roster (and
+          minting new members), the block lists, the egress grant — in
+          one place, so none of it ever crowds the activity log. */}
+      {tab === "access" && (
+        <div className="access-pane">
+          {account.is_supernode && <KycSection nodeId={node.node_id} />}
+          {account.is_supernode && account.responsible && (
+            <OrgTemplateSection nodeId={node.node_id} onImported={refresh} />
+          )}
+          {account.is_supernode && (
+            <div className="commits">
+              <button
+                className="convo-group toggle"
+                aria-expanded={showMembers}
+                onClick={() => setShowMembers((s) => !s)}
+              >
+                {showMembers ? "▾" : "▸"} {tr("work.memberNodes")} (
+                {members.length})
+              </button>
+              {showMembers && (
+                <p className="muted fixed-note">{tr("work.orderHint")}</p>
+              )}
+              {showMembers &&
+                members.map((m) => (
+                  <div key={m.node_id} className="commit-row">
+                    <span>
+                      {/* The name IS the door: clicking a member opens
+                          that node's own card. */}
+                      <button
+                        type="button"
+                        className="linklike member-link"
+                        onClick={() => onOpenNode(m.node_id)}
+                      >
+                        {displayNodeName(m.title)}
+                      </button>{" "}
+                      · {m.account.responsible || tr("work.keepIdPrivate")}
+                    </span>
+                    {/* Fixed at creation, authority included: display only. */}
+                    <span className="muted">{regimeTag(m.account)}</span>
+                    {/* The SOP dial is the one MUTABLE knob on a member:
+                        the owner's execution order — serial by number,
+                        parallel on ties, on-demand when empty. */}
+                    <MemberOrderDial member={m} />
+                  </div>
+                ))}
+              {/* Minting a member happens HERE, on the org's own access
+                  desk — the + in the sidebar makes standalone nodes. */}
+              {account.responsible && (
+                <form
+                  className="setting-control row member-create"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const title = memberTitle.trim();
+                    if (!title || memberBusy) return;
+                    setMemberError("");
+                    setMemberBusy(true);
+                    void (async () => {
+                      try {
+                        const id = (await api.createNode(title, title))
+                          .node_id;
+                        await api.workAccountCreate(id, {
+                          is_supernode: memberSuper,
+                          supernode_id: node.node_id,
+                          audit_mode: false,
+                          allow_autodev_data: true,
+                          authority_level: memberAuthority,
+                          accept_policy: true,
+                        });
+                        setMemberTitle("");
+                        onChanged();
+                        void refresh();
+                      } catch (e) {
+                        setMemberError((e as Error).message);
+                      } finally {
+                        setMemberBusy(false);
+                      }
+                    })();
+                  }}
+                >
+                  <input
+                    aria-label={tr("work.newMemberName")}
+                    placeholder={tr("work.newMemberName")}
+                    value={memberTitle}
+                    onChange={(e) => setMemberTitle(e.target.value)}
+                  />
+                  <label className="checkline">
+                    <input
+                      type="checkbox"
+                      aria-label={tr("work.memberSupernode")}
+                      checked={memberSuper}
+                      onChange={(e) => setMemberSuper(e.target.checked)}
+                    />
+                    ◆
+                  </label>
+                  <select
+                    aria-label={tr("work.authority")}
+                    value={memberAuthority}
+                    onChange={(e) =>
+                      setMemberAuthority(Number(e.target.value))
+                    }
+                  >
+                    {[1, 2, 3, 4, 5].map((level) => (
+                      <option key={level} value={level}>
+                        L{level}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="submit"
+                    disabled={memberBusy || !memberTitle.trim()}
+                  >
+                    {tr("work.createMember")}
+                  </button>
+                </form>
+              )}
+              {memberError && <div className="error">{memberError}</div>}
+            </div>
+          )}
+          {/* Egress consent lives with the rest of the access desk: what
+              this node may reach on the web. A Supernode edits its block
+              lists instead — its choice is what to REFUSE (hosts) and
+              whom not to hear (users). */}
+          {account.responsible &&
+            (account.is_supernode ? (
+              <SupernodeBlocks nodeId={node.node_id} account={account} />
+            ) : (
+              <NetworkGrant nodeId={node.node_id} account={account} />
+            ))}
+        </div>
+      )}
 
       {tab === "interact" && <NodeInteract node={node} />}
       {tab === "files" && <FilesPane nodeId={node.node_id} />}
@@ -962,7 +1018,14 @@ function NetworkGrant({
   return (
     <div className="commits network-grant">
       <div className="convo-group">{tr("net.header")}</div>
-      {hosts.length === 0 && <div className="muted">{tr("net.none")}</div>}
+      {/* On the global service a signed-in account needs no grants: the
+          web stands open by default; a grant list, when set, NARROWS it. */}
+      {isRemote() && (
+        <div className="muted">{tr("net.globalOpenNote")}</div>
+      )}
+      {hosts.length === 0 && !isRemote() && (
+        <div className="muted">{tr("net.none")}</div>
+      )}
       {hosts.map((h) => (
         <div key={h} className="commit-row">
           <span>{h}</span>

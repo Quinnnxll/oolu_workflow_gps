@@ -303,7 +303,9 @@ class KycService:
             current_id = account.supernode_id
         return best
 
-    def open_egress(self, node_id: str) -> tuple[str, ...] | None:
+    def open_egress(
+        self, node_id: str, *, default_open: bool = False
+    ) -> tuple[str, ...] | None:
         """The open-web verdict for one node: ``None`` keeps the allow-
         grant regime; a tuple means the web stands OPEN minus these hosts.
 
@@ -312,8 +314,13 @@ class KycService:
         limited to the 8-host grant: its whole fleet's web is open, like
         trust, flowing down the membership chain. What remains is the
         org's own CHOICE: every ``blocked_hosts`` list along the chain
-        binds (a ministry's block covers its divisions), unioned."""
-        open_web = False
+        binds (a ministry's block covers its divisions), unioned.
+
+        ``default_open`` is the GLOBAL service's stance: a signed-in
+        global account needs no per-host grants — the web stands open to
+        all by default, and the block lists along the chain remain the
+        one restriction that always binds."""
+        open_web = bool(default_open)
         blocked: set[str] = set()
         seen: set[str] = set()
         current_id: str | None = node_id

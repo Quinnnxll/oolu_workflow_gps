@@ -208,19 +208,15 @@ describe("AddNode", () => {
       body: workNode().account,
     };
     const onDone = vi.fn();
-    render(<AddNode supernodes={[supernode()]} onDone={onDone} />);
+    render(<AddNode onDone={onDone} />);
 
     expect(screen.getByText(/fixed at creation/)).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Name"), {
       target: { value: "Tax Filer" },
     });
-    // Under the owned Supernode, with authority L4.
-    fireEvent.change(screen.getByLabelText("Under Supernode"), {
-      target: { value: "sn1" },
-    });
-    fireEvent.change(screen.getByLabelText("Authority"), {
-      target: { value: "4" },
-    });
+    // Membership moved to the Supernode's own Access desk: the + makes
+    // standalone nodes only.
+    expect(screen.queryByLabelText("Under Supernode")).toBeNull();
     fireEvent.click(
       screen.getByLabelText(/Audit node — every request must be committed/),
     );
@@ -240,10 +236,10 @@ describe("AddNode", () => {
     const account = calls.find((c) => c.path === "/v1/work/nodes/n9/account");
     expect(account?.body).toEqual({
       is_supernode: false,
-      supernode_id: "sn1",
+      supernode_id: null,
       audit_mode: true,
       allow_autodev_data: false,
-      authority_level: 4,
+      authority_level: null,
       accept_policy: true,
     });
   });
@@ -255,7 +251,7 @@ describe("AddNode", () => {
       body: workNode().account,
     };
     const onDone = vi.fn();
-    render(<AddNode supernodes={[]} onDone={onDone} />);
+    render(<AddNode onDone={onDone} />);
 
     fireEvent.change(screen.getByLabelText("Name"), {
       target: { value: "CSV Normalizer" },
@@ -283,7 +279,7 @@ describe("AddNode", () => {
   });
 
   it("a Supernode always audits — the checkbox locks on", () => {
-    render(<AddNode supernodes={[]} onDone={vi.fn()} />);
+    render(<AddNode onDone={vi.fn()} />);
 
     fireEvent.click(screen.getByLabelText(/Supernode — manages many nodes/));
     const audit = screen.getByLabelText(
@@ -299,7 +295,7 @@ describe("AddNode", () => {
       body: workNode().account,
     };
     const onDone = vi.fn();
-    render(<AddNode supernodes={[]} onDone={onDone} />);
+    render(<AddNode onDone={onDone} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Onboard existing" }));
     expect(screen.queryByLabelText(/Audit node/)).toBeNull();
@@ -356,6 +352,7 @@ describe("NodeThread", () => {
       body: { ...workNode().account, network_hosts: ["api.example.com"] },
     };
     render(<NodeThread node={workNode()} allNodes={[workNode()]} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Access" }));
 
     // Fail closed is spoken, not implied: no grant means no web at all.
     expect(await screen.findByText("Network access")).toBeTruthy();
@@ -413,29 +410,38 @@ describe("NodeThread", () => {
     expect(screen.queryByText(/auto-grow/i)).toBeNull();
   });
 
-  it("a Supernode can be created under a Supernode, with authority", async () => {
+  it("a Supernode can be created under a Supernode, from the Access desk", async () => {
+    const sn = supernode();
+    routes["GET /v1/work/nodes/sn1/activity"] = {
+      status: 200,
+      body: { items: [] },
+    };
+    routes["GET /v1/runs/contract/holds"] = { status: 200, body: { items: [] } };
+    routes["GET /v1/work/nodes/sn1/kyc"] = {
+      status: 200,
+      body: { application: null, trust_multiplier: 1.0, required: false },
+    };
     routes["POST /v1/nodeplace"] = { status: 201, body: { node_id: "n8" } };
     routes["POST /v1/work/nodes/n8/account"] = {
       status: 200,
       body: workNode().account,
     };
-    const onDone = vi.fn();
-    render(<AddNode supernodes={[supernode()]} onDone={onDone} />);
+    render(<NodeThread node={sn} allNodes={[sn]} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Access" }));
 
-    fireEvent.change(screen.getByLabelText("Name"), {
-      target: { value: "Tax Office" },
-    });
-    fireEvent.click(screen.getByLabelText(/Supernode — manages many nodes/));
-    fireEvent.change(screen.getByLabelText("Under Supernode"), {
-      target: { value: "sn1" },
-    });
+    fireEvent.change(
+      await screen.findByLabelText("new member node name"),
+      { target: { value: "Tax Office" } },
+    );
+    fireEvent.click(screen.getByLabelText("Supernode member"));
     fireEvent.change(screen.getByLabelText("Authority"), {
       target: { value: "3" },
     });
-    fireEvent.click(screen.getByLabelText(/I agree to the Node Policy/));
-    fireEvent.click(screen.getByRole("button", { name: "Create node" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create member" }));
 
-    await waitFor(() => expect(onDone).toHaveBeenCalledWith("n8"));
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === "/v1/nodeplace")).toBeTruthy(),
+    );
     const account = calls.find((c) => c.path === "/v1/work/nodes/n8/account");
     expect(account?.body).toEqual({
       is_supernode: true,
@@ -489,7 +495,8 @@ describe("NodeThread", () => {
     expect(await screen.findByText(/file-the-taxes/)).toBeTruthy();
     // But the member's authority is fixed at creation — even for the
     // Supernode's humans it is a tag to read, never a dial to turn.
-    expect(screen.getByText("(L2, Auto-growing)")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Access" }));
+    expect(await screen.findByText("(L2, Auto-growing)")).toBeTruthy();
     expect(screen.queryByLabelText("Authority for Tax Filer")).toBeNull();
     expect(
       calls.find(
@@ -519,6 +526,7 @@ describe("NodeThread", () => {
       },
     };
     render(<NodeThread node={sn} allNodes={[sn]} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Access" }));
 
     expect(await screen.findByText("KYC — legal entity")).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Legal entity name"), {
@@ -558,6 +566,7 @@ describe("NodeThread", () => {
       },
     };
     render(<NodeThread node={sn} allNodes={[sn]} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Access" }));
 
     expect(
       await screen.findByText(/KYC verified · global trust ×1.5/),
@@ -610,6 +619,7 @@ describe("NodeThread", () => {
       body: { application: null, trust_multiplier: 1.0, required: false },
     };
     render(<NodeThread node={sn} allNodes={[sn]} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Access" }));
 
     // The thread settles with no KYC section, no form, no plan nag.
     expect(await screen.findByText(/Finance Division/)).toBeTruthy();
@@ -644,6 +654,7 @@ describe("NodeThread", () => {
       body: { application: null, trust_multiplier: 1.0, required: false },
     };
     render(<NodeThread node={sn} allNodes={[sn, member]} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Access" }));
 
     // Open by default, with the count on the header.
     const header = await screen.findByRole("button", {
@@ -844,6 +855,7 @@ describe("the SOP dial: a member's execution order", () => {
       body: { ...member.account, exec_order: 2 },
     };
     render(<NodeThread node={sn} allNodes={[sn, member]} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Access" }));
 
     // Unordered members read as on-demand — called whenever needed.
     expect(await screen.findByText("on demand")).toBeTruthy();
@@ -856,5 +868,32 @@ describe("the SOP dial: a member's execution order", () => {
       (c) => c.method === "POST" && c.path === "/v1/work/nodes/m1/order",
     );
     expect(posted?.body).toEqual({ order: 2 });
+  });
+
+  it("a member's name is the door to its own node card", async () => {
+    routes["GET /v1/work/nodes/sn1/activity"] = {
+      status: 200,
+      body: { items: [] },
+    };
+    const sn = supernode();
+    const member = workNode({
+      node_id: "m1",
+      title: "Order Intake",
+      account: {
+        ...workNode().account,
+        node_id: "m1",
+        supernode_id: "sn1",
+        authority_level: 1,
+      },
+    });
+    const onOpenNode = vi.fn();
+    render(
+      <NodeThread node={sn} allNodes={[sn, member]} onOpenNode={onOpenNode} />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Access" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Order Intake/ }),
+    );
+    expect(onOpenNode).toHaveBeenCalledWith("m1");
   });
 });

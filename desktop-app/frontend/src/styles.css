@@ -2336,3 +2336,18 @@ button.ghost {
 .contact-profile .profile-hint {
   max-width: 420px;
 }
+
+/* The Access tab: the node's whole who-and-what desk in one pane. */
+.access-pane {
+  overflow-y: auto;
+}
+
+.member-link {
+  padding: 0;
+  font: inherit;
+}
+
+.member-create input {
+  min-width: 0;
+  flex: 1;
+}

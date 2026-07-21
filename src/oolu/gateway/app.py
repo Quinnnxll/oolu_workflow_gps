@@ -3565,8 +3565,14 @@ class GatewayApp:
         """
         extras: dict = {}
         if self._desk is not None:
+            # On the global service, a signed-in account needs no per-host
+            # grants: the web is open by default, blocks still bind.
             verdict = (
-                self._kyc.open_egress(node_id) if self._kyc is not None else None
+                self._kyc.open_egress(
+                    node_id, default_open=bool(self._config.global_service)
+                )
+                if self._kyc is not None
+                else None
             )
             if verdict is not None:
                 extras["_egress_open"] = True
@@ -7411,7 +7417,9 @@ class GatewayApp:
         open_grants: dict[str, tuple[str, ...]] = {}
         if self._kyc is not None:
             for version_id, node_id in self._desk.owning_nodes(ids).items():
-                verdict = self._kyc.open_egress(node_id)
+                verdict = self._kyc.open_egress(
+                    node_id, default_open=bool(self._config.global_service)
+                )
                 if verdict is not None:
                     open_grants[version_id] = verdict
         return stamp_egress_grants(
