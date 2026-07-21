@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { OoLuMark } from "./OoLuMark";
 import { tf, useT } from "../ui";
 import {
   DEFAULT_GLOBAL_SERVER,
@@ -193,7 +194,10 @@ export function Login({
   return (
     <div className="login">
       <form className="login-card" onSubmit={submit}>
-        <div className="brand">OoLu</div>
+        <div className="brand login-brand">
+          <OoLuMark size={44} />
+          <span>OoLu</span>
+        </div>
 
         {showScope ? (
           <div className="mode-tabs scope-tabs">

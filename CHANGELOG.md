@@ -4,6 +4,18 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+OoLu gets a face: the mark, the favicon, the login lockup:
+
+- **The mark.** Two nodes joined by a route — the big O and the small
+  o of the name, read as a workflow edge. One stroke-only inline SVG
+  (`OoLuMark`), wearing the accent in both palettes, scaling anywhere
+  without an asset path to break.
+- **The login page.** The card opens with the lockup — the mark beside
+  the wordmark — instead of the bare word.
+- **The favicon.** The same mark as a data-URI SVG icon on the desktop
+  app (riding the committed shell) and the operator UI alike — no
+  file to 404, one identity in every tab.
+
 The investor metrics tracker: one catalog, one daily ledger, live:
 
 - **`telemetry/investor.py`.** A declarative metric CATALOG (engagement,
