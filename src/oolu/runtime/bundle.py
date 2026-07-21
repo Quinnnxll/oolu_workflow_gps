@@ -698,16 +698,16 @@ def _extract_readonly(tar: bytes, dest: str) -> None:
 
 
 def _rmtree_readonly(path) -> None:
+    import os
     import shutil
     import stat
 
-    def _chmod_and_retry(func, p, _exc):
-        import os
-
-        os.chmod(p, stat.S_IWUSR | stat.S_IRUSR | stat.S_IXUSR)
-        func(p)
-
-    shutil.rmtree(path, onerror=_chmod_and_retry)
+    # Unlinking a file needs write permission on its PARENT directory, and
+    # the materialized tree locks every dir to 0555 — so open the dirs back
+    # up first; the 0444 files inside then delete without ceremony.
+    for dirpath, _dirnames, _filenames in os.walk(path):
+        os.chmod(dirpath, stat.S_IRWXU)
+    shutil.rmtree(path)
 
 
 def _dir_size(path) -> int:
