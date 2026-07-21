@@ -496,7 +496,8 @@ describe("NodeThread", () => {
     // But the member's authority is fixed at creation — even for the
     // Supernode's humans it is a tag to read, never a dial to turn.
     fireEvent.click(screen.getByRole("button", { name: "Access" }));
-    expect(await screen.findByText("(L2, Auto-growing)")).toBeTruthy();
+    // The word annotations are gone: the seat block is the one mark.
+    expect(screen.queryByText("(L2, Auto-growing)")).toBeNull();
     expect(screen.queryByLabelText("Authority for Tax Filer")).toBeNull();
     expect(
       calls.find(
@@ -833,7 +834,7 @@ describe("Imitate: the guided lesson on the tab row", () => {
 });
 
 describe("the SOP dial: a member's execution order", () => {
-  it("shows the fleet's orders and lets the owner set one", async () => {
+  it("the seat block staffs an on-demand member from the Access desk", async () => {
     routes["GET /v1/work/nodes/sn1/activity"] = {
       status: 200,
       body: { items: [] },
@@ -845,29 +846,36 @@ describe("the SOP dial: a member's execution order", () => {
       account: {
         ...workNode().account,
         node_id: "m1",
+        responsible: "",
         supernode_id: "sn1",
         authority_level: 1,
-        exec_order: null,
       },
     });
-    routes["POST /v1/work/nodes/m1/order"] = {
+    routes["POST /v1/work/nodes/m1/assign"] = {
       status: 200,
-      body: { ...member.account, exec_order: 2 },
+      body: { ...member.account, responsible: "worker-9" },
     };
     render(<NodeThread node={sn} allNodes={[sn, member]} />);
     fireEvent.click(await screen.findByRole("button", { name: "Access" }));
 
-    // Unordered members read as on-demand — called whenever needed.
-    expect(await screen.findByText("on demand")).toBeTruthy();
-    const dial = screen.getByLabelText("Execution order for Order Intake");
-    fireEvent.change(dial, { target: { value: "2" } });
-    fireEvent.keyDown(dial, { key: "Enter" });
-
-    expect(await screen.findByText("step 2")).toBeTruthy();
-    const posted = calls.find(
-      (c) => c.method === "POST" && c.path === "/v1/work/nodes/m1/order",
+    // Unstaffed: the blue block says on demand — and IS the staffing
+    // hand. Clicking it asks who; submitting assigns.
+    fireEvent.click(await screen.findByRole("button", { name: "on demand" }));
+    fireEvent.change(
+      screen.getByLabelText("assign user Order Intake"),
+      { target: { value: "worker-9" } },
     );
-    expect(posted?.body).toEqual({ order: 2 });
+    fireEvent.click(screen.getByRole("button", { name: "Assign" }));
+    await vi.waitFor(() => {
+      const posted = calls.find(
+        (c) => c.method === "POST" && c.path === "/v1/work/nodes/m1/assign",
+      );
+      expect(posted?.body).toEqual({ username: "worker-9" });
+    });
+    // The form closes; the parent's refresh brings the onboard chip.
+    await vi.waitFor(() =>
+      expect(screen.queryByLabelText("assign user Order Intake")).toBeNull(),
+    );
   });
 
   it("the Code tab reads like a repo: description, files, content", async () => {

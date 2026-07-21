@@ -4,6 +4,33 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The seat block, the branch trigger, and the fleet that stays a fleet:
+
+- **One block per seat.** The member roster's execution-order dial and
+  its word annotations are gone; each row wears ONE block — theme-
+  colored saying "onboard" when a human answers for the seat, blue
+  saying "on demand" when it runs unstaffed. The blue block is also
+  the org's staffing hand: clicking it assigns a user to the seat
+  (`POST /v1/work/nodes/{id}/assign` — the Supernode's responsible
+  only, refused in words on a claimed seat, audited by name).
+- **The structure re-reasons when the code says so.** Code size is the
+  branch trigger: a member whose src/ outgrew the threshold (24 KB)
+  marks the template preview `needs_branch`, and the operator's
+  "Re-reason structure" button applies with `re_reason: true` —
+  dropping the recorded verdict and thinking again, never a silent
+  re-plan.
+- **A fleet stays a fleet.** Whatever a member node builds from its
+  interact window now lands under the member's own Supernode — never
+  a stray standalone.
+- **The org pays for its own interact.** Model consultations inside a
+  fleet member's interact window ride the `node.interact` purpose, so
+  the usage books carry the Supernode owner's line, separate from the
+  visitor's chat.
+- **Tests.** Growth pressure on the preview and the re-reason door;
+  assignment walled to the org's responsible, refused on claimed
+  seats, audited; the seat block staffing an on-demand member end to
+  end.
+
 The sandbox image carries the polyglot toolchains:
 
 - **`docker/sandbox.Dockerfile`.** The hostile-execution base now

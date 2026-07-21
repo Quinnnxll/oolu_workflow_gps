@@ -962,6 +962,7 @@ class GatewayApp:
         r.add("PUT", "/v1/friends/{peer}/prefs", self._friend_prefs_put)
         r.add("DELETE", "/v1/friends/{peer}", self._friend_delete)
         r.add("PUT", "/v1/runs/{run_id}/prefs", self._run_prefs_put)
+        r.add("POST", "/v1/work/nodes/{node_id}/assign", self._work_assign)
         # The representative: drafts in the account's own voice. Drafts
         # are proposed, listed, and decided — nothing sends without the
         # user's word (docs/representative-plan.md, Phase 0).
@@ -1377,7 +1378,23 @@ class GatewayApp:
                         ),
                     ),
                 )
-        router = self._tenant_model(session.tenant_id)
+        # Inside a fleet member's interact window, the model consultation
+        # is the ORG's draw: it rides under the "node.interact" purpose,
+        # so the usage books charge the Supernode owner's account line,
+        # never the visiting member's conversation.
+        interact_purpose = None
+        if body.get("node_id"):
+            fleet = self._fleet_supernode(str(body.get("node_id")))
+            if fleet is not None:
+                interact_purpose = "node.interact"
+        # The seam stays call-compatible: tests (and hosts) that stub
+        # _tenant_model with a one-argument brain keep working; the
+        # purpose rides only when a fleet is actually being metered.
+        router = (
+            self._tenant_model(session.tenant_id, purpose=interact_purpose)
+            if interact_purpose
+            else self._tenant_model(session.tenant_id)
+        )
         # When the model really can search (an Anthropic path with the
         # web-search door open), the turn says so — otherwise a keyed
         # install claims it "can't browse" the questions it could answer
@@ -2632,8 +2649,17 @@ class GatewayApp:
                 return "error: tell me what the node should do"
             if not self._autobuild_consented(session.tenant_id, session.principal_id):
                 return f"error: auto-build is off — {AUTOBUILD_HINT}"
+            # A fleet stays a fleet: whatever a member builds remains
+            # under the member's own Supernode; a Supernode builds under
+            # itself, exactly as before.
+            under = entry
+            under_id = node_id
+            if not entry.account.is_supernode and entry.account.supernode_id:
+                parent = entries.get(entry.account.supernode_id)
+                if parent is not None:
+                    under, under_id = parent, parent.node_id
             return self._build_function_node(
-                session, goal, under_entry=entry, under_node_id=node_id
+                session, goal, under_entry=under, under_node_id=under_id
             )
 
         def reviser(change: str) -> str:
@@ -5630,6 +5656,67 @@ class GatewayApp:
             items.append(item)
         return json_response(200, {"items": items})
 
+    def _node_code_bytes(self, session, node_id: str) -> int:
+        """The size of a node's program: its drawer's src/ bytes."""
+        if self._files is None:
+            return 0
+        total = 0
+        for file in self._files.list(tenant=session.tenant_id, node_id=node_id):
+            if file.folder == "src" or file.folder.startswith("src/"):
+                total += len(file.content or "")
+        return total
+
+    def _fleet_supernode(self, node_id: str):
+        """The nearest Supernode a node serves under, or None — the org
+        every fleet act (building, interact metering, assignment
+        authority) answers to."""
+        if self._desk is None:
+            return None
+        seen: set[str] = set()
+        current = self._desk.account_for(node_id)
+        while current is not None and current.node_id not in seen:
+            seen.add(current.node_id)
+            if current.is_supernode and current.node_id != node_id:
+                return current
+            if not current.supernode_id:
+                return None
+            current = self._desk.account_for(current.supernode_id)
+        return None
+
+    def _work_assign(self, request, session, params) -> Response:
+        """The Supernode's staffing hand: assign a user to an UNCLAIMED
+        member node — the blue on-demand seat becomes an onboarded one.
+        Only the org's own responsible may assign, and an already-claimed
+        seat is refused in words, never reassigned silently."""
+        desk = self._require_desk()
+        node_id = params["node_id"]
+        username = str((request.body or {}).get("username", "")).strip()
+        if not username:
+            raise GatewayError(400, "invalid_request", "name the user to assign")
+        supernode = self._fleet_supernode(node_id)
+        if supernode is None or supernode.responsible != session.principal_id:
+            raise GatewayError(
+                403,
+                "forbidden",
+                "only the Supernode's responsible may assign this seat",
+            )
+        try:
+            account = desk.onboard_account(
+                node_id, principal=username, tenant=session.tenant_id
+            )
+        except (ContributionError, OwnershipError, ValueError) as exc:
+            raise GatewayError(409, "conflict", str(exc)) from exc
+        self._durable.audit.append(
+            "node.assigned",
+            {
+                "run_id": f"assign:{node_id}",
+                "node_id": node_id,
+                "assigned": username,
+                "by": session.principal_id,
+            },
+        )
+        return json_response(200, account.model_dump(mode="json"))
+
     _FIXED_ACCOUNT_TRAITS = (
         "policy_version",
         "audit_mode",
@@ -6422,7 +6509,13 @@ class GatewayApp:
     # ------------------------------------------------------------------ #
     # The Supernode's template button: a working structure, imported.    #
     # ------------------------------------------------------------------ #
-    def _resolve_org_template(self, session, node_id: str):
+    # A member whose function has grown past this many bytes of src/ is
+    # a seat doing several jobs: the structure should re-reason and
+    # BRANCH the work into more seats. Code size is the trigger — it is
+    # measurable, monotone with complexity, and read off the drawer.
+    REBRANCH_CODE_BYTES = 24_000
+
+    def _resolve_org_template(self, session, node_id: str, *, re_reason=False):
         """Gate, resolve, record — the shared half of preview and apply.
 
         Deterministic plan first, exactly like node execution: a RECORDED
@@ -6447,14 +6540,15 @@ class GatewayApp:
         except ContributionError as exc:
             raise GatewayError(404, "not_found", str(exc)) from exc
         description = desk.describe(node_id, tenant=session.tenant_id)
+        # Re-reasoning drops the recorded verdict: the model is consulted
+        # afresh because the trigger (code size) says the shape moved.
+        recorded = "" if re_reason else account.org_template
         author = (
-            None
-            if account.org_template
-            else self._node_function_author(session.tenant_id)
+            None if recorded else self._node_function_author(session.tenant_id)
         )
         resolved = resolve_org_template(
             description,
-            recorded=account.org_template,
+            recorded=recorded,
             chooser=model_chooser(author) if author is not None else None,
         )
         desk.record_org_template(
@@ -6470,13 +6564,29 @@ class GatewayApp:
         seats already exist under this Supernode — nothing minted."""
         node_id = params["node_id"]
         desk, resolved = self._resolve_org_template(session, node_id)
-        existing = {
-            m["title"].strip().lower()
-            for m in desk.members_of(node_id, tenant=session.tenant_id)
-        }
+        members = desk.members_of(node_id, tenant=session.tenant_id)
+        existing = {m["title"].strip().lower() for m in members}
+        # Growth pressure, read off each member's drawer: a seat whose
+        # function outgrew the branch threshold marks the structure as
+        # due for a re-reason — the operator's button, never a silent
+        # re-plan.
+        pressure = []
+        for m in members:
+            code = self._node_code_bytes(session, m["node_id"])
+            pressure.append(
+                {
+                    "node_id": m["node_id"],
+                    "title": m["title"],
+                    "code_bytes": code,
+                    "over": code > self.REBRANCH_CODE_BYTES,
+                }
+            )
         return json_response(
             200,
             {
+                "members": pressure,
+                "needs_branch": any(m["over"] for m in pressure),
+                "branch_threshold_bytes": self.REBRANCH_CODE_BYTES,
                 "key": resolved.template.key,
                 "name": resolved.template.name,
                 "purpose": resolved.template.purpose,
@@ -6505,7 +6615,10 @@ class GatewayApp:
         from ..nodeplace.org_templates import role_script
 
         node_id = params["node_id"]
-        desk, resolved = self._resolve_org_template(session, node_id)
+        desk, resolved = self._resolve_org_template(
+            session, node_id,
+            re_reason=bool((request.body or {}).get("re_reason")),
+        )
         if self._nodeplace is None:
             raise GatewayError(404, "not_found", "nodes are not enabled here")
         existing = {

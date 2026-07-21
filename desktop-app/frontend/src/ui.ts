@@ -2173,6 +2173,48 @@ const STRINGS: Record<string, Entry> = {
     fr: "Mot de passe défini — la prochaine fois, connectez-vous avec votre identifiant et lui.",
   },
   "friends.save": { en: "Save", zh: "保存", es: "Guardar", fr: "Enregistrer" },
+  "work.seatOnboard": {
+    en: "onboard",
+    zh: "已入驻",
+    es: "a bordo",
+    fr: "à bord",
+  },
+  "work.seatOnDemand": {
+    en: "on demand",
+    zh: "按需",
+    es: "bajo demanda",
+    fr: "à la demande",
+  },
+  "work.assignHint": {
+    en: "Assign a user to this seat — the org's staffing hand.",
+    zh: "为该席位指派用户——组织的人事之手。",
+    es: "Asigna un usuario a este puesto: la mano de personal de la organización.",
+    fr: "Affectez un utilisateur à ce siège — la main RH de l'organisation.",
+  },
+  "work.assignUser": {
+    en: "assign user",
+    zh: "指派用户",
+    es: "asignar usuario",
+    fr: "affecter un utilisateur",
+  },
+  "work.assign": {
+    en: "Assign",
+    zh: "指派",
+    es: "Asignar",
+    fr: "Affecter",
+  },
+  "tpl.rebranchNote": {
+    en: "A seat's function outgrew the branch threshold — the structure should re-reason and branch the work:",
+    zh: "某席位的函数超过了分支阈值——结构应重新推理并拆分工作：",
+    es: "La función de un puesto superó el umbral de ramificación: la estructura debería re-razonar y ramificar el trabajo:",
+    fr: "La fonction d'un siège a dépassé le seuil de branchement — la structure devrait re-raisonner et brancher le travail :",
+  },
+  "tpl.rebranch": {
+    en: "Re-reason structure",
+    zh: "重新推理结构",
+    es: "Re-razonar la estructura",
+    fr: "Re-raisonner la structure",
+  },
   "work.tabCode": { en: "Code", zh: "代码", es: "Código", fr: "Code" },
   "work.codeAllFiles": {
     en: "all files",

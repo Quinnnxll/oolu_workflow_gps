@@ -218,3 +218,106 @@ def test_the_template_door_is_the_supernodes_humans_only(tmp_path):
         assert desk.account_for(super_id).org_template == ""
     finally:
         conn.close()
+
+
+def test_growth_pressure_rides_the_preview_and_re_reason_rebranches(tmp_path):
+    """Code size is the branch trigger: a member whose src/ outgrew the
+    threshold marks the structure due for a re-reason, and the apply
+    door takes {"re_reason": true} to drop the recorded verdict and
+    think again — the operator's button, never a silent re-plan."""
+    from oolu.durable import UserFileStore
+    from oolu.durable.files import UserFile
+
+    app, conn, ident, desk, super_id, member_id, owner = _template_rig(tmp_path)
+    try:
+        app._files = UserFileStore(conn)
+        preview = app.handle(
+            _req("GET", f"/v1/work/nodes/{super_id}/template", token=owner)
+        )
+        assert preview.status == 200, preview.body
+        assert preview.body["needs_branch"] is False
+        assert preview.body["branch_threshold_bytes"] > 0
+
+        # One member's function outgrows the threshold: pressure shows.
+        app._files.save(
+            UserFile(
+                tenant_id="t1",
+                node_id=member_id,
+                folder="src",
+                name="main.py",
+                content="x" * (app.REBRANCH_CODE_BYTES + 1),
+            )
+        )
+        preview = app.handle(
+            _req("GET", f"/v1/work/nodes/{super_id}/template", token=owner)
+        )
+        assert preview.body["needs_branch"] is True
+        over = {m["node_id"]: m["over"] for m in preview.body["members"]}
+        assert over[member_id] is True
+
+        # Re-reason: the recorded verdict is dropped and resolution runs
+        # afresh (no model here -> the lean fallback answers again).
+        app._node_function_author = lambda tenant: None
+        rebranched = app.handle(
+            _req(
+                "POST",
+                f"/v1/work/nodes/{super_id}/template",
+                token=owner,
+                body={"re_reason": True},
+            )
+        )
+        assert rebranched.status == 200, rebranched.body
+    finally:
+        conn.close()
+
+
+def test_the_supernode_assigns_users_to_on_demand_seats(tmp_path):
+    """The blue on-demand seat becomes an onboarded one by the org's own
+    hand: only the Supernode's responsible may assign, an assigned seat
+    is refused in words, and the act is audited."""
+    app, conn, ident, desk, super_id, member_id, owner = _template_rig(tmp_path)
+    try:
+        applied = app.handle(
+            _req("POST", f"/v1/work/nodes/{super_id}/template", token=owner)
+        )
+        seat = applied.body["created"][0]["node_id"]
+
+        # A stranger may not staff the org.
+        walled = app.handle(
+            _req(
+                "POST",
+                f"/v1/work/nodes/{seat}/assign",
+                token=ident.token("stranger", "t1"),
+                body={"username": "worker-9"},
+            )
+        )
+        assert walled.status == 403
+
+        assigned = app.handle(
+            _req(
+                "POST",
+                f"/v1/work/nodes/{seat}/assign",
+                token=owner,
+                body={"username": "worker-9"},
+            )
+        )
+        assert assigned.status == 200, assigned.body
+        assert desk.account_for(seat).responsible == "worker-9"
+        events = [
+            e for e in app._durable.audit.records()
+            if e.event_type == "node.assigned"
+        ]
+        assert events[-1].payload["assigned"] == "worker-9"
+
+        # A claimed seat is never silently reassigned.
+        again = app.handle(
+            _req(
+                "POST",
+                f"/v1/work/nodes/{seat}/assign",
+                token=owner,
+                body={"username": "worker-10"},
+            )
+        )
+        assert again.status == 409
+    finally:
+        conn.close()

@@ -2396,3 +2396,37 @@ button.ghost {
   font-size: 12px;
   line-height: 1.5;
 }
+
+
+/* The seat block: the one mark a member row wears. Theme-colored when a
+   human answers for the seat; blue when it runs on demand (and then it
+   is the org's staffing hand — click to assign). */
+.seat-chip {
+  display: inline-block;
+  padding: 1px 10px;
+  border-radius: 10px;
+  font-size: 11px;
+  border: 1px solid var(--line);
+}
+
+.seat-chip.onboard {
+  background: var(--panel);
+  color: var(--fg);
+}
+
+.seat-chip.on-demand {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-avatar);
+  cursor: pointer;
+}
+
+.seat-assign {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.seat-assign input {
+  width: 140px;
+}

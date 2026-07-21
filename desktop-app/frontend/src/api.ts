@@ -801,6 +801,15 @@ export interface OrgTemplateRole {
 // The resolved template: deterministic-first ("recorded" | "matched"),
 // the model only ever PICKS from the catalog ("model"), else "fallback".
 export interface OrgTemplateView {
+  // Growth pressure: seats whose src/ outgrew the branch threshold.
+  members?: {
+    node_id: string;
+    title: string;
+    code_bytes: number;
+    over: boolean;
+  }[];
+  needs_branch?: boolean;
+  branch_threshold_bytes?: number;
   key: string;
   name: string;
   purpose: string;
@@ -1335,8 +1344,18 @@ export const api = {
     ),
   orgTemplate: (nodeId: string) =>
     req<OrgTemplateView>("GET", `/v1/work/nodes/${nodeId}/template`),
-  orgTemplateApply: (nodeId: string) =>
-    req<OrgTemplateApplied>("POST", `/v1/work/nodes/${nodeId}/template`, {}),
+  assignNode: (nodeId: string, username: string) =>
+    req<NodeAccountView>(
+      "POST",
+      `/v1/work/nodes/${encodeURIComponent(nodeId)}/assign`,
+      { username },
+    ),
+  orgTemplateApply: (nodeId: string, reReason = false) =>
+    req<OrgTemplateApplied>(
+      "POST",
+      `/v1/work/nodes/${nodeId}/template`,
+      reReason ? { re_reason: true } : {},
+    ),
   // Reminders: rows with a clock. The client's poll is the tick — a ripe
   // one surfaces as OoLu's own message and is marked delivered once.
   reminders: () =>

@@ -853,12 +853,15 @@ export function NodeThread({
                       </button>{" "}
                       · {m.account.responsible || tr("work.keepIdPrivate")}
                     </span>
-                    {/* Fixed at creation, authority included: display only. */}
-                    <span className="muted">{regimeTag(m.account)}</span>
-                    {/* The SOP dial is the one MUTABLE knob on a member:
-                        the owner's execution order — serial by number,
-                        parallel on ties, on-demand when empty. */}
-                    <MemberOrderDial member={m} />
+                    {/* The one seat block: theme-colored when a human
+                        answers (onboard), blue when the seat runs on
+                        demand — and the blue block is the org's
+                        staffing hand: click to assign a user. */}
+                    <SeatBlock
+                      member={m}
+                      canAssign={account.responsible !== ""}
+                      onAssigned={onChanged}
+                    />
                   </div>
                 ))}
               {/* Minting a member happens HERE, on the org's own access
@@ -1123,6 +1126,71 @@ export function CodeView({ node }: { node: WorkNode }) {
   );
 }
 
+// The seat block: the one mark a member row wears. Theme-colored when a
+// human answers for the seat ("onboard"); blue when it runs on demand —
+// and the blue block is also the Supernode's staffing hand: clicking it
+// assigns a user to the seat.
+export function SeatBlock({
+  member,
+  canAssign,
+  onAssigned,
+}: {
+  member: WorkNode;
+  canAssign: boolean;
+  onAssigned: () => void;
+}) {
+  const tr = useT();
+  const [asking, setAsking] = useState(false);
+  const [who, setWho] = useState("");
+  const [error, setError] = useState("");
+  if (member.account.responsible) {
+    return <span className="seat-chip onboard">{tr("work.seatOnboard")}</span>;
+  }
+  if (!asking || !canAssign) {
+    return (
+      <button
+        type="button"
+        className="seat-chip on-demand"
+        title={tr("work.assignHint")}
+        onClick={() => canAssign && setAsking(true)}
+      >
+        {tr("work.seatOnDemand")}
+      </button>
+    );
+  }
+  return (
+    <form
+      className="seat-assign"
+      onSubmit={(e) => {
+        e.preventDefault();
+        const name = who.trim();
+        if (!name) return;
+        setError("");
+        void api
+          .assignNode(member.node_id, name)
+          .then(() => {
+            setAsking(false);
+            onAssigned();
+          })
+          .catch((err) => setError((err as Error).message));
+      }}
+    >
+      <input
+        aria-label={`${tr("work.assignUser")} ${displayNodeName(member.title)}`}
+        placeholder={tr("work.assignUser")}
+        value={who}
+        autoFocus
+        onChange={(e) => setWho(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") setAsking(false);
+        }}
+      />
+      <button type="submit">{tr("work.assign")}</button>
+      {error && <span className="error">{error}</span>}
+    </form>
+  );
+}
+
 function NetworkGrant({
   nodeId,
   account,
@@ -1372,6 +1440,38 @@ function OrgTemplateSection({
             <span className="muted">{tr(`tpl.source.${view.source}`)}</span>
           </div>
           <p className="muted">{view.purpose}</p>
+          {/* Growth pressure: a seat whose function outgrew the branch
+              threshold marks the structure due for a RE-REASON — the
+              operator's button, never a silent re-plan. */}
+          {view.needs_branch && (
+            <div className="commit-row rebranch">
+              <span className="muted">
+                {tr("tpl.rebranchNote")}{" "}
+                {(view.members ?? [])
+                  .filter((m) => m.over)
+                  .map((m) => displayNodeName(m.title))
+                  .join(", ")}
+              </span>
+              <button
+                disabled={busy}
+                onClick={() => {
+                  setBusy(true);
+                  setError("");
+                  api
+                    .orgTemplateApply(nodeId, true)
+                    .then((r) => {
+                      setImported(r.created.length);
+                      setView(null);
+                      onImported();
+                    })
+                    .catch((e) => setError((e as Error).message))
+                    .finally(() => setBusy(false));
+                }}
+              >
+                {tr("tpl.rebranch")}
+              </button>
+            </div>
+          )}
           {view.roles.map((r) => (
             <div key={r.name} className="commit-row tpl-role">
               <span>
