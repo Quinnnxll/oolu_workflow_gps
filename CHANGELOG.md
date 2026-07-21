@@ -4,6 +4,30 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The author's finish gate becomes real: a sandbox dry-run before trust:
+
+- **The gap.** The `NodeAuthorAgent` carried a `verify` seam since it
+  was born, but nothing filled it — a finished script was trusted into
+  the drawer on the strength of containing `emit_result`, and its first
+  real run was its first execution.
+- **`_author_verifier`.** The gateway now fills the seam with the SAME
+  script hand contract runs use — safety screen, dependency healing,
+  contract classification — run with NO web grant and NO staged files,
+  so nothing leaves the box: a refused `http_request` answers status 0,
+  exactly what the script contract already teaches the function to read
+  and report honestly. `finish_node` refuses a failing script back to
+  the model as words to fix; the model can also `verify_function` early
+  and iterate before finishing (the prompt now says to). Build and
+  revise both pass through it — one gate, both doors.
+- **Honest absence.** A host without a script runtime (no isolation
+  backend) wires no verify hand at all — the agent authors exactly as
+  before, and no fake gate pretends otherwise. A crashed sandbox is
+  answered in words, never a dead build.
+- **Tests.** The dry-run refuses a failing candidate and lands the
+  corrected one (both executions observed, the refusal in the
+  transcript, the passing script in the drawer); a runtime-less host
+  offers no verify hand; a crashed sandbox answers in words.
+
 The interact window learns to revise: THIS node's code, on your ask:
 
 - **The gap.** Asking a node's interact window to change its code went

@@ -48,6 +48,9 @@ http_request); only the protocol changes:
   never an imagined one.
 - Deliver by CALLING finish_node with the finished script and its
   interface (inputs/outputs). Do not paste the script as prose.
+- Where a verify_function hand is offered, the sandbox will also run
+  your script before finish_node accepts it — verify early and fix
+  what it reports rather than discovering the failure at the finish.
 - If the request is conversation, not executable work, CALL decline
   with the reason instead of writing NO_TASK."""
 

@@ -166,7 +166,7 @@ from ..skills.contract import (
     derive_data_edges,
 )
 from ..skills.inputs import bind_inputs, inputs_manifest
-from ..skills.models import ExecutionStatus, ReusableSkill
+from ..skills.models import ActionEvent, ExecutionStatus, ReusableSkill
 from ..skills.ports import ActionExecutor
 from ..social import MAX_MESSAGE_CHARS
 from .errors import GatewayError, WebhookError
@@ -589,6 +589,9 @@ class GatewayApp:
         self._contract_runner = (
             DagRouteRunner(contract_executors) if contract_executors else None
         )
+        # The raw hands too: the node author's verify gate borrows the
+        # script executor directly for its sandbox dry-run.
+        self._contract_executors = dict(contract_executors or {})
         # Node-granular trace recording happens in execute_contract (per
         # contract child), not in the runner — attaching the store to the
         # runner too would double-count the whole-route outcome.
@@ -4481,9 +4484,62 @@ class GatewayApp:
             catalog=lambda: self._author_catalog(session),
             outputs=lambda node_id: self._author_node_outputs(session, node_id),
             read_file=read_file,
+            verify=self._author_verifier(),
         )
         authored = agent.author(goal, demonstrated=demonstrated)
         return authored.script, authored.io, authored.refusal
+
+    def _author_verifier(self):
+        """The author's finish gate made real: a sandbox dry-run of the
+        candidate script through the SAME script hand contract runs use —
+        safety screen, dependency healing, contract classification — with
+        NO web grant and NO staged files, so nothing leaves the box (a
+        refused ``http_request`` answers status 0, exactly what the
+        script contract teaches the function to read and report). No
+        script runtime on this host → None: the agent authors without
+        the verify hand, exactly as before."""
+        runner = self._contract_executors.get("script")
+        if runner is None:
+            return None
+
+        def verify(script: str) -> dict:
+            import hashlib
+
+            digest = hashlib.sha256(script.encode()).hexdigest()[:16]
+            action = ActionEvent(
+                correlation_id="author-verify",
+                adapter="script",
+                operation="run",
+                parameters={
+                    "goal": (
+                        "verify the authored function executes and speaks "
+                        "the contract"
+                    ),
+                    "script": script,
+                    "node_key": f"author-verify:{digest}",
+                },
+            )
+            try:
+                outcome = runner.execute(
+                    action, idempotency_key=f"author-verify:{digest}"
+                )
+            except Exception as exc:  # noqa: BLE001 - answered, never fatal
+                return {
+                    "ok": False,
+                    "error": f"the sandbox could not run the script: {exc}",
+                }
+            if outcome.status is ExecutionStatus.SUCCEEDED:
+                report: dict = {"ok": True}
+                result = outcome.evidence.get("result")
+                if result is not None:
+                    report["result"] = result
+                return report
+            return {
+                "ok": False,
+                "error": outcome.error or "the script failed in the sandbox",
+            }
+
+        return verify
 
     def _author_catalog(self, session) -> list[dict]:
         """The desk's nodes with their contracts — the slot vocabulary in

@@ -281,3 +281,99 @@ def test_revise_in_the_interact_window_seats_the_agent_with_a_drawer_read(tmp_pa
         assert "Current function (src/main.py)" in asked
     finally:
         conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# The finish gate made real: the sandbox dry-run behind verify.                #
+# --------------------------------------------------------------------------- #
+class _VerifyingRunner:
+    """A stub script hand: succeeds unless the script contains BOOM."""
+
+    def __init__(self):
+        self.executed: list[str] = []
+
+    def execute(self, action, *, idempotency_key):
+        from oolu.skills.models import ExecutionOutcome, ExecutionStatus
+
+        script = str(action.parameters["script"])
+        self.executed.append(script)
+        ok = "BOOM" not in script
+        return ExecutionOutcome(
+            idempotency_key=idempotency_key,
+            skill_id="script-node",
+            status=ExecutionStatus.SUCCEEDED if ok else ExecutionStatus.FAILED,
+            evidence={"result": {"answer": "tidy"}} if ok else {},
+            error=None if ok else "NameError: BOOM",
+        )
+
+
+def test_the_gateway_wires_the_sandbox_dry_run_as_the_finish_gate(tmp_path):
+    app, conn, ident, desk, script_exec = _rig(tmp_path)
+    try:
+        runner = _VerifyingRunner()
+        app._contract_executors = {"script": runner}
+        bad = SCRIPT + "\nBOOM"
+        model = ConsultModel([_finish(script=bad), _finish()])
+        app._node_function_author = lambda tenant: model
+
+        response = _chat(app, ident, "build me a node that " + GOAL)
+
+        assert response.status == 200, response.body
+        assert "Built a NEW node" in response.body["reply"]
+        # Both candidates ran in the sandbox; only the passing one landed.
+        assert runner.executed == [bad, SCRIPT]
+        assert "verify_function" in model.tool_sets[0]
+        refusals = [
+            m["content"]
+            for turn in model.transcripts
+            for m in turn
+            if m.get("role") == "tool"
+        ]
+        assert any("verification failed: NameError: BOOM" in c for c in refusals)
+        nodes = app._nodeplace.list_own_nodes(
+            noder_principal="user-1", tenant_id="t1"
+        )
+        drawer = DeskFiles(
+            app._files,
+            tenant="t1",
+            node_id=nodes[0].node_id,
+            seat=SEATS["node.build"],
+            consented=True,
+        )
+        assert drawer.read("src/main.py") == SCRIPT
+    finally:
+        conn.close()
+
+
+def test_no_script_runtime_means_no_verify_hand(tmp_path):
+    app, conn, ident, desk, script_exec = _rig(tmp_path)
+    try:
+        model = ConsultModel([_finish()])
+        app._node_function_author = lambda tenant: model
+
+        response = _chat(app, ident, "build me a node that " + GOAL)
+
+        assert "Built a NEW node" in response.body["reply"]
+        # No isolation backend on this host: the agent authors without
+        # the verify hand, exactly as before — never a fake gate.
+        assert "verify_function" not in model.tool_sets[0]
+    finally:
+        conn.close()
+
+
+def test_a_crashed_sandbox_is_answered_in_words(tmp_path):
+    app, conn, ident, desk, script_exec = _rig(tmp_path)
+    try:
+
+        class _Boom:
+            def execute(self, action, *, idempotency_key):
+                raise RuntimeError("docker gone")
+
+        app._contract_executors = {"script": _Boom()}
+        verify = app._author_verifier()
+        assert verify(SCRIPT) == {
+            "ok": False,
+            "error": "the sandbox could not run the script: docker gone",
+        }
+    finally:
+        conn.close()
