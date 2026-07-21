@@ -776,6 +776,99 @@ async function storageScreen() {
     await inventoryCard(), await historyCard());
 }
 
+/* ---- finance (needs stored finance:view; give-back needs approve) ---- */
+async function financeScreen() {
+  const data = await api("GET", "/v1/platform/finance");
+  const err = h("div", { class: "error" });
+  const note = h("div", { class: "muted" });
+  const boxes = new Map();
+
+  function accountRow(a) {
+    const box = h("input", { type: "checkbox", style: "width:auto" });
+    boxes.set(a.tenant_id, box);
+    const sub = a.subscription || {};
+    const tokens = a.all_time.prompt_tokens + a.all_time.completion_tokens;
+    return h("tr", {},
+      h("td", {}, box),
+      h("td", {}, a.tenant_id, " ",
+        sub.trial ? badge("trial", "warn") : null),
+      h("td", {}, String(a.all_time.calls)),
+      h("td", {}, tokens.toLocaleString()),
+      h("td", {}, money(a.all_time.cost_usd)),
+      h("td", {}, sub.allowance_usd == null ? "—"
+        : money(sub.spent_usd) + " / " + money(sub.allowance_usd)),
+      h("td", {}, sub.remaining_usd == null ? "—" : money(sub.remaining_usd)));
+  }
+
+  async function giveBack(all) {
+    err.textContent = "";
+    note.replaceChildren();
+    const chosen = all ? [] : [...boxes]
+      .filter(([, box]) => box.checked).map(([tenant]) => tenant);
+    if (!all && chosen.length === 0) {
+      err.textContent =
+        "Tick the accounts to refill, or use Give back to all.";
+      return;
+    }
+    const asked = all
+      ? "Erase the booked model spend of EVERY account?"
+      : "Erase the booked model spend of: " + chosen.join(", ") + "?";
+    if (!confirm(asked)) return;
+    try {
+      const res = await api("POST", "/v1/platform/usage/giveback",
+        all ? { all: true } : { tenants: chosen });
+      const amounts = Object.values(res.given_back_usd);
+      const total = amounts.reduce((n, v) => n + v, 0);
+      note.replaceChildren(
+        "Gave back " + money(total) + " across " + amounts.length +
+        " account(s) — the numbers above are now stale. ",
+        h("a", { href: "#/finance", onclick: (e) => {
+          e.preventDefault(); render();
+        } }, "Refresh"));
+    } catch (e) { err.textContent = e.message; }
+  }
+
+  const accountsCard = h("div", { class: "card" },
+    h("h2", {}, "model spend by account"),
+    h("p", { class: "muted" },
+      "What each account has drawn, all time and all sources; the " +
+      "allowance column is the subscription quota's own standing."),
+    data.accounts.length
+      ? h("table", {},
+          h("tr", {}, h("th", {}, ""), h("th", {}, "account"),
+            h("th", {}, "calls"), h("th", {}, "tokens"),
+            h("th", {}, "drawn"), h("th", {}, "quota spent / allowance"),
+            h("th", {}, "remaining")),
+          data.accounts.map(accountRow))
+      : h("p", { class: "muted" }, "No model usage booked yet."),
+    h("div", {},
+      h("button", { onclick: () => giveBack(false) }, "Give back to selected"),
+      " ",
+      h("button", { onclick: () => giveBack(true) }, "Give back to all")),
+    h("p", { class: "muted" },
+      "A give-back erases the booked subscription spend (their allowance " +
+      "refills); own-api and local rows are the account's own and never " +
+      "move. Every give-back is audited by name and amount."),
+    err, note);
+
+  const nodersCard = h("div", { class: "card" },
+    h("h2", {}, "node execution revenue"),
+    data.noders.length
+      ? h("table", {},
+          h("tr", {}, h("th", {}, "noder"), h("th", {}, "available"),
+            h("th", {}, "pending"), h("th", {}, "reserved"),
+            h("th", {}, "lifetime paid")),
+          data.noders.map((n) => h("tr", {},
+            h("td", {}, n.principal),
+            h("td", {}, money(n.available_micros / 1000000)),
+            h("td", {}, money(n.pending_micros / 1000000)),
+            h("td", {}, money(n.reserved_micros / 1000000)),
+            h("td", {}, money(n.lifetime_paid_micros / 1000000)))))
+      : h("p", { class: "muted" }, "No node earnings accrued yet."));
+
+  return h("div", {}, accountsCard, nodersCard);
+}
+
 /* ---- router ---- */
 const ROUTES = [
   ["#/runs", "Runs", runsScreen],
@@ -783,6 +876,7 @@ const ROUTES = [
   ["#/inbox", "Inbox", inboxScreen],
   ["#/skills", "Skills", skillsScreen],
   ["#/earnings", "Earnings", earningsScreen],
+  ["#/finance", "Finance", financeScreen],
   ["#/users", "Users", usersScreen],
   ["#/storage", "Storage", storageScreen],
   ["#/health", "Health", healthScreen],

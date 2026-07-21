@@ -51,5 +51,9 @@ class BillingService:
     def balance(self, noder_principal: str) -> NoderBalance:
         return self._projection.balance(noder_principal)
 
+    def principals(self) -> list[str]:
+        """Every noder that ever earned — the admin monitor's roster."""
+        return self._ledger.principals()
+
     def entries(self, noder_principal: str) -> list[EarningsEntry]:
         return self._ledger.entries(noder_principal)

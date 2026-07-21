@@ -1193,6 +1193,18 @@ class GatewayApp:
             self._bundle_sweep_audit,
             requires_permission="hygiene:sweep",
         )
+        # The platform's finance monitor: what every account DRAWS (model
+        # API spend against its allowance) and what every noder EARNS
+        # (execution revenue) — one screen for the operator, read straight
+        # off the books. GET is permission-gated like the other operator
+        # reads; the give-back POST is an approved, audited platform move.
+        r.add(
+            "GET",
+            "/v1/platform/finance",
+            self._platform_finance,
+            requires_permission="finance:view",
+        )
+        r.add("POST", "/v1/platform/usage/giveback", self._usage_giveback)
         r.add("POST", "/v1/nodeplace", self._contribute)
         r.add("POST", "/v1/nodeplace/{node_id}/revoke", self._revoke_node)
         r.add("GET", "/v1/listings", self._discover_listings)
@@ -7704,6 +7716,87 @@ class GatewayApp:
             commit_prices=bool(body.get("commit_prices", False)),
         )
         return json_response(200, quote.model_dump(mode="json"))
+
+    def _platform_finance(self, request, session, params) -> Response:
+        """The operator's two-sided ledger, straight off the books: what
+        every account has DRAWN from the platform's model keys (per
+        tenant — that is where usage is booked) and what every noder has
+        EARNED from node execution (per principal). No projections, no
+        estimates — the same stores the meters write."""
+        if self._model_usage is None and self._billing is None:
+            raise GatewayError(404, "not_found", "finance books are not enabled here")
+        accounts: list[dict] = []
+        if self._model_usage is not None:
+            for tenant in self._model_usage.tenants():
+                entry: dict = {
+                    "tenant_id": tenant,
+                    # The whole ledger line (all months, all sources) and
+                    # this month's per-source rows.
+                    "all_time": self._model_usage.all_time(tenant),
+                    "month": self._model_usage.view(tenant),
+                }
+                if self._subscription is not None:
+                    allowance = self._subscription.allowance_for(tenant)
+                    spent = self._subscription.spend_for(tenant)
+                    entry["subscription"] = {
+                        "allowance_usd": allowance,
+                        "spent_usd": spent,
+                        "remaining_usd": max(0.0, allowance - spent),
+                        "trial": bool(self._subscription.is_trial(tenant)),
+                    }
+                accounts.append(entry)
+        noders: list[dict] = []
+        if self._billing is not None:
+            for principal in self._billing.principals():
+                balance = self._billing.balance(principal).model_dump(mode="json")
+                noders.append({"principal": principal, **balance})
+        return json_response(200, {"accounts": accounts, "noders": noders})
+
+    def _usage_giveback(self, request, session, params) -> Response:
+        """The give-back: erase the booked model spend of all or selected
+        accounts, restoring their allowance — the experiment-cohort
+        refill. An approved, audited platform move: the amounts forgiven
+        are named on the audit log, never silently zeroed."""
+        if self._model_usage is None:
+            raise GatewayError(404, "not_found", "model usage is not tracked here")
+        if self._approval is None:
+            raise GatewayError(404, "not_found", "approval authority is not configured")
+        try:
+            self._approval.approve(
+                session,
+                run_id="usage:giveback",
+                policy="usage.giveback",
+                requester_id="",
+                now=request.now or self._clock(),
+            )
+        except AuthorizationError as exc:
+            raise GatewayError(403, "forbidden", str(exc)) from exc
+        body = request.body or {}
+        if body.get("all"):
+            tenants = self._model_usage.tenants()
+        else:
+            tenants = [
+                str(t).strip() for t in (body.get("tenants") or []) if str(t).strip()
+            ]
+        if not tenants:
+            raise GatewayError(
+                400,
+                "invalid_request",
+                'name the accounts to refill ("tenants": [...]) or pass'
+                ' "all": true',
+            )
+        given_back = {
+            tenant: self._model_usage.reset(tenant) for tenant in tenants
+        }
+        self._durable.audit.append(
+            "usage.giveback",
+            {
+                "run_id": "usage:giveback",
+                "by": session.principal_id,
+                "given_back_usd": given_back,
+            },
+        )
+        return json_response(200, {"given_back_usd": given_back})
 
     def _earnings_balance(self, request, session, params) -> Response:
         billing = self._require_billing()

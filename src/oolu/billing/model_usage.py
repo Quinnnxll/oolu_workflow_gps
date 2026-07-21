@@ -129,6 +129,48 @@ class ModelUsageStore:
             row = self._conn.db.execute(query, args).fetchone()
         return float(row["total"] if row else 0.0)
 
+    def tenants(self) -> list[str]:
+        """Every tenant that ever drew a model call — the admin monitor's
+        roster, read from the books themselves, never a separate list."""
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                "SELECT DISTINCT tenant_id FROM model_usage ORDER BY tenant_id"
+            ).fetchall()
+        return [row["tenant_id"] for row in rows]
+
+    def all_time(self, tenant: str) -> dict:
+        """The tenant's whole ledger line, all months and sources summed —
+        what the admin's monitor shows next to the quota view."""
+        with self._conn.lock:
+            row = self._conn.db.execute(
+                "SELECT COALESCE(SUM(calls), 0) AS calls,"
+                " COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,"
+                " COALESCE(SUM(completion_tokens), 0) AS completion_tokens,"
+                " COALESCE(SUM(cost_usd), 0) AS cost_usd"
+                " FROM model_usage WHERE tenant_id = ?",
+                (tenant,),
+            ).fetchone()
+        return {
+            "calls": int(row["calls"]),
+            "prompt_tokens": int(row["prompt_tokens"]),
+            "completion_tokens": int(row["completion_tokens"]),
+            "cost_usd": float(row["cost_usd"]),
+        }
+
+    def reset(self, tenant: str, *, source: str = "subscription") -> float:
+        """The give-back: erase a tenant's booked spend for one source
+        (all months — a trial is measured lifetime, so a give-back must
+        reach the whole history) and return the amount forgiven. Only
+        the named source moves: own-api and local rows are the tenant's
+        own money and machine, never the platform's to forgive."""
+        forgiven = self.total_cost(tenant, source=source)
+        with self._conn.transaction() as db:
+            db.execute(
+                "DELETE FROM model_usage WHERE tenant_id = ? AND source = ?",
+                (tenant, source),
+            )
+        return forgiven
+
     def view(self, tenant: str, *, month: str | None = None) -> list[dict]:
         with self._conn.lock:
             rows = self._conn.db.execute(

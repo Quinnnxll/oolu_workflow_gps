@@ -4,6 +4,33 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The operator's two-sided ledger, and the give-back that refills it:
+
+- **`GET /v1/platform/finance`.** One screen, both sides of the books,
+  read straight off the stores the meters write: per ACCOUNT, the model
+  API spend drawn from the platform — all-time totals (calls, tokens,
+  dollars), this month's per-source rows, and the subscription quota's
+  own standing (allowance, spent, remaining, trial marker); per NODER,
+  the node-execution revenue balances (available, pending, reserved,
+  lifetime paid). Permission-gated (`finance:view`) like every other
+  operator read — 403 for everyone else.
+- **`POST /v1/platform/usage/giveback`.** The experiment-cohort refill:
+  erase the booked subscription spend of all (`"all": true`) or
+  selected (`"tenants": [...]`) accounts, restoring their allowance —
+  a trial is measured lifetime, so the give-back reaches the whole
+  history. Own-api and local rows are the account's own money and
+  machine and never move. An approved (`approve:usage.giveback`),
+  audited platform move: the forgiven amounts land on the audit log by
+  name; an empty ask is refused in words, never a silent no-op.
+- **The Finance screen.** A new operator-UI tab between Earnings and
+  Users: the account table (with trial badges and checkboxes), "Give
+  back to selected" / "Give back to all" behind a confirm, the refill
+  summary with a refresh link, and the noder revenue table beneath.
+- **Tests.** The wall (403 both doors), both sides of the books in one
+  view, the selected give-back (t2 refilled, t1 untouched, own-api
+  spared, audited by name and amount), give-back-to-all, and the
+  refused empty ask.
+
 The list reads like a messenger, the code greets first, the margins
 live behind the photo:
 
