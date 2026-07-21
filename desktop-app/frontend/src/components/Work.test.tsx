@@ -378,7 +378,7 @@ describe("NodeThread", () => {
     expect(await screen.findByText(/No hosts granted/)).toBeTruthy();
   });
 
-  it("the regime is one concise tag — silent about what the node isn't", async () => {
+  it("each regime trait wears its own tag — silent about what the node isn't", async () => {
     routes["GET /v1/work/nodes/n1/activity"] = {
       status: 200,
       body: { items: [] },
@@ -387,7 +387,8 @@ describe("NodeThread", () => {
     render(
       <NodeThread node={workNode()} allNodes={[workNode()]} />,
     );
-    expect(await screen.findByText("(Auto-growing)")).toBeTruthy();
+    expect(await screen.findByText("Auto-growing")).toBeTruthy();
+    expect(screen.queryByText("(Auto-growing)")).toBeNull();
     // No checkbox or select can touch the fixed regime.
     expect(screen.queryByRole("checkbox")).toBeNull();
     cleanup();
@@ -406,7 +407,9 @@ describe("NodeThread", () => {
     render(
       <NodeThread node={strict} allNodes={[strict]} />,
     );
-    expect(await screen.findByText("(L4, Audit)")).toBeTruthy();
+    // L4 and Audit as separate tags, and not a word more.
+    expect(await screen.findByText("L4")).toBeTruthy();
+    expect(screen.getByText("Audit")).toBeTruthy();
     expect(screen.queryByText(/auto-grow/i)).toBeNull();
   });
 

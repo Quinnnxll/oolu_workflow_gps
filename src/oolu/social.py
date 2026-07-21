@@ -560,8 +560,10 @@ class FriendshipStore:
         fields passed move; None leaves a field as it stands. Hiding
         stamps now, so the thread returns by itself the moment it speaks
         again; unhiding clears the stamp. Returns the resulting prefs."""
-        if kind not in ("friend", "run"):
-            raise FriendshipError("prefs cover friend and run threads only")
+        if kind not in ("friend", "run", "node"):
+            raise FriendshipError(
+                "prefs cover friend, run, and node threads only"
+            )
         now = self._clock().isoformat()
         with self._conn.transaction() as db:
             db.execute(

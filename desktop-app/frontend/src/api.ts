@@ -855,6 +855,11 @@ export interface WorkNode {
   status: string;
   // What the node was built to do — the Code tab's README-like head.
   summary?: string;
+  // When the node last moved, and the owner's own list margins.
+  last_activity?: string;
+  pinned?: boolean;
+  muted?: boolean;
+  hidden?: boolean;
   account: NodeAccountView;
   earnings_micros: number;
   health: {
@@ -1344,6 +1349,15 @@ export const api = {
     ),
   orgTemplate: (nodeId: string) =>
     req<OrgTemplateView>("GET", `/v1/work/nodes/${nodeId}/template`),
+  setWorkNodePrefs: (
+    nodeId: string,
+    prefs: { pinned?: boolean; muted?: boolean; hidden?: boolean },
+  ) =>
+    req<{ node_id: string; pinned: boolean; muted: boolean }>(
+      "PUT",
+      `/v1/work/nodes/${encodeURIComponent(nodeId)}/prefs`,
+      prefs,
+    ),
   assignNode: (nodeId: string, username: string) =>
     req<NodeAccountView>(
       "POST",

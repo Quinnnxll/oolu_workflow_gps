@@ -2173,6 +2173,12 @@ const STRINGS: Record<string, Entry> = {
     fr: "Mot de passe défini — la prochaine fois, connectez-vous avec votre identifiant et lui.",
   },
   "friends.save": { en: "Save", zh: "保存", es: "Guardar", fr: "Enregistrer" },
+  "work.deleteNodeHint": {
+    en: "Removes it from your list — the node's record survives, and it returns when it moves again.",
+    zh: "从你的列表移除——节点记录仍保留，节点再有动静时会回来。",
+    es: "Lo quita de tu lista: el registro del nodo sobrevive y vuelve cuando se mueva de nuevo.",
+    fr: "Le retire de votre liste — le dossier du nœud survit et il revient dès qu'il bouge à nouveau.",
+  },
   "work.seatOnboard": {
     en: "onboard",
     zh: "已入驻",

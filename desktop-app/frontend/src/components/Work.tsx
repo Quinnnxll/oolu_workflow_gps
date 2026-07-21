@@ -13,6 +13,7 @@ import type {
   WorkNode,
 } from "../api";
 import { identityHue } from "../avatar";
+import { orderThreads } from "../conversations";
 import { pickLocalFiles } from "../device";
 import { humanizeEvent } from "../humanize";
 import {
@@ -71,6 +72,20 @@ export function Work({ onLife }: { onLife: () => void }) {
       }`}
     >
       <aside className="convo-list">
+        <button
+          type="button"
+          className="sidebar-toggle"
+          aria-label={folded ? tr("nav.showList") : tr("nav.hideList")}
+          title={folded ? tr("nav.showList") : tr("nav.hideList")}
+          onClick={() => {
+            setFolded((f) => {
+              saveSidebarFolded(!f);
+              return !f;
+            });
+          }}
+        >
+          {folded ? "☰" : "«"}
+        </button>
         <div className="mode-tabs">
           <button onClick={onLife}>{tr("life")}</button>
           <button className="on">{tr("work")}</button>
@@ -90,7 +105,7 @@ export function Work({ onLife }: { onLife: () => void }) {
         {nodes.length === 0 && (
           <div className="convo-empty">{tr("work.empty")}</div>
         )}
-        {nodes.map((n) => (
+        {orderThreads(nodes, (n) => n.last_activity ?? "").map((n) => (
           <button
             key={n.node_id}
             className={`convo ${selected === n.node_id ? "on" : ""}`}
@@ -107,7 +122,11 @@ export function Work({ onLife }: { onLife: () => void }) {
               {n.account.is_supernode ? "◆" : n.title.slice(0, 1).toUpperCase()}
             </span>
             <span className="convo-body">
-              <span className="convo-name">{displayNodeName(n.title)}</span>
+              <span className="convo-name">
+                {n.pinned ? "📌 " : ""}
+                {displayNodeName(n.title)}
+                {n.muted ? " 🔕" : ""}
+              </span>
               <span className="convo-sub">
                 {money(n.earnings_micros)} · {healthLabel(n)}
               </span>
@@ -156,6 +175,11 @@ export function Work({ onLife }: { onLife: () => void }) {
             allNodes={nodes}
             onOpenNode={(id) => open(id)}
             onChanged={refresh}
+            onClosed={() => {
+              setSelected(null);
+              setPaneOpen(false);
+              void refresh();
+            }}
           />
         )}
         {!selected && (
@@ -231,6 +255,108 @@ export function regimeTag(account: WorkNode["account"]): string {
   if (account.audit_mode) parts.push(t("regime.audit"));
   if (account.allow_autodev_data) parts.push(t("regime.autogrow"));
   return parts.length ? `(${parts.join(", ")})` : `(${t("regime.standalone")})`;
+}
+
+// The owner's list margins on one node: pin, mute, and delete-from-
+// list (the record survives; the node returns when it moves again).
+export function NodeMargins({
+  node,
+  onChanged,
+  onClosed,
+}: {
+  node: WorkNode;
+  onChanged: () => void;
+  onClosed: () => void;
+}) {
+  const tr = useT();
+  const [confirming, setConfirming] = useState(false);
+  const [error, setError] = useState("");
+
+  async function set(prefs: {
+    pinned?: boolean;
+    muted?: boolean;
+    hidden?: boolean;
+  }) {
+    setError("");
+    try {
+      await api.setWorkNodePrefs(node.node_id, prefs);
+      if (prefs.hidden) onClosed();
+      else onChanged();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  return (
+    <span className="node-margins">
+      <button
+        type="button"
+        className="linklike"
+        onClick={() => void set({ pinned: !node.pinned })}
+      >
+        {node.pinned ? tr("profile.unpin") : tr("profile.pin")}
+      </button>
+      <button
+        type="button"
+        className="linklike"
+        onClick={() => void set({ muted: !node.muted })}
+      >
+        {node.muted ? tr("profile.unmute") : tr("profile.mute")}
+      </button>
+      {confirming ? (
+        <>
+          <span className="muted">{tr("work.deleteNodeHint")}</span>
+          <button
+            type="button"
+            className="linklike danger"
+            onClick={() => void set({ hidden: true })}
+          >
+            {tr("profile.confirmDelete")}
+          </button>
+          <button
+            type="button"
+            className="linklike"
+            onClick={() => setConfirming(false)}
+          >
+            {tr("cancel")}
+          </button>
+        </>
+      ) : (
+        <button
+          type="button"
+          className="linklike danger"
+          onClick={() => setConfirming(true)}
+        >
+          {tr("profile.delete")}
+        </button>
+      )}
+      {error && <span className="error">{error}</span>}
+    </span>
+  );
+}
+
+// Each regime trait wears its OWN tag — Supernode, L{n}, Audit,
+// Auto-growing — never a parenthesized sentence.
+export function RegimeTags({
+  account,
+}: {
+  account: WorkNode["account"];
+}) {
+  const tags: string[] = [];
+  if (account.is_supernode) tags.push(t("regime.supernode"));
+  if (account.authority_level != null) tags.push(`L${account.authority_level}`);
+  if (account.audit_mode) tags.push(t("regime.audit"));
+  if (account.allow_autodev_data) tags.push(t("regime.autogrow"));
+  if (tags.length === 0) tags.push(t("regime.standalone"));
+  return (
+    <span className="regime-tags">
+      {tags.map((tag) => (
+        <span key={tag} className="badge regime-tag">
+          {tag}
+        </span>
+      ))}
+    </span>
+  );
 }
 
 function healthLabel(n: WorkNode): string {
@@ -640,6 +766,7 @@ export function NodeThread({
   allNodes,
   onOpenNode = () => {},
   onChanged = () => {},
+  onClosed = () => {},
 }: {
   node: WorkNode;
   allNodes: WorkNode[];
@@ -647,6 +774,8 @@ export function NodeThread({
   // the roster changed (a member was created here).
   onOpenNode?: (nodeId: string) => void;
   onChanged?: () => void;
+  // Called when the node leaves the list from inside (delete).
+  onClosed?: () => void;
 }) {
   const tr = useT();
   const [activity, setActivity] = useState<NodeRunSteps[] | null>(null);
@@ -745,9 +874,11 @@ export function NodeThread({
         <p className="muted fixed-note">{tr("work.unclaimedNote")}</p>
       )}
 
-      {/* The regime, fixed at creation: one concise tag, never knobs. */}
+      {/* The regime, fixed at creation — each trait its own tag — and
+          the owner's list margins: pin, mute, delete-from-list. */}
       <div className="account-row regime">
-        <span className="badge">{regimeTag(account)}</span>
+        <RegimeTags account={account} />
+        <NodeMargins node={node} onChanged={onChanged} onClosed={onClosed} />
         {account.supernode_id && (
           <span className="muted">
             {tr("work.under")}{" "}
@@ -857,6 +988,7 @@ export function NodeThread({
                         answers (onboard), blue when the seat runs on
                         demand — and the blue block is the org's
                         staffing hand: click to assign a user. */}
+                    <RegimeTags account={m.account} />
                     <SeatBlock
                       member={m}
                       canAssign={account.responsible !== ""}

@@ -963,6 +963,7 @@ class GatewayApp:
         r.add("DELETE", "/v1/friends/{peer}", self._friend_delete)
         r.add("PUT", "/v1/runs/{run_id}/prefs", self._run_prefs_put)
         r.add("POST", "/v1/work/nodes/{node_id}/assign", self._work_assign)
+        r.add("PUT", "/v1/work/nodes/{node_id}/prefs", self._work_node_prefs_put)
         # The representative: drafts in the account's own voice. Drafts
         # are proposed, listed, and decided — nothing sends without the
         # user's word (docs/representative-plan.md, Phase 0).
@@ -5634,9 +5635,35 @@ class GatewayApp:
         entries = desk.overview(
             principal=session.principal_id, tenant=session.tenant_id
         )
+        # When each node last MOVED: the newest run that executed its
+        # function — the sidebar orders by it, newest upper, like Life.
+        last_activity: dict[str, str] = {}
+        for s in self._durable.runs.list(limit=10_000):
+            if s.contract.metadata.get("tenant_id") != session.tenant_id:
+                continue
+            nid = (s.contract.metadata.get("node_function") or {}).get("node_id")
+            if not nid:
+                continue
+            moved = s.updated_at.isoformat()
+            if moved > last_activity.get(nid, ""):
+                last_activity[nid] = moved
+        node_prefs: dict[str, dict] = {}
+        if self._friendships is not None:
+            node_prefs = self._friendships.prefs(
+                tenant=session.tenant_id,
+                owner=session.principal_id,
+                kind="node",
+            )
         items = []
         for e in entries:
             item = e.model_dump(mode="json")
+            item["last_activity"] = last_activity.get(e.node_id, "")
+            pref = node_prefs.get(e.node_id, {})
+            item["pinned"] = bool(pref.get("pinned"))
+            item["muted"] = bool(pref.get("muted"))
+            item["hidden"] = _hidden_now(
+                pref.get("hidden_at"), item["last_activity"]
+            )
             # The node's own description — what it was built to do — for
             # the Code tab's README-like head. Best-effort: a node whose
             # registry record is unreadable simply shows no description.
@@ -5682,6 +5709,42 @@ class GatewayApp:
                 return None
             current = self._desk.account_for(current.supernode_id)
         return None
+
+    def _work_node_prefs_put(self, request, session, params) -> Response:
+        """How a node sits in MY Work list — pin, mute, hide (delete-from-
+        list). The node must be on the caller's own desk; the margins are
+        the owner's alone, same store as friend and run threads."""
+        from ..social import FriendshipError
+
+        friends = self._require_friendships()
+        desk = self._require_desk()
+        node_id = params["node_id"]
+        mine = {
+            e.node_id
+            for e in desk.overview(
+                principal=session.principal_id, tenant=session.tenant_id
+            )
+        }
+        if node_id not in mine:
+            raise GatewayError(404, "not_found", "no such node on your desk")
+        body = request.body or {}
+
+        def _flag(name: str) -> bool | None:
+            return bool(body[name]) if name in body else None
+
+        try:
+            pref = friends.set_pref(
+                tenant=session.tenant_id,
+                owner=session.principal_id,
+                kind="node",
+                key=node_id,
+                pinned=_flag("pinned"),
+                muted=_flag("muted"),
+                hidden=_flag("hidden"),
+            )
+        except FriendshipError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(200, {"node_id": node_id, **pref})
 
     def _work_assign(self, request, session, params) -> Response:
         """The Supernode's staffing hand: assign a user to an UNCLAIMED

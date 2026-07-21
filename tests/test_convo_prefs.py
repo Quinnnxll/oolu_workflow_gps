@@ -264,3 +264,63 @@ def test_run_threads_carry_margins_for_their_own_submitter(tmp_path):
         assert walled.status == 404
     finally:
         conn.close()
+
+
+def test_work_nodes_carry_margins_and_last_activity(tmp_path):
+    """The Work list reads like Life: each node carries when it last
+    moved, plus the owner's own pin/mute/hide margins — walled to the
+    caller's desk."""
+    from test_org_templates import _template_rig
+
+    from oolu.social import FriendshipStore as FS
+
+    app, conn, ident, desk, super_id, member_id, owner = _template_rig(tmp_path)
+    try:
+        app._friendships = FS(conn)
+        listed = app.handle(_req("GET", "/v1/work/nodes", token=owner))
+        assert listed.status == 200, listed.body
+        entry = next(
+            i for i in listed.body["items"] if i["node_id"] == super_id
+        )
+        assert (entry["pinned"], entry["muted"], entry["hidden"]) == (
+            False, False, False,
+        )
+        assert "last_activity" in entry
+
+        pinned = app.handle(
+            _req(
+                "PUT", f"/v1/work/nodes/{super_id}/prefs",
+                token=owner, body={"pinned": True, "muted": True},
+            )
+        )
+        assert pinned.status == 200, pinned.body
+        listed = app.handle(_req("GET", "/v1/work/nodes", token=owner))
+        entry = next(
+            i for i in listed.body["items"] if i["node_id"] == super_id
+        )
+        assert entry["pinned"] is True and entry["muted"] is True
+
+        # Hide = delete-from-list: hidden as it stands.
+        hidden = app.handle(
+            _req(
+                "PUT", f"/v1/work/nodes/{super_id}/prefs",
+                token=owner, body={"hidden": True},
+            )
+        )
+        assert hidden.status == 200
+        listed = app.handle(_req("GET", "/v1/work/nodes", token=owner))
+        entry = next(
+            i for i in listed.body["items"] if i["node_id"] == super_id
+        )
+        assert entry["hidden"] is True
+
+        # Another account cannot reach my desk's margins.
+        walled = app.handle(
+            _req(
+                "PUT", f"/v1/work/nodes/{super_id}/prefs",
+                token=ident.token("stranger", "t1"), body={"pinned": True},
+            )
+        )
+        assert walled.status == 404
+    finally:
+        conn.close()

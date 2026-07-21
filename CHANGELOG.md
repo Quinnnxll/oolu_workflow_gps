@@ -4,6 +4,28 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Work reads like Life: the fold, the tags, the order, the margins:
+
+- **The fold, top-left.** The Work sidebar gains the same fold/unfold
+  button Life wears at its top left — one shared choice, one layout.
+- **Each trait its own tag.** The parenthesized regime sentence
+  ("(Supernode, Audit, Auto-growing)") gives way to independent tags —
+  Supernode, L{n}, Audit, Auto-growing — on the node card's header and
+  on every Access-desk member row alike.
+- **Newest upper.** Each work node now carries when it last moved (its
+  newest run), and the sidebar orders pinned-first-then-newest with the
+  same helper Life uses — hidden nodes leave the list and return when
+  the node moves again.
+- **Pin, mute, delete.** The node card's header row carries the
+  owner's margins: pin and mute (marked 📌/🔕 in the sidebar), and
+  delete-from-list behind a one-step confirm — the node's record
+  survives, and the thread returns on new activity. One prefs store
+  serves friends, runs, and nodes; the route is walled to the caller's
+  own desk.
+- **Tests.** Margins and last-activity on the list (walled to the
+  desk), the tag split asserted trait by trait, and the seat/staffing
+  flows unchanged.
+
 The seat block, the branch trigger, and the fleet that stays a fleet:
 
 - **One block per seat.** The member roster's execution-order dial and

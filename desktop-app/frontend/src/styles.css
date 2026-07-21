@@ -2430,3 +2430,30 @@ button.ghost {
 .seat-assign input {
   width: 140px;
 }
+
+
+/* Regime traits: each its own tag; the node's list margins ride the
+   same header row, right-aligned. */
+.regime-tags {
+  display: inline-flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.regime-tags .regime-tag {
+  margin-left: 0;
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--line);
+}
+
+.node-margins {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.node-margins .danger {
+  color: var(--danger);
+}
