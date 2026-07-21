@@ -4,6 +4,41 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The node author becomes an agent: the library in hand, seated apart:
+
+- **The gap.** A node's function was written from one thing — the goal
+  sentence — in one blind shot by the same brain that chats. No look at
+  the slot names already in circulation, no look at what the upstream
+  node actually produces, and the interface regexed out of an `IO:`
+  line in prose.
+- **`oolu.author.NodeAuthorAgent`.** For models that speak native
+  tool-calling: a bounded authoring loop whose hands are `list_nodes`
+  (the desk's contracts — reuse slot names, don't mint synonyms),
+  `read_node_output` (a named node's recent run outputs — code written
+  downstream parses the shape that ACTUALLY arrived), `read_file`, and
+  an optional `verify_function`. Delivery only through `finish_node`
+  with the script and its interface as schema-validated arguments; a
+  script that never calls `emit_result` — or fails verification, when
+  the seam is wired — is refused back to the model as a correctable
+  answer, not an exception. Conversation is declined in words. The
+  one-shot protocol still lands when it leaks through (same gates as
+  `author_node_function`), and running out of steps is an honest
+  refusal, never a silent nothing.
+- **Seated apart.** The gateway routes the author's consultations under
+  the `node.build` purpose — its own line in the meter, the usage
+  books, and the audit trail, separate from `chat.turn` — and the
+  `node.build` seat now declares the agent's hands. Model routers are
+  cached per (tenant, purpose); a changed key drops every seat's
+  router, not just the conversation's.
+- **Nothing breaks where tool-calling hasn't arrived.** A model
+  without `consult` keeps the exact one-shot path — every existing
+  builder test passes untouched.
+- **Tests.** The working loop end to end (library read, hard gates,
+  decline, prose fallback, step ceiling, dead model), and the gateway
+  seam: a tool-calling author builds a real node through `/v1/chat`
+  with the desk-backed hands on the table and the script landing in
+  the drawer; a reply-only author still takes the one-shot door.
+
 Native tool-calling: one schema, both wires, validated before dispatch:
 
 - **The gap.** Every hand the model could use rode as prose conventions —

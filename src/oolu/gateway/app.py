@@ -26,6 +26,7 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
+from ..author import NodeAuthorAgent
 from ..billing import (
     BillingService,
     DisputeService,
@@ -150,7 +151,7 @@ from ..projectgraph import (
     build_finding,
     path_covered,
 )
-from ..providers.chatmodel import ChatModelRouter
+from ..providers.chatmodel import CHAT_PURPOSE, ChatModelRouter
 from ..providers.keyring import PROVIDERS, ModelKeyring
 from ..providers.vault import SecretVault
 from ..representative import pair_exchanges as pair_representative_exchanges
@@ -651,7 +652,10 @@ class GatewayApp:
         self._subscription = subscription
         self._model_usage = model_usage
         self._stripe_webhooks = stripe_webhooks
-        self._model_routers: dict[str, ChatModelRouter] = {}
+        # Keyed (tenant, purpose): the conversation and the node author
+        # ride separate routers so their consultations enter the books
+        # under their own purposes — one brain, two accountable seats.
+        self._model_routers: dict[tuple[str, str], ChatModelRouter] = {}
         # Standing growth offers (the n8n-style trigger): a chat task that
         # failed for want of a working function asks, in the conversation,
         # whether to build the missing node. One offer per person, and it
@@ -2880,8 +2884,8 @@ class GatewayApp:
         # sees what building the node actually drew (the resource question).
         meter = getattr(self, "_model_meter", None)
         spent_before = len(meter.charges()) if meter is not None else 0
-        script, io, refusal = author_node_function(
-            author, goal, demonstrated=demonstrated
+        script, io, refusal = self._author_function(
+            session, author, goal, demonstrated
         )
         if script is None:
             return f"error: {refusal}"
@@ -4249,12 +4253,16 @@ class GatewayApp:
             raise GatewayError(404, "not_found", "model keys are not enabled")
         return self._model_keys
 
-    def _tenant_model(self, tenant: str) -> ChatModelRouter | None:
+    def _tenant_model(
+        self, tenant: str, *, purpose: str = CHAT_PURPOSE
+    ) -> ChatModelRouter | None:
         """The tenant's chat brain, or None to stay model-less.
 
-        Routers are cached per tenant (adapters keep capability caches) and
-        dropped whenever the tenant's keys change. Settings are read through
-        closures at call time, so a settings change needs no invalidation.
+        Routers are cached per (tenant, purpose) — adapters keep capability
+        caches, and the purpose is what the meter and usage books aggregate
+        by — and dropped whenever the tenant's keys change. Settings are
+        read through closures at call time, so a settings change needs no
+        invalidation.
         """
         if self._model_keys is None:
             return None
@@ -4281,7 +4289,7 @@ class GatewayApp:
             and not hosted_brain
         ):
             return None
-        router = self._model_routers.get(tenant)
+        router = self._model_routers.get((tenant, purpose))
         if router is None:
             router = ChatModelRouter(
                 self._model_keys,
@@ -4297,15 +4305,87 @@ class GatewayApp:
                 local_url=lambda: str(_effective("model.local_url", "")),
                 local_model=lambda: str(_effective("model.local_model", "")),
                 web_search=lambda: bool(_effective("model.web_search", True)),
+                purpose=purpose,
             )
-            self._model_routers[tenant] = router
+            self._model_routers[(tenant, purpose)] = router
         return router
+
+    def _drop_model_routers(self, tenant: str) -> None:
+        """Every purpose's router for this tenant — a changed key must
+        reach the author's seat as surely as the conversation's."""
+        for key in [k for k in self._model_routers if k[0] == tenant]:
+            self._model_routers.pop(key, None)
 
     def _node_function_author(self, tenant: str):
         """The model that writes a new node's execution function — the
-        tenant's own chat brain by default; a seam so tests (or a future
-        dedicated authoring model) can supply their own."""
-        return self._tenant_model(tenant)
+        tenant's own brain seated APART: routed under the ``node.build``
+        purpose, so the authoring spend and audit stand separate from the
+        conversation's. A seam so tests (or a future dedicated authoring
+        model) can supply their own."""
+        return self._tenant_model(tenant, purpose="node.build")
+
+    def _author_function(self, session, author, goal, demonstrated):
+        """``(script, io, refusal)`` through the strongest path the seated
+        model supports: a tool-calling brain works as the
+        :class:`NodeAuthorAgent` — the desk's contracts and upstream
+        outputs in hand — while a plain ``reply`` model keeps the one-shot
+        ``author_node_function`` gates unchanged."""
+        if not hasattr(author, "consult"):
+            return author_node_function(author, goal, demonstrated=demonstrated)
+        agent = NodeAuthorAgent(
+            author,
+            catalog=lambda: self._author_catalog(session),
+            outputs=lambda node_id: self._author_node_outputs(session, node_id),
+        )
+        authored = agent.author(goal, demonstrated=demonstrated)
+        return authored.script, authored.io, authored.refusal
+
+    def _author_catalog(self, session) -> list[dict]:
+        """The desk's nodes with their contracts — the slot vocabulary in
+        circulation, for the author to REUSE instead of minting synonyms."""
+        if self._nodeplace is None:
+            return []
+        try:
+            nodes = self._nodeplace.list_own_nodes(
+                noder_principal=session.principal_id,
+                tenant_id=session.tenant_id,
+            )
+        except Exception:  # noqa: BLE001 - the library is advisory context
+            return []
+        return [
+            {
+                "node_id": node.node_id,
+                "title": node.title,
+                "goal": node.summary,
+                "consumes": [
+                    {"name": s.name, "type": s.value_type} for s in node.consumes
+                ],
+                "produces": [
+                    {"name": s.name, "type": s.value_type} for s in node.produces
+                ],
+            }
+            for node in nodes[:40]
+        ]
+
+    def _author_node_outputs(self, session, node_id: str) -> list[dict]:
+        """A node's recent run results — the shape its work ACTUALLY
+        arrives in downstream, straight from the run store's books."""
+        states = [
+            s
+            for s in self._durable.runs.list(limit=10_000)
+            if s.contract.metadata.get("tenant_id") == session.tenant_id
+            and (s.contract.metadata.get("node_function") or {}).get("node_id")
+            == node_id
+            and s.result
+        ]
+        return [
+            {
+                "run_id": state.run_id,
+                "status": state.result.get("status"),
+                "outputs": state.result.get("outputs", []),
+            }
+            for state in states[-3:]
+        ]
 
     def _model_keys_list(self, request, session, params) -> Response:
         keyring = self._require_model_keys()
@@ -4356,7 +4436,7 @@ class GatewayApp:
             )
         mark = keyring.store(session.tenant_id, provider, key)
         # The next chat turn must see the new key, not a cached adapter.
-        self._model_routers.pop(session.tenant_id, None)
+        self._drop_model_routers(session.tenant_id)
         self._metrics["model_keys_added"] += 1
         # Make the added key ACTUALLY the model. The default source
         # ("subscription") is built for the OoLu plan's hosted brain,
@@ -4443,7 +4523,7 @@ class GatewayApp:
         provider = params.get("provider", "")
         if not keyring.remove(session.tenant_id, provider):
             raise GatewayError(404, "not_found", f"no {provider} key is stored")
-        self._model_routers.pop(session.tenant_id, None)
+        self._drop_model_routers(session.tenant_id)
         return json_response(200, {"removed": provider})
 
 # ------------------------------------------------------------------ #

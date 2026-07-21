@@ -103,6 +103,18 @@ SEATS: dict[str, Seat] = {
                 "function — one script, emit_result once, the web only "
                 "through http_request"
             ),
+            # The agentic author's hands (native tool-calling models):
+            # read the desk's contracts and upstream outputs, verify,
+            # and finish through the schema-checked door. A model
+            # without tool-calling keeps the one-shot path, handless.
+            hands=(
+                "list_nodes",
+                "read_node_output",
+                "read_file",
+                "verify_function",
+                "finish_node",
+                "decline",
+            ),
             reads=("src/", "lessons/"),
             writes=("src/",),
             consent_key="account.autobuild_consent",
