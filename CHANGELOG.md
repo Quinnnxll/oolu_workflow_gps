@@ -4,6 +4,41 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The list reads like a messenger, the code greets first, the margins
+live behind the photo:
+
+- **The reading order.** Friends and Noder threads now sort the way a
+  messenger reads: pinned first, then the most recently spoken — the
+  newer, the upper. The server orders the friends list (and stamps
+  `updated_at` on every run summary); one shared frontend helper
+  (`orderThreads`) applies the same order to both sidebar groups.
+- **The code greets first.** The start-a-conversation pane shows the
+  user's own QR code upper middle the moment it opens — no tap — and
+  ONE button flips the same spot between showing and scanning, so the
+  window keeps one symmetric centered shape either way. A successful
+  scan (or a camera failure) flips back to the code by itself.
+- **The margins, behind the photo.** Clicking the profile photo in a
+  friend's or a node thread's header opens the profile: the name note
+  (rename moved here from the sidebar), pin, mute, hide, and delete —
+  every margin in one place, for people and nodes alike.
+  - *Pin* lifts the thread to the top; *mute* silences the unread
+    nagging (the words still arrive); *hide* stamps a moment — new
+    words bring the thread back by themselves.
+  - *Delete* on a friend unfriends without blocking: messages stay,
+    the thread leaves the list, and they may ask again. On a node
+    thread it removes the entry from the list; the run's audit record
+    is preserved.
+- **The wire.** `convo_prefs` in the friendship store (one table, both
+  thread kinds), `PUT /v1/friends/{peer}/prefs`, `DELETE
+  /v1/friends/{peer}`, `PUT /v1/runs/{run_id}/prefs` (walled to the
+  run's own submitter), and pinned/muted/hidden flags on the friends
+  and runs lists.
+- **Tests.** Store margins move only the named fields; delete clears
+  my margins without a block; the gateway list reads pinned-first-
+  then-newest; hide returns on new words; run margins are walled to
+  their submitter. Frontend: ordering unit tests, the QR-first flip,
+  profile rename/pin/delete, and the sidebar's pinned/hidden reading.
+
 The revision reaches the registry, and the author gets its own tier:
 
 - **The registry follows the revision.** A revised function updated the

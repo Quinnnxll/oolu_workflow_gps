@@ -18,6 +18,7 @@ import {
   useT,
 } from "../ui";
 import { conciseName } from "../naming";
+import { orderThreads } from "../conversations";
 import type { RunSummary, TimelineEvent } from "../types";
 import { ForwardMenu } from "./ForwardMenu";
 import { Chat } from "./Chat";
@@ -68,14 +69,18 @@ export function Life() {
   // paneOpen decides whether the list or the open conversation shows.
   const [folded, setFolded] = useState(loadSidebarFolded);
   const [paneOpen, setPaneOpen] = useState(false);
-  // Renaming a friend the old way: click their avatar, leave a name note
-  // only you see — "Anna from the conference".
-  const [renaming, setRenaming] = useState<string | null>(null);
-  const [aliasDraft, setAliasDraft] = useState("");
 
   function open(next: Selection) {
     setSelected(next);
     setPaneOpen(true);
+  }
+
+  // Closing a thread from inside (hide/delete in its profile): back to
+  // the list with OoLu selected — the thread is gone from the sidebar.
+  function closeThread() {
+    setSelected({ kind: "oolu" });
+    setPaneOpen(false);
+    void refreshRuns();
   }
 
   function toggleGroup(name: "friends" | "noder") {
@@ -136,22 +141,6 @@ export function Life() {
     const t = setInterval(refreshRuns, 5000);
     return () => clearInterval(t);
   }, [refreshRuns]);
-
-  async function saveAlias(peer: string) {
-    try {
-      const saved = await api.setFriendAlias(peer, aliasDraft.trim());
-      // Reflect immediately; the poll confirms from the server after.
-      setFriends(
-        (list) =>
-          list?.map((f) =>
-            f.peer === peer ? { ...f, alias: saved.alias } : f,
-          ) ?? list,
-      );
-    } catch {
-      /* the row keeps its old name; the poll tells the truth */
-    }
-    setRenaming(null);
-  }
 
   if (mode === "work") {
     return <Work onLife={() => setMode("life")} />;
@@ -241,22 +230,23 @@ export function Life() {
           onClick={() => toggleGroup("friends")}
         >
           {groups.friends ? "▾" : "▸"} {tr("friends")}
-          {friends && friends.some((f) => f.unread > 0)
-            ? ` (${friends.reduce((n, f) => n + f.unread, 0)})`
+          {/* Muted threads keep their words but stop their nagging: they
+              never count toward the group's unread number. */}
+          {friends && friends.some((f) => f.unread > 0 && !f.muted)
+            ? ` (${friends.reduce((n, f) => n + (f.muted ? 0 : f.unread), 0)})`
             : ""}
         </button>
         {groups.friends &&
-          (friends ?? []).map((f) =>
-            renaming === f.peer ? (
-              // Renaming replaces the row with an inline note editor —
-              // the old way of remembering people: your label, private.
-              <form
+          orderThreads(friends ?? [], (f) => f.last_at || f.since || "").map(
+            (f) => (
+              <button
                 key={f.peer}
-                className="convo alias-edit"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void saveAlias(f.peer);
-                }}
+                className={`convo ${
+                  selected.kind === "friend" && selected.peer === f.peer
+                    ? "on"
+                    : ""
+                }`}
+                onClick={() => open({ kind: "friend", peer: f.peer })}
               >
                 <span
                   className="convo-avatar"
@@ -269,63 +259,14 @@ export function Life() {
                   {(f.alias || f.peer).slice(0, 1).toUpperCase()}
                 </span>
                 <span className="convo-body">
-                  <input
-                    aria-label={`${tr("friends.rename")} ${f.peer}`}
-                    placeholder={tr("friends.namePlaceholder")}
-                    title={tr("friends.renameHint")}
-                    value={aliasDraft}
-                    autoFocus
-                    onChange={(e) => setAliasDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Escape") setRenaming(null);
-                    }}
-                  />
-                  <span className="setting-control row">
-                    <button type="submit">{tr("friends.save")}</button>
-                    <button
-                      type="button"
-                      className="linklike"
-                      onClick={() => setRenaming(null)}
-                    >
-                      {tr("cancel")}
-                    </button>
-                  </span>
-                </span>
-              </form>
-            ) : (
-              <button
-                key={f.peer}
-                className={`convo ${
-                  selected.kind === "friend" && selected.peer === f.peer
-                    ? "on"
-                    : ""
-                }`}
-                onClick={() => open({ kind: "friend", peer: f.peer })}
-              >
-                {/* The avatar is the rename handle — click it to leave a
-                    name note only you see ("Anna from the conference"). */}
-                <span
-                  className="convo-avatar clickable"
-                  role="button"
-                  aria-label={`${tr("friends.rename")} ${f.peer}`}
-                  title={tr("friends.renameHint")}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setAliasDraft(f.alias ?? "");
-                    setRenaming(f.peer);
-                  }}
-                  style={{
-                    background: `hsl(${identityHue(f.peer)} 45% 34%)`,
-                    color: "#fff",
-                    borderColor: "transparent",
-                  }}
-                >
-                  {(f.alias || f.peer).slice(0, 1).toUpperCase()}
-                </span>
-                <span className="convo-body">
                   <span className="convo-name">
+                    {f.pinned ? "📌 " : ""}
                     {f.alias || f.peer}
-                    {f.unread > 0 ? ` · ${f.unread} new` : ""}
+                    {f.muted
+                      ? " 🔕"
+                      : f.unread > 0
+                        ? ` · ${f.unread} new`
+                        : ""}
                   </span>
                   <span className="convo-sub">
                     {/* A fresh friendship has no words yet — invite them. */}
@@ -367,7 +308,7 @@ export function Life() {
           <div className="convo-empty">{tr("nodeActivityHere")}</div>
         )}
         {groups.noder &&
-          runs.map((r) => (
+          orderThreads(runs, (r) => r.updated_at ?? "").map((r) => (
           <button
             key={r.run_id}
             className={`convo ${
@@ -392,7 +333,11 @@ export function Life() {
               {/* A name is a label, not a transcript: the keywords name
                   the thread; the full request lives in the tooltip and
                   the thread itself. */}
-              <span className="convo-name">{conciseName(r.intent)}</span>
+              <span className="convo-name">
+                {r.pinned ? "📌 " : ""}
+                {conciseName(r.intent)}
+                {r.muted ? " 🔕" : ""}
+              </span>
               <span className="convo-sub">{r.awaiting ?? r.phase}</span>
             </span>
           </button>
@@ -496,11 +441,26 @@ export function Life() {
             since={
               friends?.find((f) => f.peer === selected.peer)?.since ?? ""
             }
+            pinned={
+              friends?.find((f) => f.peer === selected.peer)?.pinned ?? false
+            }
+            muted={
+              friends?.find((f) => f.peer === selected.peer)?.muted ?? false
+            }
             onActivity={refreshRuns}
+            onClosed={closeThread}
           />
         )}
         {selected.kind === "noder" && (
-          <NoderThread key={selected.run.run_id} run={selected.run} />
+          <NoderThread
+            key={selected.run.run_id}
+            run={
+              runs.find((r) => r.run_id === selected.run.run_id) ??
+              selected.run
+            }
+            onActivity={refreshRuns}
+            onClosed={closeThread}
+          />
         )}
         {selected.kind === "files" && <FilesPane />}
         {selected.kind === "settings" && <SettingsPane />}
@@ -703,15 +663,166 @@ export function DraftsInbox({
   );
 }
 
+// The profile behind the photo: who this thread is, and every margin the
+// owner holds on it — the name note (friends), pin, mute, hide, delete.
+// One panel serves both kinds of thread; only the hands differ.
+export function ContactProfile({
+  title,
+  subtitle,
+  detail,
+  hue,
+  initial,
+  alias,
+  onAlias,
+  pinned,
+  muted,
+  onPrefs,
+  onHide,
+  onDelete,
+  deleteLabel,
+  deleteHint,
+  onBack,
+}: {
+  title: string;
+  subtitle: string;
+  detail?: string;
+  hue: number;
+  initial: string;
+  // Friends carry a name note; run threads pass no onAlias and get none.
+  alias?: string;
+  onAlias?: (alias: string) => Promise<void>;
+  pinned: boolean;
+  muted: boolean;
+  onPrefs: (prefs: { pinned?: boolean; muted?: boolean }) => Promise<void>;
+  onHide: () => Promise<void>;
+  onDelete: () => Promise<void>;
+  deleteLabel: string;
+  deleteHint: string;
+  onBack: () => void;
+}) {
+  const tr = useT();
+  const [aliasDraft, setAliasDraft] = useState(alias ?? "");
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function act(fn: () => Promise<void>) {
+    setError("");
+    setBusy(true);
+    try {
+      await fn();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="contact-profile">
+      <span
+        className="convo-avatar profile-photo"
+        style={{
+          background: `hsl(${hue} 45% 34%)`,
+          color: "#fff",
+          borderColor: "transparent",
+        }}
+      >
+        {initial}
+      </span>
+      <div className="profile-name">{title}</div>
+      <div className="muted">{subtitle}</div>
+      {detail && <div className="muted">{detail}</div>}
+
+      {onAlias && (
+        <form
+          className="setting-control row profile-alias"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void act(() => onAlias(aliasDraft.trim()));
+          }}
+        >
+          <input
+            aria-label={tr("friends.rename")}
+            placeholder={tr("friends.namePlaceholder")}
+            title={tr("friends.renameHint")}
+            value={aliasDraft}
+            onChange={(e) => setAliasDraft(e.target.value)}
+          />
+          <button type="submit" disabled={busy}>
+            {tr("friends.save")}
+          </button>
+        </form>
+      )}
+
+      <div className="profile-actions">
+        <button
+          disabled={busy}
+          onClick={() => void act(() => onPrefs({ pinned: !pinned }))}
+        >
+          {pinned ? tr("profile.unpin") : tr("profile.pin")}
+        </button>
+        <button
+          disabled={busy}
+          onClick={() => void act(() => onPrefs({ muted: !muted }))}
+        >
+          {muted ? tr("profile.unmute") : tr("profile.mute")}
+        </button>
+        <button disabled={busy} onClick={() => void act(onHide)}>
+          {tr("profile.hide")}
+        </button>
+        <button
+          className="danger"
+          disabled={busy}
+          onClick={() => setConfirming(true)}
+        >
+          {deleteLabel}
+        </button>
+      </div>
+      <p className="muted profile-hint">{tr("profile.hideHint")}</p>
+      {confirming && (
+        <div className="setting-control row profile-confirm">
+          <span className="muted">{deleteHint}</span>
+          <button
+            className="danger"
+            disabled={busy}
+            onClick={() => void act(onDelete)}
+          >
+            {tr("profile.confirmDelete")}
+          </button>
+          <button
+            className="linklike"
+            disabled={busy}
+            onClick={() => setConfirming(false)}
+          >
+            {tr("cancel")}
+          </button>
+        </div>
+      )}
+      {error && <div className="error">{error}</div>}
+
+      <button type="button" className="linklike" onClick={onBack}>
+        ‹ {tr("profile.backToChat")}
+      </button>
+    </div>
+  );
+}
+
 // A node's side of the story: the raw audit log as a message history.
 // Deliberately unpolished — this is developer material. Everyone else asks
 // OoLu, who can read these logs and re-trigger the node on their behalf.
 export function NoderThread({
   run,
+  onActivity = () => {},
+  onClosed = () => {},
 }: {
   run: RunSummary;
+  onActivity?: () => void;
+  onClosed?: () => void;
 }) {
+  const tr = useT();
   const [events, setEvents] = useState<TimelineEvent[] | null>(null);
+  const [profileOpen, setProfileOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -728,13 +839,56 @@ export function NoderThread({
     };
   }, [run.run_id]);
 
-  // The Noder view is a RECORD, not a control panel: no buttons here.
-  // Re-running is OoLu's job — asked in the chat, it re-fires the SAME
-  // task through its own route and node, never a stray duplicate from
-  // a button.
+  // The node's own margins live behind its photo — the same profile door
+  // a friend's photo opens; the log below stays a record, not a panel.
+  if (profileOpen) {
+    return (
+      <ContactProfile
+        title={conciseName(run.intent)}
+        subtitle={run.intent}
+        detail={`${run.run_id} · ${run.awaiting ?? run.phase}`}
+        hue={identityHue(run.intent)}
+        initial={conciseName(run.intent).slice(0, 1).toUpperCase()}
+        pinned={run.pinned ?? false}
+        muted={run.muted ?? false}
+        onPrefs={async (prefs) => {
+          await api.setRunPrefs(run.run_id, prefs);
+          onActivity();
+        }}
+        onHide={async () => {
+          await api.setRunPrefs(run.run_id, { hidden: true });
+          onClosed();
+        }}
+        onDelete={async () => {
+          // A run log is an audit record: "delete" removes the thread
+          // from the list; the record itself is preserved, and the
+          // thread returns if the node ever speaks again.
+          await api.setRunPrefs(run.run_id, { hidden: true });
+          onClosed();
+        }}
+        deleteLabel={tr("profile.delete")}
+        deleteHint={tr("noder.deleteHint")}
+        onBack={() => setProfileOpen(false)}
+      />
+    );
+  }
   return (
     <div className="noder-thread">
       <div className="noder-head">
+        <button
+          type="button"
+          className="convo-avatar node clickable"
+          aria-label={`${tr("profile.open")} ${conciseName(run.intent)}`}
+          title={tr("profile.openHint")}
+          onClick={() => setProfileOpen(true)}
+          style={{
+            background: `hsl(${identityHue(run.intent)} 45% 34%)`,
+            color: "#fff",
+            borderColor: "transparent",
+          }}
+        >
+          {conciseName(run.intent).slice(0, 1).toUpperCase()}
+        </button>
         <div>
           <div className="run-card-intent">{conciseName(run.intent)}</div>
           <div className="muted">“{run.intent}”</div>
@@ -786,9 +940,13 @@ export function StartConversation({
   const [incoming, setIncoming] = useState<string[]>([]);
   // Side by side, physically: one shows their QR code, the other scans
   // it — the friend request sends itself. The code carries only the
-  // username (oolu:friend:<name>), nothing secret.
+  // username (oolu:friend:<name>), nothing secret. The code IS the
+  // opening move: it shows itself the moment this pane opens, and one
+  // button flips the same spot between showing and scanning.
   const me = session.principal ?? "";
-  const [qrMode, setQrMode] = useState<"none" | "show" | "scan">("none");
+  const [qrMode, setQrMode] = useState<"none" | "show" | "scan">(
+    me ? "show" : "none",
+  );
   const [qrUrl, setQrUrl] = useState("");
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
@@ -865,13 +1023,15 @@ export function StartConversation({
           const code = jsQR(image.data, image.width, image.height);
           const match = code?.data.match(/^oolu:friend:(.+)$/);
           if (match) {
-            setQrMode("none"); // the cleanup below stops the camera
+            // The cleanup below stops the camera; the spot flips back
+            // to the user's own code.
+            setQrMode(me ? "show" : "none");
             void connectScanned(match[1]);
           }
         }, 350);
       } catch {
         setError(tr("friends.cameraError"));
-        setQrMode("none");
+        setQrMode(me ? "show" : "none");
       }
     }
     void start();
@@ -912,6 +1072,40 @@ export function StartConversation({
 
   return (
     <div className="pane-empty start-conversation">
+      {/* The code first, upper middle: side by side, one screen shows
+          while the other scans — one button flips the same spot, so the
+          window keeps one symmetric shape either way. */}
+      {qrMode === "show" && (
+        <div className="qr-panel">
+          {qrUrl && (
+            <img
+              src={qrUrl}
+              alt={`QR code for ${me}`}
+              width={220}
+              height={220}
+            />
+          )}
+          <div className="muted">{me}</div>
+        </div>
+      )}
+      {qrMode === "scan" && (
+        <div className="qr-panel">
+          <video ref={videoRef} muted playsInline className="qr-video" />
+          <div className="muted">{tr("friends.scanning")}</div>
+        </div>
+      )}
+      <div className="qr-connect setting-control row">
+        <button
+          type="button"
+          onClick={() =>
+            setQrMode(qrMode === "scan" ? (me ? "show" : "none") : "scan")
+          }
+        >
+          {qrMode === "scan" ? tr("friends.myQr") : tr("friends.scanQr")}
+        </button>
+      </div>
+      <p className="muted">{tr("friends.qrHint")}</p>
+
       <p>{tr("friends.who")}</p>
       <p className="muted">{tr("friends.whoHint")}</p>
       <form
@@ -931,41 +1125,6 @@ export function StartConversation({
           {busy ? tr("friends.looking") : tr("friends.find")}
         </button>
       </form>
-
-      {/* Side by side, physically: show or scan — no typing at all. */}
-      <div className="qr-connect setting-control row">
-        <button
-          type="button"
-          disabled={!me}
-          onClick={() => setQrMode(qrMode === "show" ? "none" : "show")}
-        >
-          {tr("friends.myQr")}
-        </button>
-        <button
-          type="button"
-          onClick={() => setQrMode(qrMode === "scan" ? "none" : "scan")}
-        >
-          {qrMode === "scan" ? tr("friends.scanStop") : tr("friends.scanQr")}
-        </button>
-        <span className="muted">{tr("friends.qrHint")}</span>
-      </div>
-      {qrMode === "show" && qrUrl && (
-        <div className="qr-panel">
-          <img
-            src={qrUrl}
-            alt={`QR code for ${me}`}
-            width={220}
-            height={220}
-          />
-          <div className="muted">{me}</div>
-        </div>
-      )}
-      {qrMode === "scan" && (
-        <div className="qr-panel">
-          <video ref={videoRef} muted playsInline className="qr-video" />
-          <div className="muted">{tr("friends.scanning")}</div>
-        </div>
-      )}
 
       {found && (
         <div className="found-account setting-control row">
@@ -1087,17 +1246,26 @@ export function FriendThread({
   peer,
   alias = "",
   since = "",
+  pinned = false,
+  muted = false,
   onActivity,
+  onClosed = () => {},
 }: {
   peer: string;
   // The user's own name note for this friend (empty = plain username),
   // and when the friendship began — both worn on the header.
   alias?: string;
   since?: string;
+  // The margins this owner holds on the thread, shown in the profile.
+  pinned?: boolean;
+  muted?: boolean;
   onActivity: () => void;
+  // Called when the thread leaves the list from inside (hide/delete).
+  onClosed?: () => void;
 }) {
   const tr = useT();
   const [messages, setMessages] = useState<FriendMessage[] | null>(null);
+  const [profileOpen, setProfileOpen] = useState(false);
   // The typing block survives pane switches and restarts — and a
   // discarded representative draft lands HERE, kept for reworking.
   const [draft, setDraft] = useState(() => loadCompose(peer));
@@ -1212,14 +1380,56 @@ export function FriendThread({
     }
   }
 
+  // The profile behind the photo: the name note, pin, mute, hide, and
+  // the unfriending — every margin in one place, reached from the face.
+  if (profileOpen) {
+    return (
+      <ContactProfile
+        title={alias || peer}
+        subtitle={peer}
+        detail={
+          since ? tf("friends.since", { date: since.slice(0, 10) }) : undefined
+        }
+        hue={identityHue(peer)}
+        initial={(alias || peer).slice(0, 1).toUpperCase()}
+        alias={alias}
+        onAlias={async (next) => {
+          await api.setFriendAlias(peer, next);
+          onActivity();
+        }}
+        pinned={pinned}
+        muted={muted}
+        onPrefs={async (prefs) => {
+          await api.setFriendPrefs(peer, prefs);
+          onActivity();
+        }}
+        onHide={async () => {
+          await api.setFriendPrefs(peer, { hidden: true });
+          onClosed();
+        }}
+        onDelete={async () => {
+          await api.deleteFriend(peer);
+          onClosed();
+        }}
+        deleteLabel={tr("profile.deleteFriend")}
+        deleteHint={tr("profile.deleteFriendHint")}
+        onBack={() => setProfileOpen(false)}
+      />
+    );
+  }
   return (
     <div className="chat friend-thread">
       {/* Who you are talking to — worn on the window, just like OoLu's
           own header: the face, the name (your note first), the username
-          underneath, and when you became friends. */}
+          underneath, and when you became friends. The face is the door
+          to their profile — rename, pin, mute, hide, delete live there. */}
       <div className="chat-head">
-        <span
-          className="convo-avatar"
+        <button
+          type="button"
+          className="convo-avatar clickable"
+          aria-label={`${tr("profile.open")} ${peer}`}
+          title={tr("profile.openHint")}
+          onClick={() => setProfileOpen(true)}
           style={{
             background: `hsl(${identityHue(peer)} 45% 34%)`,
             color: "#fff",
@@ -1227,9 +1437,13 @@ export function FriendThread({
           }}
         >
           {(alias || peer).slice(0, 1).toUpperCase()}
-        </span>
+        </button>
         <div className="chat-head-body">
-          <div className="chat-head-name">{alias || peer}</div>
+          <div className="chat-head-name">
+            {pinned ? "📌 " : ""}
+            {alias || peer}
+            {muted ? " 🔕" : ""}
+          </div>
           <div className="chat-head-sub">
             {[
               alias ? peer : "",

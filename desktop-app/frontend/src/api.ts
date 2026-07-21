@@ -593,6 +593,11 @@ export interface FriendConversation {
   // them; empty means the plain username. And when the friendship began.
   alias?: string;
   since?: string;
+  // The owner's margins on this thread: pinned to the top, muted (no
+  // unread nagging), or hidden as it stands (new words bring it back).
+  pinned?: boolean;
+  muted?: boolean;
+  hidden?: boolean;
 }
 
 export interface FriendMessage {
@@ -1016,6 +1021,32 @@ export const api = {
     ),
   // The owner's own name note for a friend; empty clears it back to the
   // real username. Nobody else ever sees it.
+  // The margins on one thread: pass only the fields to move.
+  setFriendPrefs: (
+    peer: string,
+    prefs: { pinned?: boolean; muted?: boolean; hidden?: boolean },
+  ) =>
+    req<{ peer: string; pinned: boolean; muted: boolean }>(
+      "PUT",
+      `/v1/friends/${encodeURIComponent(peer)}/prefs`,
+      prefs,
+    ),
+  // Unfriend: no block is laid and messages stay; the thread leaves the
+  // list until this person speaks again.
+  deleteFriend: (peer: string) =>
+    req<{ peer: string; relationship: string }>(
+      "DELETE",
+      `/v1/friends/${encodeURIComponent(peer)}`,
+    ),
+  setRunPrefs: (
+    runId: string,
+    prefs: { pinned?: boolean; muted?: boolean; hidden?: boolean },
+  ) =>
+    req<{ run_id: string; pinned: boolean; muted: boolean }>(
+      "PUT",
+      `/v1/runs/${encodeURIComponent(runId)}/prefs`,
+      prefs,
+    ),
   setFriendAlias: (peer: string, alias: string) =>
     req<{ peer: string; alias: string }>(
       "PUT",

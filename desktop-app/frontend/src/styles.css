@@ -2268,3 +2268,71 @@ button.ghost {
     animation: none;
   }
 }
+
+/* The start-a-conversation pane: one symmetric column, the code first.
+   The QR (or the scanner, in the same spot) sits upper middle; the one
+   toggle button and the find-by-name form line up beneath it. */
+.start-conversation {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.start-conversation .setting-control.row {
+  justify-content: center;
+}
+
+.start-conversation .qr-panel {
+  margin-top: 4px;
+  min-height: 240px;
+  justify-content: center;
+}
+
+/* The profile behind the photo: a centered card of the thread's margins. */
+.contact-profile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+  padding: 28px 16px;
+  overflow-y: auto;
+}
+
+.contact-profile .profile-photo {
+  width: 72px;
+  height: 72px;
+  font-size: 32px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.contact-profile .profile-name {
+  font-size: 1.2em;
+  font-weight: 600;
+}
+
+.contact-profile .profile-alias {
+  margin-top: 10px;
+}
+
+.profile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.profile-actions .danger,
+.profile-confirm .danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.contact-profile .profile-hint {
+  max-width: 420px;
+}

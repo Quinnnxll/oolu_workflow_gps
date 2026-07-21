@@ -318,10 +318,14 @@ describe("friend memory: name notes and the thread header", () => {
     });
   });
 
-  it("renames a friend by clicking their avatar — the old way", async () => {
+  it("renames a friend from their profile — behind the photo", async () => {
     routes["GET /v1/friends"] = {
       status: 200,
       body: { items: [{ ...FRIEND, alias: "" }] },
+    };
+    routes["GET /v1/friends/bob/messages"] = {
+      status: 200,
+      body: { peer: "bob", items: [] },
     };
     routes["PUT /v1/friends/bob/alias"] = {
       status: 200,
@@ -329,8 +333,11 @@ describe("friend memory: name notes and the thread header", () => {
     };
     render(<Life />);
 
-    // The avatar is the rename handle; clicking it must NOT open the chat.
-    fireEvent.click(await screen.findByRole("button", { name: "Rename bob" }));
+    // Open the thread, then the profile behind the header photo.
+    fireEvent.click(await screen.findByText("bob"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Profile of bob" }),
+    );
     const input = await screen.findByPlaceholderText(
       "name note (empty = username)",
     );
@@ -343,34 +350,116 @@ describe("friend memory: name notes and the thread header", () => {
       );
       expect(put?.body).toEqual({ alias: "Bob from the conference" });
     });
-    // The list wears the note right away.
-    expect(await screen.findByText("Bob from the conference")).toBeTruthy();
+  });
+
+  it("the profile holds pin, mute, hide, and delete — each its own call", async () => {
+    routes["GET /v1/friends"] = { status: 200, body: { items: [FRIEND] } };
+    routes["GET /v1/friends/bob/messages"] = {
+      status: 200,
+      body: { peer: "bob", items: [] },
+    };
+    routes["PUT /v1/friends/bob/prefs"] = {
+      status: 200,
+      body: { peer: "bob", pinned: true, muted: false },
+    };
+    routes["DELETE /v1/friends/bob"] = {
+      status: 200,
+      body: { peer: "bob", relationship: "none" },
+    };
+    render(<Life />);
+
+    fireEvent.click(await screen.findByText("Bob from the gym"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Profile of bob" }),
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Pin" }));
+    await vi.waitFor(() => {
+      const put = calls.find(
+        (c) => c.method === "PUT" && c.path === "/v1/friends/bob/prefs",
+      );
+      expect(put?.body).toEqual({ pinned: true });
+    });
+
+    // Deleting asks once, in words, before it acts — and unfriends.
+    await vi.waitFor(() => {
+      const del = screen.getByRole("button", { name: "Delete friend" });
+      expect((del as HTMLButtonElement).disabled).toBe(false);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Delete friend" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Yes, delete" }),
+    );
+    await vi.waitFor(() => {
+      expect(
+        calls.find(
+          (c) => c.method === "DELETE" && c.path === "/v1/friends/bob",
+        ),
+      ).toBeTruthy();
+    });
+  });
+
+  it("the list reads pinned first, then newest — hidden threads leave", async () => {
+    routes["GET /v1/friends"] = {
+      status: 200,
+      body: {
+        items: [
+          { ...FRIEND, peer: "old-pin", alias: "", pinned: true,
+            last_at: "2026-07-01T10:00:00+00:00" },
+          { ...FRIEND, peer: "newest", alias: "",
+            last_at: "2026-07-20T10:00:00+00:00" },
+          { ...FRIEND, peer: "ghost", alias: "", hidden: true,
+            last_at: "2026-07-21T10:00:00+00:00" },
+        ],
+      },
+    };
+    const { container } = render(<Life />);
+    await screen.findByText("newest");
+    const names = Array.from(
+      container.querySelectorAll(".convo-name"),
+    ).map((n) => n.textContent);
+    // The pinned thread sits above the newer one; the hidden one is gone.
+    const oldPin = names.findIndex((n) => n?.includes("old-pin"));
+    const newest = names.findIndex((n) => n?.includes("newest"));
+    expect(oldPin).toBeGreaterThan(-1);
+    expect(newest).toBeGreaterThan(-1);
+    expect(oldPin).toBeLessThan(newest);
+    expect(names.some((n) => n?.includes("ghost"))).toBe(false);
   });
 });
 
-describe("QR connect: side by side, physically", () => {
-  it("offers both doors, and a machine without a camera fails politely", async () => {
+describe("QR connect: the code first, one button to flip", () => {
+  it("a machine without a camera fails politely when asked to scan", async () => {
     const { StartConversation } = await import("./Life");
     routes["GET /v1/friends/requests"] = { status: 200, body: { items: [] } };
     render(<StartConversation onOpen={() => {}} />);
 
-    // Signed out (no principal cached): showing MY code is off; scanning
+    // Signed out (no principal cached): no code to show, but scanning
     // still offers itself — and jsdom has no camera, so it says so.
-    const myQr = screen.getByRole("button", { name: "My QR code" });
-    expect((myQr as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Scan a code" }));
     expect(
       await screen.findByText("The camera could not be opened."),
     ).toBeTruthy();
   });
 
-  it("shows my code once signed in", async () => {
+  it("shows my code at the top directly, and one button flips to scanning", async () => {
     localStorage.setItem("oolu_principal", "alice");
     const { StartConversation } = await import("./Life");
     routes["GET /v1/friends/requests"] = { status: 200, body: { items: [] } };
     render(<StartConversation onOpen={() => {}} />);
-    const myQr = screen.getByRole("button", { name: "My QR code" });
-    expect((myQr as HTMLButtonElement).disabled).toBe(false);
+
+    // The code shows itself — no tap needed — with ONE flip button.
+    expect(await screen.findByAltText("QR code for alice")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "My QR code" })).toBeNull();
+    const flip = screen.getByRole("button", { name: "Scan a code" });
+
+    // Flipping swaps the same spot for the scanner (jsdom has no camera,
+    // so it apologizes and flips back to the code).
+    fireEvent.click(flip);
+    expect(
+      await screen.findByText("The camera could not be opened."),
+    ).toBeTruthy();
+    expect(await screen.findByAltText("QR code for alice")).toBeTruthy();
   });
 });
 

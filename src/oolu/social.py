@@ -323,6 +323,24 @@ _ALIASES_SCHEMA = """CREATE TABLE IF NOT EXISTS friend_aliases (
 
 MAX_ALIAS_CHARS = 60
 
+# How a conversation SITS in the owner's list — pinned to the top, muted
+# (no unread nagging), or hidden until it speaks again. One table serves
+# both kinds of thread the sidebar shows: friends ("friend" + peer) and
+# node run logs ("run" + run_id). Hiding stamps a moment, not a flag:
+# anything the thread says AFTER the stamp brings it back by itself —
+# hiding is "stop showing me this as it stands", never a lost message.
+_CONVO_PREFS_SCHEMA = """CREATE TABLE IF NOT EXISTS convo_prefs (
+    tenant_id TEXT NOT NULL,
+    owner TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    key TEXT NOT NULL,
+    pinned INTEGER NOT NULL DEFAULT 0,
+    muted INTEGER NOT NULL DEFAULT 0,
+    hidden_at TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, owner, kind, key)
+)"""
+
 
 class FriendshipError(ValueError):
     """A refused social move — blocked, or nothing to accept."""
@@ -342,6 +360,7 @@ class FriendshipStore:
             db.execute(_FRIENDS_SCHEMA)
             db.execute(_MSG_PREFS_SCHEMA)
             db.execute(_ALIASES_SCHEMA)
+            db.execute(_CONVO_PREFS_SCHEMA)
 
     # -- the preference: may strangers message me? --------------------------
     def allow_nonfriend(self, *, tenant: str, principal: str) -> bool:
@@ -505,6 +524,88 @@ class FriendshipStore:
                 (tenant, owner),
             ).fetchall()
         return {r["peer"]: r["alias"] for r in rows}
+
+    def remove(self, *, tenant: str, me: str, other: str) -> None:
+        """Unfriend: both accepted edges go, and my private margins for
+        them — the alias and the list prefs — go with mine. No block is
+        laid: they may ask again, and the messages stay where they are
+        (a deleted friendship is not a shredded history)."""
+        self._clear(tenant, me, other)
+        self._clear(tenant, other, me)
+        with self._conn.transaction() as db:
+            db.execute(
+                "DELETE FROM friend_aliases WHERE tenant_id = ?"
+                " AND owner = ? AND peer = ?",
+                (tenant, me, other),
+            )
+            db.execute(
+                "DELETE FROM convo_prefs WHERE tenant_id = ? AND owner = ?"
+                " AND kind = 'friend' AND key = ?",
+                (tenant, me, other),
+            )
+
+    # -- how a conversation sits in MY list ---------------------------------
+    def set_pref(
+        self,
+        *,
+        tenant: str,
+        owner: str,
+        kind: str,
+        key: str,
+        pinned: bool | None = None,
+        muted: bool | None = None,
+        hidden: bool | None = None,
+    ) -> dict:
+        """Update how one thread sits in ``owner``'s list — only the
+        fields passed move; None leaves a field as it stands. Hiding
+        stamps now, so the thread returns by itself the moment it speaks
+        again; unhiding clears the stamp. Returns the resulting prefs."""
+        if kind not in ("friend", "run"):
+            raise FriendshipError("prefs cover friend and run threads only")
+        now = self._clock().isoformat()
+        with self._conn.transaction() as db:
+            db.execute(
+                """INSERT INTO convo_prefs
+                     (tenant_id, owner, kind, key, updated_at)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(tenant_id, owner, kind, key) DO NOTHING""",
+                (tenant, owner, kind, key, now),
+            )
+            sets, args = ["updated_at = ?"], [now]
+            if pinned is not None:
+                sets.append("pinned = ?")
+                args.append(int(bool(pinned)))
+            if muted is not None:
+                sets.append("muted = ?")
+                args.append(int(bool(muted)))
+            if hidden is not None:
+                sets.append("hidden_at = ?")
+                args.append(now if hidden else None)
+            db.execute(
+                f"UPDATE convo_prefs SET {', '.join(sets)}"
+                " WHERE tenant_id = ? AND owner = ? AND kind = ? AND key = ?",
+                (*args, tenant, owner, kind, key),
+            )
+        return self.prefs(tenant=tenant, owner=owner, kind=kind).get(
+            key, {"pinned": False, "muted": False, "hidden_at": None}
+        )
+
+    def prefs(self, *, tenant: str, owner: str, kind: str) -> dict[str, dict]:
+        """Every thread pref of one kind for ``owner``, keyed by thread."""
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                "SELECT key, pinned, muted, hidden_at FROM convo_prefs"
+                " WHERE tenant_id = ? AND owner = ? AND kind = ?",
+                (tenant, owner, kind),
+            ).fetchall()
+        return {
+            r["key"]: {
+                "pinned": bool(r["pinned"]),
+                "muted": bool(r["muted"]),
+                "hidden_at": r["hidden_at"],
+            }
+            for r in rows
+        }
 
     def friends_since(self, *, tenant: str, me: str) -> dict[str, str]:
         """When each friendship was accepted (my edge's timestamp), ISO —

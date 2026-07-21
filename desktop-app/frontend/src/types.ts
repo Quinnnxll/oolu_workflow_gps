@@ -107,6 +107,12 @@ export interface RunSummary {
   intent: string;
   phase: string;
   awaiting: string | null;
+  // When the run last moved — the Noder list orders by it — and the
+  // owner's margins on the thread (pin/mute/hide, all theirs alone).
+  updated_at?: string;
+  pinned?: boolean;
+  muted?: boolean;
+  hidden?: boolean;
 }
 
 // A marketplace listing (`GET /v1/listings`). The desktop "Skills" tab browses

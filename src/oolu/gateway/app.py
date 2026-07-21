@@ -946,6 +946,9 @@ class GatewayApp:
         # The owner's own name note for a friend — how people remembered
         # each other before software: "Anna from the conference".
         r.add("PUT", "/v1/friends/{peer}/alias", self._friend_alias_put)
+        r.add("PUT", "/v1/friends/{peer}/prefs", self._friend_prefs_put)
+        r.add("DELETE", "/v1/friends/{peer}", self._friend_delete)
+        r.add("PUT", "/v1/runs/{run_id}/prefs", self._run_prefs_put)
         # The representative: drafts in the account's own voice. Drafts
         # are proposed, listed, and decided — nothing sends without the
         # user's word (docs/representative-plan.md, Phase 0).
@@ -1673,10 +1676,115 @@ class GatewayApp:
                         "last_at": "",
                     }
                 )
+        prefs: dict[str, dict] = {}
+        if self._friendships is not None:
+            prefs = self._friendships.prefs(
+                tenant=session.tenant_id,
+                owner=session.principal_id,
+                kind="friend",
+            )
         for item in items:
             item["alias"] = aliases.get(item["peer"], "")
             item["since"] = since.get(item["peer"], "")
+            pref = prefs.get(item["peer"], {})
+            item["pinned"] = bool(pref.get("pinned"))
+            item["muted"] = bool(pref.get("muted"))
+            # Hidden is a MOMENT, not a state: anything said after the
+            # stamp brings the thread back by itself.
+            item["hidden"] = _hidden_now(
+                pref.get("hidden_at"), item.get("last_at") or ""
+            )
+        # The reading order of a messenger: pinned first, then the most
+        # recently spoken — the newer, the upper; silent fresh friendships
+        # sort by when the friendship began. Two stable passes: recency
+        # first, then pinned rises without disturbing it.
+        items.sort(
+            key=lambda i: str(i.get("last_at") or i.get("since") or ""),
+            reverse=True,
+        )
+        items.sort(key=lambda i: not i["pinned"])
         return json_response(200, {"items": items})
+
+    def _friend_prefs_put(self, request, session, params) -> Response:
+        """How this conversation sits in MY list — pin, mute, hide. Each
+        field moves only when the body names it."""
+        from ..social import FriendshipError
+
+        friends = self._require_friendships()
+        body = request.body or {}
+
+        def _flag(name: str) -> bool | None:
+            return bool(body[name]) if name in body else None
+
+        try:
+            pref = friends.set_pref(
+                tenant=session.tenant_id,
+                owner=session.principal_id,
+                kind="friend",
+                key=params["peer"],
+                pinned=_flag("pinned"),
+                muted=_flag("muted"),
+                hidden=_flag("hidden"),
+            )
+        except FriendshipError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(200, {"peer": params["peer"], **pref})
+
+    def _friend_delete(self, request, session, params) -> Response:
+        """Unfriend: the friendship and my private margins go; no block is
+        laid, and the messages stay where they are — a deleted friendship
+        is not a shredded history."""
+        friends = self._require_friendships()
+        friends.remove(
+            tenant=session.tenant_id,
+            me=session.principal_id,
+            other=params["peer"],
+        )
+        # The thread leaves the list too — hidden as it stands, so it
+        # returns only if this person speaks again (their messages are
+        # never shredded, and neither is the door back in).
+        friends.set_pref(
+            tenant=session.tenant_id,
+            owner=session.principal_id,
+            kind="friend",
+            key=params["peer"],
+            hidden=True,
+        )
+        return json_response(200, {"peer": params["peer"], "relationship": "none"})
+
+    def _run_prefs_put(self, request, session, params) -> Response:
+        """The Noder list's margins: pin, mute, hide one run thread. The
+        run must be the caller's own — the same visibility wall the list
+        itself enforces."""
+        from ..social import FriendshipError
+
+        friends = self._require_friendships()
+        run_id = params["run_id"]
+        state = self._durable.runs.get(run_id)
+        if (
+            state is None
+            or state.contract.metadata.get("tenant_id") != session.tenant_id
+            or state.contract.submitted_by != session.principal_id
+        ):
+            raise GatewayError(404, "not_found", "no such run of yours")
+        body = request.body or {}
+
+        def _flag(name: str) -> bool | None:
+            return bool(body[name]) if name in body else None
+
+        try:
+            pref = friends.set_pref(
+                tenant=session.tenant_id,
+                owner=session.principal_id,
+                kind="run",
+                key=run_id,
+                pinned=_flag("pinned"),
+                muted=_flag("muted"),
+                hidden=_flag("hidden"),
+            )
+        except FriendshipError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(200, {"run_id": run_id, **pref})
 
     def _friends_lookup(self, request, session, params) -> Response:
         """Find a person by EXACT username or e-mail — never a directory.
@@ -3716,10 +3824,30 @@ class GatewayApp:
         ]
         start = (page - 1) * size
         window = runs[start : start + size]
+        # The Noder list's margins ride each summary: pinned, muted, and
+        # whether the thread is hidden AS IT STANDS — activity after the
+        # hide stamp brings it back by itself.
+        run_prefs: dict[str, dict] = {}
+        if self._friendships is not None:
+            run_prefs = self._friendships.prefs(
+                tenant=session.tenant_id,
+                owner=session.principal_id,
+                kind="run",
+            )
+        items = []
+        for s in window:
+            entry = self._run_dict(s)
+            pref = run_prefs.get(s.run_id, {})
+            entry["pinned"] = bool(pref.get("pinned"))
+            entry["muted"] = bool(pref.get("muted"))
+            entry["hidden"] = _hidden_now(
+                pref.get("hidden_at"), entry.get("updated_at") or ""
+            )
+            items.append(entry)
         return json_response(
             200,
             {
-                "items": [self._run_dict(s) for s in window],
+                "items": items,
                 "page": page,
                 "size": size,
                 "total": len(runs),
@@ -8581,6 +8709,7 @@ class GatewayApp:
         return {
             "run_id": state.run_id,
             "intent": state.intent,
+            "updated_at": state.updated_at.isoformat(),
             "phase": state.phase.value,
             "awaiting": _PAUSE_VALUE[state.pause.kind] if state.pause else None,
             "prompt": state.pause.prompt if state.pause else None,
@@ -8612,3 +8741,12 @@ class GatewayApp:
             "consent": consent,
             "hint": None if consent else AUTOBUILD_HINT,
         }
+
+
+def _hidden_now(hidden_at: str | None, last_at: str) -> bool:
+    """Whether a thread is hidden AS IT STANDS: a hide stamps a moment,
+    and only words spoken AFTER that moment bring the thread back. ISO
+    timestamps in one format compare lexicographically."""
+    if not hidden_at:
+        return False
+    return not last_at or last_at <= str(hidden_at)
