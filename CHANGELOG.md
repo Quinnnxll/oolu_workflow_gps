@@ -4,6 +4,40 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Native tool-calling: one schema, both wires, validated before dispatch:
+
+- **The gap.** Every hand the model could use rode as prose conventions —
+  a fenced script here, an `IO:` line there — parsed back out of free
+  text. The providers never sent a real tool schema, so the model was
+  guessing at contracts the runtime enforces everywhere else.
+- **`providers.tools`.** A `ToolSpec` is declared once with a JSON-schema
+  parameter shape and rendered onto either wire (OpenAI
+  `tools=[{"type":"function",…}]`, Anthropic `input_schema`); replies come
+  back as a structured `ToolReply` whose `ToolCall`s carry parsed
+  arguments. One neutral transcript shape converts to each dialect —
+  including tool answers riding back as `tool` messages / `tool_result`
+  blocks.
+- **Nothing unvalidated reaches a handler.** The `ToolRouter` stands
+  between model and handler: unknown names, malformed argument JSON, and
+  schema violations (a stdlib validator: types, required, closed objects,
+  enums, bounds, patterns, nesting) become error `ToolResult`s the model
+  reads and retries on — a bad emission costs a turn, not a crash. A
+  handler that blows up is likewise answered, never fatal.
+- **`ChatModelRouter.consult()`.** `reply()`'s structured sibling on the
+  same routing skeleton (now factored and shared): same budget gate, same
+  provider order and failover, same books — but tools ride natively, on
+  Anthropic, OpenAI, and any OpenAI-compatible local server alike, next
+  to the existing server-side web-search tool.
+- **The bounded loop.** `run_tool_loop` is the agent loop over that
+  contract — consult, dispatch, feed answers back, stop on a final text
+  or at `max_steps` — returning the full transcript for audit or
+  follow-up. This is the floor the node-authoring agent builds on.
+- **Tests.** A dedicated offline suite: both wire renders, the validator's
+  refusals by name, dialect conversion round-trips, router discipline
+  (nothing unvalidated through, everything answered), the loop's ceiling,
+  and `consult()` end-to-end against a scripted transport for both
+  providers.
+
 The chat offers its hands: proactive node-building, on consent:
 
 - **The gap.** The engine can build real automations — program files,

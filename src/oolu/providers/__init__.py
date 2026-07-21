@@ -37,6 +37,17 @@ from .google import (
     OAuthCredential,
     pkce_challenge,
 )
+from .tools import (
+    ToolArgumentError,
+    ToolCall,
+    ToolLoopLimit,
+    ToolReply,
+    ToolResult,
+    ToolRouter,
+    ToolSpec,
+    run_tool_loop,
+    validate_arguments,
+)
 from .vault import CredentialRef, SecretVault
 
 # NB: ``HttpxTransport`` lives in ``providers.transport`` and is intentionally not
@@ -69,6 +80,15 @@ __all__ = [
     "RevokedCredential",
     "SecretVault",
     "TokenExpired",
+    "ToolArgumentError",
+    "ToolCall",
+    "ToolLoopLimit",
+    "ToolReply",
+    "ToolResult",
+    "ToolRouter",
+    "ToolSpec",
     "classify_status",
     "pkce_challenge",
+    "run_tool_loop",
+    "validate_arguments",
 ]

@@ -26,6 +26,14 @@ from .apikey import AnthropicAdapter, OpenAiAdapter
 from .base import HttpTransport
 from .errors import ProviderError
 from .keyring import PROVIDERS, KeyringError, ModelKeyring, fingerprint
+from .tools import (
+    ToolReply,
+    ToolSpec,
+    parse_anthropic_tool_reply,
+    parse_openai_tool_reply,
+    to_anthropic_messages,
+    to_openai_messages,
+)
 from .vault import SecretVault
 
 # What the user must hear when a SAVED key can't be decrypted on this
@@ -179,13 +187,43 @@ class ChatModelRouter:
 
     def reply(self, messages: list[dict]) -> str:
         self._check_budget()
+        return self._route(
+            keyed=lambda provider, secret: self._ask(provider, secret, messages),
+            local=lambda: self._ask_local(messages),
+        )
+
+    def consult(
+        self,
+        messages: list[dict],
+        *,
+        tools: list[ToolSpec],
+        tool_choice: str = "auto",
+    ) -> ToolReply:
+        """``reply``'s structured sibling: the same routing, budget, and
+        books, but the tools ride natively on the wire and the answer
+        comes back parsed — text plus :class:`ToolCall`\\ s — instead of
+        prose to regex through. The transcript may already carry earlier
+        tool exchanges (the neutral shape ``providers.tools`` documents);
+        each dialect conversion happens here, per provider."""
+        self._check_budget()
+        return self._route(
+            keyed=lambda provider, secret: self._consult_provider(
+                provider, secret, messages, tools, tool_choice
+            ),
+            local=lambda: self._consult_local(messages, tools, tool_choice),
+        )
+
+    def _route(self, *, keyed, local):
+        """One routing skeleton for every consultation shape: local means
+        local, a configured subscription answers on the plan's keys, and
+        otherwise the tenant's own keys take the preference order."""
         source = self._source()
         if source == "local":
             # The machine's own brain: no key, no cloud, no fallback into
             # one — choosing local means local, so a dead local server
             # degrades to the model-less path instead of quietly phoning
             # a provider.
-            return self._ask_local(messages)
+            return local()
         if (
             source == "subscription"
             and self._subscription is not None
@@ -193,7 +231,7 @@ class ChatModelRouter:
         ):
             # The hosted plan's brain: platform keys, metered per tenant
             # against the plan's monthly allowance.
-            return self._ask_subscription(messages)
+            return self._subscription_route(keyed)
         errors: list[str] = []
         for provider in self._order():
             try:
@@ -204,7 +242,7 @@ class ChatModelRouter:
             if secret is None:
                 continue
             try:
-                return self._ask(provider, secret, messages)
+                return keyed(provider, secret)
             except ProviderError as exc:
                 errors.append(f"{provider}: {exc}")
                 continue
@@ -313,12 +351,14 @@ class ChatModelRouter:
         )
         self._book_usage(record)
 
-    def _ask_subscription(self, messages: list[dict]) -> str:
+    def _subscription_route(self, ask):
         """Answer through the PLATFORM's keys, inside the plan's allowance.
 
         The plan gate first (free includes no hosted brain), then the
         month's spend against the allowance, then the plan's provider
         order — Claude first, always. Every failure names the way out.
+        ``ask(provider, secret)`` is whichever consultation shape the
+        caller is routing — plain reply or a tool consultation.
         """
         brain = self._subscription
         allowance = brain.allowance_for(self._tenant)
@@ -357,7 +397,7 @@ class ChatModelRouter:
             if secret is None:
                 continue
             try:
-                return self._ask(provider, secret, messages)
+                return ask(provider, secret)
             except ProviderError as exc:
                 errors.append(f"{provider}: {exc}")
         if errors:
@@ -464,20 +504,15 @@ class ChatModelRouter:
         except ProviderError as exc:
             raise ModelUnavailable(f"local ({url}): {exc}") from exc
         text, prompt_tokens, completion_tokens = _parse_openai_shape(data)
-        if self._meter is not None:
-            # Local turns still enter the books — usage is real telemetry
-            # even when the marginal dollar cost is the machine's own.
-            record = self._meter.record(
-                self._purpose,
-                _Telemetry(
-                    model=str(data.get("model") or model_id),
-                    tier="local",
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    duration_s=time.monotonic() - started,
-                ),
-            )
-            self._book_usage(record)
+        # Local turns still enter the books — usage is real telemetry
+        # even when the marginal dollar cost is the machine's own.
+        self._book(
+            model=str(data.get("model") or model_id),
+            tier="local",
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            started=started,
+        )
         if not text:
             raise ModelUnavailable(f"local ({url}) returned an empty reply")
         return text
@@ -509,21 +544,118 @@ class ChatModelRouter:
         else:
             data = adapter.chat(messages, model=model_id)
             text, prompt_tokens, completion_tokens = _parse_openai_shape(data)
-        if self._meter is not None:
-            record = self._meter.record(
-                self._purpose,
-                _Telemetry(
-                    model=str(data.get("model") or model_id),
-                    tier=tier,
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    duration_s=time.monotonic() - started,
-                ),
-            )
-            self._book_usage(record)
+        self._book(
+            model=str(data.get("model") or model_id),
+            tier=tier,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            started=started,
+        )
         if not text:
             raise ModelUnavailable(f"{provider} returned an empty reply")
         return text
+
+    def _consult_provider(
+        self,
+        provider: str,
+        secret: str,
+        messages: list[dict],
+        tools: list[ToolSpec],
+        tool_choice: str,
+    ) -> ToolReply:
+        tier = self._tier()
+        model_id = DEFAULT_MODELS[provider].get(
+            tier, DEFAULT_MODELS[provider]["fast"]
+        )
+        adapter = self._adapter(provider, secret)
+        started = time.monotonic()
+        if provider == "anthropic":
+            system, rest = _split_system(messages)
+            data = adapter.messages(
+                to_anthropic_messages(rest),
+                model=model_id,
+                max_tokens=self._max_tokens,
+                system=system,
+                tools=tools,
+                tool_choice=tool_choice,
+                web_search=self._web_search(),
+            )
+            reply = parse_anthropic_tool_reply(data)
+        else:
+            data = adapter.chat(
+                to_openai_messages(messages),
+                model=model_id,
+                tools=tools,
+                tool_choice=tool_choice,
+            )
+            reply = parse_openai_tool_reply(data)
+        self._book(
+            model=str(data.get("model") or model_id),
+            tier=tier,
+            prompt_tokens=reply.prompt_tokens,
+            completion_tokens=reply.completion_tokens,
+            started=started,
+        )
+        # A pure tool-call turn legitimately has no text; only a reply
+        # with neither words nor calls is a dead one.
+        if not reply.text and not reply.tool_calls:
+            raise ModelUnavailable(f"{provider} returned an empty reply")
+        return reply
+
+    def _consult_local(
+        self, messages: list[dict], tools: list[ToolSpec], tool_choice: str
+    ) -> ToolReply:
+        url = str(self._local_url() or "").strip().rstrip("/")
+        model_id = str(self._local_model() or "").strip()
+        if not url or not model_id:
+            raise ModelUnavailable(
+                "local model is selected but not configured — set the "
+                "local model URL and name in Settings"
+            )
+        started = time.monotonic()
+        try:
+            data = self._local_adapter(url).chat(
+                to_openai_messages(messages),
+                model=model_id,
+                tools=tools,
+                tool_choice=tool_choice,
+            )
+        except ProviderError as exc:
+            raise ModelUnavailable(f"local ({url}): {exc}") from exc
+        reply = parse_openai_tool_reply(data)
+        self._book(
+            model=str(data.get("model") or model_id),
+            tier="local",
+            prompt_tokens=reply.prompt_tokens,
+            completion_tokens=reply.completion_tokens,
+            started=started,
+        )
+        if not reply.text and not reply.tool_calls:
+            raise ModelUnavailable(f"local ({url}) returned an empty reply")
+        return reply
+
+    def _book(
+        self,
+        *,
+        model: str,
+        tier: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        started: float,
+    ) -> None:
+        if self._meter is None:
+            return
+        record = self._meter.record(
+            self._purpose,
+            _Telemetry(
+                model=model,
+                tier=tier,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                duration_s=time.monotonic() - started,
+            ),
+        )
+        self._book_usage(record)
 
     def _book_usage(self, record) -> None:
         """Per-tenant durable usage next to the in-memory telemetry: the

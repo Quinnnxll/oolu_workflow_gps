@@ -15,6 +15,7 @@ from typing import Any, Iterator
 
 from .base import BaseProviderAdapter, HttpTransport
 from .errors import classify_status
+from .tools import ToolSpec
 from .vault import CredentialRef, SecretVault
 
 
@@ -166,12 +167,24 @@ class OpenAiAdapter(ApiKeyProviderAdapter):
         messages: list[dict[str, Any]],
         *,
         model: str,
+        tools: list[ToolSpec] | None = None,
+        tool_choice: str | None = None,
         idempotency_key: str | None = None,
         cost: float = 1.0,
     ) -> dict:
+        body: dict[str, Any] = {"model": model, "messages": messages}
+        if tools:
+            body["tools"] = [spec.as_openai() for spec in tools]
+            # "auto" is this wire's default; only a real preference rides.
+            if tool_choice and tool_choice != "auto":
+                body["tool_choice"] = (
+                    {"type": "function", "function": {"name": tool_choice}}
+                    if tool_choice != "required"
+                    else "required"
+                )
         return self.invoke(
             "/chat/completions",
-            {"model": model, "messages": messages},
+            body,
             idempotency_key=idempotency_key,
             cost=cost,
         )
@@ -242,6 +255,8 @@ class AnthropicAdapter(ApiKeyProviderAdapter):
         model: str,
         max_tokens: int = 1024,
         system: str | None = None,
+        tools: list[ToolSpec] | None = None,
+        tool_choice: str | None = None,
         idempotency_key: str | None = None,
         cost: float = 1.0,
         web_search: bool = False,
@@ -255,18 +270,29 @@ class AnthropicAdapter(ApiKeyProviderAdapter):
         # "system"-role message.
         if system:
             body["system"] = system
+        wire_tools: list[dict[str, Any]] = [
+            spec.as_anthropic() for spec in tools or []
+        ]
         # The provider's own web-search tool: the SEARCH runs on Anthropic's
         # servers inside this same API call — the machine here needs no web
         # access of its own, which is exactly what lets a keyed OoLu answer
         # current-facts questions from any install.
         if web_search:
-            body["tools"] = [
+            wire_tools.append(
                 {
                     "type": "web_search_20250305",
                     "name": "web_search",
                     "max_uses": 3,
                 }
-            ]
+            )
+        if wire_tools:
+            body["tools"] = wire_tools
+        if tools and tool_choice and tool_choice != "auto":
+            body["tool_choice"] = (
+                {"type": "any"}
+                if tool_choice == "required"
+                else {"type": "tool", "name": tool_choice}
+            )
         return self.invoke(
             "/messages",
             body,
