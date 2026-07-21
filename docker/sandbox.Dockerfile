@@ -17,6 +17,15 @@ FROM python:3.12-slim
 # reproducibility; bump deliberately.
 COPY --from=ghcr.io/astral-sh/uv:0.5 /uv /usr/local/bin/uv
 
+# The polyglot toolchains: a node function may be JavaScript (main.js),
+# C (main.c), C++ (main.cpp) or shell as well as Python — the sandbox's
+# generated wrapper drives these tools inside the same walls (read-only
+# rootfs, no network in Phase B; compiles land in the /sandbox tmpfs).
+# Debian's gcc/g++ register the cc/c++ alternatives the wrapper invokes.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends nodejs gcc g++ libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 # Non-root user. Hostile code must never run as root, even inside the container.
 RUN useradd --create-home --uid 10001 sandbox \
     && mkdir -p /opt/oolu

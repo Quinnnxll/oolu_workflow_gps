@@ -4,6 +4,17 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The sandbox image carries the polyglot toolchains:
+
+- **`docker/sandbox.Dockerfile`.** The hostile-execution base now
+  installs Node.js, gcc, and g++ (with libc headers), so JavaScript,
+  C, and C++ node functions run out of the box — no operator action
+  beyond rebuilding the image. Debian's gcc/g++ register the cc/c++
+  alternatives the polyglot wrapper invokes; compiles land in the
+  /sandbox tmpfs under the same read-only-rootfs, no-network walls.
+  Rebuild with:
+  `docker build -f docker/sandbox.Dockerfile -t oolu-sandbox:latest .`
+
 The node read like a repo, speaking the mainstream languages:
 
 - **The Code tab.** The node card grows a Code tab that reads like a
