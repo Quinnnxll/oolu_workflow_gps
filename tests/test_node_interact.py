@@ -380,12 +380,24 @@ def test_revise_rewrites_this_nodes_own_function_under_consent(tmp_path):
 
         # A reply-only author takes the one-shot door and the revision
         # lands in THIS node's drawer.
+        parent = app._nodeplace.latest_version(node_id)
         author = FakeAuthor()
         app._node_function_author = lambda tenant: author
         revised = _chat(app, ident, node_id, "revise this node to trim rows")
         assert revised.status == 200, revised.body
         assert "Revised" in revised.body["reply"]
         assert "src/main.py" in revised.body["reply"]
+        # The registry followed: a NEW version on the SAME node, derived
+        # from the one it replaces, carrying the revised script.
+        assert "The registry followed: version 1.0.1" in revised.body["reply"]
+        from oolu.skills.models import ReusableSkill
+
+        newest = app._nodeplace.latest_version(node_id)
+        assert newest.version_id != parent.version_id
+        assert newest.semver == "1.0.1"
+        assert newest.lineage[0].ancestor_version_id == parent.version_id
+        stored = ReusableSkill.model_validate_json(newest.sanitized_skill_json)
+        assert "emit_result" in stored.actions[0].parameters["script"]
         assert revised.body["actions"] == [{"tool": "revise_node"}]
         drawer = DeskFiles(
             app._files,

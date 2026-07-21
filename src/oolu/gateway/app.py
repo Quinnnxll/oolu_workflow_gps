@@ -109,6 +109,7 @@ from ..nodeplace import (
     RatingError,
     RatingService,
     ReviewRequiredError,
+    SafetyViolation,
     StepCandidates,
     SubscriptionPlan,
     SubscriptionRequired,
@@ -3070,7 +3071,24 @@ class GatewayApp:
                 "function, and no model is configured to write it — add "
                 "a model key (or a local model) in Settings"
             )
-        current = self._node_current_script(session, node_id) or ""
+        # The node's registry state: the latest version and its skill —
+        # the fallback source of the current script, and the parent the
+        # revised version derives from.
+        version = current_skill = None
+        if self._nodeplace is not None:
+            try:
+                version = self._nodeplace.latest_version(node_id)
+                if version is not None:
+                    current_skill = ReusableSkill.model_validate_json(
+                        version.sanitized_skill_json
+                    )
+            except Exception:  # noqa: BLE001 - a broken record revises from blank
+                version = current_skill = None
+        current = (
+            self._node_drawer_read(session, node_id, "src/main.py")
+            or self._skill_script(current_skill)
+            or ""
+        )
         goal = (
             "Revise this node's execution function.\n"
             f"Node: {entry.title}\n"
@@ -3094,6 +3112,78 @@ class GatewayApp:
         if script is None:
             return f"error: {refusal}"
         cost_note = self._build_cost_note(meter, spent_before)
+        # The registry follows the revision: a NEW version on the SAME
+        # node, derived from the one it replaces, carrying the revised
+        # script and the revised interface — so the contract the goal
+        # assembler plans over is the code that actually runs. This
+        # happens BEFORE the drawer write: a version the safety screen
+        # (or ownership) refuses leaves the node exactly as it was.
+        version_note = ""
+        if (
+            self._nodeplace is not None
+            and version is not None
+            and current_skill is not None
+        ):
+            revised_skill = ReusableSkill.model_validate(
+                {
+                    "id": current_skill.id,
+                    "name": current_skill.name,
+                    "description": current_skill.description,
+                    "signature": {"application": "script", "adapter": "script"},
+                    "parameters": [
+                        {
+                            "name": item["name"],
+                            "value_type": item["type"],
+                            "required": True,
+                        }
+                        for item in io.get("inputs", [])
+                    ],
+                    "actions": [
+                        {
+                            "correlation_id": "function",
+                            "adapter": "script",
+                            "operation": "run",
+                            "parameters": {
+                                "goal": current_skill.description or change,
+                                "script": script,
+                                "node_key": self._skill_node_key(current_skill),
+                            },
+                        }
+                    ],
+                }
+            )
+            consumes = [
+                Slot(name=item["name"], value_type=item["type"], role="input")
+                for item in io.get("inputs", [])
+            ]
+            produces = [
+                Slot(name=item["name"], value_type=item["type"], role="result")
+                for item in io.get("outputs", [])
+            ]
+            try:
+                contributed = self._nodeplace.contribute(
+                    noder_principal=session.principal_id,
+                    tenant_id=session.tenant_id,
+                    skill=revised_skill,
+                    semver=self._bump_semver(version.semver),
+                    title=entry.title,
+                    summary=current_skill.description or entry.title,
+                    node_id=node_id,
+                    derived_from=version.version_id,
+                    consumes=consumes or None,
+                    produces=produces or None,
+                )
+            except (
+                ContributionError,
+                OwnershipError,
+                SafetyViolation,
+                ValueError,
+            ) as exc:
+                return f"error: the revision was refused before it landed: {exc}"
+            version_note = (
+                f" The registry followed: version {contributed.version.semver} "
+                "now carries the revised function and interface."
+            )
         desk_files = DeskFiles(
             self._files,
             tenant=session.tenant_id,
@@ -3128,32 +3218,47 @@ class GatewayApp:
             f"Revised “{entry.title}” — its execution function "
             "(src/main.py) was rewritten with the change applied, through "
             "the node.build seat, and the act is audited. The node's next "
-            "run executes the updated code." + web_note + cost_note
+            "run executes the updated code."
+            + version_note
+            + web_note
+            + cost_note
         )
 
-    def _node_current_script(self, session, node_id: str) -> str | None:
-        """The node's function as it stands: the drawer's ``src/main.py``
-        first (the runtime home), the latest version's stored script as
-        the fallback — the same precedence runs apply."""
-        drawer = self._node_drawer_read(session, node_id, "src/main.py")
-        if drawer:
-            return drawer
-        if self._nodeplace is None:
-            return None
-        try:
-            version = self._nodeplace.latest_version(node_id)
-            if version is None:
-                return None
-            skill = ReusableSkill.model_validate_json(
-                version.sanitized_skill_json
-            )
-        except Exception:  # noqa: BLE001 - a broken record revises from blank
+    @staticmethod
+    def _skill_script(skill) -> str | None:
+        """The script a skill's function action carries, if any."""
+        if skill is None:
             return None
         action = next(
             (a for a in skill.actions if a.adapter == "script"), None
         )
         script = (action.parameters or {}).get("script") if action else None
         return str(script) if script else None
+
+    @staticmethod
+    def _skill_node_key(skill) -> str:
+        """The stable cache identity a revised function keeps: the key the
+        current function ran under, so the revision's verified runs land
+        in the same node's history — defaulted from the skill id."""
+        action = next(
+            (a for a in skill.actions if a.adapter == "script"), None
+        )
+        key = (action.parameters or {}).get("node_key") if action else None
+        return str(key) if key else f"node:{skill.id}"
+
+    @staticmethod
+    def _bump_semver(semver: str) -> str:
+        """The next patch version — a revision is the same node, moved one
+        honest step. An unparsable current version restarts at 1.0.1."""
+        parts = str(semver or "").split(".")
+        try:
+            numbers = [int(p) for p in parts[:3]]
+        except ValueError:
+            return "1.0.1"
+        while len(numbers) < 3:
+            numbers.append(0)
+        numbers[2] += 1
+        return ".".join(str(n) for n in numbers)
 
     def _node_drawer_read(self, session, node_id: str, path: str) -> str | None:
         """A seat-scoped read of one node's drawer for the author's hand —
@@ -4435,6 +4540,16 @@ class GatewayApp:
             and not hosted_brain
         ):
             return None
+        def _tier_now() -> str:
+            # The author's seat may think harder than the conversation:
+            # model.build_tier overrides the shared tier for node.build
+            # consultations; "inherit" (the default) follows model.tier.
+            if purpose == "node.build":
+                chosen = str(_effective("model.build_tier", "inherit"))
+                if chosen in ("fast", "reasoning"):
+                    return chosen
+            return str(_effective("model.tier", "fast"))
+
         router = self._model_routers.get((tenant, purpose))
         if router is None:
             router = ChatModelRouter(
@@ -4446,7 +4561,7 @@ class GatewayApp:
                 budget=lambda: float(_effective("budget.model_cap", 0.0) or 0.0),
                 currency=lambda: str(_effective("account.currency", "USD")),
                 preference=lambda: str(_effective("model.provider", "auto")),
-                tier=lambda: str(_effective("model.tier", "fast")),
+                tier=_tier_now,
                 source=lambda: str(_effective("model.source", "subscription")),
                 local_url=lambda: str(_effective("model.local_url", "")),
                 local_model=lambda: str(_effective("model.local_model", "")),

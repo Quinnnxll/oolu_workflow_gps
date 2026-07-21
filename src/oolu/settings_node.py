@@ -299,6 +299,17 @@ SETTINGS_CATALOG: tuple[SettingField, ...] = (
         "costs more per turn.",
     ),
     SettingField(
+        key="model.build_tier",
+        group="model",
+        label="Code-writing tier",
+        kind=SettingKind.CHOICE,
+        default="inherit",
+        choices=("inherit", "fast", "reasoning"),
+        description="The tier the node author writes and revises code "
+        "with. Inherit follows the model tier above; reasoning thinks "
+        "harder about the code while your chat stays fast.",
+    ),
+    SettingField(
         key="budget.model_cap",
         group="model",
         label="Model spending cap",

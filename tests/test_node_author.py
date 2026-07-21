@@ -377,3 +377,42 @@ def test_a_crashed_sandbox_is_answered_in_words(tmp_path):
         }
     finally:
         conn.close()
+
+
+def test_the_author_seat_may_think_harder_than_the_chat(tmp_path):
+    """model.build_tier: the node author's consultations may ride the
+    reasoning tier while the conversation stays fast — and "inherit"
+    (the default) follows the shared model.tier, so nothing changes
+    until the user asks for it."""
+    from oolu.providers.keyring import ModelKeyring
+    from oolu.settings_node import SettingsNode, SettingsStore
+
+    app, conn, ident, desk, script_exec = _rig(tmp_path)
+    try:
+        app._model_keys = ModelKeyring(conn, key_path=tmp_path / "machine.key")
+        app._model_keys.store("t1", "anthropic", "sk-ant-0123456789")
+        settings = SettingsNode(SettingsStore(conn))
+        app._settings = settings
+
+        chat_router = app._tenant_model("t1")
+        author_router = app._tenant_model("t1", purpose="node.build")
+        assert chat_router is not author_router
+        # The default inherits the shared tier.
+        assert (chat_router._tier(), author_router._tier()) == ("fast", "fast")
+
+        # The author thinks harder; the chat does not move.
+        settings.set("t1", "model.build_tier", "reasoning")
+        assert (chat_router._tier(), author_router._tier()) == (
+            "fast",
+            "reasoning",
+        )
+
+        # Inherit follows the shared tier wherever it goes.
+        settings.set("t1", "model.build_tier", "inherit")
+        settings.set("t1", "model.tier", "reasoning")
+        assert (chat_router._tier(), author_router._tier()) == (
+            "reasoning",
+            "reasoning",
+        )
+    finally:
+        conn.close()

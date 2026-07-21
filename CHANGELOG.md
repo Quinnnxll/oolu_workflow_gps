@@ -4,6 +4,26 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The revision reaches the registry, and the author gets its own tier:
+
+- **The registry follows the revision.** A revised function updated the
+  drawer (what runs) but left the registry contract frozen at the
+  original interface — the goal assembler kept planning over slots the
+  code no longer spoke. Now `revise_node` also contributes a NEW
+  version on the SAME node, derived (lineage) from the one it replaces,
+  carrying the revised script and the revised consumes/produces —
+  before the drawer write, so a version the safety screen or ownership
+  refuses leaves the node exactly as it was. The reply names the new
+  version; the semver moves one honest patch step.
+- **`model.build_tier`.** The node author's consultations may ride the
+  reasoning tier while the conversation stays fast: a new model
+  setting, default "inherit" (follows `model.tier`, so nothing changes
+  until the user asks), read at call time by the `node.build` router.
+- **Tests.** The revise reply names the followed version; the new
+  version derives from its parent and carries the revised script; the
+  tier setting moves the author without moving the chat, and inherit
+  follows the shared tier wherever it goes.
+
 The author's finish gate becomes real: a sandbox dry-run before trust:
 
 - **The gap.** The `NodeAuthorAgent` carried a `verify` seam since it
