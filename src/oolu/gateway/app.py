@@ -561,6 +561,8 @@ class GatewayApp:
         model_usage=None,  # billing.ModelUsageStore: per-tenant durable books
         metrics_store=None,  # telemetry.investor.MetricsSnapshotStore
         values=None,  # values.ValueStore: the exact-value reference layer
+        provenance=None,  # nodeplace.NodeProvenance: immutable commits,
+        # sealed releases, revocation — the build policy's ledgers
         stripe_webhooks=None,  # gateway.StripeWebhookVerifier: real Stripe
         # events land at /v1/webhooks/stripe only when this is configured
         google_signin: GoogleSignIn | None = None,  # "Continue with Google"
@@ -672,6 +674,7 @@ class GatewayApp:
         self._model_usage = model_usage
         self._metrics_store = metrics_store
         self._values = values
+        self._provenance = provenance
         self._stripe_webhooks = stripe_webhooks
         # Keyed (tenant, purpose): the conversation and the node author
         # ride separate routers so their consultations enter the books
@@ -1151,6 +1154,16 @@ class GatewayApp:
         # an outside system POSTing to it fires the node's own function
         # with the payload staged as a file. Minting again rotates the
         # token; the fire door is public because the token IS the door.
+        # Node provenance: the drawer's immutable commit history, the
+        # sealed releases verification produced, and the revocation door
+        # — a vulnerable release is revoked, never silently modified.
+        r.add("GET", "/v1/work/nodes/{node_id}/commits", self._node_commits)
+        r.add("GET", "/v1/work/nodes/{node_id}/releases", self._node_releases)
+        r.add(
+            "POST",
+            "/v1/work/nodes/{node_id}/releases/{release_id}/revoke",
+            self._node_release_revoke,
+        )
         r.add("GET", "/v1/work/nodes/{node_id}/hook", self._node_hook_status)
         r.add("POST", "/v1/work/nodes/{node_id}/hook", self._node_hook_mint)
         r.add("DELETE", "/v1/work/nodes/{node_id}/hook", self._node_hook_revoke)
@@ -1614,7 +1627,7 @@ class GatewayApp:
                 if not in_node:
                     say = self._offer_growth(say, session, turn.task, run=run)
             except GatewayError as exc:
-                if exc.code != "cannot_execute":
+                if exc.code not in ("cannot_execute", "release_revoked"):
                     raise
                 # The engine refused the plan: the assistant says so in the
                 # conversation instead of the client showing a raw error —
@@ -2935,7 +2948,7 @@ class GatewayApp:
         try:
             run = self._start_intent_run(session, goal)
         except GatewayError as exc:
-            if exc.code != "cannot_execute":
+            if exc.code not in ("cannot_execute", "release_revoked"):
                 raise
             return (
                 ChatTurn(
@@ -2945,6 +2958,19 @@ class GatewayApp:
                 None,
             )
         self._metrics["chat_runs"] += 1
+        if function is not None:
+            # Reuse chosen over duplication — the decision the build
+            # policy wants on the log, not just in the moment.
+            self._durable.audit.append(
+                "node.reuse_decision",
+                {
+                    "decision": "reuse_directly",
+                    "node_id": function["node_id"],
+                    "goal": goal,
+                    "by": session.principal_id,
+                    "tenant": session.tenant_id,
+                },
+            )
         say = (
             f"Running “{title}” — the node that already answers for this; "
             "the execution lands in its own log."
@@ -2973,7 +2999,7 @@ class GatewayApp:
         try:
             run = self._start_intent_run(session, goal)
         except GatewayError as exc:
-            if exc.code != "cannot_execute":
+            if exc.code not in ("cannot_execute", "release_revoked"):
                 raise
             return (
                 ChatTurn(
@@ -3087,6 +3113,23 @@ class GatewayApp:
                     "truly different work, say the goal more distinctly "
                     "and I'll build it."
                 )
+        else:
+            # The user's explicit "this is different work" IS the reuse
+            # decision — recorded with the node that was considered, so
+            # a duplicate always carries its justification on the log.
+            similar = self._find_similar_function_node(session, goal)
+            if similar is not None:
+                self._durable.audit.append(
+                    "node.reuse_decision",
+                    {
+                        "decision": "create_new_node_with_justification",
+                        "considered": [similar["node_id"]],
+                        "considered_title": similar["title"],
+                        "goal": goal,
+                        "by": session.principal_id,
+                        "tenant": session.tenant_id,
+                    },
+                )
         author = self._node_function_author(session.tenant_id)
         if author is None:
             return (
@@ -3195,6 +3238,14 @@ class GatewayApp:
                     "node_id": new_id,
                     "written": desk_files.written,
                 },
+            )
+            # The birth commit: the authored function is the chain's root.
+            self._file_node_commit(
+                session.tenant_id,
+                new_id,
+                kind="build",
+                instruction=goal,
+                by=session.principal_id,
             )
         placing = (
             "under this Supernode — it starts UNCLAIMED: share its node "
@@ -3397,6 +3448,15 @@ class GatewayApp:
                 "written": desk_files.written,
             },
         )
+        # A revision is a new commit on the chain — the user's ask rides
+        # as its instruction; the replaced code stays in the parent.
+        self._file_node_commit(
+            session.tenant_id,
+            node_id,
+            kind="revise",
+            instruction=change,
+            by=session.principal_id,
+        )
         web_note = (
             (
                 " The revised function uses the web hand: make sure the "
@@ -3548,20 +3608,27 @@ class GatewayApp:
                 # contract path stamps, applied to the node-function route.
                 **self._node_function_extras(session, node.node_id),
                 **self._declared_ports(node),
-            }
+            },
+            tenant=session.tenant_id,
         )
 
-    def _finalize_function(self, function: dict) -> dict:
+    def _finalize_function(self, function: dict, *, tenant: str = "") -> dict:
         """Shape a resolved function for execution: promote the drawer's
-        ``src/main.py`` to the script, then — when a tree of OTHER files
-        remains and a bundle store exists — FREEZE that tree into a
-        content-addressed bundle and ship its id in place of the inline
-        bytes. A large node then travels as a 64-char reference, not its
-        whole codebase, and the runner stages it from one packed archive.
+        ``src/main.py`` to the script, stamp what the sealed-release
+        policy says about that exact tree (sealed / draft / REVOKED),
+        then — when a tree of OTHER files remains and a bundle store
+        exists — FREEZE that tree into a content-addressed bundle and
+        ship its id in place of the inline bytes. A large node then
+        travels as a 64-char reference, not its whole codebase, and the
+        runner stages it from one packed archive.
 
         No store (a minimal install, or a test): the tree stays inline —
         the same bytes, the same walls, just not deduplicated or cached."""
         function = _drawer_function(function)
+        if tenant:
+            # After drawer promotion (the executed tree), before bundle
+            # freeze (which replaces the files with a reference).
+            function = self._stamp_release_state(tenant, function)
         files = function.get("files")
         if files and self._bundle_store is not None:
             bundle_id = self._freeze_tree(files)
@@ -3719,7 +3786,8 @@ class GatewayApp:
                 ),
                 **self._node_function_extras(session, node.node_id),
                 **self._declared_ports(node),
-            }
+            },
+            tenant=session.tenant_id,
         )
 
     @staticmethod
@@ -3734,6 +3802,114 @@ class GatewayApp:
             for s in (getattr(node, "produces", None) or ())
         ]
         return {"_output_ports": ports} if ports else {}
+
+    # ------------------------------------------------------------------ #
+    # Node provenance: immutable commits, sealed releases, revocation.    #
+    # ------------------------------------------------------------------ #
+    def _node_src_tree(self, tenant: str, node_id: str) -> dict[str, str]:
+        """The node's WHOLE current ``src/`` tree, main.py included — in
+        the same path form the runs stage it (``main.py``,
+        ``sub/helper.py``), so commit and release identities hash the
+        exact tree that executes."""
+        if self._files is None:
+            return {}
+        tree: dict[str, str] = {}
+        for file in self._files.list(tenant=tenant, node_id=node_id):
+            if file.blob_ref:
+                continue
+            folder = file.folder
+            if folder == "src":
+                name = file.name
+            elif folder.startswith("src/"):
+                name = f"{folder[4:]}/{file.name}"
+            else:
+                continue
+            tree[name] = file.content
+        return tree
+
+    def _file_node_commit(
+        self,
+        tenant: str,
+        node_id: str,
+        *,
+        kind: str,
+        instruction: str,
+        by: str,
+    ) -> None:
+        """Every write to a node's function files an immutable commit —
+        build, revise, repair, hand edit alike — so the drawer's current
+        tree is just the HEAD of a chain that preserves every attempt.
+        Best-effort bookkeeping: the write it records already landed."""
+        if self._provenance is None:
+            return
+        try:
+            tree = self._node_src_tree(tenant, node_id)
+            if tree:
+                self._provenance.commit(
+                    tenant,
+                    node_id,
+                    tree,
+                    kind=kind,
+                    instruction=instruction,
+                    by=by,
+                )
+        except Exception:  # noqa: BLE001 — history is a bonus on a landed write
+            logging.getLogger("oolu.gateway").warning(
+                "node commit filing failed for %s", node_id, exc_info=True
+            )
+
+    def _stamp_release_state(self, tenant: str, function: dict) -> dict:
+        """What the sealed-release policy says about the function about
+        to run. Three honest answers: SEALED (this exact tree is the
+        latest verified release), a DRAFT (edited since the seal — it
+        runs, and a verified run seals it anew), or REVOKED (this exact
+        tree's release was revoked — new runs refuse with the reason
+        until the function is revised into a new draft)."""
+        if self._provenance is None or not function.get("node_id"):
+            return function
+        from ..nodeplace.provenance import tree_hash
+
+        try:
+            tree = {"main.py": str(function.get("script", ""))}
+            for name, content in (function.get("files") or {}).items():
+                tree[str(name)] = str(content)
+            digest = tree_hash(tree)
+            revoked = self._provenance.revoked_tree(
+                tenant, str(function["node_id"])
+            )
+            if revoked is not None and revoked[0] == digest:
+                function["_revoked"] = revoked[1] or (
+                    "its verified release was revoked"
+                )
+                return function
+            latest = self._provenance.latest_release(
+                tenant, str(function["node_id"])
+            )
+            if latest is not None:
+                function["_release"] = {
+                    "release_id": latest.release_id,
+                    "sealed": latest.tree_hash == digest,
+                }
+        except Exception:  # noqa: BLE001 — the stamp is advisory; every
+            # other wall (screen, sandbox, confirmation) still binds.
+            logging.getLogger("oolu.gateway").warning(
+                "release stamping failed", exc_info=True
+            )
+        return function
+
+    @staticmethod
+    def _refuse_revoked(function: dict | None) -> None:
+        """The production guard: a revoked release never runs again —
+        not silently replanned around, refused in words. A REVISED
+        function is a new draft (different tree, no stamp) and passes."""
+        if function and function.get("_revoked"):
+            raise GatewayError(
+                422,
+                "release_revoked",
+                "this node's verified release was revoked — "
+                f"{function['_revoked']} — revise its function to earn a "
+                "new release before running it",
+            )
 
     def _find_similar_function_node(self, session, goal: str) -> dict | None:
         """The twin guard's lookup: the user's own function node whose goal
@@ -3795,6 +3971,7 @@ class GatewayApp:
         # A goal the user already built a node for runs THAT node's own
         # function — the route is the stored code, not a fresh plan.
         function = self._resolve_node_function(session, intent)
+        self._refuse_revoked(function)
         if function is not None:
             metadata["node_function"] = function
         contract = TaskContract(
@@ -3855,6 +4032,7 @@ class GatewayApp:
             metadata: dict = {"tenant_id": session.tenant_id}
             if node_version_id is None:
                 function = self._resolve_node_function(session, intent)
+                self._refuse_revoked(function)
                 if function is not None:
                     metadata["node_function"] = function
             contract = TaskContract(
@@ -5663,6 +5841,22 @@ class GatewayApp:
             store.save(updated)
         except FileTooLargeError as exc:
             raise GatewayError(413, "too_large", str(exc)) from exc
+        # A hand edit to a node's src/ program is a commit like any
+        # seated write — the chain preserves what the edit replaced.
+        touched_src = any(
+            f == "src" or f.startswith("src/")
+            for f in (file.folder, updated.folder)
+        )
+        if updated.node_id and touched_src:
+            self._file_node_commit(
+                session.tenant_id,
+                updated.node_id,
+                kind="edit",
+                instruction=(
+                    f"edited {updated.folder}/{updated.name}".strip("/")
+                ),
+                by=session.principal_id,
+            )
         return json_response(
             200, {**self._file_meta(updated), "content": updated.content}
         )
@@ -6188,6 +6382,9 @@ class GatewayApp:
                 "cannot_execute",
                 "the node this hook fires no longer has a function here",
             )
+        # The production guard binds the public door too: a revoked
+        # release never runs again, whoever rings.
+        self._refuse_revoked(function)
         payload = request.body
         if payload is not None:
             text = json.dumps(payload, ensure_ascii=False)
@@ -6239,6 +6436,93 @@ class GatewayApp:
                 "run_id": run.get("run_id"),
                 "phase": run.get("phase"),
                 "awaiting": run.get("awaiting"),
+            },
+        )
+
+    # ------------------------------------------------------------------ #
+    # Node provenance doors: history, releases, revocation.               #
+    # ------------------------------------------------------------------ #
+    def _require_provenance(self):
+        if self._provenance is None:
+            raise GatewayError(
+                404, "not_found", "node provenance is not enabled here"
+            )
+        return self._provenance
+
+    def _node_commits(self, request, session, params) -> Response:
+        """The node's function history, newest first — every build,
+        revision, repair, and hand edit as an immutable commit, read
+        like a repo's log. Walled to the caller's own desk."""
+        ledger = self._require_provenance()
+        self._imitate_entry(session, params["node_id"])
+        items = [
+            {
+                "commit_id": commit.commit_id,
+                "parent_id": commit.parent_id,
+                "tree_hash": commit.tree_hash,
+                "kind": commit.kind,
+                "instruction": commit.instruction,
+                "by": commit.by,
+                "created_at": commit.created_at.isoformat(),
+                "files": sorted(commit.file_hashes),
+            }
+            for commit in ledger.history(session.tenant_id, params["node_id"])
+        ]
+        return json_response(200, {"items": items})
+
+    def _node_releases(self, request, session, params) -> Response:
+        """What verification sealed, newest first — each release with
+        its live operational status (active | revoked) riding along.
+        The artifact rows never change; only the status does."""
+        ledger = self._require_provenance()
+        self._imitate_entry(session, params["node_id"])
+        return json_response(
+            200,
+            {"items": ledger.releases(session.tenant_id, params["node_id"])},
+        )
+
+    def _node_release_revoke(self, request, session, params) -> Response:
+        """The revocation door: a vulnerable release is revoked in words
+        — reason required — never silently modified. New runs of that
+        exact tree refuse from this moment; a REVISED function is a new
+        draft and runs to earn a new seal. Idempotent; the first reason
+        stands."""
+        ledger = self._require_provenance()
+        self._imitate_entry(session, params["node_id"])
+        release = ledger.get_release(
+            session.tenant_id, params["node_id"], params["release_id"]
+        )
+        if release is None:
+            raise GatewayError(404, "not_found", "no such release of this node")
+        reason = str((request.body or {}).get("reason") or "").strip()
+        if not reason:
+            raise GatewayError(
+                400, "invalid_request", 'give the reason: {"reason": "..."}'
+            )
+        flipped = ledger.revoke(
+            session.tenant_id,
+            release.release_id,
+            reason=reason,
+            by=session.principal_id,
+        )
+        if flipped:
+            self._durable.audit.append(
+                "node.release_revoked",
+                {
+                    "node_id": params["node_id"],
+                    "release_id": release.release_id,
+                    "tree_hash": release.tree_hash,
+                    "reason": reason,
+                    "by": session.principal_id,
+                },
+            )
+        control = ledger.control(session.tenant_id, release.release_id)
+        return json_response(
+            200,
+            {
+                "release_id": release.release_id,
+                "status": control.get("status", "revoked"),
+                "reason": control.get("reason", reason),
             },
         )
 
@@ -9238,6 +9522,48 @@ class GatewayApp:
         # and error/restricted states are never healed here either way.
         if recorded and outcome == "succeeded" and self._desk is not None:
             self._desk.mark_verified(node_id)
+        # A verified run SEALS the exact tree it executed as a release —
+        # content-addressed and idempotent (the same tree is the same
+        # release; a revoked release stays revoked through a re-seal).
+        # Editing the drawer afterwards never edits the release: it
+        # starts a new draft the next verified run can seal.
+        if outcome == "succeeded" and self._provenance is not None:
+            try:
+                tenant = str(state.contract.metadata.get("tenant_id", ""))
+                tree = self._node_src_tree(tenant, node_id)
+                head = None
+                if tree:
+                    head = self._provenance.commit(
+                        tenant,
+                        node_id,
+                        tree,
+                        kind="snapshot",
+                        instruction=f"tree verified by run {state.run_id}",
+                        by=state.contract.submitted_by or "",
+                    )
+                release = self._provenance.seal(
+                    tenant,
+                    node_id,
+                    tree=tree or None,
+                    commit_id=head.commit_id if head is not None else "",
+                    semver=version.semver,
+                    verified_by_run=state.run_id,
+                )
+                self._durable.audit.append(
+                    "node.release_sealed",
+                    {
+                        "node_id": node_id,
+                        "release_id": release.release_id,
+                        "tree_hash": release.tree_hash,
+                        "run_id": state.run_id,
+                        "semver": version.semver,
+                    },
+                )
+            except Exception:  # noqa: BLE001 — sealing is bookkeeping on
+                # a verified run; the verification itself already stands.
+                logging.getLogger("oolu.gateway").warning(
+                    "release sealing failed for %s", node_id, exc_info=True
+                )
 
     def _file_run_values(self, state: RunState) -> None:
         """A COMPLETED node-function run's outputs, filed where the typed
@@ -9351,6 +9677,15 @@ class GatewayApp:
                 "run_id": state.run_id,
                 "written": desk_files.written,
             },
+        )
+        # The healed code is a commit like any other write — the failing
+        # parent stays on the chain as the evidence it healed FROM.
+        self._file_node_commit(
+            tenant,
+            node_id,
+            kind="repair",
+            instruction=f"run {state.run_id} repaired the function",
+            by=state.contract.submitted_by or "",
         )
 
     def _run_dict(self, state: RunState) -> dict:

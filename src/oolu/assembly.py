@@ -1230,6 +1230,9 @@ def build_host_runtime(
         metrics_store=_metrics_store(conn),
         # The exact-value reference layer: refs in, exact values out.
         values=values_store,
+        # The build policy's ledgers: immutable commits at every write,
+        # sealed releases on verification, revocation over modification.
+        provenance=_node_provenance(conn),
         bundle_store=bundle_store,
         # The accelerator tiers the sweep purges alongside dead manifests —
         # on a fleet's shared materialized root, the sweep is the ONLY
@@ -1339,3 +1342,9 @@ def _metrics_store(conn):
     from .telemetry.investor import MetricsSnapshotStore
 
     return MetricsSnapshotStore(conn)
+
+
+def _node_provenance(conn):
+    from .nodeplace.provenance import NodeProvenance
+
+    return NodeProvenance(conn)

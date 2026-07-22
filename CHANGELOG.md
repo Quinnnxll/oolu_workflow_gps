@@ -4,6 +4,46 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Node provenance — immutable commits, sealed releases, honest
+revocation (the build policy: a draft is a laboratory, a verified node
+is a sealed artifact):
+
+- **`oolu/nodeplace/provenance.py`.** Two append-only, per-tenant,
+  content-addressed ledgers. COMMITS: every write to a node's function
+  — build, revision, repair promotion, hand edit in the Code tab —
+  files an immutable commit chained to its parent, carrying the tree
+  hash, per-file hashes, the bytes (bounded), the instruction, and the
+  author; the drawer's current tree is just the HEAD of a chain that
+  preserves every attempt (the same tree twice is the same commit — no
+  empty history). RELEASES: a verified run seals the EXACT tree it
+  executed as a release; re-verifying the same tree is the same
+  release. The module can only INSERT OR IGNORE artifact rows — no
+  update, no delete, by construction.
+- **Revocation over modification.** A release's operational status
+  lives in a separate CONTROL row (active | revoked). Revoking names
+  the reason and refuses new runs of that exact tree at every door —
+  chat, `/v1/runs`, the public webhook — with `release_revoked` in
+  words; a REVISED function is a new draft (different tree) that runs
+  to earn a new seal, and a revoked artifact cannot be laundered by
+  re-sealing it. The chat surface answers the refusal conversationally.
+- **The release stamp.** Every resolved node function is stamped with
+  what the policy says about the exact tree about to run: sealed (it
+  IS the latest verified release), a draft (edited since the seal), or
+  revoked. Advisory where it can be, a wall where it must be.
+- **Doors.** `GET /v1/work/nodes/{id}/commits` (the function's history,
+  read like a repo log), `GET /v1/work/nodes/{id}/releases` (each with
+  live status), `POST …/releases/{rid}/revoke` (reason required,
+  idempotent, first reason stands) — all desk-walled. Reuse decisions
+  now land on the audit log too: running the node that already answers
+  files `reuse_directly`; building past the twin guard with the user's
+  explicit "this is different work" files
+  `create_new_node_with_justification` naming the node considered.
+- **Tests.** The chain (parents, dedupe, preserved attempts, tenant
+  wall), tree-hash identity, idempotent sealing, revocation standing
+  through re-seals and lifting on revision, the stamp and the
+  production guard, drawer-tree commits through the files store, and
+  the desk-walled doors end to end.
+
 Typed output ports, port edges, and lineage — the typed-workflow
 contract binds every run:
 
