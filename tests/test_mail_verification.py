@@ -487,6 +487,87 @@ def test_build_mail_sender_reads_the_environment():
     assert build_mail_sender({"OOLU_MAIL_URL": "https://x.example"}) is None
 
 
+def test_build_mail_sender_speaks_smtp():
+    from oolu.mail import SmtpMailSender
+
+    smtp_env = {
+        "OOLU_SMTP_HOST": "smtp.example.com",
+        "OOLU_SMTP_USER": "codes@example.com",
+        "OOLU_SMTP_PASSWORD": "app-pass",
+        "OOLU_MAIL_FROM": "codes@example.com",
+    }
+    sender = build_mail_sender(smtp_env)
+    assert isinstance(sender, SmtpMailSender)
+    # STARTTLS on 587 is the default; ssl flips the default port.
+    assert sender._port == 587 and sender._security == "starttls"
+    ssl_sender = build_mail_sender(
+        {**smtp_env, "OOLU_SMTP_SECURITY": "ssl"}
+    )
+    assert ssl_sender._port == 465 and ssl_sender._security == "ssl"
+    # SMTP outranks the HTTP door when both are configured.
+    assert isinstance(
+        build_mail_sender(
+            {
+                **smtp_env,
+                "OOLU_MAIL_URL": "https://x.example",
+                "OOLU_MAIL_KEY": "k",
+            }
+        ),
+        SmtpMailSender,
+    )
+    # Half-configured SMTP refuses loudly, never a silently shut door.
+    import pytest
+
+    with pytest.raises(ValueError, match="OOLU_MAIL_FROM"):
+        build_mail_sender({"OOLU_SMTP_HOST": "smtp.example.com"})
+    with pytest.raises(ValueError, match="starttls, ssl, or none"):
+        build_mail_sender({**smtp_env, "OOLU_SMTP_SECURITY": "tls13"})
+    with pytest.raises(ValueError, match="must be a number"):
+        build_mail_sender({**smtp_env, "OOLU_SMTP_PORT": "many"})
+
+
+def test_smtp_sender_logs_in_sends_and_hangs_up():
+    from oolu.mail import SmtpMailSender
+
+    class FakeSmtp:
+        made: list["FakeSmtp"] = []
+
+        def __init__(self, host, port, timeout=None):
+            self.host, self.port, self.timeout = host, port, timeout
+            self.calls: list[tuple] = []
+            FakeSmtp.made.append(self)
+
+        def starttls(self):
+            self.calls.append(("starttls",))
+
+        def login(self, user, password):
+            self.calls.append(("login", user, password))
+
+        def send_message(self, message):
+            self.calls.append(("send", message["To"], message["Subject"]))
+
+        def quit(self):
+            self.calls.append(("quit",))
+
+    sender = SmtpMailSender(
+        host="smtp.example.com",
+        port=587,
+        sender="codes@example.com",
+        username="codes@example.com",
+        password="app-pass",
+        smtp=FakeSmtp,
+    )
+    sender.send(to="user@example.com", subject="Your code", body="123456")
+    (made,) = FakeSmtp.made
+    assert made.host == "smtp.example.com" and made.port == 587
+    assert made.calls == [
+        ("starttls",),
+        ("login", "codes@example.com", "app-pass"),
+        ("send", "user@example.com", "Your code"),
+        ("quit",),
+    ]
+
+
 # --------------------------------------------------------------------------- #
 # The public-host walls.                                                       #
 # --------------------------------------------------------------------------- #

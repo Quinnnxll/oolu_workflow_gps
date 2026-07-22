@@ -15,6 +15,28 @@ services:
     environment:
       OOLU_HOST_SECRET: ${OOLU_HOST_SECRET:?set OOLU_HOST_SECRET to a long random secret}
       OOLU_ADMIN_PASSWORD: ${OOLU_ADMIN_PASSWORD:-}
+      # Outbound mail (reset codes, e-mailed passwords, verification):
+      # SMTP (OOLU_SMTP_HOST + OOLU_MAIL_FROM, plus user/password) or a
+      # Resend-style JSON door (OOLU_MAIL_URL + OOLU_MAIL_KEY +
+      # OOLU_MAIL_FROM); OOLU_MAIL=console prints codes to this log.
+      OOLU_SMTP_HOST: ${OOLU_SMTP_HOST:-}
+      OOLU_SMTP_PORT: ${OOLU_SMTP_PORT:-}
+      OOLU_SMTP_USER: ${OOLU_SMTP_USER:-}
+      OOLU_SMTP_PASSWORD: ${OOLU_SMTP_PASSWORD:-}
+      OOLU_SMTP_SECURITY: ${OOLU_SMTP_SECURITY:-}
+      OOLU_MAIL_URL: ${OOLU_MAIL_URL:-}
+      OOLU_MAIL_KEY: ${OOLU_MAIL_KEY:-}
+      OOLU_MAIL_FROM: ${OOLU_MAIL_FROM:-}
+      OOLU_MAIL: ${OOLU_MAIL:-}
+      # Outbound SMS ("continue with phone"): Twilio or a generic JSON
+      # endpoint; OOLU_SMS=console for development.
+      OOLU_SMS: ${OOLU_SMS:-}
+      OOLU_SMS_PROVIDER: ${OOLU_SMS_PROVIDER:-}
+      OOLU_SMS_URL: ${OOLU_SMS_URL:-}
+      OOLU_SMS_KEY: ${OOLU_SMS_KEY:-}
+      OOLU_SMS_FROM: ${OOLU_SMS_FROM:-}
+      OOLU_TWILIO_ACCOUNT_SID: ${OOLU_TWILIO_ACCOUNT_SID:-}
+      OOLU_TWILIO_AUTH_TOKEN: ${OOLU_TWILIO_AUTH_TOKEN:-}
     volumes:
       - oolu-data:/data
     restart: unless-stopped

@@ -126,6 +126,62 @@ Two doors, both real, both metered:
   keys follow the environment on every boot — set is stored encrypted,
   unset is removed.
 
+### Mail: reset codes, e-mailed passwords, verification
+
+Three account doors ride outbound mail — the **reset code**
+(`/v1/auth/reset/request` → `/confirm`), the **e-mailed new password**
+(`/v1/auth/reset/password`), and verification-first registration. They
+all answer 404 "not offered" until the host has a sender. Pick ONE in
+`.env` (the compose file already passes every variable through):
+
+```bash
+# The classic SMTP mailbox — a Gmail app password, Office 365, or your
+# registrar's mail. STARTTLS on 587 is the default; ssl uses 465.
+OOLU_SMTP_HOST=smtp.example.com
+OOLU_SMTP_USER=codes@example.com
+OOLU_SMTP_PASSWORD=app-password-here
+OOLU_MAIL_FROM=codes@example.com
+# OOLU_SMTP_PORT=587        # optional
+# OOLU_SMTP_SECURITY=starttls  # starttls | ssl | none
+
+# — or a Resend-style HTTP JSON door:
+OOLU_MAIL_URL=https://api.resend.com/emails
+OOLU_MAIL_KEY=re_xxx
+OOLU_MAIL_FROM=codes@example.com
+
+# — or, for a dry run only, print codes to the server log:
+OOLU_MAIL=console
+```
+
+Restart (`docker compose up -d`) and the doors open. Sends are
+throttled per address (60 s cooldown, 10/day), codes are hashed,
+expire in 30 minutes, and never say whether an address has an account.
+
+### Phone sign-in ("continue with phone")
+
+The phone door (`/v1/auth/phone/start` → `/verify`) texts a one-time
+code; a new number gets an account born with a usable texted password.
+It answers 404 until an SMS provider is configured:
+
+```bash
+# Twilio (the common case):
+OOLU_TWILIO_ACCOUNT_SID=ACxxx
+OOLU_TWILIO_AUTH_TOKEN=xxx
+OOLU_SMS_FROM=+15551230000
+
+# — or any generic JSON endpoint (POST {from, to, body}):
+OOLU_SMS_URL=https://sms.example.com/send
+OOLU_SMS_KEY=xxx
+OOLU_SMS_FROM=+15551230000
+
+# — or, development only:
+OOLU_SMS=console
+```
+
+Texts cost real provider money, so the same per-number throttle binds,
+and a half-configured Twilio refuses to boot rather than silently
+falling back to a door it cannot speak through.
+
 ### "Continue with Google" on the app domain
 
 The button appears on the sign-in screen as soon as a Google OAuth

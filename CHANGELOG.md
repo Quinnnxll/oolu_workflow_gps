@@ -4,6 +4,32 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Reset codes, e-mailed passwords, and phone sign-in become OFFERABLE —
+the doors existed; the deployment could never open them:
+
+- **The gap.** All three doors were fully built (hashed expiring
+  codes, throttles, no-enumeration answers, texted passwords) but
+  gated on a mail/SMS sender — and the docker-compose files never
+  passed a single mail or SMS variable through, so a deployed server
+  answered 404 "not offered" forever. Worse, the only real mail
+  sender spoke an HTTP JSON API; the classic SMTP mailbox most
+  operators actually have had no door at all.
+- **`SmtpMailSender`.** Pure-stdlib SMTP (STARTTLS on 587 by default,
+  ssl on 465, none for an in-network relay), fresh connection per
+  send. `build_mail_sender` learns it: ``OOLU_SMTP_HOST`` +
+  ``OOLU_MAIL_FROM`` (+ user/password/port/security) — SMTP outranks
+  the HTTP door, and a HALF-configured SMTP refuses to boot with the
+  missing name rather than silently leaving the doors shut.
+- **Compose pass-through.** Both docker-compose files now carry every
+  mail and SMS variable (`OOLU_SMTP_*`, `OOLU_MAIL_*`, `OOLU_SMS*`,
+  `OOLU_TWILIO_*`) so a `.env` entry is all it takes; the deploy guide
+  gains a section for each door with copy-paste configs (SMTP, Resend
+  style, Twilio, generic JSON, console dry-run).
+- **Tests.** The SMTP builder (defaults, ssl port flip, precedence
+  over HTTP, loud half-configuration refusals) and the sender's exact
+  SMTP conversation (starttls → login → send → quit) via an injected
+  fake.
+
 The interact agent gets hands — and the org wears its name:
 
 - **New hands in the node window.** The interact agent can now DO the

@@ -1679,7 +1679,14 @@ def _cmd_host(args, out) -> int:
     from .mail import build_mail_sender
     from .sms import build_sms_sender
 
-    mail = build_mail_sender(os.environ)
+    # SMTP (OOLU_SMTP_HOST + OOLU_MAIL_FROM), the HTTP JSON door
+    # (OOLU_MAIL_URL + OOLU_MAIL_KEY + OOLU_MAIL_FROM), or
+    # OOLU_MAIL=console for development. A half-configured SMTP raises
+    # here rather than silently leaving the mail doors closed.
+    try:
+        mail = build_mail_sender(os.environ)
+    except ValueError as exc:
+        raise _CliError(str(exc)) from exc
     # The phone door: OOLU_SMS=console for development; Twilio via
     # OOLU_TWILIO_ACCOUNT_SID + OOLU_TWILIO_AUTH_TOKEN + OOLU_SMS_FROM;
     # or a generic JSON provider via OOLU_SMS_URL + OOLU_SMS_KEY +

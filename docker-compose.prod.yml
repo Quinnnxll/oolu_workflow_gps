@@ -56,6 +56,30 @@ services:
       # from Google Cloud Console — setup in docs/deploy-production.md.
       OOLU_GOOGLE_CLIENT_ID: ${OOLU_GOOGLE_CLIENT_ID:-}
       OOLU_GOOGLE_CLIENT_SECRET: ${OOLU_GOOGLE_CLIENT_SECRET:-}
+      # Outbound MAIL — what makes reset codes, e-mailed passwords, and
+      # verification-first registration REAL on this host. Either the
+      # classic SMTP mailbox (host + from; user/password unless it is an
+      # open relay; security starttls|ssl|none, default starttls) …
+      OOLU_SMTP_HOST: ${OOLU_SMTP_HOST:-}
+      OOLU_SMTP_PORT: ${OOLU_SMTP_PORT:-}
+      OOLU_SMTP_USER: ${OOLU_SMTP_USER:-}
+      OOLU_SMTP_PASSWORD: ${OOLU_SMTP_PASSWORD:-}
+      OOLU_SMTP_SECURITY: ${OOLU_SMTP_SECURITY:-}
+      # … or a Resend-style HTTP JSON door. Both need the from-address.
+      OOLU_MAIL_URL: ${OOLU_MAIL_URL:-}
+      OOLU_MAIL_KEY: ${OOLU_MAIL_KEY:-}
+      OOLU_MAIL_FROM: ${OOLU_MAIL_FROM:-}
+      OOLU_MAIL: ${OOLU_MAIL:-}
+      # Outbound SMS — the "continue with phone" door. Twilio (the
+      # common provider) or any generic JSON endpoint; absent, the
+      # phone routes answer 404 and the app hides the button.
+      OOLU_SMS: ${OOLU_SMS:-}
+      OOLU_SMS_PROVIDER: ${OOLU_SMS_PROVIDER:-}
+      OOLU_SMS_URL: ${OOLU_SMS_URL:-}
+      OOLU_SMS_KEY: ${OOLU_SMS_KEY:-}
+      OOLU_SMS_FROM: ${OOLU_SMS_FROM:-}
+      OOLU_TWILIO_ACCOUNT_SID: ${OOLU_TWILIO_ACCOUNT_SID:-}
+      OOLU_TWILIO_AUTH_TOKEN: ${OOLU_TWILIO_AUTH_TOKEN:-}
     volumes:
       - oolu-data:/data
     depends_on:

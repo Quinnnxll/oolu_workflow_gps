@@ -80,6 +80,71 @@ class HttpMailSender:
             raise RuntimeError(f"mail send failed: status {response.status}")
 
 
+class SmtpMailSender:
+    """The classic door: any SMTP mailbox sends the codes.
+
+    Most self-hosting operators have SMTP credentials (a Gmail app
+    password, an Office 365 mailbox, their registrar's mail) long
+    before they have an HTTP mail API — this sender is what makes the
+    reset-code and emailed-password doors REAL on those hosts. Pure
+    stdlib (``smtplib`` + ``email.message``); a fresh connection per
+    send, closed either way — code mail is rare and must not hold a
+    socket open between sends.
+
+    ``security``: "starttls" (587, the default), "ssl" (465), or
+    "none" (a relay inside the operator's own network only).
+    """
+
+    def __init__(
+        self,
+        *,
+        host: str,
+        port: int,
+        sender: str,
+        username: str = "",
+        password: str = "",
+        security: str = "starttls",
+        smtp=None,  # test seam: a class with the smtplib.SMTP surface
+        smtp_ssl=None,
+        timeout: float = 15.0,
+    ):
+        self._host = host
+        self._port = int(port)
+        self._from = sender
+        self._username = username
+        self._password = password
+        self._security = security
+        self._smtp = smtp
+        self._smtp_ssl = smtp_ssl
+        self._timeout = float(timeout)
+
+    def send(self, *, to: str, subject: str, body: str) -> None:
+        import smtplib
+        from email.message import EmailMessage
+
+        message = EmailMessage()
+        message["From"] = self._from
+        message["To"] = to
+        message["Subject"] = subject
+        message.set_content(body)
+        if self._security == "ssl":
+            maker = self._smtp_ssl or smtplib.SMTP_SSL
+        else:
+            maker = self._smtp or smtplib.SMTP
+        connection = maker(self._host, self._port, timeout=self._timeout)
+        try:
+            if self._security == "starttls":
+                connection.starttls()
+            if self._username:
+                connection.login(self._username, self._password)
+            connection.send_message(message)
+        finally:
+            try:
+                connection.quit()
+            except Exception:  # noqa: BLE001 — the send already happened
+                pass
+
+
 def _hash(email: str, purpose: str, code: str) -> str:
     return hashlib.sha256(f"{email}|{purpose}|{code}".encode()).hexdigest()
 
@@ -267,14 +332,55 @@ class SendThrottle:
 
 
 def build_mail_sender(environ: dict[str, Any]) -> MailSender | None:
-    """The host's outbound door from environment configuration:
-    OOLU_MAIL_URL + OOLU_MAIL_KEY + OOLU_MAIL_FROM → HttpMailSender;
-    OOLU_MAIL=console → the development log sender; nothing → None."""
+    """The host's outbound door from environment configuration, in order:
+
+    - ``OOLU_MAIL=console`` → the development log sender.
+    - SMTP (the classic mailbox most operators already have):
+      ``OOLU_SMTP_HOST`` + ``OOLU_MAIL_FROM`` → :class:`SmtpMailSender`,
+      with ``OOLU_SMTP_PORT`` (default 587), ``OOLU_SMTP_USER`` +
+      ``OOLU_SMTP_PASSWORD`` (optional for an open relay), and
+      ``OOLU_SMTP_SECURITY`` = starttls (default) | ssl | none.
+    - HTTP JSON door: ``OOLU_MAIL_URL`` + ``OOLU_MAIL_KEY`` +
+      ``OOLU_MAIL_FROM`` → :class:`HttpMailSender`.
+    - nothing → None (the mail doors answer 404 and the app hides them).
+
+    A half-configured SMTP raises with the missing names — it must
+    never silently fall through to a door that cannot send.
+    """
     if environ.get("OOLU_MAIL", "").strip().lower() == "console":
         return ConsoleMailSender()
+    sender = environ.get("OOLU_MAIL_FROM", "").strip()
+    smtp_host = environ.get("OOLU_SMTP_HOST", "").strip()
+    if smtp_host:
+        if not sender:
+            raise ValueError(
+                "OOLU_SMTP_HOST is set but OOLU_MAIL_FROM is missing — "
+                "name the address the codes are sent from"
+            )
+        security = (
+            environ.get("OOLU_SMTP_SECURITY", "").strip().lower() or "starttls"
+        )
+        if security not in ("starttls", "ssl", "none"):
+            raise ValueError(
+                "OOLU_SMTP_SECURITY must be starttls, ssl, or none"
+            )
+        try:
+            port = int(
+                environ.get("OOLU_SMTP_PORT", "").strip()
+                or ("465" if security == "ssl" else "587")
+            )
+        except ValueError as exc:
+            raise ValueError("OOLU_SMTP_PORT must be a number") from exc
+        return SmtpMailSender(
+            host=smtp_host,
+            port=port,
+            sender=sender,
+            username=environ.get("OOLU_SMTP_USER", "").strip(),
+            password=environ.get("OOLU_SMTP_PASSWORD", ""),
+            security=security,
+        )
     url = environ.get("OOLU_MAIL_URL", "").strip()
     key = environ.get("OOLU_MAIL_KEY", "").strip()
-    sender = environ.get("OOLU_MAIL_FROM", "").strip()
     if url and key and sender:
         return HttpMailSender(url=url, api_key=key, sender=sender)
     return None
