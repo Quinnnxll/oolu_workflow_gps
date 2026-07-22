@@ -4,6 +4,38 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Per-user API draw — every account gets its own gauge on the shared
+platform key:
+
+- **The gap.** On the global service every self-registered user shares
+  one tenant, and model usage was booked per TENANT — so the admin
+  Finance monitor collapsed everyone into a single "main" row. Whether
+  each user's draw was recorded could not even be checked.
+- **Who-drew books.** `model_usage_accounts` sits beside the tenant
+  books: the SAME consultation is booked on the tenant line (the
+  quota's basis) and on the acting user's own line, in one
+  transaction. The router now carries an actor channel (`act_as`) —
+  routers are cached per (tenant, purpose), so the gateway names the
+  drawing principal before every use: the speaking user in chat, the
+  node author's builder seat, the reviser, the rebuild offer — and a
+  fleet interact names the SUPERNODE OWNER, the account those books
+  were already charging in name.
+- **Independent gauges.** `GET /v1/platform/finance` now lists every
+  user under their tenant row — calls, tokens, and drawn USD each —
+  and the operator SPA renders them as sub-rows with their own
+  checkboxes. `GET /v1/usage/model` answers each user with `mine`:
+  their OWN line, not the tenant's collapsed total.
+- **Per-user give-back.** The giveback door accepts
+  `users: [{tenant, account}]`: one user's booked spend is erased and
+  the shared tenant line decreases by exactly that amount (a negative
+  adjustment, current month) — the shared quota refills by what that
+  user drew, and everyone else's gauge stands. A whole-tenant reset
+  clears its user lines with it; audited by name and amount as before.
+- **Tests.** The double-entry booking, the exact per-user refill, the
+  router naming the actor, the seat helper tolerating stub brains, the
+  monitor's per-user gauges, the user-level giveback door, and the
+  personal usage view.
+
 Node provenance — immutable commits, sealed releases, honest
 revocation (the build policy: a draft is a laboratory, a verified node
 is a sealed artifact):

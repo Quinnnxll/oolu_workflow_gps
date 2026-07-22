@@ -1441,6 +1441,15 @@ class GatewayApp:
             if interact_purpose
             else self._tenant_model(session.tenant_id)
         )
+        # WHO this consultation is drawn by: inside a fleet interact the
+        # org's owner (the account the books charge), otherwise the
+        # speaking user — so shared-tenant gauges stay per person.
+        router = self._seat_actor(
+            router,
+            (fleet.responsible or session.principal_id)
+            if interact_purpose
+            else session.principal_id,
+        )
         # When the model really can search (an Anthropic path with the
         # web-search door open), the turn says so — otherwise a keyed
         # install claims it "can't browse" the questions it could answer
@@ -2126,7 +2135,10 @@ class GatewayApp:
                 inbound_text=inbound,
                 display_name=peer,
                 history=history,
-                model=self._tenant_model(session.tenant_id),
+                model=self._seat_actor(
+                    self._tenant_model(session.tenant_id),
+                    session.principal_id,
+                ),
             )
             if draft.status == "auto_sent" and draft.final_text:
                 store.send(
@@ -2465,7 +2477,10 @@ class GatewayApp:
             inbound_text=thread[-1].body,
             display_name=session.principal_id,
             history=history,
-            model=self._tenant_model(session.tenant_id),
+            model=self._seat_actor(
+                    self._tenant_model(session.tenant_id),
+                    session.principal_id,
+                ),
             extra_context=extra_context,
         )
 
@@ -3130,7 +3145,10 @@ class GatewayApp:
                         "tenant": session.tenant_id,
                     },
                 )
-        author = self._node_function_author(session.tenant_id)
+        author = self._seat_actor(
+            self._node_function_author(session.tenant_id),
+            session.principal_id,
+        )
         if author is None:
             return (
                 "error: building a node means writing its execution "
@@ -3307,7 +3325,10 @@ class GatewayApp:
                 "error: this host stores no node files, so there is no "
                 "function to revise"
             )
-        author = self._node_function_author(session.tenant_id)
+        author = self._seat_actor(
+            self._node_function_author(session.tenant_id),
+            session.principal_id,
+        )
         if author is None:
             return (
                 "error: revising a node means rewriting its execution "
@@ -4985,6 +5006,17 @@ class GatewayApp:
             self._model_routers[(tenant, purpose)] = router
         return router
 
+    @staticmethod
+    def _seat_actor(router, principal: str):
+        """Name WHO is drawing on the shared brain before it is used.
+        Routers are cached per (tenant, purpose) while many users share
+        one tenant on the global service — this stamp is what keeps
+        every user's API draw on their OWN gauge in the usage books.
+        A test stub without the channel simply stays tenant-level."""
+        if router is not None and hasattr(router, "act_as"):
+            router.act_as(principal or "")
+        return router
+
     def _drop_model_routers(self, tenant: str) -> None:
         """Every purpose's router for this tenant — a changed key must
         reach the author's seat as surely as the conversation's."""
@@ -5130,7 +5162,14 @@ class GatewayApp:
         if self._model_usage is None:
             raise GatewayError(404, "not_found", "model usage is not tracked here")
         tenant = session.tenant_id
-        view: dict = {"items": self._model_usage.view(tenant)}
+        view: dict = {
+            "items": self._model_usage.view(tenant),
+            # The caller's OWN gauge: what THIS account drew, independent
+            # of everyone else sharing the tenant's platform key.
+            "mine": self._model_usage.user_all_time(
+                tenant, session.principal_id
+            ),
+        }
         if self._subscription is not None and self._subscription.configured():
             brain = self._subscription
             allowance = brain.allowance_for(tenant)
@@ -5209,7 +5248,9 @@ class GatewayApp:
         mystery.
         """
         self._require_model_keys()
-        router = self._tenant_model(session.tenant_id)
+        router = self._seat_actor(
+            self._tenant_model(session.tenant_id), session.principal_id
+        )
         if router is None:
             return json_response(
                 200,
@@ -6941,7 +6982,12 @@ class GatewayApp:
         # afresh because the trigger (code size) says the shape moved.
         recorded = "" if re_reason else account.org_template
         author = (
-            None if recorded else self._node_function_author(session.tenant_id)
+            None
+            if recorded
+            else self._seat_actor(
+                self._node_function_author(session.tenant_id),
+                session.principal_id,
+            )
         )
         resolved = resolve_org_template(
             description,
@@ -8524,6 +8570,10 @@ class GatewayApp:
                     # this month's per-source rows.
                     "all_time": self._model_usage.all_time(tenant),
                     "month": self._model_usage.view(tenant),
+                    # WHO drew it: every user's independent gauge under
+                    # the shared tenant line — the same consultations,
+                    # keyed by the acting principal at booking time.
+                    "users": self._model_usage.users(tenant),
                 }
                 if self._subscription is not None:
                     allowance = self._subscription.allowance_for(tenant)
@@ -8562,22 +8612,41 @@ class GatewayApp:
         except AuthorizationError as exc:
             raise GatewayError(403, "forbidden", str(exc)) from exc
         body = request.body or {}
+        # Selected USERS on a shared tenant: erase exactly what each one
+        # drew (their own line), refilling the shared quota by that
+        # amount — everyone else's gauges stand untouched.
+        users = [
+            {
+                "tenant": str(u.get("tenant") or u.get("tenant_id") or "").strip(),
+                "account": str(u.get("account") or "").strip(),
+            }
+            for u in (body.get("users") or [])
+            if isinstance(u, dict)
+        ]
+        users = [u for u in users if u["tenant"] and u["account"]]
         if body.get("all"):
             tenants = self._model_usage.tenants()
         else:
             tenants = [
                 str(t).strip() for t in (body.get("tenants") or []) if str(t).strip()
             ]
-        if not tenants:
+        if not tenants and not users:
             raise GatewayError(
                 400,
                 "invalid_request",
-                'name the accounts to refill ("tenants": [...]) or pass'
+                'name the accounts to refill ("tenants": [...] and/or'
+                ' "users": [{"tenant": ..., "account": ...}]) or pass'
                 ' "all": true',
             )
-        given_back = {
+        given_back: dict[str, float] = {
             tenant: self._model_usage.reset(tenant) for tenant in tenants
         }
+        for user in users:
+            if user["tenant"] in tenants:
+                continue  # the whole tenant already reset — nothing left
+            given_back[f"{user['tenant']}:{user['account']}"] = (
+                self._model_usage.reset_user(user["tenant"], user["account"])
+            )
         self._durable.audit.append(
             "usage.giveback",
             {

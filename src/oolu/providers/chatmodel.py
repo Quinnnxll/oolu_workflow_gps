@@ -154,6 +154,17 @@ class ChatModelRouter:
         self._max_tokens = max_tokens
         self._purpose = purpose
         self._adapters: dict[tuple[str, str], Any] = {}
+        # WHO is drawing right now. Routers are cached per (tenant,
+        # purpose) and many users can share one tenant (the global
+        # service), so the gateway names the acting principal — or the
+        # Supernode owner a fleet interact bills — before each use, and
+        # every booked consultation carries it into the per-user books.
+        self._actor = ""
+
+    def act_as(self, principal: str) -> None:
+        """Name the account the NEXT consultations are drawn by — the
+        per-user dimension of the usage books on a shared tenant."""
+        self._actor = str(principal or "")
 
     # ------------------------------------------------------------------ #
     def web_search_ready(self) -> bool:
@@ -660,9 +671,13 @@ class ChatModelRouter:
     def _book_usage(self, record) -> None:
         """Per-tenant durable usage next to the in-memory telemetry: the
         subscription quota reads these books, so they must survive
-        restarts. Booked under the source that answered."""
+        restarts. Booked under the source that answered — and under the
+        acting user's own line, so a shared tenant still shows who drew
+        what."""
         if self._subscription is not None:
-            self._subscription.record(self._tenant, record, self._source())
+            self._subscription.record(
+                self._tenant, record, self._source(), self._actor
+            )
 
 
 class RouterIntakeModel:

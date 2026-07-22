@@ -783,13 +783,15 @@ async function financeScreen() {
   const err = h("div", { class: "error" });
   const note = h("div", { class: "muted" });
   const boxes = new Map();
+  const userBoxes = new Map();
+  const SEP = "\u0000";
 
   function accountRow(a) {
     const box = h("input", { type: "checkbox", style: "width:auto" });
     boxes.set(a.tenant_id, box);
     const sub = a.subscription || {};
     const tokens = a.all_time.prompt_tokens + a.all_time.completion_tokens;
-    return h("tr", {},
+    const tenantRow = h("tr", {},
       h("td", {}, box),
       h("td", {}, a.tenant_id, " ",
         sub.trial ? badge("trial", "warn") : null),
@@ -799,6 +801,22 @@ async function financeScreen() {
       h("td", {}, sub.allowance_usd == null ? "—"
         : money(sub.spent_usd) + " / " + money(sub.allowance_usd)),
       h("td", {}, sub.remaining_usd == null ? "—" : money(sub.remaining_usd)));
+    // Every USER's independent gauge under the shared tenant line —
+    // who actually drew the calls, even though they ride one API key.
+    const userRows = (a.users || []).map((u) => {
+      const ubox = h("input", { type: "checkbox", style: "width:auto" });
+      userBoxes.set(a.tenant_id + SEP + u.account, ubox);
+      const utokens = u.prompt_tokens + u.completion_tokens;
+      return h("tr", {},
+        h("td", {}, ubox),
+        h("td", { class: "muted" }, "└ " + u.account),
+        h("td", {}, String(u.calls)),
+        h("td", {}, utokens.toLocaleString()),
+        h("td", {}, money(u.cost_usd)),
+        h("td", { class: "muted" }, "user draw"),
+        h("td", {}, ""));
+    });
+    return [tenantRow, ...userRows];
   }
 
   async function giveBack(all) {
@@ -806,18 +824,26 @@ async function financeScreen() {
     note.replaceChildren();
     const chosen = all ? [] : [...boxes]
       .filter(([, box]) => box.checked).map(([tenant]) => tenant);
-    if (!all && chosen.length === 0) {
+    const chosenUsers = all ? [] : [...userBoxes]
+      .filter(([, box]) => box.checked)
+      .map(([key]) => {
+        const [tenant, account] = key.split(SEP);
+        return { tenant, account };
+      });
+    if (!all && chosen.length === 0 && chosenUsers.length === 0) {
       err.textContent =
-        "Tick the accounts to refill, or use Give back to all.";
+        "Tick the accounts or users to refill, or use Give back to all.";
       return;
     }
+    const named = chosen.concat(
+      chosenUsers.map((u) => u.tenant + " └ " + u.account));
     const asked = all
       ? "Erase the booked model spend of EVERY account?"
-      : "Erase the booked model spend of: " + chosen.join(", ") + "?";
+      : "Erase the booked model spend of: " + named.join(", ") + "?";
     if (!confirm(asked)) return;
     try {
       const res = await api("POST", "/v1/platform/usage/giveback",
-        all ? { all: true } : { tenants: chosen });
+        all ? { all: true } : { tenants: chosen, users: chosenUsers });
       const amounts = Object.values(res.given_back_usd);
       const total = amounts.reduce((n, v) => n + v, 0);
       note.replaceChildren(
@@ -840,7 +866,7 @@ async function financeScreen() {
             h("th", {}, "calls"), h("th", {}, "tokens"),
             h("th", {}, "drawn"), h("th", {}, "quota spent / allowance"),
             h("th", {}, "remaining")),
-          data.accounts.map(accountRow))
+          data.accounts.flatMap(accountRow))
       : h("p", { class: "muted" }, "No model usage booked yet."),
     h("div", {},
       h("button", { onclick: () => giveBack(false) }, "Give back to selected"),
@@ -848,8 +874,10 @@ async function financeScreen() {
       h("button", { onclick: () => giveBack(true) }, "Give back to all")),
     h("p", { class: "muted" },
       "A give-back erases the booked subscription spend (their allowance " +
-      "refills); own-api and local rows are the account's own and never " +
-      "move. Every give-back is audited by name and amount."),
+      "refills). Ticking a USER row erases only what that user drew — " +
+      "the shared quota refills by exactly that amount and everyone " +
+      "else's gauge stands. Own-api and local rows never move. Every " +
+      "give-back is audited by name and amount."),
     err, note);
 
   const nodersCard = h("div", { class: "card" },

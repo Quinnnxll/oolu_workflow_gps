@@ -52,6 +52,24 @@ _SCHEMA = """CREATE TABLE IF NOT EXISTS model_usage (
     PRIMARY KEY (tenant_id, month, source)
 )"""
 
+# The per-USER books beside the per-tenant books. On the global service
+# every self-registered account shares one tenant, so the tenant line
+# alone collapses everyone into a single gauge — this table keys the
+# same consultations by WHO drew them (the acting principal, or the
+# Supernode owner a fleet interact bills), so each user has an
+# independent gauge even though every call rides the same platform key.
+_ACCOUNTS_SCHEMA = """CREATE TABLE IF NOT EXISTS model_usage_accounts (
+    tenant_id TEXT NOT NULL,
+    account TEXT NOT NULL,
+    month TEXT NOT NULL,
+    source TEXT NOT NULL,
+    calls INTEGER NOT NULL DEFAULT 0,
+    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (tenant_id, account, month, source)
+)"""
+
 
 class ModelUsageStore:
     """Durable per-tenant model usage, bucketed by calendar month and by
@@ -63,6 +81,7 @@ class ModelUsageStore:
         self._clock = clock or (lambda: datetime.now(UTC))
         with self._conn.transaction() as db:
             db.execute(_SCHEMA)
+            db.execute(_ACCOUNTS_SCHEMA)
 
     def _month(self, month: str | None = None) -> str:
         return month or self._clock().strftime("%Y-%m")
@@ -75,7 +94,11 @@ class ModelUsageStore:
         cost: float,
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
+        account: str = "",
     ) -> None:
+        """Book one consultation: always on the tenant line (the quota's
+        basis), and — when the caller names WHO drew it — on that
+        account's own line beside it, in the same transaction."""
         with self._conn.transaction() as db:
             db.execute(
                 """INSERT INTO model_usage
@@ -99,6 +122,34 @@ class ModelUsageStore:
                     float(cost),
                 ),
             )
+            if account:
+                db.execute(
+                    """INSERT INTO model_usage_accounts
+                         (tenant_id, account, month, source, calls,
+                          prompt_tokens, completion_tokens, cost_usd)
+                       VALUES (?, ?, ?, ?, 1, ?, ?, ?)
+                       ON CONFLICT(tenant_id, account, month, source)
+                       DO UPDATE SET
+                         calls = model_usage_accounts.calls + 1,
+                         prompt_tokens =
+                           model_usage_accounts.prompt_tokens
+                             + excluded.prompt_tokens,
+                         completion_tokens =
+                           model_usage_accounts.completion_tokens
+                             + excluded.completion_tokens,
+                         cost_usd =
+                           model_usage_accounts.cost_usd
+                             + excluded.cost_usd""",
+                    (
+                        tenant,
+                        account,
+                        self._month(),
+                        source,
+                        int(prompt_tokens),
+                        int(completion_tokens),
+                        float(cost),
+                    ),
+                )
 
     def month_cost(
         self, tenant: str, *, source: str | None = None, month: str | None = None
@@ -157,18 +208,114 @@ class ModelUsageStore:
             "cost_usd": float(row["cost_usd"]),
         }
 
+    def users(self, tenant: str) -> list[dict]:
+        """Every account that ever drew on this tenant's line, each with
+        its whole ledger summed — the independent per-user gauges the
+        admin monitor shows under the shared tenant row."""
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                "SELECT account,"
+                " COALESCE(SUM(calls), 0) AS calls,"
+                " COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,"
+                " COALESCE(SUM(completion_tokens), 0) AS completion_tokens,"
+                " COALESCE(SUM(cost_usd), 0) AS cost_usd"
+                " FROM model_usage_accounts WHERE tenant_id = ?"
+                " GROUP BY account ORDER BY cost_usd DESC, account",
+                (tenant,),
+            ).fetchall()
+        return [
+            {
+                "account": row["account"],
+                "calls": int(row["calls"]),
+                "prompt_tokens": int(row["prompt_tokens"]),
+                "completion_tokens": int(row["completion_tokens"]),
+                "cost_usd": float(row["cost_usd"]),
+            }
+            for row in rows
+        ]
+
+    def user_all_time(self, tenant: str, account: str) -> dict:
+        """One user's whole ledger line on this tenant — their own gauge,
+        independent of everyone else sharing the platform key."""
+        with self._conn.lock:
+            row = self._conn.db.execute(
+                "SELECT COALESCE(SUM(calls), 0) AS calls,"
+                " COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,"
+                " COALESCE(SUM(completion_tokens), 0) AS completion_tokens,"
+                " COALESCE(SUM(cost_usd), 0) AS cost_usd"
+                " FROM model_usage_accounts"
+                " WHERE tenant_id = ? AND account = ?",
+                (tenant, account),
+            ).fetchone()
+        return {
+            "account": account,
+            "calls": int(row["calls"]),
+            "prompt_tokens": int(row["prompt_tokens"]),
+            "completion_tokens": int(row["completion_tokens"]),
+            "cost_usd": float(row["cost_usd"]),
+        }
+
+    def user_total_cost(
+        self, tenant: str, account: str, *, source: str | None = None
+    ) -> float:
+        query = (
+            "SELECT COALESCE(SUM(cost_usd), 0) AS total"
+            " FROM model_usage_accounts WHERE tenant_id = ? AND account = ?"
+        )
+        args: tuple = (tenant, account)
+        if source is not None:
+            query += " AND source = ?"
+            args = (*args, source)
+        with self._conn.lock:
+            row = self._conn.db.execute(query, args).fetchone()
+        return float(row["total"] if row else 0.0)
+
     def reset(self, tenant: str, *, source: str = "subscription") -> float:
         """The give-back: erase a tenant's booked spend for one source
         (all months — a trial is measured lifetime, so a give-back must
         reach the whole history) and return the amount forgiven. Only
         the named source moves: own-api and local rows are the tenant's
-        own money and machine, never the platform's to forgive."""
+        own money and machine, never the platform's to forgive. The
+        per-user lines under the tenant clear with it — the books never
+        show users owing spend a tenant no longer carries."""
         forgiven = self.total_cost(tenant, source=source)
         with self._conn.transaction() as db:
             db.execute(
                 "DELETE FROM model_usage WHERE tenant_id = ? AND source = ?",
                 (tenant, source),
             )
+            db.execute(
+                "DELETE FROM model_usage_accounts"
+                " WHERE tenant_id = ? AND source = ?",
+                (tenant, source),
+            )
+        return forgiven
+
+    def reset_user(
+        self, tenant: str, account: str, *, source: str = "subscription"
+    ) -> float:
+        """The per-user give-back on a shared tenant: erase ONE account's
+        booked spend for the source and subtract exactly that amount
+        from the tenant line (a negative adjustment in the current
+        month), so the shared quota refills by what this user drew —
+        no more, no less. Everyone else's gauges stand untouched."""
+        forgiven = self.user_total_cost(tenant, account, source=source)
+        with self._conn.transaction() as db:
+            db.execute(
+                "DELETE FROM model_usage_accounts"
+                " WHERE tenant_id = ? AND account = ? AND source = ?",
+                (tenant, account, source),
+            )
+            if forgiven > 0:
+                db.execute(
+                    """INSERT INTO model_usage
+                         (tenant_id, month, source, calls, prompt_tokens,
+                          completion_tokens, cost_usd)
+                       VALUES (?, ?, ?, 0, 0, 0, ?)
+                       ON CONFLICT(tenant_id, month, source) DO UPDATE SET
+                         cost_usd = model_usage.cost_usd + excluded.cost_usd""",
+                    (tenant, self._month(), source, -float(forgiven)),
+                )
         return forgiven
 
     def view(self, tenant: str, *, month: str | None = None) -> list[dict]:
@@ -239,12 +386,15 @@ class SubscriptionBrain:
             return self._usage.total_cost(tenant, source="subscription")
         return self.month_spend(tenant)
 
-    def record(self, tenant: str, record, source: str) -> None:
-        """Book one consultation (a ``ModelCallRecord``) under the tenant."""
+    def record(self, tenant: str, record, source: str, account: str = "") -> None:
+        """Book one consultation (a ``ModelCallRecord``) under the tenant
+        — and under the drawing user's own line when the router names
+        one, so a shared tenant still shows independent gauges."""
         self._usage.record(
             tenant,
             source=source,
             cost=float(getattr(record, "cost", 0.0) or 0.0),
             prompt_tokens=int(getattr(record, "prompt_tokens", 0) or 0),
             completion_tokens=int(getattr(record, "completion_tokens", 0) or 0),
+            account=account,
         )
