@@ -4,6 +4,27 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The conversation window tidies up — one fold control, drafts that
+survive, the representative IN the thread:
+
+- **One fold control.** The Work page's conversation window carried a
+  duplicate fold/unfold button next to Back; it's gone. The My-nodes
+  column's toggle is the one control, and it survives folding as the
+  thin rail's own button — same as Life.
+- **Unsent words survive.** The OoLu chat and every node's interact
+  window now keep their typed-but-unsent message when the user leaves
+  for another conversation and comes back — the same per-account
+  compose store friend threads already used (sending clears it;
+  sign-out purges it).
+- **The representative lives in the conversation.** Waiting replies no
+  longer pop as a separate window pinned above the chat: the drafts
+  inbox rides IN the thread as an execution-style block at the
+  conversation's end — bordered like a run card, scrolling with the
+  messages — through the new ``inlineBlock`` seam on ``Chat``.
+- **Tests.** Draft persistence across unmount for both composers, the
+  inline block rendering inside the thread, and Work carrying exactly
+  one fold control. Shell rebuilt.
+
 Failed runs revive in place — no more phantom siblings in the Noder —
 and retention finally applies:
 

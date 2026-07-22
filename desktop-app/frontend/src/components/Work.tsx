@@ -136,6 +136,9 @@ export function Work({ onLife }: { onLife: () => void }) {
       </aside>
 
       <section className="convo-pane">
+        {/* One fold control only — it lives on the My-nodes column (and
+            survives folding as the thin rail's toggle), so the
+            conversation window carries no duplicate. */}
         <div className="pane-bar">
           <button
             type="button"
@@ -144,20 +147,6 @@ export function Work({ onLife }: { onLife: () => void }) {
             onClick={() => setPaneOpen(false)}
           >
             ‹ {tr("nav.back")}
-          </button>
-          <button
-            type="button"
-            className="sidebar-toggle"
-            aria-label={folded ? tr("nav.showList") : tr("nav.hideList")}
-            title={folded ? tr("nav.showList") : tr("nav.hideList")}
-            onClick={() => {
-              setFolded((f) => {
-                saveSidebarFolded(!f);
-                return !f;
-              });
-            }}
-          >
-            {folded ? "☰" : "«"}
           </button>
         </div>
         {selected === "add" && (

@@ -356,19 +356,20 @@ export function Life() {
             ‹ {tr("nav.back")}
           </button>
         </div>
-        {selected.kind === "oolu" &&
-          rep !== null &&
-          rep.mode !== "off" &&
-          (rep.drafts_pending > 0 || (rep.drafts_waiting ?? 0) > 0) && (
-            <div className="rep-sweep">
-              <DraftsInbox
-                onActivity={refreshRuns}
-                onOpenThread={(peer) => open({ kind: "friend", peer })}
-              />
-            </div>
-          )}
         {selected.kind === "oolu" && (
           <Chat
+            inlineBlock={
+              // Waiting replies ride IN the conversation as an execution
+              // block at the thread's end — no window popping on top.
+              rep !== null &&
+              rep.mode !== "off" &&
+              (rep.drafts_pending > 0 || (rep.drafts_waiting ?? 0) > 0) ? (
+                <DraftsInbox
+                  onActivity={refreshRuns}
+                  onOpenThread={(peer) => open({ kind: "friend", peer })}
+                />
+              ) : undefined
+            }
             headerAside={
               rep !== null && (
                 // The representative toggle rides the OoLu-name row.

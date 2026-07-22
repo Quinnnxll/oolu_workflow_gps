@@ -301,6 +301,31 @@ describe("Chat", () => {
     ).toBe(true);
   });
 
+  it("keeps an unsent draft across leaving and returning", () => {
+    // Typed but never sent: leaving to another conversation window
+    // (unmount) must not lose the words.
+    const first = render(<Chat />);
+    fireEvent.change(screen.getByPlaceholderText("Message OoLu…"), {
+      target: { value: "half a thought" },
+    });
+    first.unmount();
+
+    render(<Chat />);
+    expect(
+      (screen.getByPlaceholderText("Message OoLu…") as HTMLTextAreaElement | HTMLInputElement)
+        .value,
+    ).toBe("half a thought");
+  });
+
+  it("renders the inline block IN the thread as an execution block", () => {
+    render(<Chat inlineBlock={<div>waiting replies</div>} />);
+    const block = screen.getByText("waiting replies");
+    // Inside the conversation window, styled like a run block — not a
+    // separate window above the chat.
+    expect(block.closest(".rep-block")).toBeTruthy();
+    expect(block.closest(".chat-thread")).toBeTruthy();
+  });
+
   it("persists the thread across remounts", async () => {
     routes["POST /v1/chat"] = {
       status: 200,

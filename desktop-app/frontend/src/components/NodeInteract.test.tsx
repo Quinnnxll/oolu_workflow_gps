@@ -69,6 +69,24 @@ describe("NodeInteract", () => {
     ).toContain("no verified runs yet");
   });
 
+  it("keeps an unsent draft when the user leaves and returns", () => {
+    const first = render(<NodeInteract node={node()} />);
+    fireEvent.change(
+      screen.getByPlaceholderText("Message OoLu about Invoice Cleaner…"),
+      { target: { value: "not sent yet" } },
+    );
+    first.unmount();
+
+    render(<NodeInteract node={node()} />);
+    expect(
+      (
+        screen.getByPlaceholderText(
+          "Message OoLu about Invoice Cleaner…",
+        ) as HTMLInputElement
+      ).value,
+    ).toBe("not sent yet");
+  });
+
   it("sends node-scoped chat turns and shows what OoLu touched", async () => {
     routes["POST /v1/chat"] = {
       status: 200,

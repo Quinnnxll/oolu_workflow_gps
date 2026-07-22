@@ -2089,12 +2089,15 @@ button.ghost {
   border-color: var(--accent);
 }
 
-.rep-sweep {
-  border-bottom: 1px solid var(--line);
-  max-height: 45%;
-  overflow-y: auto;
-  flex-shrink: 0;
+/* The representative's waiting replies, IN the conversation: an
+   execution-style block at the thread's end — bordered like a run card,
+   scrolling with the chat instead of popping above it. */
+.rep-block {
+  border: 1px solid var(--line);
+  border-radius: 12px;
   padding: 12px;
+  margin: 6px 0;
+  background: var(--bg-raised, transparent);
 }
 
 /* The drafts inbox stacks its cards as a column with breathing room, so each

@@ -4,7 +4,7 @@ import type { ChatAction, WorkNode } from "../api";
 import { identityHue } from "../avatar";
 import { actionLabel, Reasoning } from "./Chat";
 import { ForwardMenu } from "./ForwardMenu";
-import { t, tf, useT } from "../ui";
+import { loadCompose, saveCompose, t, tf, useT } from "../ui";
 
 // The node's interaction window — a conversation, nothing else. The
 // thread fills the pane and the composer sits under it; there is no
@@ -73,9 +73,15 @@ export function NodeInteract({ node }: { node: WorkNode }) {
       return [];
     }
   });
-  const [draft, setDraft] = useState("");
+  // Unsent words survive leaving to another conversation window: one
+  // compose slot per node, same store as a friend thread's.
+  const [draft, setDraft] = useState(() => loadCompose(`node:${node.node_id}`));
   const [busy, setBusy] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    saveCompose(`node:${node.node_id}`, draft);
+  }, [node.node_id, draft]);
 
   useEffect(() => {
     localStorage.setItem(storageKey, JSON.stringify(thread));

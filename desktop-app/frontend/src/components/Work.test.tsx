@@ -88,6 +88,18 @@ describe("Work", () => {
     expect(screen.getByText("$12.34 · 90% healthy")).toBeTruthy();
   });
 
+  it("carries exactly one fold control — on the My-nodes column", async () => {
+    routes["GET /v1/work/nodes"] = {
+      status: 200,
+      body: { items: [workNode()] },
+    };
+    const { container } = render(<Work onLife={vi.fn()} />);
+    await screen.findByText("Invoice Cleaner");
+    // The conversation window carries no duplicate toggle.
+    expect(container.querySelectorAll(".sidebar-toggle").length).toBe(1);
+    expect(container.querySelector(".convo-list .sidebar-toggle")).toBeTruthy();
+  });
+
   it("has no auto-build checkbox — that consent lives in Settings now", async () => {
     routes["GET /v1/work/nodes"] = { status: 200, body: { items: [] } };
     render(<Work onLife={vi.fn()} />);

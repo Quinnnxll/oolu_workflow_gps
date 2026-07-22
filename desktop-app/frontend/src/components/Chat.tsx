@@ -3,7 +3,7 @@ import { accountScope, api, TERMINAL_PHASES } from "../api";
 import type { ChatAction, ChatHistoryTurn } from "../api";
 import { humanizeEvent, statusSentence } from "../humanize";
 import { conciseName } from "../naming";
-import { t, tf, useT } from "../ui";
+import { loadCompose, saveCompose, t, tf, useT } from "../ui";
 import type { TaskView, TimelineEvent } from "../types";
 import {
   currentAvatarSignals,
@@ -115,10 +115,21 @@ function fromServer(items: ChatHistoryTurn[]): Msg[] {
   });
 }
 
-export function Chat({ headerAside }: { headerAside?: React.ReactNode } = {}) {
+export function Chat({
+  headerAside,
+  inlineBlock,
+}: {
+  headerAside?: React.ReactNode;
+  // A block that belongs IN the conversation (e.g. the representative's
+  // waiting replies), rendered at the thread's end like an execution
+  // card — never a separate window popping above the chat.
+  inlineBlock?: React.ReactNode;
+} = {}) {
   const tr = useT();
   const [thread, setThread] = useState<Msg[]>(loadThread);
-  const [draft, setDraft] = useState("");
+  // Unsent words survive leaving the window: the OoLu chat keeps its
+  // own compose slot, same store as a friend thread's.
+  const [draft, setDraft] = useState(() => loadCompose("oolu"));
   const [busy, setBusy] = useState(false);
   // The model's reasoning as it streams in — real ⟨think⟩ tokens, shown live
   // in the thinking bubble, not a canned animation.
@@ -163,6 +174,12 @@ export function Chat({ headerAside }: { headerAside?: React.ReactNode } = {}) {
     localStorage.setItem(chatKey(), JSON.stringify(thread));
     endRef.current?.scrollIntoView?.({ block: "end" });
   }, [thread]);
+
+  // Persist the typing block as it changes; sending clears it below —
+  // leaving for another conversation window never loses the words.
+  useEffect(() => {
+    saveCompose("oolu", draft);
+  }, [draft]);
 
   // On mount, ask the host for the account's thread. Present and
   // non-empty → it replaces the local cache (another device may have
@@ -665,6 +682,12 @@ export function Chat({ headerAside }: { headerAside?: React.ReactNode } = {}) {
               <span className="thinking-note">{tr("interact.thinking")}</span>
             )}
           </div>
+        )}
+        {/* The representative's waiting replies (or any other standing
+            work) live IN the conversation, as an execution block at the
+            thread's end — never a window popping above it. */}
+        {inlineBlock && (
+          <div className="run-anchor rep-block">{inlineBlock}</div>
         )}
         <div ref={endRef} />
       </div>
