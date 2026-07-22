@@ -259,6 +259,10 @@ class NodeScriptRunner:
         backend_image: str | None = None,
         environment_fingerprint: str = "",
         bundle_resolver=None,  # (bundle_id) -> PreparedBundle | None
+        # (bindings, tenant) -> (resolved, provenance): the exact-value
+        # binder — value:// references become their stored values just
+        # before execution. None keeps literal bindings as they are.
+        value_resolver=None,
     ):
         self._backend = backend
         self._cache = cache
@@ -273,6 +277,7 @@ class NodeScriptRunner:
         # staged in one archive. No resolver -> the inline ``files`` path
         # stands, so a minimal install (or a test) needs nothing extra.
         self._bundle_resolver = bundle_resolver
+        self._value_resolver = value_resolver
         self._completed: dict[str, ExecutionOutcome] = {}
 
     def capabilities(self) -> frozenset[str]:
@@ -323,6 +328,24 @@ class NodeScriptRunner:
                 error="script actions need operation 'run' and a 'goal' parameter",
             )
         bindings = dict(action.parameters.get("bindings") or {})
+        # The deterministic binder: any value:// reference among the
+        # bindings resolves to its exact stored value HERE — tenant
+        # wall and type checks included — so the cache keys on real
+        # values and the sandbox stages them verbatim. A reference
+        # that cannot be honored blocks the run with the reason named;
+        # a missing authoritative value is never filled from memory.
+        if self._value_resolver is not None:
+            tenant = str(action.parameters.get("_value_tenant") or "")
+            try:
+                bindings, _provenance = self._value_resolver(bindings, tenant)
+            except Exception as exc:  # noqa: BLE001 - honest refusal
+                return self._outcome(
+                    action,
+                    idempotency_key,
+                    ExecutionStatus.BLOCKED,
+                    started,
+                    error=f"unresolved value reference: {exc}",
+                )
         node_key = str(action.parameters.get("node_key") or goal)
         provided = action.parameters.get("script")
         # The tree's identity joins the key: an edited bundle (new

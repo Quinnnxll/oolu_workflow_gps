@@ -4,6 +4,35 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The exact-value reference layer: refs in, exact values out:
+
+- **`oolu/values.py`.** The architectural form of the exact-value rule.
+  Every authoritative value is stored ONCE — immutable, typed,
+  tenant-owned, content-addressed (`value://{tenant}/{id}`; the same
+  typed value is always the same reference) — and everything upstream
+  of execution speaks by reference. Decimals and identifiers ride as
+  strings, so scale, leading zeros, and case survive verbatim.
+- **The deterministic binder.** `resolve_bindings` turns every
+  `value://` reference among a run's bindings into its exact stored
+  value — tenant wall, type check, honest lookup failure, one
+  provenance line per resolution — and the script runner applies it
+  just before the sandbox: the cache keys on real values, and
+  `bindings.json` stages what the runtime holds, never what a model
+  retyped. An unhonorable reference BLOCKS the run with the reason
+  named; a missing authoritative value is never filled from memory.
+- **Result snapshots and the renderer.** `GET /v1/runs/{id}/values`
+  files a run's result outputs as immutable refs (submitter-walled,
+  audited); `POST /v1/values/render` is the deterministic renderer —
+  the model shapes the sentence segments, the store supplies every
+  number, identifier, and date through registered formatters only
+  (raw, decimal_exact, currency_code, date_iso, identifier). A missing
+  reference refuses with 422; the renderer never fabricates the value
+  it exists to guarantee.
+- **Tests.** Exactness (scale, leading zeros, case), the tenant wall
+  and honest misses, the binder's provenance and named refusals, the
+  runner staging resolved values and blocking bad refs, the renderer
+  end to end, and the gateway routes walled like every run read.
+
 The exact-value rules: real computation only, values from the runtime:
 
 - **The gap.** A mocked function RUNS: it emits a baked-in answer and

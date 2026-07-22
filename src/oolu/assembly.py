@@ -480,6 +480,7 @@ def build_script_executor(
     environ: dict | None = None,
     bundle_resolver=None,  # runtime.BundleResolver: id -> PreparedBundle
     materialized_dir=None,  # runtime.MaterializedBundleDir: the mounted tier
+    value_resolver=None,  # (bindings, tenant) -> (resolved, provenance)
 ) -> dict[str, ActionExecutor]:
     """The script hand: run planner-provided or synthesized code through the
     configured isolation backend (Docker when configured; the subprocess
@@ -523,6 +524,7 @@ def build_script_executor(
             settings.backend.image if settings.backend.kind == "docker" else None
         ),
         bundle_resolver=bundle_resolver,
+        value_resolver=value_resolver,
     )
     return {runner.name: runner}
 
@@ -928,6 +930,9 @@ def build_host_runtime(
         if _cache_mb > 0
         else None
     )
+    from .values import ValueStore as _ValueStore
+
+    values_store = _ValueStore(conn)
     bundle_resolver = BundleResolver(
         PreparedBundleCache(bundle_store, warm=warm)
     )
@@ -956,6 +961,9 @@ def build_host_runtime(
                     ),
                     bundle_resolver=bundle_resolver,
                     materialized_dir=materialized_dir,
+                    value_resolver=lambda bindings, tenant: (
+                        values_store.resolve_bindings(bindings, tenant=tenant)
+                    ),
                 )
             )
         except Exception as exc:  # noqa: BLE001 - hosts without a script
@@ -1220,6 +1228,8 @@ def build_host_runtime(
         files=UserFileStore(conn, artifacts=blob_store_from_env(data)),
         # The investor metrics tracker's daily ledger.
         metrics_store=_metrics_store(conn),
+        # The exact-value reference layer: refs in, exact values out.
+        values=values_store,
         bundle_store=bundle_store,
         # The accelerator tiers the sweep purges alongside dead manifests —
         # on a fleet's shared materialized root, the sweep is the ONLY

@@ -560,6 +560,7 @@ class GatewayApp:
         # every self-hosted install
         model_usage=None,  # billing.ModelUsageStore: per-tenant durable books
         metrics_store=None,  # telemetry.investor.MetricsSnapshotStore
+        values=None,  # values.ValueStore: the exact-value reference layer
         stripe_webhooks=None,  # gateway.StripeWebhookVerifier: real Stripe
         # events land at /v1/webhooks/stripe only when this is configured
         google_signin: GoogleSignIn | None = None,  # "Continue with Google"
@@ -670,6 +671,7 @@ class GatewayApp:
         self._subscription = subscription
         self._model_usage = model_usage
         self._metrics_store = metrics_store
+        self._values = values
         self._stripe_webhooks = stripe_webhooks
         # Keyed (tenant, purpose): the conversation and the node author
         # ride separate routers so their consultations enter the books
@@ -1244,6 +1246,11 @@ class GatewayApp:
             requires_permission="metrics:view",
         )
         r.add("PUT", "/v1/platform/metrics/{key}", self._metrics_record)
+        # The exact-value reference layer: a run's result outputs filed
+        # as immutable refs, and the deterministic renderer that puts
+        # exact stored values into a model-shaped response.
+        r.add("GET", "/v1/runs/{run_id}/values", self._run_values)
+        r.add("POST", "/v1/values/render", self._values_render)
         r.add("POST", "/v1/nodeplace", self._contribute)
         r.add("POST", "/v1/nodeplace/{node_id}/revoke", self._revoke_node)
         r.add("GET", "/v1/listings", self._discover_listings)
@@ -3628,6 +3635,9 @@ class GatewayApp:
         host with no desk at all stamps nothing (no grant, no web hand).
         """
         extras: dict = {}
+        # The exact-value binder's wall: value:// references among the
+        # run's bindings may only resolve inside THIS tenant.
+        extras["_value_tenant"] = session.tenant_id
         if self._desk is not None:
             # On the global service, a signed-in account needs no per-host
             # grants: the web is open by default, blocks still bind.
@@ -7955,6 +7965,63 @@ class GatewayApp:
             commit_prices=bool(body.get("commit_prices", False)),
         )
         return json_response(200, quote.model_dump(mode="json"))
+
+    def _require_values(self):
+        if self._values is None:
+            raise GatewayError(
+                404, "not_found", "the value store is not enabled here"
+            )
+        return self._values
+
+    def _run_values(self, request, session, params) -> Response:
+        """A run's result outputs, filed as immutable exact-value refs —
+        idempotent (content-addressed), walled to the run's own
+        submitter, audited on first filing."""
+        store = self._require_values()
+        state = self._durable.runs.get(params["run_id"])
+        if (
+            state is None
+            or state.contract.metadata.get("tenant_id") != session.tenant_id
+            or state.contract.submitted_by != session.principal_id
+        ):
+            raise GatewayError(404, "not_found", "no such run of yours")
+        outputs = (state.result or {}).get("outputs") or []
+        refs: dict[str, str] = {}
+        for index, output in enumerate(outputs):
+            filed = store.snapshot_outputs(
+                session.tenant_id, output, label=f"{state.run_id}:{index}"
+            )
+            for name, ref in filed.items():
+                refs[f"{index}.{name}" if len(outputs) > 1 else name] = ref
+        self._durable.audit.append(
+            "values.snapshot",
+            {
+                "run_id": state.run_id,
+                "by": session.principal_id,
+                "refs": sorted(refs.values()),
+            },
+        )
+        return json_response(200, {"run_id": state.run_id, "fields": refs})
+
+    def _values_render(self, request, session, params) -> Response:
+        """The deterministic renderer: the model shapes the sentence,
+        the store supplies every value — a missing reference refuses,
+        never fabricates."""
+        from ..values import ValueError_, render_segments
+
+        store = self._require_values()
+        segments = (request.body or {}).get("segments")
+        if not isinstance(segments, list) or not segments:
+            raise GatewayError(
+                400, "invalid_request", 'give the segments: {"segments": [...]}'
+            )
+        try:
+            text = render_segments(
+                segments, store=store, tenant=session.tenant_id
+            )
+        except ValueError_ as exc:
+            raise GatewayError(422, "cannot_render", str(exc)) from exc
+        return json_response(200, {"text": text})
 
     def _investor_metrics(self):
         """The metrics service over this host's REAL stores — readers are
