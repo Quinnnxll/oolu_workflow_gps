@@ -118,6 +118,10 @@ class WorkDesk:
             account = self._accounts.get(node.node_id) or NodeAccount(
                 node_id=node.node_id, responsible=node.noder_principal
             )
+            if account.deleted_at is not None:
+                # A deleted node is OFF the desk — everywhere at once.
+                # The tombstone lives for the revival window only.
+                continue
             entries.append(
                 DeskEntry(
                     node_id=node.node_id,
@@ -202,6 +206,26 @@ class WorkDesk:
     def account_for(self, node_id: str) -> NodeAccount | None:
         return self._accounts.get(node_id)
 
+    def delete_node(self, node_id: str, *, at) -> bool:
+        """Tombstone the node: off every list at once, revivable until
+        the window closes, purged for good after."""
+        return self._accounts.mark_deleted(node_id, at=at)
+
+    def revive_node(self, node_id: str) -> bool:
+        """The administrator's undo — clears the tombstone."""
+        return self._accounts.revive(node_id)
+
+    def purge_deleted(self, *, before) -> list[NodeAccount]:
+        """Accounts whose revival window has passed, removed for good —
+        returned so the caller can take the node's files with them."""
+        return self._accounts.purge_deleted(before=before)
+
+    def node_tenant(self, node_id: str) -> str | None:
+        """Which tenant a node lives in, off the registry — what the
+        purge needs to find the node's drawer."""
+        node = self._registry.get_node(node_id)
+        return node.tenant_id if node is not None else None
+
     def siblings(self, node_id: str, *, tenant: str) -> list[dict]:
         """The nodes under the SAME Supernode as this one — the org's
         members a node may message. Same-tenant only, self excluded, each
@@ -238,6 +262,33 @@ class WorkDesk:
             ]
             members.append(
                 {"node_id": node.node_id, "title": self._title(node, version_ids)}
+            )
+        return members
+
+    def deleted_members_of(
+        self, supernode_id: str, *, tenant: str
+    ) -> list[dict]:
+        """A Supernode's RECENTLY DELETED members — the revival list an
+        administrator reads to undo an accidental delete before the
+        window closes. Same-tenant, tombstoned accounts only."""
+        members: list[dict] = []
+        for member in self._accounts.under(
+            supernode_id, include_deleted=True
+        ):
+            if member.deleted_at is None:
+                continue
+            node = self._registry.get_node(member.node_id)
+            if node is None or node.tenant_id != tenant:
+                continue
+            version_ids = [
+                v.version_id for v in self._registry.list_versions(node.node_id)
+            ]
+            members.append(
+                {
+                    "node_id": node.node_id,
+                    "title": self._title(node, version_ids),
+                    "deleted_at": member.deleted_at.isoformat(),
+                }
             )
         return members
 

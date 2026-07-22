@@ -246,8 +246,9 @@ export function regimeTag(account: WorkNode["account"]): string {
   return parts.length ? `(${parts.join(", ")})` : `(${t("regime.standalone")})`;
 }
 
-// The owner's list margins on one node: pin, mute, and delete-from-
-// list (the record survives; the node returns when it moves again).
+// The owner's list margins on one node: pin, mute — and DELETE, which
+// is real: the node leaves the desk, its Supernode's roster, and run
+// resolution at once, revivable by an administrator for 7 days.
 export function NodeMargins({
   node,
   onChanged,
@@ -261,16 +262,21 @@ export function NodeMargins({
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState("");
 
-  async function set(prefs: {
-    pinned?: boolean;
-    muted?: boolean;
-    hidden?: boolean;
-  }) {
+  async function set(prefs: { pinned?: boolean; muted?: boolean }) {
     setError("");
     try {
       await api.setWorkNodePrefs(node.node_id, prefs);
-      if (prefs.hidden) onClosed();
-      else onChanged();
+      onChanged();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function destroy() {
+    setError("");
+    try {
+      await api.deleteWorkNode(node.node_id);
+      onClosed();
     } catch (e) {
       setError((e as Error).message);
     }
@@ -298,7 +304,7 @@ export function NodeMargins({
           <button
             type="button"
             className="linklike danger"
-            onClick={() => void set({ hidden: true })}
+            onClick={() => void destroy()}
           >
             {tr("profile.confirmDelete")}
           </button>
@@ -778,6 +784,15 @@ export function NodeThread({
   const [memberSuper, setMemberSuper] = useState(false);
   const [memberBusy, setMemberBusy] = useState(false);
   const [memberError, setMemberError] = useState("");
+  // Recently deleted members: the administrator's 7-day revival list.
+  const [deletedMembers, setDeletedMembers] = useState<
+    {
+      node_id: string;
+      title: string;
+      deleted_at: string;
+      revivable_until: string;
+    }[]
+  >([]);
   // A large fleet folds away for a clear view of the thread itself.
   const [showMembers, setShowMembers] = useState(true);
   // Imitate: the guided lesson recording in THIS node's window, if any.
@@ -794,6 +809,15 @@ export function NodeThread({
       setActivity((await api.workActivity(node.node_id)).items);
     } catch {
       setActivity([]);
+    }
+    if (account.is_supernode) {
+      try {
+        setDeletedMembers(
+          (await api.deletedMembers(node.node_id)).items ?? [],
+        );
+      } catch {
+        setDeletedMembers([]);
+      }
     }
     if (watchesHolds) {
       // The human desk: an audit node's own holds — and for a Supernode,
@@ -985,6 +1009,41 @@ export function NodeThread({
                     />
                   </div>
                 ))}
+              {/* The administrator's undo: deleted members stay OFF the
+                  roster above but revivable here for 7 days — then the
+                  purge makes the delete final. */}
+              {showMembers && deletedMembers.length > 0 && (
+                <>
+                  <span className="convo-group deleted-group">
+                    {tr("work.recentlyDeleted")} ({deletedMembers.length})
+                  </span>
+                  <p className="muted fixed-note">{tr("work.reviveHint")}</p>
+                  {deletedMembers.map((m) => (
+                    <div key={m.node_id} className="commit-row deleted-row">
+                      <span className="muted">
+                        {displayNodeName(m.title)} ·{" "}
+                        {m.deleted_at.slice(0, 10)}
+                      </span>
+                      <button
+                        type="button"
+                        className="linklike"
+                        onClick={() => {
+                          void (async () => {
+                            try {
+                              await api.reviveWorkNode(m.node_id);
+                              onChanged();
+                            } catch {
+                              /* the poll corrects the list shortly */
+                            }
+                          })();
+                        }}
+                      >
+                        {tr("work.revive")}
+                      </button>
+                    </div>
+                  ))}
+                </>
+              )}
               {/* Minting a member happens HERE, on the org's own access
                   desk — the + in the sidebar makes standalone nodes. */}
               {account.responsible && (

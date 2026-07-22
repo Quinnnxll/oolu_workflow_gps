@@ -6,7 +6,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { AddNode, NodeThread, Work } from "./Work";
+import { AddNode, NodeMargins, NodeThread, Work } from "./Work";
 import type { WorkNode } from "../api";
 
 let routes: Record<string, { status: number; body: unknown }>;
@@ -86,6 +86,27 @@ describe("Work", () => {
 
     expect(await screen.findByText("Invoice Cleaner")).toBeTruthy();
     expect(screen.getByText("$12.34 · 90% healthy")).toBeTruthy();
+  });
+
+  it("delete is REAL: the confirm calls the delete door, not a hide", async () => {
+    routes["DELETE /v1/work/nodes/n1"] = {
+      status: 200,
+      body: { deleted: true, revivable_until: "2026-07-06T00:00:00Z" },
+    };
+    const closed = vi.fn();
+    render(
+      <NodeMargins node={workNode()} onChanged={vi.fn()} onClosed={closed} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    // The hint says what delete now MEANS: gone everywhere, 7-day undo.
+    expect(screen.getByText(/revive it within 7 days/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Yes, delete" }));
+    await waitFor(() => expect(closed).toHaveBeenCalled());
+    expect(
+      calls.some(
+        (c) => c.method === "DELETE" && c.path === "/v1/work/nodes/n1",
+      ),
+    ).toBe(true);
   });
 
   it("carries exactly one fold control — on the My-nodes column", async () => {

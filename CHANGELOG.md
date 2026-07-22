@@ -4,6 +4,34 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Node deletion is REAL — everywhere at once, with a 7-day undo:
+
+- **The gap.** "Delete" on a Work node was a list margin: the node
+  left YOUR sidebar but kept living everywhere else — still on its
+  Supernode's Access roster, still resolving goals, still runnable.
+- **Tombstone now.** ``DELETE /v1/work/nodes/{id}`` (desk-walled)
+  stamps ``deleted_at`` on the node's account: it leaves the Work
+  desk, its Supernode's member roster, run resolution (chat, API, and
+  webhook fire alike), the twin guard, and the build dedupe in the
+  same moment — a deleted node never blocks rebuilding its goal, and
+  a rebuilt twin resolves past the tombstone. The marketplace listing
+  is revoked best-effort with it.
+- **Revive within 7 days.** The accidental-delete safety window:
+  ``POST /v1/work/nodes/{id}/revive`` restores the node whole — the
+  node's own responsible/admin or its SUPERNODE's may do it; 410 once
+  the window closes. The Access tab shows a "Recently deleted" list
+  under the member roster with a Revive button and the deadline, fed
+  by ``GET /v1/work/nodes/{id}/deleted-members``.
+- **Purge after.** The hourly retention tick removes accounts whose
+  window has passed — the account row, the node's whole drawer, and
+  its webhook go together, audited as ``node.purged``. The delete
+  becomes exactly what it said.
+- **Tests.** Both stacks: gone-everywhere + revive-restores, the
+  walls (stranger delete 404, stranger revive 403, double delete),
+  the closed window (410) and the final purge (account + files), the
+  tombstone never blocking a rebuild; the UI confirming into the real
+  delete door with the 7-day hint. Shell rebuilt.
+
 The conversation window tidies up — one fold control, drafts that
 survive, the representative IN the thread:
 

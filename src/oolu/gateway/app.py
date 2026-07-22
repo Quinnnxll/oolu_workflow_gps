@@ -191,6 +191,10 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 # an event, not a dataset — big payloads belong in the drawer's blob door.
 _MAX_HOOK_PAYLOAD = 65_536
 
+# How long a deleted node stays revivable before the purge makes the
+# delete real — the accidental-delete safety window.
+NODE_REVIVAL_DAYS = 7.0
+
 # An explicit "build me a node ..." request in general chat. It REQUIRES the
 # word "node" so a plain "build me a report" stays ordinary work — only a
 # genuine node-build request is routed to the real builder (never the model,
@@ -1163,6 +1167,19 @@ class GatewayApp:
         # an outside system POSTing to it fires the node's own function
         # with the payload staged as a file. Minting again rotates the
         # token; the fire door is public because the token IS the door.
+        # Real deletion with an undo window: DELETE tombstones the node
+        # (off the desk, off its Supernode's roster, out of resolution,
+        # listing revoked); the administrator may revive it within the
+        # window; the retention pass purges it for good after.
+        r.add("DELETE", "/v1/work/nodes/{node_id}", self._work_node_delete)
+        r.add(
+            "POST", "/v1/work/nodes/{node_id}/revive", self._work_node_revive
+        )
+        r.add(
+            "GET",
+            "/v1/work/nodes/{node_id}/deleted-members",
+            self._work_deleted_members,
+        )
         # Node provenance: the drawer's immutable commit history, the
         # sealed releases verification produced, and the revocation door
         # — a vulnerable release is revoked, never silently modified.
@@ -3111,7 +3128,8 @@ class GatewayApp:
                     noder_principal=session.principal_id,
                     tenant_id=session.tenant_id,
                 )
-                if n.skill_id == skill_id
+                # A deleted node never blocks rebuilding its goal.
+                if n.skill_id == skill_id and not self._node_deleted(n.node_id)
             ),
             None,
         )
@@ -3604,7 +3622,17 @@ class GatewayApp:
             )
         except Exception:  # noqa: BLE001 - resolution is best-effort
             return None
-        node = next((n for n in nodes if n.skill_id == skill_id), None)
+        # A deleted node is absent: its function never resolves — and a
+        # REBUILT twin of the same goal resolves past the tombstone.
+        node = next(
+            (
+                n
+                for n in nodes
+                if n.skill_id == skill_id
+                and not self._node_deleted(n.node_id)
+            ),
+            None,
+        )
         if node is None:
             return None
         version = self._nodeplace.latest_version(node.node_id)
@@ -3786,7 +3814,7 @@ class GatewayApp:
         except Exception:  # noqa: BLE001 - resolution is best-effort
             return None
         node = next((n for n in nodes if n.node_id == node_id), None)
-        if node is None:
+        if node is None or self._node_deleted(node.node_id):
             return None
         version = self._nodeplace.latest_version(node.node_id)
         if version is None:
@@ -3964,6 +3992,8 @@ class GatewayApp:
         for node in nodes:
             if not node.skill_id.startswith("fn-") or node.skill_id == exact_id:
                 continue
+            if self._node_deleted(node.node_id):
+                continue  # a deleted twin is no twin
             version = self._nodeplace.latest_version(node.node_id)
             if version is None:
                 continue
@@ -6555,6 +6585,132 @@ class GatewayApp:
         )
 
     # ------------------------------------------------------------------ #
+    # Node deletion: tombstone now, revive within the window, purge after.#
+    # ------------------------------------------------------------------ #
+    def _work_node_delete(self, request, session, params) -> Response:
+        """Delete the node for REAL — everywhere at once: off the Work
+        desk, off its Supernode's member roster, out of run resolution,
+        its marketplace listing revoked. The tombstone stands for
+        ``NODE_REVIVAL_DAYS`` so an administrator can undo an accident;
+        then the retention pass purges the account and the node's
+        drawer for good."""
+        desk, _entry = self._imitate_entry(session, params["node_id"])
+        node_id = params["node_id"]
+        now = request.now or self._clock()
+        if not desk.delete_node(node_id, at=now):
+            raise GatewayError(404, "not_found", "no such node to delete")
+        # The marketplace listing goes with it — best-effort: an account
+        # responsible who is not the registry creator cannot revoke the
+        # listing, but the desk/roster/resolution walls bind regardless.
+        if self._nodeplace is not None:
+            try:
+                self._nodeplace.revoke(
+                    node_id,
+                    noder_principal=session.principal_id,
+                    tenant_id=session.tenant_id,
+                )
+            except Exception:  # noqa: BLE001 — the tombstone already stands
+                pass
+        revivable_until = now + timedelta(days=NODE_REVIVAL_DAYS)
+        self._durable.audit.append(
+            "node.deleted",
+            {
+                "node_id": node_id,
+                "by": session.principal_id,
+                "tenant": session.tenant_id,
+                "deleted_at": now.isoformat(),
+                "revivable_until": revivable_until.isoformat(),
+            },
+        )
+        return json_response(
+            200,
+            {"deleted": True, "revivable_until": revivable_until.isoformat()},
+        )
+
+    def _work_node_revive(self, request, session, params) -> Response:
+        """The administrator's undo: within the window, the node's own
+        responsible/admin — or its Supernode's — brings an accidentally
+        deleted node back whole. After the window: gone for good (410),
+        which is exactly what the delete promised."""
+        desk = self._require_desk()
+        node_id = params["node_id"]
+        account = desk.account_for(node_id)
+        if (
+            account is None
+            or account.deleted_at is None
+            or desk.node_tenant(node_id) != session.tenant_id
+        ):
+            raise GatewayError(404, "not_found", "no deleted node by that id")
+        allowed = {account.responsible, account.admin} - {None, ""}
+        if account.supernode_id:
+            parent = desk.account_for(account.supernode_id)
+            if parent is not None:
+                allowed |= {parent.responsible, parent.admin} - {None, ""}
+        if session.principal_id not in allowed:
+            raise GatewayError(
+                403, "forbidden", "only its administrators may revive a node"
+            )
+        now = request.now or self._clock()
+        deadline = account.deleted_at + timedelta(days=NODE_REVIVAL_DAYS)
+        if now > deadline:
+            raise GatewayError(
+                410,
+                "gone",
+                "the revival window has closed — the delete stands",
+            )
+        desk.revive_node(node_id)
+        self._durable.audit.append(
+            "node.revived",
+            {
+                "node_id": node_id,
+                "by": session.principal_id,
+                "tenant": session.tenant_id,
+            },
+        )
+        return json_response(200, {"revived": True})
+
+    def _work_deleted_members(self, request, session, params) -> Response:
+        """A Supernode's recently deleted members — the revival list its
+        administrators read. Walled to the caller's own desk."""
+        desk, _entry = self._imitate_entry(session, params["node_id"])
+        items = desk.deleted_members_of(
+            params["node_id"], tenant=session.tenant_id
+        )
+        for item in items:
+            deleted_at = datetime.fromisoformat(item["deleted_at"])
+            item["revivable_until"] = (
+                deleted_at + timedelta(days=NODE_REVIVAL_DAYS)
+            ).isoformat()
+        return json_response(200, {"items": items})
+
+    def _node_deleted(self, node_id: str) -> bool:
+        """Whether the node is tombstoned — resolution, reuse offers,
+        and the build dedupe all treat a deleted node as absent."""
+        if self._desk is None:
+            return False
+        account = self._desk.account_for(node_id)
+        return account is not None and account.deleted_at is not None
+
+    def _purge_deleted_nodes(self, now) -> None:
+        """The delete becomes real: accounts whose revival window has
+        passed leave the books, and each node's drawer and webhook go
+        with them. Rides the retention tick; never raises into serving."""
+        if self._desk is None:
+            return
+        cutoff = now - timedelta(days=NODE_REVIVAL_DAYS)
+        for account in self._desk.purge_deleted(before=cutoff):
+            node_id = account.node_id
+            tenant = self._desk.node_tenant(node_id) or ""
+            if self._files is not None and tenant:
+                for file in self._files.list(tenant=tenant, node_id=node_id):
+                    self._files.delete(file.file_id, tenant=tenant)
+            self._node_hooks.revoke(node_id)
+            self._durable.audit.append(
+                "node.purged",
+                {"node_id": node_id, "tenant": tenant},
+            )
+
+    # ------------------------------------------------------------------ #
     # Node provenance doors: history, releases, revocation.               #
     # ------------------------------------------------------------------ #
     def _require_provenance(self):
@@ -7518,6 +7674,8 @@ class GatewayApp:
                 "retention.pruned",
                 {"run_id": "retention:tick", "days": days, **pruned},
             )
+        # Deleted nodes whose revival window has passed go for good.
+        self._purge_deleted_nodes(now)
 
     def _scheduled_sweep_tick(self, now) -> None:
         """One due-check and, when this host wins the claim, one sweep —

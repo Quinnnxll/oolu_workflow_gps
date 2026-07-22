@@ -193,6 +193,13 @@ class NodeAccount(BaseModel):
     # FIRST time the template button ran — so the choice is decided once
     # and never re-reasoned, model or not. Empty = not resolved yet.
     org_template: str = ""
+    # The tombstone: when this node was DELETED. A deleted node leaves
+    # every list — the owner's desk, its Supernode's member roster, run
+    # resolution — at once, but the record survives for the revival
+    # window so an administrator can undo an accidental delete. The
+    # retention pass purges the account (and the node's files) for good
+    # once the window passes. None = alive.
+    deleted_at: datetime | None = None
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -230,20 +237,75 @@ class NodeAccountStore:
             return None
         return NodeAccount.model_validate_json(row["payload_json"])
 
-    def under(self, supernode_id: str) -> list[NodeAccount]:
+    def under(
+        self, supernode_id: str, *, include_deleted: bool = False
+    ) -> list[NodeAccount]:
         """Every account created under one Supernode — the org's members.
-        A human-sized scan: a Supernode manages a fleet, not a census."""
-        return [a for a in self._all() if a.supernode_id == supernode_id]
+        A human-sized scan: a Supernode manages a fleet, not a census.
+        Deleted members are OUT of the roster unless explicitly asked
+        for (the revival list is the one caller that wants them)."""
+        return [
+            a
+            for a in self._all()
+            if a.supernode_id == supernode_id
+            and (include_deleted or a.deleted_at is None)
+        ]
 
     def answered_by(self, principal: str) -> list[NodeAccount]:
         """Every account this principal answers for — as the responsible
         who onboarded it, or as its admin. This is how a node someone ELSE
         created (a Supernode's humans minting claim tickets) reaches the
         onboarder's own Work desk: responsibility lives on the account,
-        not in the registry's creator column."""
+        not in the registry's creator column. Deleted accounts stay off
+        the desk — the tombstone is the revival door's business."""
         return [
-            a for a in self._all() if principal in {a.responsible, a.admin}
+            a
+            for a in self._all()
+            if principal in {a.responsible, a.admin} and a.deleted_at is None
         ]
+
+    # -- deletion: tombstone, revival, purge ----------------------------- #
+    def mark_deleted(self, node_id: str, *, at: datetime) -> bool:
+        """Stamp the tombstone. False when there is no account or it is
+        already deleted — deleting twice does not move the clock (and
+        cannot stretch the revival window)."""
+        account = self.get(node_id)
+        if account is None or account.deleted_at is not None:
+            return False
+        self.upsert(
+            account.model_copy(update={"deleted_at": at, "updated_at": at})
+        )
+        return True
+
+    def revive(self, node_id: str) -> bool:
+        """Clear the tombstone — the administrator's undo within the
+        window. False when there is nothing deleted to revive."""
+        account = self.get(node_id)
+        if account is None or account.deleted_at is None:
+            return False
+        self.upsert(
+            account.model_copy(
+                update={"deleted_at": None, "updated_at": datetime.now(UTC)}
+            )
+        )
+        return True
+
+    def purge_deleted(self, *, before: datetime) -> list[NodeAccount]:
+        """Remove accounts whose tombstone predates the cutoff — the
+        revival window has passed; the delete becomes real. Returns what
+        was purged so the caller can take the node's files with it."""
+        gone = [
+            a
+            for a in self._all()
+            if a.deleted_at is not None and a.deleted_at < before
+        ]
+        with self._conn.transaction() as db:
+            for account in gone:
+                db.execute(
+                    "DELETE FROM node_accounts WHERE node_id = ?",
+                    (account.node_id,),
+                )
+        return gone
 
     def _all(self) -> list[NodeAccount]:
         with self._conn.lock:

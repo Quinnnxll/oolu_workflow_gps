@@ -1358,6 +1358,29 @@ export const api = {
       `/v1/work/nodes/${encodeURIComponent(nodeId)}/prefs`,
       prefs,
     ),
+  // REAL deletion with an undo window: the node leaves the desk, its
+  // Supernode's roster, and run resolution at once; an administrator
+  // can revive it until revivable_until, then the purge makes it final.
+  deleteWorkNode: (nodeId: string) =>
+    req<{ deleted: boolean; revivable_until: string }>(
+      "DELETE",
+      `/v1/work/nodes/${encodeURIComponent(nodeId)}`,
+    ),
+  reviveWorkNode: (nodeId: string) =>
+    req<{ revived: boolean }>(
+      "POST",
+      `/v1/work/nodes/${encodeURIComponent(nodeId)}/revive`,
+      {},
+    ),
+  deletedMembers: (nodeId: string) =>
+    req<{
+      items: {
+        node_id: string;
+        title: string;
+        deleted_at: string;
+        revivable_until: string;
+      }[];
+    }>("GET", `/v1/work/nodes/${encodeURIComponent(nodeId)}/deleted-members`),
   assignNode: (nodeId: string, username: string) =>
     req<NodeAccountView>(
       "POST",

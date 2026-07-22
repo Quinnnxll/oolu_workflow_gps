@@ -2174,10 +2174,28 @@ const STRINGS: Record<string, Entry> = {
   },
   "friends.save": { en: "Save", zh: "保存", es: "Guardar", fr: "Enregistrer" },
   "work.deleteNodeHint": {
-    en: "Removes it from your list — the node's record survives, and it returns when it moves again.",
-    zh: "从你的列表移除——节点记录仍保留，节点再有动静时会回来。",
-    es: "Lo quita de tu lista: el registro del nodo sobrevive y vuelve cuando se mueva de nuevo.",
-    fr: "Le retire de votre liste — le dossier du nœud survit et il revient dès qu'il bouge à nouveau.",
+    en: "Deletes the node everywhere — your list, its org's roster, and execution. An administrator can revive it within 7 days; after that it is gone for good.",
+    zh: "彻底删除该节点——从你的列表、组织成员名单和执行中移除。管理员可在 7 天内恢复；超过后将永久删除。",
+    es: "Elimina el nodo en todas partes: tu lista, la plantilla de su organización y la ejecución. Un administrador puede revivirlo en 7 días; después desaparece para siempre.",
+    fr: "Supprime le nœud partout — votre liste, l'effectif de son organisation et l'exécution. Un administrateur peut le rétablir sous 7 jours ; ensuite il disparaît pour de bon.",
+  },
+  "work.recentlyDeleted": {
+    en: "Recently deleted",
+    zh: "最近删除",
+    es: "Eliminados recientemente",
+    fr: "Supprimés récemment",
+  },
+  "work.revive": {
+    en: "Revive",
+    zh: "恢复",
+    es: "Revivir",
+    fr: "Rétablir",
+  },
+  "work.reviveHint": {
+    en: "Deleted members stay revivable for 7 days, then the purge makes it final.",
+    zh: "已删除的成员可在 7 天内恢复，之后将永久清除。",
+    es: "Los miembros eliminados pueden revivirse durante 7 días; luego la purga es definitiva.",
+    fr: "Les membres supprimés restent récupérables 7 jours, puis la purge est définitive.",
   },
   "work.seatOnboard": {
     en: "onboard",
