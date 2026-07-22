@@ -1293,6 +1293,13 @@ class GatewayApp:
             self._metrics_scorecard,
             requires_permission="metrics:view",
         )
+        # Phase 2: signup-month cohorts straight from the run books.
+        r.add(
+            "GET",
+            "/v1/platform/metrics/cohorts",
+            self._metrics_cohorts,
+            requires_permission="metrics:view",
+        )
         r.add(
             "POST",
             "/v1/platform/metrics/snapshot",
@@ -8956,6 +8963,123 @@ class GatewayApp:
             errors = self._metrics.get("errors", 0)
             return (requests - errors) / requests * 100
 
+        # ---- phase 2 readers -------------------------------------------- #
+        month = datetime.now(UTC).strftime("%Y-%m")
+
+        def _earnings_month() -> float:
+            billing = self._billing
+            if billing is None:
+                raise LookupError("no earnings books on this host")
+            micros = 0
+            for principal in billing.principals():
+                for entry in billing.entries(principal):
+                    if entry.created_at.strftime("%Y-%m") == month:
+                        micros += entry.amount_micros
+            return micros / 1_000_000
+
+        def _completed_month() -> int:
+            return len(
+                [
+                    s
+                    for s in _runs()
+                    if s.phase.value == "completed"
+                    and s.updated_at.strftime("%Y-%m") == month
+                ]
+            )
+
+        def _arpu() -> float:
+            monthly = len(_active_since(30))
+            if not monthly:
+                raise LookupError("no monthly actives — no ARPU basis")
+            return _earnings_month() / monthly
+
+        def _cost_per_success() -> float:
+            completed = _completed_month()
+            if not completed:
+                raise LookupError("no completed runs this month")
+            return _model_month_cost() / completed
+
+        def _contribution_margin() -> float:
+            earnings = _earnings_month()
+            if not earnings:
+                raise LookupError("no earnings this month — no margin basis")
+            return (earnings - _model_month_cost()) / earnings * 100
+
+        def _ai_terminal_30d():
+            floor = datetime.now(UTC) - timedelta(days=30)
+            return [
+                s
+                for s in _runs()
+                if s.updated_at >= floor
+                and s.phase.value in ("completed", "failed", "cancelled")
+            ]
+
+        def _ai_task_success() -> float:
+            done = [
+                s
+                for s in _ai_terminal_30d()
+                if isinstance(
+                    s.contract.metadata.get("node_function"), dict
+                )
+            ]
+            if not done:
+                raise LookupError("no node-function runs in 30 days")
+            wins = [s for s in done if s.phase.value == "completed"]
+            return len(wins) / len(done) * 100
+
+        def _intervention_rate() -> float:
+            done = _ai_terminal_30d()
+            if not done:
+                raise LookupError("no terminal runs in 30 days")
+            touched = [s for s in done if s.user_retries > 0]
+            return len(touched) / len(done) * 100
+
+        def _repairs_total() -> float:
+            return float(
+                len(
+                    [
+                        record
+                        for record in self._durable.audit.records()
+                        if record.event_type == "model.seat"
+                        and record.payload.get("purpose") == "node.repair"
+                    ]
+                )
+            )
+
+        def _todays_entries():
+            billing = self._billing
+            if billing is None:
+                raise LookupError("no earnings books on this host")
+            return [
+                entry
+                for principal in billing.principals()
+                for entry in billing.entries(principal)
+                if entry.created_at.date() == today
+            ]
+
+        def _avg_transaction() -> float:
+            entries = _todays_entries()
+            if not entries:
+                raise LookupError("no transactions today")
+            return sum(e.amount_micros for e in entries) / len(entries) / 1e6
+
+        def _activation_rate() -> float:
+            started: set[str] = set()
+            completed: set[str] = set()
+            for s in _runs():
+                if not s.contract.submitted_by:
+                    continue
+                started.add(s.contract.submitted_by)
+                if s.phase.value == "completed":
+                    completed.add(s.contract.submitted_by)
+            if not started:
+                raise LookupError("no accounts have started a run yet")
+            return len(completed & started) / len(started) * 100
+
+        def _at_risk() -> float:
+            earlier = _active_since(30) - _active_since(7)
+            return float(len(earlier))
+
         today = datetime.now(UTC).date()
         readers = {
             "users.daily_active": lambda: len(_active_since(1)),
@@ -8984,9 +9108,25 @@ class GatewayApp:
             "model.calls_total": lambda: _model_totals("calls"),
             "model.spend_usd": lambda: _model_totals("cost_usd"),
             "capital.in_app_usd": _capital,
+            # ---- phase 2 -------------------------------------------- #
+            "unit.arpu_usd": _arpu,
+            "unit.cost_per_successful_workflow_usd": _cost_per_success,
+            "unit.contribution_margin_pct": _contribution_margin,
+            "ai.task_success_rate": _ai_task_success,
+            "ai.intervention_rate": _intervention_rate,
+            "ai.repairs_total": _repairs_total,
+            "market.transactions_daily": lambda: float(
+                len(_todays_entries())
+            ),
+            "market.avg_transaction_usd": _avg_transaction,
+            "health.activation_rate_pct": _activation_rate,
+            "health.at_risk_users": _at_risk,
         }
         if self._nodeplace is not None:
             readers["nodes.total"] = lambda: len(self._nodeplace.all_nodes())
+            readers["market.listings_active"] = lambda: float(
+                len(self._nodeplace.discover(""))
+            )
         return InvestorMetricsService(self._metrics_store, readers=readers)
 
     def _require_metrics(self):
@@ -9010,6 +9150,53 @@ class GatewayApp:
         """The weighted composite, pillars renormalized over what this
         platform can actually measure — excluded pillars are named."""
         return json_response(200, self._require_metrics().scorecard())
+
+    def _metrics_cohorts(self, request, session, params) -> Response:
+        """Signup-month cohorts off the run books: each account joins
+        the cohort of its FIRST activity month, and every cohort shows
+        how many members were active in each month since — the matrix's
+        cohort analysis, computed from real stamps, never sampled."""
+        self._require_metrics()  # the same wall and enablement check
+        from datetime import UTC as _UTC
+        from datetime import datetime as _dt
+
+        from ..telemetry.investor import month_span
+
+        first_seen: dict[str, str] = {}
+        active_months: dict[str, set[str]] = {}
+        for state in self._durable.runs.list(limit=10_000):
+            who = state.contract.submitted_by
+            if not who or not state.contract.metadata.get("tenant_id"):
+                continue
+            born = state.created_at.strftime("%Y-%m")
+            moved = state.updated_at.strftime("%Y-%m")
+            active_months.setdefault(who, set()).update({born, moved})
+            if who not in first_seen or born < first_seen[who]:
+                first_seen[who] = born
+        cohorts: dict[str, list[str]] = {}
+        for who, born in first_seen.items():
+            cohorts.setdefault(born, []).append(who)
+        now_month = _dt.now(_UTC).strftime("%Y-%m")
+        items = []
+        for born in sorted(cohorts)[-12:]:
+            members = cohorts[born]
+            retention = []
+            for offset, month in enumerate(month_span(born, now_month)):
+                active = sum(
+                    1 for who in members if month in active_months[who]
+                )
+                retention.append(
+                    {
+                        "month": month,
+                        "offset": offset,
+                        "active": active,
+                        "pct": round(active / len(members) * 100, 1),
+                    }
+                )
+            items.append(
+                {"cohort": born, "size": len(members), "retention": retention}
+            )
+        return json_response(200, {"items": items})
 
     def _metrics_history(self, request, session, params) -> Response:
         self._require_metrics()

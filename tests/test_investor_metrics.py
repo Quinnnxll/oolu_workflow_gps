@@ -257,3 +257,93 @@ def test_summary_and_scorecard_routes_are_walled(tmp_path):
             assert field in first
     finally:
         conn.close()
+
+
+# --------------------------------------------------------------------- #
+# Phase 2: unit economics, AI quality, cohorts, market, health.         #
+# --------------------------------------------------------------------- #
+def test_month_span_walks_calendar_months():
+    from oolu.telemetry.investor import month_span
+
+    assert month_span("2025-11", "2026-02") == [
+        "2025-11", "2025-12", "2026-01", "2026-02",
+    ]
+    assert month_span("2026-03", "2026-03") == ["2026-03"]
+    assert month_span("2026-05", "2026-03") == []  # inverted: empty
+    assert month_span("garbage", "2026-03") == []
+
+
+def test_phase2_metrics_read_the_real_books(tmp_path):
+    gw, conn, ident = _host(tmp_path)
+    try:
+        # One real completed run: activation and AI books have a basis.
+        gw.handle(
+            _req(
+                "POST", "/v1/runs",
+                token=ident.token("operator", "t1"), body={"intent": "tidy"},
+            )
+        )
+        view = gw.handle(
+            _req(
+                "GET", "/v1/platform/metrics",
+                token=ident.token("operator", "t1"),
+            )
+        )
+        items = {i["key"]: i for i in view.body["items"]}
+        # The runner completed, so every account that started activated.
+        assert items["health.activation_rate_pct"]["value"] == 100.0
+        assert items["health.at_risk_users"]["value"] == 0.0
+        # No human retries anywhere: intervention is honestly zero.
+        assert items["ai.intervention_rate"]["value"] == 0.0
+        # No earnings books on this host: unit economics stay blank —
+        # a missing store is a blank metric, never a fake zero.
+        assert items["unit.arpu_usd"]["value"] is None
+        # The manual CAC door exists with its contract riding along.
+        assert items["unit.cac_usd"]["source"] == "manual"
+        assert items["unit.cac_usd"]["section"] == "acquisition_and_growth"
+    finally:
+        conn.close()
+
+
+def test_cohorts_answer_from_the_run_books_and_are_walled(tmp_path):
+    gw, conn, ident = _host(tmp_path)
+    try:
+        walled = gw.handle(
+            _req(
+                "GET", "/v1/platform/metrics/cohorts",
+                token=ident.token("user-1", "t1"),
+            )
+        )
+        assert walled.status == 403
+        gw.handle(
+            _req(
+                "POST", "/v1/runs",
+                token=ident.token("operator", "t1"), body={"intent": "tidy"},
+            )
+        )
+        answered = gw.handle(
+            _req(
+                "GET", "/v1/platform/metrics/cohorts",
+                token=ident.token("operator", "t1"),
+            )
+        )
+        assert answered.status == 200
+        (cohort,) = answered.body["items"]
+        assert cohort["size"] == 1
+        # The signup month itself is retention point M0 at 100%.
+        assert cohort["retention"][0]["offset"] == 0
+        assert cohort["retention"][0]["pct"] == 100.0
+        # The columns walk to the CURRENT month, one point per month.
+        months = [p["month"] for p in cohort["retention"]]
+        assert months == sorted(set(months))
+    finally:
+        conn.close()
+
+
+def test_the_scorecard_gains_phase2_inputs(tmp_path):
+    from oolu.telemetry.investor import SCORECARD_PILLARS
+
+    pillars = {p["name"]: p for p in SCORECARD_PILLARS}
+    assert "ai.task_success_rate" in pillars["product"]["inputs"]
+    assert "health.activation_rate_pct" in pillars["product"]["inputs"]
+    assert "unit.contribution_margin_pct" in pillars["economics"]["inputs"]

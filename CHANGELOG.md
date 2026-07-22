@@ -4,6 +4,34 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Investor panel Phase 2 — unit economics, cohorts, AI quality,
+marketplace health, customer health:
+
+- **Unit economics.** ARPU (month earnings per monthly active), cost
+  per successful workflow (model spend / completed runs, month to
+  date), contribution margin (earnings after model cost) — all off the
+  real books, blank when a store is absent, never a fake zero. CAC and
+  LTV/CAC arrive through the manual door with their contracts riding.
+- **Cohort analysis.** ``GET /v1/platform/metrics/cohorts``: each
+  account joins the cohort of its FIRST activity month; every cohort
+  answers how many members were active in each month since — computed
+  from real run stamps, last 12 cohorts, M0 onward. The panel renders
+  the classic retention triangle, shaded by retention band.
+- **AI quality.** Task success rate over node-function runs (the AI's
+  own code executing end to end, 30-day window), human intervention
+  rate (terminal runs that needed a retry), and self-repairs promoted
+  (the node.repair seat's audit count).
+- **Marketplace and customer health.** Active listings, transactions
+  today, average transaction value; activation rate (accounts that
+  ever completed among accounts that ever started) and the at-risk
+  watchlist (active this month, silent 7 days).
+- **Scorecard follows.** The product pillar now reads AI task success
+  and activation; economics reads contribution margin.
+- **Tests.** The month-span walker, phase-2 readers against real runs
+  (honest blanks where books are absent), the cohort door (M0 = 100%,
+  columns walking to the current month, walled), and the scorecard's
+  new inputs.
+
 The investor panel learns the performance matrix — Phase 1: contract,
 executive summary, scorecard:
 

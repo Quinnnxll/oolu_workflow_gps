@@ -41,6 +41,15 @@
     background: var(--line); overflow: hidden; }
   .score-bar > i { display: block; height: 100%; background: var(--accent); }
   .score-total { font-size: 2rem; font-weight: 700; }
+  table.cohort { border-collapse: collapse; font-size: 0.8rem;
+    margin-top: 0.4rem; }
+  table.cohort th, table.cohort td { border: 1px solid var(--line);
+    padding: 0.25rem 0.55rem; text-align: right; }
+  table.cohort th:first-child, table.cohort td:first-child {
+    text-align: left; }
+  table.cohort td.hot { background: rgba(68, 102, 255, 0.28); }
+  table.cohort td.warm { background: rgba(68, 102, 255, 0.14); }
+  .scroll-x { overflow-x: auto; }
 </style>
 </head>
 <body>
@@ -58,6 +67,7 @@
   <span class="muted">refreshes every 60&thinsp;s</span>
 </form>
 <div id="exec"></div>
+<div id="cohorts"></div>
 <div id="scorecard"></div>
 <div id="board"></div>
 <div id="err" class="error"></div>
@@ -90,6 +100,7 @@ async function refresh() {
     const data = await res.json();
     await renderExec();
     await renderScorecard();
+    await renderCohorts();
     const groups = {};
     for (const item of data.items) {
       (groups[item.group] = groups[item.group] || []).push(item);
@@ -213,6 +224,53 @@ async function renderScorecard() {
       + data.excluded.join(", ").replace(/_/g, " ");
     wrap.append(note);
   }
+  mount.append(h, wrap);
+}
+/* Signup-month cohorts: each row a cohort, each column the share of
+   its members still active N months on — shaded by retention. */
+async function renderCohorts() {
+  const data = await api("/v1/platform/metrics/cohorts");
+  const mount = $("cohorts");
+  mount.replaceChildren();
+  if (!data.items.length) return;
+  const h = document.createElement("h2");
+  h.textContent = "cohort retention (signup month)";
+  const wrap = document.createElement("div");
+  wrap.className = "scroll-x";
+  const table = document.createElement("table");
+  table.className = "cohort";
+  const maxOffset = Math.max(
+    ...data.items.map((c) => c.retention.length));
+  const head = document.createElement("tr");
+  const corner = document.createElement("th");
+  corner.textContent = "cohort (size)";
+  head.append(corner);
+  for (let i = 0; i < maxOffset; i++) {
+    const th = document.createElement("th");
+    th.textContent = "M" + i;
+    head.append(th);
+  }
+  table.append(head);
+  for (const cohort of data.items) {
+    const row = document.createElement("tr");
+    const name = document.createElement("td");
+    name.textContent = cohort.cohort + " (" + cohort.size + ")";
+    row.append(name);
+    for (let i = 0; i < maxOffset; i++) {
+      const cell = document.createElement("td");
+      const point = cohort.retention[i];
+      if (point) {
+        cell.textContent = point.pct + "%";
+        cell.className = point.pct >= 60 ? "hot"
+          : point.pct >= 25 ? "warm" : "";
+      } else {
+        cell.textContent = "";
+      }
+      row.append(cell);
+    }
+    table.append(row);
+  }
+  wrap.append(table);
   mount.append(h, wrap);
 }
 $("conf").addEventListener("submit", (e) => {

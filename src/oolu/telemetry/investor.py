@@ -58,6 +58,23 @@ class MetricSpec:
     executive: bool = False
 
 
+def month_span(start: str, end: str) -> list[str]:
+    """Every calendar month from ``start`` to ``end`` inclusive, as
+    YYYY-MM — the cohort table's columns. An inverted range is empty."""
+    try:
+        year, month = int(start[:4]), int(start[5:7])
+        end_year, end_month = int(end[:4]), int(end[5:7])
+    except (ValueError, IndexError):
+        return []
+    months: list[str] = []
+    while (year, month) <= (end_year, end_month):
+        months.append(f"{year:04d}-{month:02d}")
+        month += 1
+        if month > 12:
+            year, month = year + 1, 1
+    return months
+
+
 def metric_status(spec: MetricSpec, value: float | None) -> str:
     """ok | warning | critical | unknown — the spec's thresholds applied
     with its direction. No thresholds → ok whenever a value exists."""
@@ -187,6 +204,105 @@ METRIC_CATALOG: tuple[MetricSpec, ...] = (
         description="Noder balances standing in the app: available + "
         "pending + reserved earnings.",
     ),
+    # ---- phase 2: unit economics -------------------------------------- #
+    MetricSpec(
+        "unit.arpu_usd", "ARPU (month)", "unit", "USD",
+        description="This month's platform earnings per monthly active "
+        "user.",
+        section="financial_performance",
+        formula="month_earnings / monthly_active_users",
+    ),
+    MetricSpec(
+        "unit.cost_per_successful_workflow_usd",
+        "Cost per successful workflow", "unit", "USD",
+        description="This month's model spend per completed run.",
+        section="cost_structure",
+        formula="model_month_cost / workflows_completed_this_month",
+        direction="down",
+    ),
+    MetricSpec(
+        "unit.contribution_margin_pct", "Contribution margin", "unit", "%",
+        description="Earnings after model cost, as a share of earnings, "
+        "month to date.",
+        section="financial_performance",
+        formula="(month_earnings - model_month_cost) / month_earnings * 100",
+        target=50.0, warning=20.0, critical=0.0,
+    ),
+    MetricSpec(
+        "unit.cac_usd", "Customer acquisition cost", "unit", "USD",
+        source="manual", direction="down",
+        description="Recorded by the operator from marketing spend.",
+        section="acquisition_and_growth",
+        formula="acquisition_spend / new_customers",
+    ),
+    MetricSpec(
+        "unit.ltv_cac_ratio", "LTV / CAC", "unit", "", source="manual",
+        description="Recorded by the operator once LTV modeling stands.",
+        section="financial_performance",
+        target=3.0, warning=1.5, critical=1.0,
+    ),
+    # ---- phase 2: AI quality ------------------------------------------ #
+    MetricSpec(
+        "ai.task_success_rate", "AI task success rate", "ai", "%",
+        description="Node-function runs (the AI's own code executing) "
+        "that completed, over the last 30 days of terminal runs.",
+        section="ai_performance",
+        formula="completed_node_function_runs / terminal_node_function_runs"
+        " * 100",
+        target=90.0, warning=75.0, critical=50.0,
+    ),
+    MetricSpec(
+        "ai.intervention_rate", "Human intervention rate", "ai", "%",
+        description="Terminal runs in the last 30 days that needed a "
+        "human retry.",
+        section="ai_performance",
+        formula="runs_with_user_retries / terminal_runs * 100",
+        direction="down", warning=30.0, critical=60.0,
+    ),
+    MetricSpec(
+        "ai.repairs_total", "Self-repairs promoted", "ai", "count",
+        description="Healed functions the node.repair seat promoted into "
+        "drawers, all-time.",
+        section="ai_performance",
+        formula="count of node.repair seat events on the audit log",
+    ),
+    # ---- phase 2: marketplace health ---------------------------------- #
+    MetricSpec(
+        "market.listings_active", "Active listings", "market", "count",
+        description="Nodes currently discoverable on the nodeplace.",
+        section="transaction_and_marketplace",
+        formula="count of discoverable listings",
+    ),
+    MetricSpec(
+        "market.transactions_daily", "Transactions today", "market", "count",
+        description="Earnings entries filed today.",
+        section="transaction_and_marketplace",
+        formula="count of earnings entries created today",
+    ),
+    MetricSpec(
+        "market.avg_transaction_usd", "Avg transaction value", "market",
+        "USD",
+        description="Mean value of today's earnings entries.",
+        section="transaction_and_marketplace",
+        formula="today_earnings_value / today_earnings_count",
+    ),
+    # ---- phase 2: customer health ------------------------------------- #
+    MetricSpec(
+        "health.activation_rate_pct", "Activation rate", "health", "%",
+        description="Accounts that ever completed a run, among accounts "
+        "that ever started one.",
+        section="acquisition_and_growth",
+        formula="accounts_with_completed_run / accounts_with_any_run * 100",
+        target=60.0, warning=40.0, critical=20.0,
+    ),
+    MetricSpec(
+        "health.at_risk_users", "At-risk users", "health", "users",
+        description="Accounts active earlier this month but silent for "
+        "the last 7 days — the silent-churn watchlist.",
+        section="retention_and_churn",
+        formula="active(8..30 days ago) − active(last 7 days)",
+        direction="down",
+    ),
     MetricSpec(
         "code.commits", "GitHub commits", "code", "count", source="manual",
         description="Recorded by the release pipeline or the operator.",
@@ -226,12 +342,18 @@ SCORECARD_PILLARS: tuple[dict, ...] = (
     },
     {
         "name": "economics", "weight": 0.15,
-        "inputs": ("capital.in_app_usd", "revenue.earnings_daily_usd"),
+        "inputs": (
+            "capital.in_app_usd", "revenue.earnings_daily_usd",
+            "unit.contribution_margin_pct",
+        ),
         "basis": "growth",
     },
     {
         "name": "product", "weight": 0.10,
-        "inputs": ("workflows.first_attempt_success_rate",),
+        "inputs": (
+            "workflows.first_attempt_success_rate", "ai.task_success_rate",
+            "health.activation_rate_pct",
+        ),
         "basis": "status",
     },
     {
