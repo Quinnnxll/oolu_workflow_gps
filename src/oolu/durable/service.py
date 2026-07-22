@@ -67,6 +67,16 @@ class DurableWorkflowService:
         self._checkpoint(state, "workflow.resumed")
         return state
 
+    def restart(self, run_id: str) -> RunState:
+        """Re-drive a FAILED run in its own thread instead of minting a
+        sibling — the retry lives where the failure lives."""
+        state = self.runs.get(run_id)
+        if state is None:
+            raise KeyError(f"unknown run: {run_id}")
+        state = self._orch.restart(state)
+        self._checkpoint(state, "workflow.restarted")
+        return state
+
     def get(self, run_id: str) -> RunState | None:
         return self.runs.get(run_id)
 

@@ -104,6 +104,48 @@ class WorkflowOrchestrator:
             state = self.step(state)
         return state
 
+    def restart(self, state: RunState) -> RunState:
+        """Re-drive a FAILED run IN PLACE — the same run_id, the same
+        thread — instead of minting a sibling. Asking the same goal
+        again must not pile a new dead thread onto the Noder list every
+        time: the retry lives where the failure lives, the history keeps
+        both, and ``user_retries`` counts honestly.
+
+        Every per-phase output resets (a fresh attempt re-plans, and the
+        human gates — confirmation, approval — are re-earned, never
+        inherited from the route that failed); the history, incidents,
+        and run identity survive as the record of what happened."""
+        if state.phase is not Phase.FAILED:
+            raise ResumeError("only a failed run can be restarted in place")
+        state.user_retries += 1
+        state.recovery_attempts = 0
+        state.rebuild_attempts = 0
+        state.failure_reason = None
+        state.brief = None
+        state.compilation = None
+        state.grounding = None
+        state.route = None
+        state.human_control = None
+        state.confirmation = None
+        state.approvals = []
+        state.execution = None
+        state.monitoring = None
+        state.feedback = None
+        state.pause = None
+        state.history.append(
+            PhaseTransition(
+                from_phase=Phase.FAILED,
+                to_phase=Phase.INTAKE,
+                note=f"restarted in place — user retry #{state.user_retries}",
+            )
+        )
+        state.phase = Phase.INTAKE
+        self._emit(
+            "workflow.restarted",
+            {"run_id": state.run_id, "user_retries": state.user_retries},
+        )
+        return self.run(state)
+
     def step(self, state: RunState) -> RunState:
         """Execute exactly the phase named by ``state.phase`` once."""
         if state.is_paused:

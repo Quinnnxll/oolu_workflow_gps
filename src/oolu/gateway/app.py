@@ -429,6 +429,13 @@ class GatewayConfig:
     open_registration: bool = True
     # Which tenant self-served accounts land in.
     registration_tenant: str = "main"
+    # How long finished history stays on the books before the retention
+    # pass trims it: terminal runs (the dead Noder threads nobody
+    # revives), finished queue tasks, delivered outbox rows, and the
+    # audit chain's oldest prefix (attested, so the chain still
+    # verifies). 0 turns retention off. Live and paused work is never
+    # touched — retention trims history, not work.
+    retention_days: float = 45.0
     # Is this deployment the OoLu GLOBAL service? Supernodes serving the
     # global ecosystem carry a higher trust score and must obey the KYC
     # policy (with its paying-plan gate). Edge installs — the desktop and
@@ -654,6 +661,8 @@ class GatewayApp:
         self._sweep_schedule = SweepScheduleStore(durable.conn)
         # The tick's cheap gate: at most one due-check per minute per host.
         self._sweep_gate = 0.0
+        # Retention's own gate: at most one pruning pass per hour per host.
+        self._retention_gate = 0.0
         self._settings = settings_node
         self._payments = payments
         self._launch_guard = launch_guard
@@ -3978,16 +3987,41 @@ class GatewayApp:
                 )
         return best[1] if best is not None else None
 
+    def _revivable_run_for(self, session, intent: str):
+        """``(state, mode)`` for the caller's own dead-or-stuck run of
+        this exact goal, newest first — the thread a re-ask revives
+        instead of piling a sibling next to it. Two shapes revive: a
+        terminal FAILED run (mode "restart" — re-driven in place) and a
+        run paused on an INCIDENT (mode "retry" — the operator door,
+        answered by the re-ask itself)."""
+        wanted = (intent or "").strip()
+        if not wanted:
+            return None
+        for state in self._durable.runs.list(limit=10_000):
+            if state.contract.metadata.get("tenant_id") != session.tenant_id:
+                continue
+            if state.contract.submitted_by != session.principal_id:
+                continue
+            if (state.contract.intent or "").strip() != wanted:
+                continue
+            if state.phase is Phase.FAILED:
+                return state, "restart"
+            if (
+                state.pause is not None
+                and state.pause.kind is PauseKind.INCIDENT
+            ):
+                return state, "retry"
+        return None
+
     def _start_intent_run(self, session, intent: str, *, max_recovery: int = 1) -> dict:
         """Submit a plain intent as a run: the non-marketplace core of
-        ``_submit_run``, shared with the chat surface."""
-        tenant_runs = sum(
-            1
-            for s in self._durable.runs.list()
-            if s.contract.metadata.get("tenant_id") == session.tenant_id
-        )
-        if tenant_runs >= self._config.max_runs_per_tenant:
-            raise GatewayError(429, "quota_exceeded", "tenant run quota exceeded")
+        ``_submit_run``, shared with the chat surface.
+
+        Asking a goal again after it FAILED revives the same run — the
+        same run_id, the same Noder thread — instead of minting a fresh
+        one: the retry lands where the failure lives, the thread rises
+        (its moment moves), and the list stops filling with dead
+        siblings of one goal."""
         metadata: dict = {"tenant_id": session.tenant_id}
         # A goal the user already built a node for runs THAT node's own
         # function — the route is the stored code, not a fresh plan.
@@ -3995,6 +4029,39 @@ class GatewayApp:
         self._refuse_revoked(function)
         if function is not None:
             metadata["node_function"] = function
+        revivable = self._revivable_run_for(session, intent)
+        if revivable is not None:
+            previous, mode = revivable
+            # The revived attempt resolves the node FRESH: a node built
+            # (or revised) since the failure now carries the route.
+            previous.contract = previous.contract.model_copy(
+                update={"metadata": metadata}
+            )
+            self._durable.runs.save(previous)
+            try:
+                if mode == "restart":
+                    state = self._durable.restart(previous.run_id)
+                else:
+                    state = self._durable.resume(
+                        previous.run_id,
+                        ResumeInput(
+                            kind=PauseKind.INCIDENT,
+                            incident_decision="retry",
+                            principal=session.principal_id,
+                        ),
+                    )
+            except OrchestratorError as exc:
+                raise GatewayError(422, "cannot_execute", str(exc)) from exc
+            self._metrics["runs_submitted"] += 1
+            self._record_function_verification(state)
+            return self._run_dict(state)
+        tenant_runs = sum(
+            1
+            for s in self._durable.runs.list()
+            if s.contract.metadata.get("tenant_id") == session.tenant_id
+        )
+        if tenant_runs >= self._config.max_runs_per_tenant:
+            raise GatewayError(429, "quota_exceeded", "tenant run quota exceeded")
         contract = TaskContract(
             intent=intent,
             submitted_by=session.principal_id,
@@ -4050,6 +4117,13 @@ class GatewayApp:
                         "not_found",
                         f"no active public listing for version '{node_version_id}'",
                     )
+            if entry is None:
+                # The plain path is the chat surface's path exactly —
+                # including reviving this goal's FAILED run in place
+                # instead of piling a sibling thread beside it.
+                return self._start_intent_run(
+                    session, intent, max_recovery=max_recovery
+                )
             metadata: dict = {"tenant_id": session.tenant_id}
             if node_version_id is None:
                 function = self._resolve_node_function(session, intent)
@@ -7413,12 +7487,37 @@ class GatewayApp:
 
         try:
             now_mono = time_module.monotonic()
+            # Retention rides the same lazy traffic but keeps its OWN
+            # hourly gate — it must not depend on a bundle schedule
+            # existing or on the sweep's minute window.
+            self._maybe_retention(now_mono, request.now or self._clock())
             if now_mono < self._sweep_gate:
                 return
             self._sweep_gate = now_mono + 60.0
             self._scheduled_sweep_tick(request.now or self._clock())
         except Exception:  # noqa: BLE001 - maintenance never breaks serving
             logging.getLogger("oolu.gateway").exception("scheduled sweep tick failed")
+
+    def _maybe_retention(self, now_mono: float, now) -> None:
+        """The activity log's retention, applied for real: once an hour,
+        terminal runs, finished tasks, delivered outbox rows, and the
+        audit chain's oldest prefix older than ``retention_days`` leave
+        the books — trimmed, audited, and never touching live work. Off
+        when the window is 0."""
+        days = float(getattr(self._config, "retention_days", 0.0) or 0.0)
+        if days <= 0 or now_mono < self._retention_gate:
+            return
+        self._retention_gate = now_mono + 3600.0
+        from ..durable.maintenance import prune_retention
+
+        pruned = prune_retention(
+            self._durable.conn, older_than_days=days, now=now
+        )
+        if any(pruned.values()):
+            self._durable.audit.append(
+                "retention.pruned",
+                {"run_id": "retention:tick", "days": days, **pruned},
+            )
 
     def _scheduled_sweep_tick(self, now) -> None:
         """One due-check and, when this host wins the claim, one sweep —

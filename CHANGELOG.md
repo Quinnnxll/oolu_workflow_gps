@@ -4,6 +4,43 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Failed runs revive in place — no more phantom siblings in the Noder —
+and retention finally applies:
+
+- **The pile-up.** Asking a goal OoLu had no working node for failed —
+  and asking again minted a WHOLE NEW run, so the Noder list filled
+  with dead threads of one goal (each looking like a node that never
+  syncs to Work, because it never was one). Worse, a failing execution
+  parks on the incident door (awaiting retry/abort) — and the re-ask
+  ignored the waiting run entirely.
+- **Revive, don't recreate.** The orchestrator gains ``restart``: a
+  FAILED run re-drives IN PLACE — same run_id, same thread, per-phase
+  outputs reset, human gates (confirmation, approval) re-earned, retry
+  counted, history kept. The chat surface and ``POST /v1/runs`` now
+  revive the caller's own dead-or-stuck run of the same goal: a
+  terminal failure restarts; an incident-paused run takes the re-ask
+  AS the retry answer. The revived attempt re-resolves the node fresh
+  — a node built or revised since the failure now carries the route —
+  and the thread RISES (its moment moves), which is exactly the
+  latest-executed-first order both the Noder and Work lists already
+  sort by. One goal, one thread, however many attempts.
+- **Retention applies for real.** ``prune_retention`` existed but
+  nothing ever called it. It now covers terminal runs (the dead
+  threads nobody revives), finished queue tasks, delivered outbox
+  rows, AND the audit chain's oldest prefix — pruned as a PREFIX only,
+  with the cut attested in-chain (an ``audit.retention`` entry names
+  the hash the surviving chain resumes from), so ``verify`` still
+  passes while a SILENT prefix deletion still fails. The gateway runs
+  it on ordinary traffic, hourly, under the new
+  ``retention_days`` config (default 45; 0 turns it off); live and
+  paused work is never touched. The activity log stops growing without
+  bound.
+- **Tests.** The revive loop end to end (fail → re-ask same thread →
+  heal → same thread completes; a different goal is a new thread; a
+  stranger's same-goal run is never reused), retention trimming runs
+  and attesting the audit cut, the hourly tick from config, and
+  retention never touching live work.
+
 Per-user API draw — every account gets its own gauge on the shared
 platform key:
 

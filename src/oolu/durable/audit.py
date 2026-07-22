@@ -136,10 +136,59 @@ class DurableAuditLog:
                 ]
         return statuses
 
+    def prune(self, *, older_than: datetime) -> int:
+        """Retention for the chain: drop the OLDEST PREFIX — every row
+        from before the cutoff — never a middle link, so what remains is
+        still a chain. The cut is itself audited FIRST: an
+        ``audit.retention`` entry names the boundary hash the surviving
+        chain resumes from, so ``verify`` can attest the new start. The
+        activity log stays honest about having been trimmed, and stops
+        growing without bound."""
+        cutoff = older_than.isoformat()
+        with self._conn.lock:
+            row = self._conn.db.execute(
+                "SELECT seq, hash,"
+                " (SELECT COUNT(*) FROM audit_log inner_rows"
+                "  WHERE inner_rows.seq <= boundary.seq) AS pruned"
+                " FROM audit_log boundary WHERE at < ?"
+                " ORDER BY seq DESC LIMIT 1",
+                (cutoff,),
+            ).fetchone()
+        if row is None:
+            return 0
+        boundary_seq = int(row["seq"])
+        pruned = int(row["pruned"])
+        self.append(
+            "audit.retention",
+            {
+                "pruned_through_seq": boundary_seq,
+                "resume_prev_hash": row["hash"],
+                "pruned_rows": pruned,
+            },
+        )
+        with self._conn.transaction() as db:
+            db.execute("DELETE FROM audit_log WHERE seq <= ?", (boundary_seq,))
+        return pruned
+
     def verify(self) -> bool:
-        """Recompute the chain end to end; ``False`` if any link is broken."""
-        prev_hash = _GENESIS
-        for record in self.records():
+        """Recompute the chain end to end; ``False`` if any link is broken.
+
+        A chain that no longer starts at genesis is accepted ONLY when a
+        surviving ``audit.retention`` entry attests the exact hash the
+        chain resumes from — a silent prefix deletion still fails."""
+        records = self.records()
+        if not records:
+            return True
+        prev_hash = records[0].prev_hash
+        if prev_hash != _GENESIS:
+            attested = any(
+                record.event_type == "audit.retention"
+                and record.payload.get("resume_prev_hash") == prev_hash
+                for record in records
+            )
+            if not attested:
+                return False
+        for record in records:
             if record.prev_hash != prev_hash:
                 return False
             expected = _entry_hash(

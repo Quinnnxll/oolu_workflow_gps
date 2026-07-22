@@ -41,9 +41,17 @@ def prune_retention(
     older_than_days: float,
     now: datetime | None = None,
 ) -> dict[str, int]:
-    """Delete terminal tasks and delivered outbox messages older than the cutoff."""
+    """Retention across the durable runtime, one cutoff: terminal tasks,
+    delivered outbox messages, TERMINAL workflow runs (completed, failed,
+    cancelled — the dead Noder threads nobody revives), and the audit
+    chain's oldest prefix (through :meth:`DurableAuditLog.prune`, which
+    attests the cut so the surviving chain still verifies). Live and
+    paused runs are never touched — retention trims history, not work."""
+    from .audit import DurableAuditLog
+
     moment = now or datetime.now(UTC)
-    cutoff = (moment - timedelta(days=older_than_days)).isoformat()
+    cutoff_at = moment - timedelta(days=older_than_days)
+    cutoff = cutoff_at.isoformat()
     with conn.transaction() as db:
         tasks = db.execute(
             "DELETE FROM tasks WHERE status IN ('done', 'cancelled', 'dead')"
@@ -54,7 +62,13 @@ def prune_retention(
             "DELETE FROM outbox WHERE status = 'sent' AND sent_at < ?",
             (cutoff,),
         ).rowcount
-    return {"tasks": tasks, "outbox": messages}
+        runs = db.execute(
+            "DELETE FROM workflow_runs WHERE updated_at < ?"
+            " AND phase IN ('completed', 'failed', 'cancelled')",
+            (cutoff,),
+        ).rowcount
+    audit = DurableAuditLog(conn).prune(older_than=cutoff_at)
+    return {"tasks": tasks, "outbox": messages, "runs": runs, "audit": audit}
 
 
 def delete_workflow(conn: DurableConnection, run_id: str) -> dict[str, int]:
