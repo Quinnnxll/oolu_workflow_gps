@@ -27,6 +27,20 @@
   input { font: inherit; padding: 0.4rem; flex: 1; min-width: 200px; }
   button { font: inherit; padding: 0.4rem 0.9rem; cursor: pointer; }
   .error { color: #d44; margin-top: 0.6rem; }
+  .exec .tile { border-left: 4px solid var(--line); }
+  .exec .tile.ok { border-left-color: #2a7; }
+  .exec .tile.warning { border-left-color: #e90; }
+  .exec .tile.critical { border-left-color: #d44; }
+  .delta { font-size: 0.8rem; }
+  .delta.up { color: #2a7; }
+  .delta.down { color: #d44; }
+  .score-row { display: flex; align-items: center; gap: 0.6rem;
+    margin: 0.25rem 0; font-size: 0.85rem; }
+  .score-row .name { width: 10.5rem; }
+  .score-bar { flex: 1; height: 8px; border-radius: 999px;
+    background: var(--line); overflow: hidden; }
+  .score-bar > i { display: block; height: 100%; background: var(--accent); }
+  .score-total { font-size: 2rem; font-weight: 700; }
 </style>
 </head>
 <body>
@@ -43,6 +57,8 @@
   <button type="submit">Connect</button>
   <span class="muted">refreshes every 60&thinsp;s</span>
 </form>
+<div id="exec"></div>
+<div id="scorecard"></div>
 <div id="board"></div>
 <div id="err" class="error"></div>
 <script>
@@ -72,6 +88,8 @@ async function refresh() {
     });
     if (!res.ok) throw new Error("HTTP " + res.status);
     const data = await res.json();
+    await renderExec();
+    await renderScorecard();
     const groups = {};
     for (const item of data.items) {
       (groups[item.group] = groups[item.group] || []).push(item);
@@ -108,6 +126,94 @@ async function refresh() {
       board.append(h, grid);
     }
   } catch (e) { $("err").textContent = e.message; }
+}
+async function api(path) {
+  const res = await fetch(conf.server + path, {
+    headers: { Authorization: "Bearer " + conf.token },
+  });
+  if (!res.ok) throw new Error("HTTP " + res.status + " on " + path);
+  return res.json();
+}
+/* The matrix's executive strip: actual, previous period, growth,
+   target, status — one tile per headline metric, edged by health. */
+async function renderExec() {
+  const data = await api("/v1/platform/metrics/summary");
+  const mount = $("exec");
+  mount.replaceChildren();
+  if (!data.items.length) return;
+  const h = document.createElement("h2");
+  h.textContent = "executive summary";
+  const grid = document.createElement("div");
+  grid.className = "grid exec";
+  for (const item of data.items) {
+    const tile = document.createElement("div");
+    tile.className = "tile " + (item.status || "");
+    const label = document.createElement("div");
+    label.className = "label";
+    label.textContent = item.label;
+    const value = document.createElement("div");
+    value.className = "value";
+    value.textContent = fmt({ value: item.actual, unit: item.unit });
+    const delta = document.createElement("div");
+    if (item.growth_rate_pct != null) {
+      const up = item.growth_rate_pct >= 0;
+      delta.className = "delta " + (up ? "up" : "down");
+      delta.textContent = (up ? "▲ " : "▼ ")
+        + Math.abs(Math.round(item.growth_rate_pct * 10) / 10)
+        + "% vs previous period";
+    } else {
+      delta.className = "muted";
+      delta.textContent = "no previous period yet";
+    }
+    const foot = document.createElement("div");
+    foot.className = "muted";
+    foot.textContent = (item.target != null ? "target " + item.target : "")
+      + (item.as_of ? "  ·  as of " + item.as_of : "");
+    tile.append(label, value, delta, foot);
+    grid.append(tile);
+  }
+  mount.append(h, grid);
+}
+/* The weighted scorecard: pillars renormalized over what this host can
+   measure; excluded pillars are named, never averaged in as zero. */
+async function renderScorecard() {
+  const data = await api("/v1/platform/metrics/scorecard");
+  const mount = $("scorecard");
+  mount.replaceChildren();
+  if (data.score == null) return;
+  const h = document.createElement("h2");
+  h.textContent = "investor scorecard";
+  const wrap = document.createElement("div");
+  wrap.className = "tile";
+  const total = document.createElement("div");
+  total.className = "score-total";
+  total.textContent = data.score + " / 100";
+  wrap.append(total);
+  for (const pillar of data.pillars) {
+    const row = document.createElement("div");
+    row.className = "score-row";
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = pillar.name.replace(/_/g, " ")
+      + " (" + Math.round(pillar.effective_weight * 100) + "%)";
+    const bar = document.createElement("span");
+    bar.className = "score-bar";
+    const fill = document.createElement("i");
+    fill.style.width = Math.max(2, Math.min(100, pillar.score)) + "%";
+    bar.append(fill);
+    const num = document.createElement("span");
+    num.textContent = Math.round(pillar.score);
+    row.append(name, bar, num);
+    wrap.append(row);
+  }
+  if (data.excluded.length) {
+    const note = document.createElement("div");
+    note.className = "muted";
+    note.textContent = "not yet measurable here: "
+      + data.excluded.join(", ").replace(/_/g, " ");
+    wrap.append(note);
+  }
+  mount.append(h, wrap);
 }
 $("conf").addEventListener("submit", (e) => {
   e.preventDefault();

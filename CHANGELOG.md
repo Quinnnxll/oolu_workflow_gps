@@ -4,6 +4,44 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The investor panel learns the performance matrix — Phase 1: contract,
+executive summary, scorecard:
+
+- **The metric contract.** Every ``MetricSpec`` now carries the
+  matrix's contract fields — section, formula (the one-line business
+  definition), owner, update frequency, direction, target /
+  warning / critical thresholds, version — and ``metric_status``
+  applies them honoring direction (higher-is-better floors,
+  lower-is-better ceilings). The catalog view exposes the contract, so
+  every number answers "defined how, owned by whom, healthy when."
+- **Phase-1 metrics, real readers.** Monthly active users and DAU/MAU
+  stickiness; workflow success rate and first-attempt success rate
+  (today's terminal runs); successful workflows today; net earnings
+  today (the earnings ledger); model spend this month (the usage
+  books); day-7 retention (the run-activity cohort); request success
+  rate (the gateway's own counters — the availability proxy). Readers
+  that have no basis raise honestly and leave the metric blank, never
+  a fake zero.
+- **Executive summary.** ``GET /v1/platform/metrics/summary``: each
+  headline metric with the matrix's status components — actual,
+  previous period, growth rate, target, threshold status, owner.
+- **Investor scorecard.** ``GET /v1/platform/metrics/scorecard``: the
+  matrix's weighted pillars (growth .20, retention .15, economics .15,
+  product / technology / physical / market / moat .10 each), each
+  scored from its inputs by threshold status or 7-day trend; pillars
+  with no measurable input are EXCLUDED BY NAME and the weights
+  renormalize — the score never averages in what this platform cannot
+  measure yet. The panel page renders the executive strip
+  (health-edged tiles with period deltas) and the scorecard bars.
+- **Next phases** (planned, not built): Phase 2 — unit economics,
+  cohorts, AI quality from the author/verify books, marketplace
+  health; Phase 3 — competitor intelligence and attention share
+  through the manual doors, moat measures, scenario modeling,
+  automated reporting.
+- **Tests.** Direction-aware status, the summary's status components
+  and honest empties, scorecard renormalization with named
+  exclusions, and both routes walled.
+
 繁體中文 speaks everywhere — full coverage, 勿擾, and its own faces:
 
 - **The gap.** The Traditional dictionary covered 412 of 533 strings;

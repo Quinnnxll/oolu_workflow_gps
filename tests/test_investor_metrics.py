@@ -153,3 +153,107 @@ def test_the_routes_are_walled_and_read_the_real_books(tmp_path):
         assert history.body["series"]["code.commits"][-1]["value"] == 900.0
     finally:
         conn.close()
+
+
+# --------------------------------------------------------------------- #
+# Phase 1 of the panel matrix: contract, executive summary, scorecard.  #
+# --------------------------------------------------------------------- #
+def test_metric_status_honors_direction_and_thresholds():
+    from oolu.telemetry.investor import MetricSpec, metric_status
+
+    up = MetricSpec(
+        "x", "X", "g", "%", target=95.0, warning=85.0, critical=70.0
+    )
+    assert metric_status(up, 96.0) == "ok"
+    assert metric_status(up, 80.0) == "warning"
+    assert metric_status(up, 60.0) == "critical"
+    assert metric_status(up, None) == "unknown"
+    down = MetricSpec(
+        "y", "Y", "g", "USD", direction="down", warning=100.0, critical=500.0
+    )
+    assert metric_status(down, 50.0) == "ok"
+    assert metric_status(down, 200.0) == "warning"
+    assert metric_status(down, 900.0) == "critical"
+    # No thresholds: a present value is simply ok.
+    assert metric_status(MetricSpec("z", "Z", "g"), 1.0) == "ok"
+
+
+def test_the_executive_summary_speaks_the_status_components(tmp_path):
+    conn = DurableConnection(tmp_path / "m.db")
+    tick = {"now": NOW}
+    store = MetricsSnapshotStore(conn, clock=lambda: tick["now"])
+    service = InvestorMetricsService(store)
+    # Two days of history for one executive metric.
+    store.record("workflows.success_rate", 90.0)
+    tick["now"] = NOW + timedelta(days=1)
+    store.record("workflows.success_rate", 99.0)
+    summary = service.summary()
+    by_key = {i["key"]: i for i in summary["items"]}
+    line = by_key["workflows.success_rate"]
+    assert line["actual"] == 99.0
+    assert line["previous_period"] == 90.0
+    assert round(line["growth_rate_pct"], 1) == 10.0
+    assert line["target"] == 95.0
+    assert line["status"] == "ok"
+    # A headline metric with no points answers honestly.
+    empty = by_key["retention.day7_pct"]
+    assert empty["actual"] is None and empty["status"] == "unknown"
+    # Only executive metrics ride the strip.
+    assert "users.weekly_active" not in by_key
+    conn.close()
+
+
+def test_the_scorecard_renormalizes_over_what_exists(tmp_path):
+    conn = DurableConnection(tmp_path / "m.db")
+    tick = {"now": NOW}
+    store = MetricsSnapshotStore(conn, clock=lambda: tick["now"])
+    service = InvestorMetricsService(store)
+    # Technology pillar: status basis, both inputs green.
+    store.record("workflows.success_rate", 99.0)
+    store.record("reliability.request_success_pct", 99.95)
+    # Growth pillar: an 8-day rising series for one input.
+    for offset in range(8):
+        tick["now"] = NOW + timedelta(days=offset)
+        store.record("users.daily_active", 10 + offset * 2)
+    card = service.scorecard()
+    names = {p["name"]: p for p in card["pillars"]}
+    assert names["technology"]["score"] == 100.0
+    assert names["growth"]["score"] == 100.0  # ≥5% over the window
+    # No physical fleet, no seo recordings, no retention data → named.
+    assert "physical_execution" in card["excluded"]
+    assert "market" in card["excluded"]
+    # Weights renormalize over the pillars that HAVE data.
+    total = sum(p["effective_weight"] for p in card["pillars"])
+    assert abs(total - 1.0) < 1e-9
+    assert card["score"] is not None
+    conn.close()
+
+
+def test_summary_and_scorecard_routes_are_walled(tmp_path):
+    gw, conn, ident = _host(tmp_path)
+    try:
+        for path in (
+            "/v1/platform/metrics/summary",
+            "/v1/platform/metrics/scorecard",
+        ):
+            walled = gw.handle(
+                _req("GET", path, token=ident.token("user-1", "t1"))
+            )
+            assert walled.status == 403, path
+            answered = gw.handle(
+                _req("GET", path, token=ident.token("operator", "t1"))
+            )
+            assert answered.status == 200, (path, answered.body)
+        summary = gw.handle(
+            _req(
+                "GET", "/v1/platform/metrics/summary",
+                token=ident.token("operator", "t1"),
+            )
+        )
+        # The strip carries the matrix's status components.
+        (first, *_rest) = summary.body["items"]
+        for field in ("actual", "previous_period", "growth_rate_pct",
+                      "target", "status", "owner"):
+            assert field in first
+    finally:
+        conn.close()

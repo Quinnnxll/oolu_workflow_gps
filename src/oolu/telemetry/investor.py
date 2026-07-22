@@ -30,15 +30,52 @@ from typing import Callable
 
 @dataclass(frozen=True)
 class MetricSpec:
-    """One metric's standing identity: the key the ledger files under,
-    the words the panel shows, and how it is fed."""
+    """One metric's standing identity AND its contract: the key the
+    ledger files under, the words the panel shows, how it is fed — and
+    the matrix's contract fields (formula, owner, cadence, thresholds,
+    version), so every number on the investor panel answers "defined
+    how, owned by whom, healthy when"."""
 
     key: str  # e.g. "users.daily_active"
     label: str
     group: str  # engagement | nodes | executions | model | capital | code | seo
-    unit: str = ""  # "", "users", "USD", "tokens", "minutes", "count"
+    unit: str = ""  # "", "users", "USD", "tokens", "minutes", "count", "%"
     source: str = "auto"  # auto | manual
     description: str = ""
+    # -- the metric contract ------------------------------------------- #
+    section: str = ""  # the matrix section this metric reports under
+    formula: str = ""  # the business definition, in one line
+    owner: str = "operator"
+    update_frequency: str = "daily"  # realtime | daily | weekly | monthly
+    # Health thresholds, honoring direction: "up" = higher is better
+    # (warning/critical are floors), "down" = lower is better (ceilings).
+    direction: str = "up"
+    target: float | None = None
+    warning: float | None = None
+    critical: float | None = None
+    version: str = "1"
+    # Rides the executive summary strip.
+    executive: bool = False
+
+
+def metric_status(spec: MetricSpec, value: float | None) -> str:
+    """ok | warning | critical | unknown — the spec's thresholds applied
+    with its direction. No thresholds → ok whenever a value exists."""
+    if value is None:
+        return "unknown"
+    if spec.warning is None and spec.critical is None:
+        return "ok"
+    if spec.direction == "down":
+        if spec.critical is not None and value >= spec.critical:
+            return "critical"
+        if spec.warning is not None and value >= spec.warning:
+            return "warning"
+        return "ok"
+    if spec.critical is not None and value <= spec.critical:
+        return "critical"
+    if spec.warning is not None and value <= spec.warning:
+        return "warning"
+    return "ok"
 
 
 # The starting catalog — the shape scales to hundreds: registering a
@@ -47,10 +84,87 @@ METRIC_CATALOG: tuple[MetricSpec, ...] = (
     MetricSpec(
         "users.daily_active", "Daily active users", "engagement", "users",
         description="Distinct accounts that moved work today.",
+        section="product_usage_and_attention",
+        formula="distinct principals with run activity in the last day",
+        executive=True,
     ),
     MetricSpec(
         "users.weekly_active", "Weekly active users", "engagement", "users",
         description="Distinct accounts that moved work in the last 7 days.",
+        section="product_usage_and_attention",
+        formula="distinct principals with run activity in the last 7 days",
+    ),
+    MetricSpec(
+        "users.monthly_active", "Monthly active users", "engagement", "users",
+        description="Distinct accounts that moved work in the last 30 days.",
+        section="product_usage_and_attention",
+        formula="distinct principals with run activity in the last 30 days",
+    ),
+    MetricSpec(
+        "users.stickiness_dau_mau", "Stickiness (DAU/MAU)", "engagement", "%",
+        description="How much of the monthly base shows up on a given day.",
+        section="product_usage_and_attention",
+        formula="daily_active_users / monthly_active_users * 100",
+        target=40.0, warning=20.0, critical=10.0,
+    ),
+    MetricSpec(
+        "workflows.completed_daily", "Successful workflows today",
+        "executions", "count",
+        description="Runs that reached COMPLETED today.",
+        section="workflow_automation",
+        formula="runs completed today",
+        executive=True,
+    ),
+    MetricSpec(
+        "workflows.success_rate", "Workflow success rate", "executions", "%",
+        description="Completed runs among today's terminal runs.",
+        section="workflow_automation",
+        formula="successful_workflows / completed_workflows * 100",
+        target=95.0, warning=85.0, critical=70.0,
+        executive=True,
+    ),
+    MetricSpec(
+        "workflows.first_attempt_success_rate",
+        "First-attempt success rate", "executions", "%",
+        description="Today's completed runs that needed no retry.",
+        section="workflow_automation",
+        formula="first_attempt_successes / workflows_started * 100",
+        target=90.0, warning=75.0, critical=50.0,
+    ),
+    MetricSpec(
+        "revenue.earnings_daily_usd", "Net earnings today", "capital", "USD",
+        description="Noder earnings accrued today across the platform.",
+        section="financial_performance",
+        formula="sum of earnings entries created today",
+        executive=True,
+    ),
+    MetricSpec(
+        "cost.model_month_usd", "Model spend this month", "model", "USD",
+        description="Month-to-date model/API cost across every tenant.",
+        section="cost_structure",
+        formula="sum of tenant model usage cost for the current month",
+        direction="down",
+        executive=True,
+    ),
+    MetricSpec(
+        "retention.day7_pct", "Day-7 retention", "engagement", "%",
+        description="Of accounts active 7 days ago, the share active in "
+        "the last day.",
+        section="retention_and_churn",
+        formula="active(day-7) ∩ active(today) / active(day-7) * 100",
+        target=40.0, warning=20.0, critical=10.0,
+        executive=True,
+    ),
+    MetricSpec(
+        "reliability.request_success_pct", "Request success rate",
+        "executions", "%",
+        description="Gateway requests answered without an error since "
+        "this process started — the availability proxy.",
+        section="reliability_and_observability",
+        formula="(requests - errors) / requests * 100",
+        update_frequency="realtime",
+        target=99.9, warning=99.0, critical=95.0,
+        executive=True,
     ),
     MetricSpec(
         "engagement.avg_daily_minutes", "Avg daily use time", "engagement",
@@ -89,6 +203,59 @@ METRIC_CATALOG: tuple[MetricSpec, ...] = (
         "capital.raised_usd", "Capital raised", "capital", "USD",
         source="manual",
     ),
+)
+
+
+# The investor scorecard, exactly as the matrix weighs it. Each pillar
+# names the metric keys that feed it; a pillar with NO data on this host
+# is EXCLUDED and the remaining weights renormalize — an empty pillar is
+# named, never averaged in as a fake zero.
+SCORECARD_PILLARS: tuple[dict, ...] = (
+    {
+        "name": "growth", "weight": 0.20,
+        "inputs": (
+            "users.daily_active", "executions.daily",
+            "revenue.earnings_daily_usd",
+        ),
+        "basis": "growth",  # scored on the 7-day trend
+    },
+    {
+        "name": "retention", "weight": 0.15,
+        "inputs": ("retention.day7_pct", "users.stickiness_dau_mau"),
+        "basis": "status",  # scored on thresholds
+    },
+    {
+        "name": "economics", "weight": 0.15,
+        "inputs": ("capital.in_app_usd", "revenue.earnings_daily_usd"),
+        "basis": "growth",
+    },
+    {
+        "name": "product", "weight": 0.10,
+        "inputs": ("workflows.first_attempt_success_rate",),
+        "basis": "status",
+    },
+    {
+        "name": "technology", "weight": 0.10,
+        "inputs": (
+            "workflows.success_rate", "reliability.request_success_pct",
+        ),
+        "basis": "status",
+    },
+    {
+        "name": "physical_execution", "weight": 0.10,
+        "inputs": (),  # no physical fleet on this platform yet — excluded
+        "basis": "status",
+    },
+    {
+        "name": "market", "weight": 0.10,
+        "inputs": ("seo.impressions", "seo.clicks"),
+        "basis": "growth",
+    },
+    {
+        "name": "moat", "weight": 0.10,
+        "inputs": ("nodes.total",),
+        "basis": "growth",
+    },
 )
 
 
@@ -207,12 +374,13 @@ class InvestorMetricsService:
     def view(self) -> dict:
         """The panel's read: every cataloged metric with its newest
         value (today's collection for auto, last recording for manual),
-        grouped for display."""
+        grouped for display — the contract fields riding along."""
         self.collect()
         latest = self._store.latest()
         items = []
         for spec in self._catalog:
             point = latest.get(spec.key)
+            value = point["value"] if point else None
             items.append(
                 {
                     "key": spec.key,
@@ -221,8 +389,120 @@ class InvestorMetricsService:
                     "unit": spec.unit,
                     "source": spec.source,
                     "description": spec.description,
-                    "value": point["value"] if point else None,
+                    "section": spec.section,
+                    "formula": spec.formula,
+                    "owner": spec.owner,
+                    "update_frequency": spec.update_frequency,
+                    "target": spec.target,
+                    "status": metric_status(spec, value),
+                    "version": spec.version,
+                    "value": value,
                     "as_of": point["day"] if point else None,
                 }
             )
         return {"items": items}
+
+    # -- the executive summary ------------------------------------------ #
+    def summary(self) -> dict:
+        """The matrix's executive strip: each executive metric with its
+        status components — actual, previous period, growth rate,
+        target, and threshold status. Previous period is the day before
+        the newest point in the ledger; growth is honest None when
+        there is nothing to compare against."""
+        self.collect()
+        history = self._store.history(days=90)
+        items = []
+        for spec in self._catalog:
+            if not spec.executive:
+                continue
+            points = history.get(spec.key, [])
+            actual = points[-1]["value"] if points else None
+            previous = points[-2]["value"] if len(points) > 1 else None
+            growth = None
+            if actual is not None and previous not in (None, 0):
+                growth = (actual - previous) / abs(previous) * 100
+            items.append(
+                {
+                    "key": spec.key,
+                    "label": spec.label,
+                    "unit": spec.unit,
+                    "actual": actual,
+                    "previous_period": previous,
+                    "growth_rate_pct": growth,
+                    "target": spec.target,
+                    "status": metric_status(spec, actual),
+                    "owner": spec.owner,
+                    "as_of": points[-1]["day"] if points else None,
+                }
+            )
+        return {"items": items}
+
+    # -- the weighted scorecard ----------------------------------------- #
+    _STATUS_SCORE = {"ok": 100.0, "warning": 60.0, "critical": 20.0}
+
+    def _growth_score(self, points: list[dict]) -> float | None:
+        """A 7-day trend as a score: growing ≥5% → 100, flat-or-growing
+        → 70, shrinking → 30. Under two points → None (no basis)."""
+        if len(points) < 2:
+            return None
+        window = points[-8:]
+        first, last = window[0]["value"], window[-1]["value"]
+        if first == 0:
+            return 100.0 if last > 0 else 70.0
+        change = (last - first) / abs(first)
+        if change >= 0.05:
+            return 100.0
+        if change >= 0:
+            return 70.0
+        return 30.0
+
+    def scorecard(self) -> dict:
+        """The matrix's weighted composite. Every pillar scores from its
+        inputs (threshold status or 7-day trend, per its basis); pillars
+        with NO scoreable input are EXCLUDED and named, and the weights
+        renormalize over what remains — the score never averages in a
+        pillar this platform cannot measure yet."""
+        self.collect()
+        history = self._store.history(days=90)
+        pillars: list[dict] = []
+        excluded: list[str] = []
+        for pillar in SCORECARD_PILLARS:
+            components: list[dict] = []
+            for key in pillar["inputs"]:
+                spec = self.spec(key)
+                points = history.get(key, [])
+                if spec is None or not points:
+                    continue
+                if pillar["basis"] == "status":
+                    status = metric_status(spec, points[-1]["value"])
+                    score = self._STATUS_SCORE.get(status)
+                    basis = f"status:{status}"
+                else:
+                    score = self._growth_score(points)
+                    basis = "trend:7d"
+                if score is None:
+                    continue
+                components.append({"key": key, "score": score, "basis": basis})
+            if not components:
+                excluded.append(pillar["name"])
+                continue
+            pillars.append(
+                {
+                    "name": pillar["name"],
+                    "weight": pillar["weight"],
+                    "score": sum(c["score"] for c in components)
+                    / len(components),
+                    "inputs": components,
+                }
+            )
+        total_weight = sum(p["weight"] for p in pillars)
+        for p in pillars:
+            p["effective_weight"] = (
+                p["weight"] / total_weight if total_weight else 0.0
+            )
+        score = sum(p["score"] * p["effective_weight"] for p in pillars)
+        return {
+            "score": round(score, 1) if pillars else None,
+            "pillars": pillars,
+            "excluded": excluded,
+        }

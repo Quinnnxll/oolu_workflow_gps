@@ -1278,6 +1278,21 @@ class GatewayApp:
             self._metrics_history,
             requires_permission="metrics:view",
         )
+        # Phase 1 of the panel matrix: the executive summary (actual,
+        # previous period, growth, target, status per headline metric)
+        # and the weighted investor scorecard.
+        r.add(
+            "GET",
+            "/v1/platform/metrics/summary",
+            self._metrics_summary,
+            requires_permission="metrics:view",
+        )
+        r.add(
+            "GET",
+            "/v1/platform/metrics/scorecard",
+            self._metrics_scorecard,
+            requires_permission="metrics:view",
+        )
         r.add(
             "POST",
             "/v1/platform/metrics/snapshot",
@@ -8871,15 +8886,100 @@ class GatewayApp:
                 )
             return micros / 1_000_000
 
+        def _stickiness() -> float:
+            monthly = len(_active_since(30))
+            if not monthly:
+                return 0.0
+            return len(_active_since(1)) / monthly * 100
+
+        def _terminal_today():
+            done = [
+                s
+                for s in _runs()
+                if s.updated_at.date() == today
+                and s.phase.value in ("completed", "failed", "cancelled")
+            ]
+            return done
+
+        def _success_rate() -> float:
+            done = _terminal_today()
+            if not done:
+                raise LookupError("no terminal runs today — nothing to rate")
+            wins = [s for s in done if s.phase.value == "completed"]
+            return len(wins) / len(done) * 100
+
+        def _first_attempt_rate() -> float:
+            done = _terminal_today()
+            if not done:
+                raise LookupError("no terminal runs today — nothing to rate")
+            first = [
+                s
+                for s in done
+                if s.phase.value == "completed" and s.user_retries == 0
+            ]
+            return len(first) / len(done) * 100
+
+        def _earnings_today() -> float:
+            billing = self._billing
+            if billing is None:
+                raise LookupError("no earnings books on this host")
+            micros = 0
+            for principal in billing.principals():
+                for entry in billing.entries(principal):
+                    if entry.created_at.date() == today:
+                        micros += entry.amount_micros
+            return micros / 1_000_000
+
+        def _model_month_cost() -> float:
+            usage = self._model_usage
+            if usage is None:
+                raise LookupError("no model usage books on this host")
+            return sum(usage.month_cost(t) for t in usage.tenants())
+
+        def _day7_retention() -> float:
+            floor = datetime.now(UTC) - timedelta(days=8)
+            ceiling = datetime.now(UTC) - timedelta(days=7)
+            cohort = {
+                s.contract.submitted_by
+                for s in _runs()
+                if floor <= s.updated_at < ceiling and s.contract.submitted_by
+            }
+            if not cohort:
+                raise LookupError("no activity 7 days ago — no cohort yet")
+            kept = cohort & _active_since(1)
+            return len(kept) / len(cohort) * 100
+
+        def _request_success() -> float:
+            requests = self._metrics.get("requests", 0)
+            if not requests:
+                raise LookupError("no requests since start")
+            errors = self._metrics.get("errors", 0)
+            return (requests - errors) / requests * 100
+
         today = datetime.now(UTC).date()
         readers = {
             "users.daily_active": lambda: len(_active_since(1)),
             "users.weekly_active": lambda: len(_active_since(7)),
+            "users.monthly_active": lambda: len(_active_since(30)),
+            "users.stickiness_dau_mau": _stickiness,
             "engagement.avg_daily_minutes": _avg_daily_minutes,
             "executions.total": lambda: len(_runs()),
             "executions.daily": lambda: len(
                 [s for s in _runs() if s.created_at.date() == today]
             ),
+            "workflows.completed_daily": lambda: len(
+                [
+                    s
+                    for s in _terminal_today()
+                    if s.phase.value == "completed"
+                ]
+            ),
+            "workflows.success_rate": _success_rate,
+            "workflows.first_attempt_success_rate": _first_attempt_rate,
+            "revenue.earnings_daily_usd": _earnings_today,
+            "cost.model_month_usd": _model_month_cost,
+            "retention.day7_pct": _day7_retention,
+            "reliability.request_success_pct": _request_success,
             "model.tokens_total": lambda: _model_totals("tokens"),
             "model.calls_total": lambda: _model_totals("calls"),
             "model.spend_usd": lambda: _model_totals("cost_usd"),
@@ -8899,6 +8999,17 @@ class GatewayApp:
 
     def _metrics_view(self, request, session, params) -> Response:
         return json_response(200, self._require_metrics().view())
+
+    def _metrics_summary(self, request, session, params) -> Response:
+        """The executive strip: each headline metric with the matrix's
+        status components — actual, previous period, growth, target,
+        threshold status, owner."""
+        return json_response(200, self._require_metrics().summary())
+
+    def _metrics_scorecard(self, request, session, params) -> Response:
+        """The weighted composite, pillars renormalized over what this
+        platform can actually measure — excluded pillars are named."""
+        return json_response(200, self._require_metrics().scorecard())
 
     def _metrics_history(self, request, session, params) -> Response:
         self._require_metrics()
