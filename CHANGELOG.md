@@ -4,6 +4,33 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The interact agent gets hands — and the org wears its name:
+
+- **New hands in the node window.** The interact agent can now DO the
+  desk work it could only describe: ``write_file`` grew a ``folder``
+  arm (upload straight into a folder of this node's drawer),
+  ``create_folder`` makes a new one (held open by a ``.keep`` file
+  until real files arrive), ``create_member`` mints a node on the
+  org's access desk (this Supernode's, or the fleet a member serves
+  under — unclaimed until someone onboards it), and ``grant_host`` /
+  ``block_host`` / ``block_user`` move the node's egress consent and
+  refusals. Every hand flows through the SAME real handlers as the
+  Access desk's buttons — ownership walls, fixed-trait refusals,
+  validation, and audit bind the model exactly as they bind a human.
+  The operator charter teaches each tool with its exact JSON shape.
+- **The org in words.** A member's card said "under 3f9a2c1d" to the
+  person who onboarded it — the Supernode's title only resolved from
+  the viewer's own desk. ``/v1/work/nodes`` now carries
+  ``supernode_title`` resolved server-side, so the onboarder reads the
+  org's NAME exactly as the owner does; the id remains the last
+  resort.
+- **Tests.** Folders and uploads landing in the node's drawer (with
+  honest answers from unwired hands), access hands flowing through the
+  real account door (grant/block land, idempotent in words), member
+  minting from the org window (standalone nodes refuse; dispatch
+  reaches the hand by tool name), and the member card naming its
+  Supernode. Shell rebuilt.
+
 Node deletion is REAL — everywhere at once, with a 7-day undo:
 
 - **The gap.** "Delete" on a Work node was a list margin: the node

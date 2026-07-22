@@ -408,7 +408,9 @@ class ChatTools(Protocol):
 
     def list_files(self) -> list[UserFile]: ...
     def resolve(self, name: str) -> list[UserFile]: ...
-    def write_file(self, name: str, content: str) -> UserFile: ...
+    def write_file(
+        self, name: str, content: str, folder: str = ""
+    ) -> UserFile: ...
 
 
 class FileChatTools:
@@ -442,16 +444,24 @@ class FileChatTools:
             return exact
         return [f for f in files if wanted and wanted in f.name.casefold()]
 
-    def write_file(self, name: str, content: str) -> UserFile:
+    def write_file(
+        self, name: str, content: str, folder: str = ""
+    ) -> UserFile:
+        from .durable.files import normalize_folder
+
+        placed = normalize_folder(folder) if folder else ""
         matches = self.resolve(name)
         if len(matches) == 1:
-            updated = matches[0].model_copy(update={"content": content})
-            return self._store.save(updated)
+            update: dict = {"content": content}
+            if placed:
+                update["folder"] = placed
+            return self._store.save(matches[0].model_copy(update=update))
         return self._store.save(
             UserFile(
                 tenant_id=self._tenant,
                 owner=self._owner,
                 name=name.strip(),
+                folder=placed,
                 content=content,
             )
         )
@@ -1174,6 +1184,12 @@ class NodeChatTools(GatewayChatTools):
         holds_reply,  # (pending_id, message) -> str
         builder,  # (goal) -> str
         reviser=None,  # (change) -> str; None = revision not wired here
+        # (title, authority, is_supernode) -> str: mint a member on the
+        # org's access desk — the same door the + form uses.
+        member_creator=None,
+        # (action, value) -> str: grant_host | block_host | block_user —
+        # the account door's mutable slice, same walls, same audit.
+        account_control=None,
     ):
         super().__init__(
             store,
@@ -1191,6 +1207,8 @@ class NodeChatTools(GatewayChatTools):
         self._holds_reply = holds_reply
         self._builder = builder
         self._reviser = reviser
+        self._member_creator = member_creator
+        self._account_control = account_control
 
     def list_files(self) -> list[UserFile]:
         """The interact window's file hands reach THIS NODE's drawer —
@@ -1202,19 +1220,58 @@ class NodeChatTools(GatewayChatTools):
             node_id=str(self._node.get("node_id") or "") or None,
         )
 
-    def write_file(self, name: str, content: str) -> UserFile:
+    def write_file(
+        self, name: str, content: str, folder: str = ""
+    ) -> UserFile:
+        from .durable.files import normalize_folder
+
+        placed = normalize_folder(folder) if folder else ""
         matches = self.resolve(name)
         if len(matches) == 1:
-            updated = matches[0].model_copy(update={"content": content})
-            return self._store.save(updated)
+            update: dict = {"content": content}
+            if placed:
+                update["folder"] = placed
+            return self._store.save(matches[0].model_copy(update=update))
         return self._store.save(
             UserFile(
                 tenant_id=self._chat_tenant,
                 node_id=str(self._node.get("node_id") or "") or None,
                 name=name.strip(),
+                folder=placed,
                 content=content,
             )
         )
+
+    def create_folder(self, path: str) -> str:
+        """A new folder in THIS node's drawer. Folders are derived from
+        the files that name them, so an empty one is held open by a
+        ``.keep`` file until real files arrive."""
+        from .durable.files import normalize_folder
+
+        try:
+            folder = normalize_folder(path)
+        except ValueError as exc:
+            return f"error: {exc}"
+        if not folder:
+            return "error: name the folder to create"
+        node_id = str(self._node.get("node_id") or "") or None
+        standing = [
+            f
+            for f in self.list_files()
+            if f.folder == folder or f.folder.startswith(f"{folder}/")
+        ]
+        if standing:
+            return f"folder {folder}/ already exists ({len(standing)} file(s))"
+        self._store.save(
+            UserFile(
+                tenant_id=self._chat_tenant,
+                node_id=node_id,
+                name=".keep",
+                folder=folder,
+                content="this file holds the folder open\n",
+            )
+        )
+        return f"created folder {folder}/ — upload or write files into it"
 
     def message_targets(self) -> list[dict]:
         """The gateway targets plus this node's own org: from a node's
@@ -1261,6 +1318,21 @@ class NodeChatTools(GatewayChatTools):
             return "error: revising this node's function is not wired here"
         return self._reviser(change)
 
+    def create_member(
+        self, title: str, authority: int = 1, is_supernode: bool = False
+    ) -> str:
+        if self._member_creator is None:
+            return "error: minting members is not wired here"
+        return self._member_creator(title, authority, is_supernode)
+
+    def node_access(self, action: str, value: str) -> str:
+        """The account door's mutable slice from the interact window:
+        grant_host | block_host | block_user — same walls, same audit
+        as the Access desk's own controls."""
+        if self._account_control is None:
+            return "error: access controls are not wired here"
+        return self._account_control(action, value)
+
 
 @runtime_checkable
 class NodeTools(Protocol):
@@ -1277,6 +1349,11 @@ class NodeTools(Protocol):
     def reply_hold(self, pending_id: str, message: str) -> str: ...
     def build_node(self, goal: str) -> str: ...
     def revise_node(self, change: str) -> str: ...
+    def create_folder(self, path: str) -> str: ...
+    def create_member(
+        self, title: str, authority: int = 1, is_supernode: bool = False
+    ) -> str: ...
+    def node_access(self, action: str, value: str) -> str: ...
 
 
 def _resolve_hold(holds: list[dict], ref: str) -> list[dict]:
@@ -2216,11 +2293,25 @@ def _run_tool(tools: ChatTools, call: _ToolCall) -> tuple[str, dict | None]:
         name = str(call.args.get("name", "")).strip()
         if not name:
             return "error: a file name is required", None
+        folder = str(call.args.get("folder", "") or "").strip()
         try:
-            saved = tools.write_file(name, str(call.args.get("content", "")))
+            # The folder rides only when given, so a hand without the
+            # parameter (an older stub) keeps its exact signature.
+            if folder:
+                saved = tools.write_file(
+                    name, str(call.args.get("content", "")), folder=folder
+                )
+            else:
+                saved = tools.write_file(name, str(call.args.get("content", "")))
         except FileTooLargeError as exc:
             return f"error: {exc}", None
-        return f"saved {saved.name}", {"tool": "write_file", "name": saved.name}
+        except ValueError as exc:
+            return f"error: {exc}", None
+        placed = f"{saved.folder}/" if saved.folder else ""
+        return f"saved {placed}{saved.name}", {
+            "tool": "write_file",
+            "name": saved.name,
+        }
     if call.name == "find_local_files":
         search = getattr(tools, "search_local_files", None)
         enabled = getattr(tools, "local_search_enabled", None)
@@ -2348,6 +2439,41 @@ def _run_tool(tools: ChatTools, call: _ToolCall) -> tuple[str, dict | None]:
         action = (
             None if result.startswith("error:") else {"tool": "revise_node"}
         )
+        return result, action
+    if call.name == "create_folder" and isinstance(tools, NodeTools):
+        result = tools.create_folder(str(call.args.get("path", "")).strip())
+        action = (
+            None if result.startswith("error:") else {"tool": "create_folder"}
+        )
+        return result, action
+    if call.name == "create_member" and isinstance(tools, NodeTools):
+        try:
+            authority = int(call.args.get("authority", 1) or 1)
+        except (TypeError, ValueError):
+            authority = 1
+        result = tools.create_member(
+            str(call.args.get("title", "")).strip(),
+            authority,
+            bool(call.args.get("is_supernode", False)),
+        )
+        action = (
+            None if result.startswith("error:") else {"tool": "create_member"}
+        )
+        return result, action
+    if call.name in ("grant_host", "block_host", "block_user") and isinstance(
+        tools, NodeTools
+    ):
+        value = str(
+            call.args.get("host")
+            or call.args.get("user")
+            or call.args.get("value")
+            or ""
+        ).strip()
+        result = tools.node_access(call.name, value)
+        action = None if result.startswith("error:") else {
+            "tool": call.name,
+            "name": value,
+        }
         return result, action
     if call.name == "send_message" and isinstance(tools, MessagingTools):
         wanted = str(call.args.get("to", "")).strip()

@@ -860,6 +860,9 @@ export interface WorkNode {
   pinned?: boolean;
   muted?: boolean;
   hidden?: boolean;
+  // The org it serves under, in words — shown to the onboarder exactly
+  // like the owner sees it, never a bare id.
+  supernode_title?: string;
   account: NodeAccountView;
   earnings_micros: number;
   health: {

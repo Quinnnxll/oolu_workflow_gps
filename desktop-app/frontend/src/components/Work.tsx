@@ -895,8 +895,13 @@ export function NodeThread({
         {account.supernode_id && (
           <span className="muted">
             {tr("work.under")}{" "}
-            {allNodes.find((n) => n.node_id === account.supernode_id)?.title ??
-              account.supernode_id.slice(0, 8)}
+            {/* The org's NAME, for the onboarder exactly as for the
+                owner — the server resolves it even when the Supernode
+                is not on this desk; the id is the last resort. */}
+            {node.supernode_title ||
+              (allNodes.find((n) => n.node_id === account.supernode_id)
+                ?.title ??
+                account.supernode_id.slice(0, 8))}
           </span>
         )}
       </div>

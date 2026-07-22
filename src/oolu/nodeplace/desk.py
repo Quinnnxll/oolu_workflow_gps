@@ -226,6 +226,18 @@ class WorkDesk:
         node = self._registry.get_node(node_id)
         return node.tenant_id if node is not None else None
 
+    def node_title(self, node_id: str) -> str:
+        """The node's human name, exactly as its own desk would show it
+        — so a member's card can say WHOSE org it serves under in words,
+        not an id, even when the parent is not on the viewer's desk."""
+        node = self._registry.get_node(node_id)
+        if node is None:
+            return ""
+        version_ids = [
+            v.version_id for v in self._registry.list_versions(node_id)
+        ]
+        return self._title(node, version_ids)
+
     def siblings(self, node_id: str, *, tenant: str) -> list[dict]:
         """The nodes under the SAME Supernode as this one — the org's
         members a node may message. Same-tenant only, self excluded, each

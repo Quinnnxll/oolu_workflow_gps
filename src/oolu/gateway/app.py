@@ -2760,6 +2760,125 @@ class GatewayApp:
                 return f"error: auto-build is off — {AUTOBUILD_HINT}"
             return self._revise_node_function(session, node_id, entry, change)
 
+        def _call_handler(handler, handler_params: dict, payload: dict):
+            """(status, body) through a REAL handler — every wall it
+            enforces (ownership, tenancy, fixed traits, audit) binds the
+            chat hand exactly as it binds the button."""
+            call = Request(
+                method="POST",
+                path="/internal",
+                headers={},
+                query={},
+                body=payload,
+                now=request.now,
+            )
+            try:
+                answered = handler(call, session, handler_params)
+            except GatewayError as exc:
+                return exc.status, {"message": exc.message}
+            return answered.status, answered.body or {}
+
+        def member_creator(title: str, authority: int, is_supernode: bool) -> str:
+            title = (title or "").strip()
+            if not title:
+                return "error: give the member a name"
+            # Members are minted on the ORG's desk: this Supernode's, or
+            # the fleet a member serves under — never a standalone node.
+            target_id = node_id
+            if not entry.account.is_supernode:
+                if not entry.account.supernode_id:
+                    return (
+                        "error: only an org mints members — this node "
+                        "stands alone, use + in the sidebar instead"
+                    )
+                target_id = entry.account.supernode_id
+            try:
+                authority = max(1, min(5, int(authority or 1)))
+            except (TypeError, ValueError):
+                authority = 1
+            status, body = _call_handler(
+                self._contribute,
+                {},
+                {
+                    # The same empty-draft shape the + form mints: the
+                    # function arrives from work or a later build.
+                    "skill": {
+                        "name": title,
+                        "description": title,
+                        "signature": {"application": "cli", "adapter": "cli"},
+                        "actions": [
+                            {
+                                "correlation_id": "draft",
+                                "adapter": "cli",
+                                "operation": "run",
+                            }
+                        ],
+                    },
+                    "semver": "1.0.0",
+                    "title": title,
+                    "summary": title,
+                },
+            )
+            if status >= 400:
+                return f"error: {body.get('message', 'the node was refused')}"
+            new_id = str(body.get("node_id") or "")
+            status, body = _call_handler(
+                self._work_account,
+                {"node_id": new_id},
+                {
+                    "accept_policy": True,
+                    "is_supernode": bool(is_supernode),
+                    "supernode_id": target_id,
+                    "audit_mode": False,
+                    "allow_autodev_data": True,
+                    "authority_level": authority,
+                },
+            )
+            if status >= 400:
+                return (
+                    f"error: the node was created ({new_id[:8]}) but its "
+                    f"org seat was refused: {body.get('message', 'refused')}"
+                )
+            return (
+                f"Created member “{title}” ({new_id[:8]}) under the org at "
+                f"L{authority} — it starts UNCLAIMED: share its node id "
+                "only with the person who should onboard it."
+            )
+
+        def account_control(action: str, value: str) -> str:
+            value = (value or "").strip()
+            if not value:
+                return "error: name the host or user"
+            account = self._desk.account_for(node_id) if self._desk else None
+            if account is None:
+                return "error: this node has no account here"
+            if action == "grant_host":
+                standing = list(account.network_hosts)
+                if value in standing:
+                    return f"{value} is already granted"
+                patch: dict = {"network_hosts": [*standing, value]}
+                did = f"granted {value} — this node's functions may reach it"
+            elif action == "block_host":
+                standing = list(account.blocked_hosts)
+                if value in standing:
+                    return f"{value} is already blocked"
+                patch = {"blocked_hosts": [*standing, value]}
+                did = f"blocked host {value} for this org's whole fleet"
+            elif action == "block_user":
+                standing = list(account.blocked_users)
+                if value in standing:
+                    return f"{value} is already blocked"
+                patch = {"blocked_users": [*standing, value]}
+                did = f"blocked user {value} — their messages will not land"
+            else:
+                return f"error: unknown access action '{action}'"
+            status, body = _call_handler(
+                self._work_account, {"node_id": node_id}, patch
+            )
+            if status >= 400:
+                return f"error: {body.get('message', 'refused')}"
+            return did
+
         health = entry.health
         verified = health.verified_successes + health.verified_failures
         reliability = (
@@ -2802,6 +2921,18 @@ class GatewayApp:
             '  {"tool": "build_node", "args": {"goal": "<what it must do>"}}\n'
             '  {"tool": "revise_node", "args": {"change": "<what must '
             'change in THIS node\'s function>"}}\n'
+            '  {"tool": "create_folder", "args": {"path": "<folder path>"}}\n'
+            '  {"tool": "create_member", "args": {"title": "<member '
+            'name>", "authority": 1, "is_supernode": false}}\n'
+            '  {"tool": "grant_host", "args": {"host": "api.example.com"}}\n'
+            '  {"tool": "block_host", "args": {"host": "bad.example.com"}}\n'
+            '  {"tool": "block_user", "args": {"user": "<principal>"}}\n'
+            "write_file also takes an optional \"folder\" to upload into "
+            "a folder of this node's drawer. create_member mints a new "
+            "node under this org's Supernode (unclaimed until someone "
+            "onboards it); grant_host/block_host move this node's egress "
+            "consent, and block_user refuses a principal — all through "
+            "the same walls and audit as the Access desk's own controls. "
             "Never decide or sign a held request the user did not ask you "
             "to. When automation fails, give the user the error code so "
             "they can fix it later."
@@ -2826,6 +2957,8 @@ class GatewayApp:
             holds_reply=holds_reply,
             builder=builder,
             reviser=reviser,
+            member_creator=member_creator,
+            account_control=account_control,
         )
         return tools, context_note
 
@@ -6047,6 +6180,14 @@ class GatewayApp:
         for e in entries:
             item = e.model_dump(mode="json")
             item["last_activity"] = last_activity.get(e.node_id, "")
+            # The org a member serves under, IN WORDS: the onboarder's
+            # card names the Supernode like the owner's does — never a
+            # bare id, even when the parent is not on this desk.
+            item["supernode_title"] = (
+                desk.node_title(e.account.supernode_id)
+                if e.account.supernode_id
+                else ""
+            )
             pref = node_prefs.get(e.node_id, {})
             item["pinned"] = bool(pref.get("pinned"))
             item["muted"] = bool(pref.get("muted"))
