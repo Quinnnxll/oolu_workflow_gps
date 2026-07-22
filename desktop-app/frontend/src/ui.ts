@@ -3287,4 +3287,167 @@ const ZH_HANT: Record<string, string> = {
   "rep.toggleOff": "✍ 個人代表：關",
   "rep.toggleHint": "用你的語氣為等候中的好友起草回覆——你只需篩選。",
   "rep.autoToPeer": "對 {peer} 的自動回覆（僅限已贏得信任的回覆；涉及承諾的內容永遠等你決定）",
+  // ---- the once-missing tail: full Traditional coverage ---------------- //
+  "chat.reminderRing": "提醒：",
+  "choice.metric": "公制 (SI)",
+  "choice.imperial": "英制",
+  "friends.message": "傳訊息",
+  "friends.sayHello": "新朋友——打個招呼吧！",
+  "login.backToSignIn": "返回登入",
+  "login.emailNewPassword": "或寄一組新密碼給我",
+  "login.keepTexted": "保留簡訊中的密碼",
+  "login.newPasswordSent":
+    "如果該信箱有帳戶，新密碼已寄出——請收信，然後到設定中修改。",
+  "login.phoneChoosePassword": "設定你的密碼（簡訊中的密碼同樣有效）。",
+  "login.phoneCodeSent": "驗證碼已發送——請查看簡訊。",
+  "login.phoneCreated":
+    "帳戶已建立！密碼已透過簡訊發送——你也可以現在自行設定。",
+  "login.phoneEnterCode": "輸入我們發送的驗證碼。",
+  "login.phoneIntro":
+    "輸入手機號碼——我們會發送登入驗證碼。新號碼會當場建立帳戶。",
+  "login.phoneNumber": "手機號碼",
+  "login.savePassword": "儲存密碼",
+  "login.sendPhoneCode": "發送驗證碼",
+  "login.sendingNewPassword": "正在寄送新密碼…",
+  "net.blockHost": "封鎖主機",
+  "net.blockHostLabel": "要封鎖的主機",
+  "net.blockUser": "封鎖使用者",
+  "net.blockUserLabel": "要封鎖的使用者",
+  "net.blockedHosts": "已封鎖的主機",
+  "net.blockedUsers": "已封鎖的使用者",
+  "net.globalOpenNote":
+    "登入全域服務後，網路預設全面開放——無需授權。在此新增主機只會收窄此節點可存取的範圍；封鎖清單始終生效。",
+  "net.noBlockedHosts":
+    "未封鎖任何主機——該組織可存取開放網路；填入主機名稱即可拒絕它（含子網域），對該超級節點下的所有節點生效。",
+  "net.noBlockedUsers":
+    "未封鎖任何使用者——如同封鎖好友，被封鎖使用者的訊息既到不了此超級節點，也到不了它之下的任何節點。",
+  "net.openWeb":
+    "網路開放——該組織是全域帳戶下的已驗證實體，其節點不受主機授權清單限制。它仍可在下方選擇要拒絕的對象。",
+  "net.unblock": "取消封鎖",
+  "noder.deleteHint":
+    "從清單移除。執行紀錄仍保留；節點再有動靜時會話會回來。",
+  "profile.backToChat": "返回會話",
+  "profile.confirmDelete": "確認刪除",
+  "profile.delete": "刪除",
+  "profile.deleteFriend": "刪除好友",
+  "profile.deleteFriendHint":
+    "僅解除好友關係，不封鎖。訊息保留；對方再來訊時會話會回來。",
+  "profile.hide": "隱藏",
+  "profile.hideHint":
+    "隱藏會把會話從清單移走——對方再說話時它會自己回來。",
+  "profile.mute": "勿擾",
+  "profile.unmute": "取消勿擾",
+  "profile.open": "查看資料：",
+  "profile.openHint": "備註名、置頂、勿擾、隱藏、刪除——都在這裡。",
+  "profile.pin": "置頂",
+  "profile.unpin": "取消置頂",
+  "rep.discarded":
+    "已存入你與 {peer} 的輸入框——若對方再來訊息、你重新開啟代表模式，或明天仍未讀，我會再擬一稿。",
+  "rep.ignore": "忽略",
+  "rep.waitingCard": "要回覆 {peer}——「{text}」——我需要：",
+  "rep.waitingHint":
+    "在 OoLu 對話中回答我，我就會擬稿——或按「忽略」將其標為已讀且不回覆。",
+  "rep.waitingTitle": "等待你的資訊",
+  "tpl.allSeated": "所有席位均已就位——無需匯入。",
+  "tpl.button": "建議組織結構",
+  "tpl.header": "組織範本",
+  "tpl.hint":
+    "讀取此超級節點的描述並解析出精簡的工作結構——優先確定性比對，一次記錄，絕不重複推理。",
+  "tpl.import": "匯入 {n} 個節點",
+  "tpl.imported":
+    "已匯入 {n} 個節點——均為未認領狀態：僅將節點 id 分享給應接手的人。",
+  "tpl.rebranch": "重新推理結構",
+  "tpl.rebranchNote":
+    "某席位的函式超過了分支門檻——結構應重新推理並拆分工作：",
+  "tpl.seated": "已就位",
+  "tpl.source.fallback": "無相符——使用精簡通用結構",
+  "tpl.source.matched": "依描述確定性比對",
+  "tpl.source.model": "證據不足——模型從目錄中選取",
+  "tpl.source.recorded": "已記錄的選擇——只解析一次，此後一直沿用",
+  "work.assign": "指派",
+  "work.assignHint": "為該席位指派使用者——組織的人事之手。",
+  "work.assignUser": "指派使用者",
+  "work.codeAllFiles": "全部檔案",
+  "work.codeEmpty":
+    "尚未建置任何內容——節點的函式與資源會以檔案形式出現在這裡。",
+  "work.codeLanguagesNote":
+    "節點支援主流語言：Python 原生執行；JavaScript（main.js）、C（main.c）、C++（main.cpp）與 shell 進入點經沙箱工具鏈執行；JSON、HTML、Markdown 與 React 原始碼作為隨附資源。",
+  "work.codeNoSummary": "此節點暫無描述。",
+  "work.createMember": "建立成員",
+  "work.deleteNodeHint":
+    "徹底刪除該節點——從你的清單、組織成員名冊和執行中移除。管理員可在 7 天內復原；逾期將永久刪除。",
+  "work.memberSupernode": "超級節點成員",
+  "work.newMemberName": "新成員節點名稱",
+  "work.recentlyDeleted": "最近刪除",
+  "work.revive": "復原",
+  "work.reviveHint": "已刪除的成員可在 7 天內復原，之後將永久清除。",
+  "work.seatOnDemand": "隨需",
+  "work.seatOnboard": "已入駐",
+  "work.tabAccess": "存取",
+  "work.tabCode": "程式碼",
+  // ---- the Settings window, fully in Traditional ----------------------- //
+  "setting.app.theme.label": "主題",
+  "setting.app.theme.desc": "應用程式的配色主題。",
+  "setting.app.language.label": "語言",
+  "setting.app.language.desc": "介面語言。",
+  "setting.app.notifications.label": "通知",
+  "setting.app.notifications.desc": "當任務完成或需要我時通知我。",
+  "setting.app.voice_replies.label": "朗讀回覆",
+  "setting.app.voice_replies.desc":
+    "OoLu 會在顯示訊息的同時朗讀回覆。想安靜對話就在這裡關閉。",
+  "setting.account.display_name.label": "顯示名稱",
+  "setting.account.display_name.desc": "帳戶上顯示的名稱。",
+  "setting.account.currency.label": "消費貨幣",
+  "setting.account.currency.desc":
+    "你所在地區的法定貨幣——所有上限與消費金額都以它輸入和顯示。換算到內部計量單位使用固定參考匯率。",
+  "setting.account.units.label": "計量單位",
+  "setting.account.units.desc":
+    "OoLu 回答時使用的計量系統——公尺和公斤（公制/SI）或英尺和磅（英制）。自動模式跟隨你所在地區：美國用英制，其他地區用 SI。",
+  "setting.account.log_retention_days.label": "執行日誌保留期",
+  "setting.account.log_retention_days.desc":
+    "每個節點在清理前保留其每日執行日誌檔（位於其檔案抽屜的 logs/ 下）的時長。請依你的法定留存要求設定。",
+  "setting.account.autobuild_consent.label": "自動建置路徑上的節點",
+  "setting.account.autobuild_consent.desc":
+    "允許 OoLu 建置缺少的節點並以我的帳戶發佈。預設關閉：當任務沒有現成路徑時，OoLu 會先徵求你的同意再建置。",
+  "setting.subscription.plan.label": "方案",
+  "setting.subscription.plan.desc":
+    "你目前的方案。在帳戶中心管理——先在那裡取消目前方案才能更改條款。",
+  "setting.subscription.billing_cycle.label": "計費週期",
+  "setting.subscription.billing_cycle.desc":
+    "按月或按年。與方案一起在帳戶中心管理。",
+  "setting.model.source.label": "預設模型",
+  "setting.model.source.desc":
+    "大腦所在。訂閱跟隨你的 OoLu 方案（優先 Claude）。自有 API 使下方新增的金鑰成為預設模型，覆蓋方案。本機使用在這台機器上執行的模型伺服器——無需金鑰，不上雲。",
+  "setting.model.provider.label": "模型供應商",
+  "setting.model.provider.desc":
+    "當預設模型為自有 API 時由哪把金鑰應答。自動會先試 Anthropic，再試 OpenAI——哪個設定了金鑰就用哪個。",
+  "setting.model.local_url.label": "本機模型位址",
+  "setting.model.local_url.desc":
+    "本機模型伺服器的 OpenAI 相容端點（Ollama、LM Studio、llama.cpp server）。僅在預設模型為本機時使用。",
+  "setting.model.local_model.label": "本機模型名稱",
+  "setting.model.local_model.desc":
+    "向本機伺服器請求的模型名稱，例如 llama3.2 或 qwen3。預設模型為本機時必填。",
+  "setting.model.tier.label": "模型檔位",
+  "setting.model.tier.desc":
+    "快速檔回答便宜；深度思考檔想得更深，每輪更貴。",
+  "setting.model.web_search.label": "模型連網搜尋",
+  "setting.model.web_search.desc":
+    "允許模型在需要時連網搜尋最新資訊（在供應商的 API 呼叫內完成——目前為 Claude；本機模型從不連網）。",
+  "setting.budget.model_cap.label": "模型消費上限",
+  "setting.budget.model_cap.desc":
+    "當計量的對話消費達到該金額（以你的消費貨幣計）時停止呼叫模型（0 = 不設上限）。任務仍會執行。",
+  "setting.budget.hard_cap.label": "硬性消費上限",
+  "setting.budget.hard_cap.desc":
+    "拒絕任何預估超過該金額（以你的消費貨幣計）的任務（0 = 不設上限）。",
+  "setting.budget.review_threshold.label": "覆核門檻",
+  "setting.budget.review_threshold.desc":
+    "預估超過該金額（以你的消費貨幣計）的任務需先經我確認（0 = 關閉）。",
+  "setting.budget.monthly_limit.label": "每月限額",
+  "setting.budget.monthly_limit.desc":
+    "以你的消費貨幣計的每月軟性支出目標（0 = 無）。",
 };
+
+// Test-only handles: the coverage guard in ui.test.ts reads these to
+// prove ZH_HANT covers every key — a new string cannot silently fall
+// back to Simplified while the app speaks Traditional.
+export const _dictionaries = { STRINGS, SETTING_STRINGS, ZH_HANT };

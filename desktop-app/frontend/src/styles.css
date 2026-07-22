@@ -79,6 +79,20 @@ body {
   color: var(--fg);
 }
 
+/* Traditional Chinese reads in its own faces: Noto Sans TC first,
+   Taipei Sans TC beside it, then the CJK-TC system stack — never a
+   Simplified-tuned font rendering Traditional glyphs oddly. The html
+   lang attribute is stamped by applyLanguage. */
+html[lang="zh-hant"] body,
+html[lang="zh-hant"] input,
+html[lang="zh-hant"] textarea,
+html[lang="zh-hant"] select,
+html[lang="zh-hant"] button {
+  font-family: "Noto Sans TC", "Taipei Sans TC", "Noto Sans CJK TC",
+    "PingFang TC", "Microsoft JhengHei", system-ui, -apple-system,
+    Segoe UI, Roboto, sans-serif;
+}
+
 /* The app frame is pinned to the viewport: the page itself never scrolls.
    Each column (the conversation list, the open pane) owns its own
    overflow, so scrolling the list never moves the chat and vice versa. */

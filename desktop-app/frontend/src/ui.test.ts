@@ -134,6 +134,50 @@ describe("Traditional Chinese and the device language", () => {
     expect(displayNodeName("Handiwork")).toBe("Handiwork");
   });
 
+  it("covers EVERY string — nothing falls back to Simplified", async () => {
+    const { _dictionaries } = await import("./ui");
+    const { STRINGS, SETTING_STRINGS, ZH_HANT } = _dictionaries;
+    const missing = Object.keys(STRINGS).filter((k) => !(k in ZH_HANT));
+    expect(missing).toEqual([]);
+    const settingGaps: string[] = [];
+    for (const [key, entry] of Object.entries(SETTING_STRINGS)) {
+      if (!(`setting.${key}.label` in ZH_HANT)) {
+        settingGaps.push(`setting.${key}.label`);
+      }
+      if (entry.desc && !(`setting.${key}.desc` in ZH_HANT)) {
+        settingGaps.push(`setting.${key}.desc`);
+      }
+    }
+    expect(settingGaps).toEqual([]);
+  });
+
+  it("mute speaks 勿擾, and the Settings window speaks Traditional", async () => {
+    const { applyLanguage, t, settingLabel, settingDesc } =
+      await import("./ui");
+    applyLanguage("zh-hant");
+    expect(t("profile.mute")).toBe("勿擾");
+    expect(t("profile.unmute")).toBe("取消勿擾");
+    expect(settingLabel("app.theme", "Theme")).toBe("主題");
+    expect(settingDesc("app.theme", null)).toBe("應用程式的配色主題。");
+    expect(settingLabel("account.display_name", "x")).toBe("顯示名稱");
+    // The account description reads Traditional, not Simplified.
+    expect(settingDesc("account.display_name", null)).toBe(
+      "帳戶上顯示的名稱。",
+    );
+    // Work tags and margins follow.
+    expect(t("work.tabCode")).toBe("程式碼");
+    expect(t("regime.supernode")).toBe("超級節點");
+    applyLanguage("en");
+  });
+
+  it("the html lang attribute follows, so the TC font stack binds", async () => {
+    const { applyLanguage } = await import("./ui");
+    applyLanguage("zh-hant");
+    expect(document.documentElement.lang).toBe("zh-hant");
+    applyLanguage("en");
+    expect(document.documentElement.lang).toBe("en");
+  });
+
   it("a first run boots in the device's language, a choice sticks", async () => {
     const { bootAppearance, currentLanguage, applyLanguage } = await import(
       "./ui"

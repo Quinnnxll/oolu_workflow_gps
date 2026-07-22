@@ -4,6 +4,30 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+繁體中文 speaks everywhere — full coverage, 勿擾, and its own faces:
+
+- **The gap.** The Traditional dictionary covered 412 of 533 strings;
+  everything else fell back to Simplified — most visibly the ENTIRE
+  Settings window (every label and description), the account
+  descriptions, the Work tabs and node tags, the login/phone strings,
+  the org-template block, and the pin/mute/delete margins.
+- **Full coverage.** All 121 missing entries translated into
+  Traditional with Taiwan vocabulary (登入, 簡訊, 帳戶, 設定, 檔案,
+  程式碼, 使用者, 封鎖, 方案, 金鑰, 伺服器…), and Mute is 勿擾 /
+  取消勿擾 with its descriptions translated alongside. A coverage
+  GUARD now lives in the test suite: every key in the string table and
+  every Settings label/description must have a Traditional entry, so a
+  future string can never silently fall back to Simplified.
+- **Its own faces.** ``applyLanguage`` already stamps the html lang
+  attribute; the stylesheet now gives ``zh-hant`` its own font stack —
+  Noto Sans TC first, Taipei Sans TC beside it, then the CJK-TC system
+  faces (PingFang TC, Microsoft JhengHei) — across body, inputs, and
+  buttons, so Traditional glyphs stop rendering through a
+  Simplified-tuned font.
+- **Tests.** The coverage guard, 勿擾 and the Settings window reading
+  Traditional, and the lang attribute following the switch. Shell
+  rebuilt.
+
 Reset codes, e-mailed passwords, and phone sign-in become OFFERABLE —
 the doors existed; the deployment could never open them:
 
