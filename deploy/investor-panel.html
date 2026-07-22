@@ -64,10 +64,12 @@
   <input id="server" placeholder="https://api.your-oolu-host" />
   <input id="token" placeholder="bearer token (metrics:view)" />
   <button type="submit">Connect</button>
+  <button type="button" id="report">Download report</button>
   <span class="muted">refreshes every 60&thinsp;s</span>
 </form>
 <div id="exec"></div>
 <div id="cohorts"></div>
+<div id="competitors"></div>
 <div id="scorecard"></div>
 <div id="board"></div>
 <div id="err" class="error"></div>
@@ -101,6 +103,7 @@ async function refresh() {
     await renderExec();
     await renderScorecard();
     await renderCohorts();
+    await renderCompetitors();
     const groups = {};
     for (const item of data.items) {
       (groups[item.group] = groups[item.group] || []).push(item);
@@ -273,6 +276,65 @@ async function renderCohorts() {
   wrap.append(table);
   mount.append(h, wrap);
 }
+/* The strategic comparison: newest observation per dimension, with
+   confidence — positive scores mean OoLu leads. */
+async function renderCompetitors() {
+  const data = await api("/v1/platform/competitors");
+  const mount = $("competitors");
+  mount.replaceChildren();
+  if (!data.items.length) return;
+  const h = document.createElement("h2");
+  h.textContent = "competitive position";
+  const wrap = document.createElement("div");
+  wrap.className = "scroll-x";
+  const table = document.createElement("table");
+  table.className = "cohort";
+  const head = document.createElement("tr");
+  const corner = document.createElement("th");
+  corner.textContent = "dimension";
+  head.append(corner);
+  for (const entry of data.items) {
+    const th = document.createElement("th");
+    th.textContent = "vs " + entry.competitor;
+    head.append(th);
+  }
+  table.append(head);
+  for (const dim of data.dimensions) {
+    const observed = data.items.some((e) => e.dimensions[dim]);
+    if (!observed) continue;
+    const row = document.createElement("tr");
+    const name = document.createElement("td");
+    name.textContent = dim.replace(/_/g, " ");
+    row.append(name);
+    for (const entry of data.items) {
+      const cell = document.createElement("td");
+      const obs = entry.dimensions[dim];
+      if (obs) {
+        const s = obs.relative_score;
+        cell.textContent = (s > 0 ? "+" : "") + s + " (" + obs.confidence + ")";
+        cell.className = s > 0 ? "hot" : s < 0 ? "" : "warm";
+        cell.title = obs.evidence || "";
+      } else {
+        cell.textContent = "";
+      }
+      row.append(cell);
+    }
+    table.append(row);
+  }
+  wrap.append(table);
+  mount.append(h, wrap);
+}
+$("report").addEventListener("click", async () => {
+  try {
+    const data = await api("/v1/platform/metrics/report");
+    const blob = new Blob([data.markdown], { type: "text/markdown" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "oolu-investor-report-" + data.generated_at + ".md";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch (e) { $("err").textContent = e.message; }
+});
 $("conf").addEventListener("submit", (e) => {
   e.preventDefault();
   conf.set($("server").value.trim().replace(/\/+$/, ""), $("token").value.trim());

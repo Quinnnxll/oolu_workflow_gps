@@ -299,6 +299,15 @@ class NodeProvenance:
         stored = self.get_release(tenant, node_id, release_id)
         return stored if stored is not None else record
 
+    def count_releases(self) -> int:
+        """Every sealed release on this host, all tenants — the moat's
+        'reusable verified nodes' gauge."""
+        with self._conn.lock:
+            row = self._conn.db.execute(
+                "SELECT COUNT(*) AS n FROM node_releases"
+            ).fetchone()
+        return int(row["n"])
+
     def get_release(
         self, tenant: str, node_id: str, release_id: str
     ) -> NodeRelease | None:

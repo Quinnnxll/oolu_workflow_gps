@@ -303,6 +303,63 @@ METRIC_CATALOG: tuple[MetricSpec, ...] = (
         formula="active(8..30 days ago) − active(last 7 days)",
         direction="down",
     ),
+    # ---- phase 3: attention share (external eyes — the manual door) --- #
+    MetricSpec(
+        "attention.share_of_search_pct", "Share of search", "attention", "%",
+        source="manual",
+        description="Branded-search share against the category, from the "
+        "search-trend door.",
+        section="market_and_competition",
+        update_frequency="weekly",
+    ),
+    MetricSpec(
+        "attention.share_of_voice_pct", "Share of voice", "attention", "%",
+        source="manual",
+        description="Category mentions that are ours, from press/social "
+        "listening.",
+        section="market_and_competition",
+        update_frequency="weekly",
+    ),
+    MetricSpec(
+        "attention.category_time_share_pct", "Category time share",
+        "attention", "%", source="manual",
+        description="Share of category app time spent in OoLu, from panel "
+        "estimators.",
+        section="product_usage_and_attention",
+        update_frequency="monthly",
+    ),
+    MetricSpec(
+        "attention.external_tools_eliminated", "External tools eliminated",
+        "attention", "count", source="manual",
+        description="Tools customers report replacing with OoLu workflows.",
+        section="product_usage_and_attention",
+        update_frequency="monthly",
+    ),
+    # ---- phase 3: the moat, measured off the real stores -------------- #
+    MetricSpec(
+        "moat.node_reuse_rate_pct", "Node reuse rate", "moat", "%",
+        description="Terminal runs (30 days) that routed through an "
+        "existing node's own function instead of a fresh plan.",
+        section="moat_and_compounding_advantage",
+        formula="node_function_runs / terminal_runs * 100",
+        target=60.0, warning=30.0, critical=10.0,
+    ),
+    MetricSpec(
+        "moat.reusable_verified_nodes", "Verified sealed releases", "moat",
+        "count",
+        description="Content-addressed node releases verification sealed — "
+        "the reusable, provable function library.",
+        section="moat_and_compounding_advantage",
+        formula="count of sealed releases on the provenance ledger",
+    ),
+    MetricSpec(
+        "moat.proprietary_events_total", "Proprietary event volume", "moat",
+        "count",
+        description="Rows on the tamper-evident audit chain — the "
+        "platform's own execution history nobody else holds.",
+        section="moat_and_compounding_advantage",
+        formula="count of audit-chain entries",
+    ),
     MetricSpec(
         "code.commits", "GitHub commits", "code", "count", source="manual",
         description="Recorded by the release pipeline or the operator.",
@@ -370,15 +427,107 @@ SCORECARD_PILLARS: tuple[dict, ...] = (
     },
     {
         "name": "market", "weight": 0.10,
-        "inputs": ("seo.impressions", "seo.clicks"),
+        "inputs": (
+            "seo.impressions", "seo.clicks",
+            "attention.share_of_search_pct",
+        ),
         "basis": "growth",
     },
     {
         "name": "moat", "weight": 0.10,
-        "inputs": ("nodes.total",),
+        "inputs": (
+            "nodes.total", "moat.reusable_verified_nodes",
+            "moat.proprietary_events_total",
+        ),
         "basis": "growth",
     },
 )
+
+# The strategic-comparison dimensions, exactly as the matrix names them.
+COMPARISON_DIMENSIONS: tuple[str, ...] = (
+    "workflow_coverage",
+    "automation_depth",
+    "physical_execution_capability",
+    "integrations",
+    "reliability",
+    "implementation_time",
+    "pricing",
+    "switching_cost",
+    "data_advantage",
+    "geographic_coverage",
+)
+
+# The decision-support scenarios the matrix models.
+SCENARIOS: tuple[str, ...] = (
+    "pricing_change",
+    "model_provider_change",
+    "infrastructure_migration",
+    "new_market_entry",
+    "physical_capacity_expansion",
+    "sales_hiring",
+    "workflow_subsidy",
+    "competitor_price_reduction",
+)
+
+
+def project_scenario(
+    *, scenario: str, baseline: dict, assumptions: dict
+) -> dict:
+    """Deterministic what-if arithmetic — the matrix's decision-support
+    outputs from the CURRENT actuals and the operator's stated
+    assumptions. No model touches a number: every output is a formula
+    over the baseline, and the confidence range is exactly the stated
+    uncertainty applied to the projected deltas."""
+    if scenario not in SCENARIOS:
+        raise ValueError(
+            f"unknown scenario '{scenario}' — one of: {', '.join(SCENARIOS)}"
+        )
+    revenue = float(baseline.get("monthly_revenue_usd") or 0.0)
+    cost = float(baseline.get("monthly_cost_usd") or 0.0)
+    cash = float(baseline.get("cash_usd") or 0.0)
+    revenue_delta = revenue * float(assumptions.get("revenue_delta_pct", 0)) / 100
+    cost_delta = cost * float(assumptions.get("cost_delta_pct", 0)) / 100
+    one_time = float(assumptions.get("one_time_cost_usd", 0))
+    uncertainty = abs(float(assumptions.get("uncertainty_pct", 20))) / 100
+
+    old_net = revenue - cost
+    new_net = (revenue + revenue_delta) - (cost + cost_delta)
+    monthly_gain = new_net - old_net
+    old_margin = (old_net / revenue * 100) if revenue else None
+    new_revenue = revenue + revenue_delta
+    new_margin = (new_net / new_revenue * 100) if new_revenue else None
+    burn = max(0.0, -new_net)
+    runway = (cash - one_time) / burn if burn else None
+    break_even = (
+        one_time / monthly_gain if one_time > 0 and monthly_gain > 0 else None
+    )
+    return {
+        "scenario": scenario,
+        "baseline": {
+            "monthly_revenue_usd": revenue,
+            "monthly_cost_usd": cost,
+            "cash_usd": cash,
+        },
+        "assumptions": dict(assumptions),
+        "revenue_impact_usd_month": round(revenue_delta, 2),
+        "cost_impact_usd_month": round(cost_delta, 2),
+        "margin_impact_pts": (
+            round(new_margin - old_margin, 2)
+            if old_margin is not None and new_margin is not None
+            else None
+        ),
+        "cash_impact_usd_year": round(monthly_gain * 12 - one_time, 2),
+        "monthly_net_before_usd": round(old_net, 2),
+        "monthly_net_after_usd": round(new_net, 2),
+        "runway_months_after": round(runway, 1) if runway is not None else None,
+        "break_even_months": (
+            round(break_even, 1) if break_even is not None else None
+        ),
+        "confidence_range_usd_month": [
+            round(monthly_gain * (1 - uncertainty), 2),
+            round(monthly_gain * (1 + uncertainty), 2),
+        ],
+    }
 
 
 _SCHEMA = """CREATE TABLE IF NOT EXISTS metric_snapshots (
@@ -627,4 +776,109 @@ class InvestorMetricsService:
             "score": round(score, 1) if pillars else None,
             "pillars": pillars,
             "excluded": excluded,
+        }
+
+
+_COMPETITOR_SCHEMA = """CREATE TABLE IF NOT EXISTS competitor_observations (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    competitor TEXT NOT NULL,
+    dimension TEXT NOT NULL,
+    score REAL NOT NULL,
+    evidence TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT '',
+    confidence TEXT NOT NULL DEFAULT 'medium',
+    observed_at TEXT NOT NULL
+)"""
+
+
+class CompetitorLedger:
+    """Competitor intelligence, append-only: every observation keeps its
+    evidence, source, and confidence — the matrix's strategic
+    comparison reads the NEWEST observation per (competitor,
+    dimension), and the history stays for the audit. Scores are
+    relative: positive means OoLu leads on that dimension, negative
+    means the competitor does."""
+
+    def __init__(self, conn, *, clock: Callable[[], datetime] | None = None):
+        self._conn = conn
+        self._clock = clock or (lambda: datetime.now(UTC))
+        with self._conn.transaction() as db:
+            db.execute(_COMPETITOR_SCHEMA)
+
+    def observe(
+        self,
+        competitor: str,
+        dimension: str,
+        score: float,
+        *,
+        evidence: str = "",
+        source: str = "",
+        confidence: str = "medium",
+    ) -> dict:
+        competitor = competitor.strip()
+        if not competitor:
+            raise ValueError("name the competitor")
+        if dimension not in COMPARISON_DIMENSIONS:
+            raise ValueError(
+                f"unknown dimension '{dimension}' — one of: "
+                + ", ".join(COMPARISON_DIMENSIONS)
+            )
+        if confidence not in ("low", "medium", "high"):
+            raise ValueError("confidence must be low, medium, or high")
+        observed_at = self._clock().isoformat()
+        with self._conn.transaction() as db:
+            db.execute(
+                """INSERT INTO competitor_observations
+                       (competitor, dimension, score, evidence, source,
+                        confidence, observed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    competitor,
+                    dimension,
+                    float(score),
+                    evidence[:2000],
+                    source[:500],
+                    confidence,
+                    observed_at,
+                ),
+            )
+        return {
+            "competitor": competitor,
+            "dimension": dimension,
+            "score": float(score),
+            "observed_at": observed_at,
+        }
+
+    def comparison(self) -> dict:
+        """The strategic matrix: per competitor, per dimension — the
+        newest relative score with its evidence, confidence, and
+        last-updated stamp. Unobserved dimensions are simply absent,
+        never guessed."""
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                """SELECT competitor, dimension, score, evidence, source,
+                          confidence, observed_at
+                   FROM competitor_observations latest
+                   WHERE seq = (SELECT MAX(seq)
+                                FROM competitor_observations
+                                WHERE competitor = latest.competitor
+                                  AND dimension = latest.dimension)
+                   ORDER BY competitor, dimension"""
+            ).fetchall()
+        competitors: dict[str, dict] = {}
+        for row in rows:
+            entry = competitors.setdefault(
+                row["competitor"], {"competitor": row["competitor"],
+                                    "dimensions": {}}
+            )
+            entry["dimensions"][row["dimension"]] = {
+                "relative_score": row["score"],
+                "evidence": row["evidence"],
+                "source": row["source"],
+                "confidence": row["confidence"],
+                "last_updated": row["observed_at"],
+            }
+        return {
+            "dimensions": list(COMPARISON_DIMENSIONS),
+            "items": list(competitors.values()),
         }

@@ -667,6 +667,8 @@ class GatewayApp:
         self._sweep_gate = 0.0
         # Retention's own gate: at most one pruning pass per hour per host.
         self._retention_gate = 0.0
+        # Competitor intelligence, constructed on first use.
+        self._competitors = None
         self._settings = settings_node
         self._payments = payments
         self._launch_guard = launch_guard
@@ -1298,6 +1300,28 @@ class GatewayApp:
             "GET",
             "/v1/platform/metrics/cohorts",
             self._metrics_cohorts,
+            requires_permission="metrics:view",
+        )
+        # Phase 3: competitor intelligence (append-only observations →
+        # the strategic comparison), deterministic scenario modeling,
+        # and the automated investor report.
+        r.add(
+            "GET",
+            "/v1/platform/competitors",
+            self._competitors_view,
+            requires_permission="metrics:view",
+        )
+        r.add("PUT", "/v1/platform/competitors", self._competitors_record)
+        r.add(
+            "POST",
+            "/v1/platform/metrics/scenario",
+            self._metrics_scenario,
+            requires_permission="metrics:view",
+        )
+        r.add(
+            "GET",
+            "/v1/platform/metrics/report",
+            self._metrics_report,
             requires_permission="metrics:view",
         )
         r.add(
@@ -9080,6 +9104,23 @@ class GatewayApp:
             earlier = _active_since(30) - _active_since(7)
             return float(len(earlier))
 
+        # ---- phase 3: the moat, measured -------------------------------- #
+        def _node_reuse_rate() -> float:
+            done = _ai_terminal_30d()
+            if not done:
+                raise LookupError("no terminal runs in 30 days")
+            reused = [
+                s
+                for s in done
+                if isinstance(s.contract.metadata.get("node_function"), dict)
+            ]
+            return len(reused) / len(done) * 100
+
+        def _sealed_releases() -> float:
+            if self._provenance is None:
+                raise LookupError("no provenance ledger on this host")
+            return float(self._provenance.count_releases())
+
         today = datetime.now(UTC).date()
         readers = {
             "users.daily_active": lambda: len(_active_since(1)),
@@ -9121,6 +9162,11 @@ class GatewayApp:
             "market.avg_transaction_usd": _avg_transaction,
             "health.activation_rate_pct": _activation_rate,
             "health.at_risk_users": _at_risk,
+            "moat.node_reuse_rate_pct": _node_reuse_rate,
+            "moat.reusable_verified_nodes": _sealed_releases,
+            "moat.proprietary_events_total": lambda: float(
+                self._durable.audit.count()
+            ),
         }
         if self._nodeplace is not None:
             readers["nodes.total"] = lambda: len(self._nodeplace.all_nodes())
@@ -9150,6 +9196,179 @@ class GatewayApp:
         """The weighted composite, pillars renormalized over what this
         platform can actually measure — excluded pillars are named."""
         return json_response(200, self._require_metrics().scorecard())
+
+    def _competitor_ledger(self):
+        from ..telemetry.investor import CompetitorLedger
+
+        if self._competitors is None:
+            self._competitors = CompetitorLedger(self._durable.conn)
+        return self._competitors
+
+    def _competitors_view(self, request, session, params) -> Response:
+        """The strategic comparison: per competitor, per matrix
+        dimension — the newest relative score with evidence, confidence,
+        and last-updated. Unobserved dimensions are absent, never
+        guessed."""
+        self._require_metrics()
+        return json_response(200, self._competitor_ledger().comparison())
+
+    def _competitors_record(self, request, session, params) -> Response:
+        """The observation door: approved and audited like the manual
+        metric door — competitor intelligence is external eyes, so every
+        entry names its evidence, source, and confidence."""
+        self._require_metrics()
+        if self._approval is None:
+            raise GatewayError(
+                404, "not_found", "approval authority is not configured"
+            )
+        try:
+            self._approval.approve(
+                session,
+                run_id="competitors:observe",
+                policy="metrics.record",
+                requester_id="",
+                now=request.now or self._clock(),
+            )
+        except AuthorizationError as exc:
+            raise GatewayError(403, "forbidden", str(exc)) from exc
+        body = request.body or {}
+        try:
+            observed = self._competitor_ledger().observe(
+                str(body.get("competitor", "")),
+                str(body.get("dimension", "")),
+                float(body.get("score")),
+                evidence=str(body.get("evidence", "") or ""),
+                source=str(body.get("source", "") or ""),
+                confidence=str(body.get("confidence", "medium") or "medium"),
+            )
+        except (TypeError, ValueError) as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        self._durable.audit.append(
+            "competitors.observed",
+            {
+                "run_id": "competitors:observe",
+                "by": session.principal_id,
+                **observed,
+            },
+        )
+        return json_response(200, observed)
+
+    def _metrics_scenario(self, request, session, params) -> Response:
+        """Decision support, deterministically: the matrix's what-if
+        outputs computed from CURRENT actuals (the ledgers' own numbers)
+        and the operator's stated assumptions — no model ever touches a
+        number. The baseline is named in the answer, approximations
+        included."""
+        from ..telemetry.investor import project_scenario
+
+        service = self._require_metrics()
+        service.collect()
+        latest = self._metrics_store.latest()
+
+        def _value(key: str) -> float | None:
+            point = latest.get(key)
+            return float(point["value"]) if point else None
+
+        arpu = _value("unit.arpu_usd")
+        mau = _value("users.monthly_active")
+        daily = _value("revenue.earnings_daily_usd")
+        monthly_revenue = (
+            arpu * mau
+            if arpu is not None and mau is not None
+            else (daily or 0.0) * 30
+        )
+        baseline = {
+            "monthly_revenue_usd": monthly_revenue,
+            "monthly_cost_usd": _value("cost.model_month_usd") or 0.0,
+            "cash_usd": _value("capital.in_app_usd") or 0.0,
+        }
+        body = request.body or {}
+        try:
+            projected = project_scenario(
+                scenario=str(body.get("scenario", "")),
+                baseline=baseline,
+                assumptions=dict(body.get("assumptions") or {}),
+            )
+        except (TypeError, ValueError) as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(200, projected)
+
+    def _metrics_report(self, request, session, params) -> Response:
+        """The automated investor report: one Markdown document off the
+        ledgers — executive summary, scorecard, cohorts, competitors —
+        every number the runtime's own, none written by a model."""
+        service = self._require_metrics()
+        summary = service.summary()
+        scorecard = service.scorecard()
+        cohorts = self._metrics_cohorts(request, session, params).body
+        competitors = self._competitor_ledger().comparison()
+        now = (request.now or self._clock()).strftime("%Y-%m-%d")
+        lines = [
+            f"# OoLu — Investor Report ({now})",
+            "",
+            "## Executive summary",
+            "",
+            "| Metric | Actual | Prev | Δ% | Target | Status |",
+            "| --- | ---: | ---: | ---: | ---: | --- |",
+        ]
+
+        def _num(value) -> str:
+            if value is None:
+                return "—"
+            return f"{value:,.2f}" if value % 1 else f"{int(value):,}"
+
+        for item in summary["items"]:
+            growth = item["growth_rate_pct"]
+            lines.append(
+                f"| {item['label']} | {_num(item['actual'])} | "
+                f"{_num(item['previous_period'])} | "
+                f"{_num(growth) if growth is not None else '—'} | "
+                f"{_num(item['target'])} | {item['status']} |"
+            )
+        lines += ["", "## Scorecard", ""]
+        if scorecard["score"] is not None:
+            lines.append(f"**{scorecard['score']} / 100**")
+            lines.append("")
+            for pillar in scorecard["pillars"]:
+                lines.append(
+                    f"- {pillar['name'].replace('_', ' ')}: "
+                    f"{pillar['score']:.0f} "
+                    f"(weight {pillar['effective_weight'] * 100:.0f}%)"
+                )
+            if scorecard["excluded"]:
+                lines.append(
+                    "- not yet measurable: "
+                    + ", ".join(scorecard["excluded"]).replace("_", " ")
+                )
+        else:
+            lines.append("No scoreable data yet.")
+        lines += ["", "## Cohort retention", ""]
+        for cohort in cohorts["items"][-6:]:
+            points = ", ".join(
+                f"M{p['offset']} {p['pct']}%" for p in cohort["retention"][:6]
+            )
+            lines.append(
+                f"- {cohort['cohort']} (n={cohort['size']}): {points}"
+            )
+        if not cohorts["items"]:
+            lines.append("No cohorts yet.")
+        lines += ["", "## Competitive position", ""]
+        for entry in competitors["items"]:
+            lines.append(f"### vs {entry['competitor']}")
+            for dim, obs in entry["dimensions"].items():
+                lead = "we lead" if obs["relative_score"] > 0 else (
+                    "they lead" if obs["relative_score"] < 0 else "even"
+                )
+                lines.append(
+                    f"- {dim.replace('_', ' ')}: {lead} "
+                    f"({obs['relative_score']:+.1f}, {obs['confidence']} "
+                    f"confidence) — {obs['evidence'] or 'no evidence noted'}"
+                )
+        if not competitors["items"]:
+            lines.append("No competitor observations recorded.")
+        return json_response(
+            200, {"generated_at": now, "markdown": "\n".join(lines)}
+        )
 
     def _metrics_cohorts(self, request, session, params) -> Response:
         """Signup-month cohorts off the run books: each account joins

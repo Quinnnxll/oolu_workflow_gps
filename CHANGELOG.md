@@ -4,6 +4,42 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Investor panel Phase 3 — competitor intelligence, moat, scenarios,
+the automated report:
+
+- **Competitor intelligence.** An append-only observation ledger
+  (competitor × the matrix's ten strategic dimensions), every entry
+  carrying its evidence, source, confidence, and stamp — recorded
+  through the same approved/audited door as manual metrics. ``GET
+  /v1/platform/competitors`` answers the strategic comparison (newest
+  observation per cell; unobserved dimensions absent, never guessed),
+  and the panel renders it as a shaded position table.
+- **Attention share.** Share of search, share of voice, category time
+  share, and external tools eliminated join the catalog as manual
+  metrics with weekly/monthly cadence contracts — external eyes enter
+  through the recording door, never invented.
+- **The moat, measured.** Node reuse rate (terminal runs routed
+  through an existing node's own function, 30 days), reusable
+  verified nodes (sealed releases on the provenance ledger), and
+  proprietary event volume (the audit chain's row count) — all auto,
+  all off stores this session's earlier work built. The moat and
+  market scorecard pillars read them.
+- **Scenario modeling.** ``POST /v1/platform/metrics/scenario``: the
+  matrix's eight decision-support scenarios projected by DETERMINISTIC
+  arithmetic over current actuals (revenue, cost, cash from the
+  ledgers) and stated assumptions — revenue/cost/margin/cash impact,
+  runway after, break-even months, and a confidence range that is
+  exactly the stated uncertainty. No model touches a number.
+- **Automated investor reporting.** ``GET
+  /v1/platform/metrics/report``: one Markdown document assembled from
+  the ledgers — executive summary table, scorecard, cohort retention,
+  competitive position — every figure the runtime's own. The panel
+  gains a Download-report button.
+- **Tests.** The observation ledger (supersession, dimension and
+  confidence walls), the scenario arithmetic to the cent, and the
+  three doors end to end (walled, moat metrics live, the report
+  carrying its sections).
+
 Investor panel Phase 2 — unit economics, cohorts, AI quality,
 marketplace health, customer health:
 

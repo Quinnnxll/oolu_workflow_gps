@@ -347,3 +347,154 @@ def test_the_scorecard_gains_phase2_inputs(tmp_path):
     assert "ai.task_success_rate" in pillars["product"]["inputs"]
     assert "health.activation_rate_pct" in pillars["product"]["inputs"]
     assert "unit.contribution_margin_pct" in pillars["economics"]["inputs"]
+
+
+# --------------------------------------------------------------------- #
+# Phase 3: competitors, moat, scenario modeling, the automated report.  #
+# --------------------------------------------------------------------- #
+def test_competitor_observations_build_the_strategic_comparison(tmp_path):
+    from oolu.telemetry.investor import CompetitorLedger
+
+    conn = DurableConnection(tmp_path / "c.db")
+    try:
+        ledger = CompetitorLedger(conn)
+        ledger.observe(
+            "AutomateCo", "automation_depth", 1.5,
+            evidence="no verified physical hand", confidence="high",
+        )
+        ledger.observe("AutomateCo", "pricing", -1.0, confidence="low")
+        # A newer observation supersedes; the history stays underneath.
+        ledger.observe(
+            "AutomateCo", "pricing", -0.5, evidence="they raised prices"
+        )
+        comparison = ledger.comparison()
+        (entry,) = comparison["items"]
+        assert entry["dimensions"]["pricing"]["relative_score"] == -0.5
+        assert entry["dimensions"]["pricing"]["evidence"] == (
+            "they raised prices"
+        )
+        assert entry["dimensions"]["automation_depth"]["confidence"] == "high"
+        # Only the matrix's dimensions are speakable.
+        import pytest
+
+        with pytest.raises(ValueError, match="unknown dimension"):
+            ledger.observe("X", "vibes", 1.0)
+        with pytest.raises(ValueError, match="low, medium, or high"):
+            ledger.observe("X", "pricing", 1.0, confidence="certain")
+    finally:
+        conn.close()
+
+
+def test_scenario_projection_is_deterministic_arithmetic():
+    from oolu.telemetry.investor import project_scenario
+
+    projected = project_scenario(
+        scenario="pricing_change",
+        baseline={
+            "monthly_revenue_usd": 1000.0,
+            "monthly_cost_usd": 600.0,
+            "cash_usd": 10_000.0,
+        },
+        assumptions={
+            "revenue_delta_pct": 20,
+            "cost_delta_pct": 5,
+            "one_time_cost_usd": 300,
+            "uncertainty_pct": 25,
+        },
+    )
+    assert projected["revenue_impact_usd_month"] == 200.0
+    assert projected["cost_impact_usd_month"] == 30.0
+    assert projected["monthly_net_before_usd"] == 400.0
+    assert projected["monthly_net_after_usd"] == 570.0
+    # margin: 40% -> 47.5% = +7.5 pts
+    assert projected["margin_impact_pts"] == 7.5
+    # one-time 300 / monthly gain 170
+    assert projected["break_even_months"] == 1.8
+    lo, hi = projected["confidence_range_usd_month"]
+    assert (lo, hi) == (127.5, 212.5)
+    import pytest
+
+    with pytest.raises(ValueError, match="unknown scenario"):
+        project_scenario(
+            scenario="wishful_thinking", baseline={}, assumptions={}
+        )
+
+
+def test_phase3_doors_answer_and_are_walled(tmp_path):
+    gw, conn, ident = _host(tmp_path)
+    try:
+        # Competitor door: approved recording, then the comparison view.
+        recorded = gw.handle(
+            _req(
+                "PUT", "/v1/platform/competitors",
+                token=ident.token("operator", "t1"),
+                body={
+                    "competitor": "AutomateCo", "dimension": "reliability",
+                    "score": 1.0, "evidence": "public outage log",
+                    "confidence": "medium",
+                },
+            )
+        )
+        assert recorded.status == 200, recorded.body
+        walled = gw.handle(
+            _req(
+                "GET", "/v1/platform/competitors",
+                token=ident.token("user-1", "t1"),
+            )
+        )
+        assert walled.status == 403
+        comparison = gw.handle(
+            _req(
+                "GET", "/v1/platform/competitors",
+                token=ident.token("operator", "t1"),
+            )
+        )
+        assert comparison.status == 200
+        (entry,) = comparison.body["items"]
+        assert entry["dimensions"]["reliability"]["relative_score"] == 1.0
+
+        # A run gives the moat and scenario baselines something real.
+        gw.handle(
+            _req(
+                "POST", "/v1/runs",
+                token=ident.token("operator", "t1"), body={"intent": "tidy"},
+            )
+        )
+        scenario = gw.handle(
+            _req(
+                "POST", "/v1/platform/metrics/scenario",
+                token=ident.token("operator", "t1"),
+                body={
+                    "scenario": "model_provider_change",
+                    "assumptions": {"cost_delta_pct": -30},
+                },
+            )
+        )
+        assert scenario.status == 200, scenario.body
+        assert scenario.body["scenario"] == "model_provider_change"
+        assert "baseline" in scenario.body
+
+        report = gw.handle(
+            _req(
+                "GET", "/v1/platform/metrics/report",
+                token=ident.token("operator", "t1"),
+            )
+        )
+        assert report.status == 200
+        markdown = report.body["markdown"]
+        assert "# OoLu — Investor Report" in markdown
+        assert "## Executive summary" in markdown
+        assert "## Cohort retention" in markdown
+        assert "vs AutomateCo" in markdown
+        # Moat metrics ride the catalog with real readers.
+        view = gw.handle(
+            _req(
+                "GET", "/v1/platform/metrics",
+                token=ident.token("operator", "t1"),
+            )
+        )
+        items = {i["key"]: i for i in view.body["items"]}
+        assert items["moat.node_reuse_rate_pct"]["value"] is not None
+        assert items["moat.proprietary_events_total"]["value"] > 0
+    finally:
+        conn.close()

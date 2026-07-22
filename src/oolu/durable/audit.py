@@ -95,6 +95,15 @@ class DurableAuditLog:
             at=at,
         )
 
+    def count(self) -> int:
+        """How many entries the chain holds — the proprietary-event
+        gauge, without loading a single payload."""
+        with self._conn.lock:
+            row = self._conn.db.execute(
+                "SELECT COUNT(*) AS n FROM audit_log"
+            ).fetchone()
+        return int(row["n"])
+
     def records(self, *, run_id: str | None = None) -> list[AuditRecord]:
         with self._conn.lock:
             if run_id is None:
