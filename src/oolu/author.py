@@ -357,6 +357,11 @@ class NodeAuthorAgent:
         return "recorded — nothing will be built"
 
     def _script_problem(self, script: str) -> str | None:
+        from .nodeplace.screening import mock_smells
+
+        smells = mock_smells(script)
+        if smells:
+            return "the function only pretends — " + "; ".join(smells)
         if "emit_result" not in script:
             return (
                 "the script never calls emit_result — it must import "

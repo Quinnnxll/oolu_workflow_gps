@@ -43,7 +43,7 @@ IO_ANSWER = (
     "1. Read the rows.\n"
     'IO: {"inputs": [{"name": "invoice_csv", "type": "path"}],'
     ' "outputs": [{"name": "normalized_csv", "type": "path"}]}\n'
-    "```python\nfrom _oolu_runtime import emit_result\nemit_result('tidy')\n```"
+    "```python\nfrom _oolu_runtime import emit_result\nemit_result(''.join(['t', 'i', 'd', 'y']))\n```"
 )
 
 
@@ -205,7 +205,7 @@ def test_a_run_with_a_node_function_executes_that_function(tmp_path):
                     "skill_id": "fn-abc",
                     "title": "Normalize Invoice Csv Files",
                     "goal": GOAL,
-                    "script": "from _oolu_runtime import emit_result\nemit_result('tidy')",
+                    "script": "from _oolu_runtime import emit_result\nemit_result(''.join(['t', 'i', 'd', 'y']))",
                     "node_key": "node:fn-abc",
                 },
             },

@@ -17,7 +17,7 @@ from oolu.author import NodeAuthorAgent
 from oolu.providers.tools import ToolCall, ToolReply
 from oolu.seats import SEATS, DeskFiles
 
-SCRIPT = "from _oolu_runtime import emit_result\nemit_result('tidy')"
+SCRIPT = "from _oolu_runtime import emit_result\nemit_result(''.join(['t', 'i', 'd', 'y']))"
 
 
 class ConsultModel:

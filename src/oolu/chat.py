@@ -1015,7 +1015,20 @@ Otherwise write the node's execution function:
    honestly. A web-needing task IS executable work: write the function
    with http_request and let the grant decide at run time; never refuse
    it as impossible. A node fired by its webhook finds the caller's
-   payload staged at ./webhook_payload.json when one was sent."""
+   payload staged at ./webhook_payload.json when one was sent.
+
+REAL COMPUTATION ONLY — the exact-value rule. The runtime supplies
+values; the function computes with them:
+- The node's resolved inputs are staged at ./bindings.json on EVERY
+  run — read exact values from there, never retype them as literals
+  in the code.
+- COMPUTE the result from real inputs: bindings, staged files, the
+  webhook payload, or the web through http_request. NEVER invent,
+  mock, or hardcode data that pretends to be computed — no placeholder
+  rows, no sample outputs, no emit_result of a baked-in value.
+- A function that cannot reach its real data must emit_error naming
+  exactly what is missing — an honest failure outranks a fabricated
+  success every time."""
 
 
 _IO_LINE_RE = re.compile(r"^\s*IO:\s*(\{.*\})\s*$", re.M)
@@ -1123,6 +1136,14 @@ def author_node_function(
         return None, {}, (
             "the model wrote no usable function, so nothing was built — "
             "an empty node is unnecessary"
+        )
+    from .nodeplace.screening import mock_smells
+
+    smells = mock_smells(script)
+    if smells:
+        return None, {}, (
+            "the model wrote a function that only pretends — "
+            + "; ".join(smells)
         )
     return script, parse_node_io(raw), ""
 

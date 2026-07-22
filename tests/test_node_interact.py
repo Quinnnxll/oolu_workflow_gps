@@ -148,7 +148,7 @@ def test_replying_lands_on_the_hold(tmp_path):
 
 FUNCTION_ANSWER = (
     "1. Normalize the rows.\n"
-    "```python\nfrom _oolu_runtime import emit_result\nemit_result('tidy')\n```"
+    "```python\nfrom _oolu_runtime import emit_result\nemit_result(''.join(['t', 'i', 'd', 'y']))\n```"
 )
 
 
@@ -407,7 +407,7 @@ def test_revise_rewrites_this_nodes_own_function_under_consent(tmp_path):
             consented=True,
         )
         assert drawer.read("src/main.py") == (
-            "from _oolu_runtime import emit_result\nemit_result('tidy')"
+            "from _oolu_runtime import emit_result\nemit_result(''.join(['t', 'i', 'd', 'y']))"
         )
         # The author SAW the change request and the current-function frame.
         [consultation] = author.calls

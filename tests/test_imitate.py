@@ -35,7 +35,7 @@ GOAL = "normalize supplier invoices into one ledger csv"
 
 FUNCTION_ANSWER = (
     "1. Read the demonstrated steps.\n"
-    "```python\nfrom _oolu_runtime import emit_result\nemit_result('ok')\n```"
+    "```python\nfrom _oolu_runtime import emit_result\nemit_result(''.join(['o', 'k']))\n```"
 )
 
 

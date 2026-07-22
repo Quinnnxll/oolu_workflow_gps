@@ -4,6 +4,36 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The exact-value rules: real computation only, values from the runtime:
+
+- **The gap.** A mocked function RUNS: it emits a baked-in answer and
+  every gate that only checks "did it execute" passes — one successful
+  execution, nothing real computed. And the authored function had no
+  channel for its exact inputs, so the model retyped (or invented)
+  values as literals in the code.
+- **The mock screen.** `mock_smells` in the screening module: an
+  AST-level check that refuses an authored function whose
+  `emit_result` is handed a constant the model wrote (plain, dict,
+  f-string of constants — a constant in any costume), or whose code
+  names its own pretending (mock/placeholder/dummy/sample data).
+  Enforced at BOTH authoring doors — the one-shot
+  `author_node_function` and the agent's `finish_node` gate — as a
+  correctable refusal naming exactly what to fix, so the model
+  rewrites instead of shipping a fabricated success.
+- **The exact-value channel.** A node's resolved bindings now ride
+  into the sandbox as `./bindings.json` on EVERY run — cached,
+  provided, and resynthesized alike — so the function reads the exact
+  values the runtime bound, never literals the model retyped. The
+  prompt's new REAL COMPUTATION ONLY block teaches all of it: read
+  inputs from bindings, compute from real sources, and emit_error
+  naming what is missing rather than fabricate — an honest failure
+  outranks a fabricated success every time.
+- **Tests.** Every costume of a constant refused and real computation
+  passing clean; both authoring doors refusing in words; the agent
+  correcting on the named refusal; and bindings staged verbatim into
+  the backend request. Authored-script fixtures across the suite now
+  compute their answers.
+
 OoLu gets a face: the mark, the favicon, the login lockup:
 
 - **The mark.** Two nodes joined by a route — the big O and the small

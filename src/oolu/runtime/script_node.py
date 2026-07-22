@@ -338,6 +338,19 @@ class NodeScriptRunner:
         # repaired, and resynthesized alike.
         web = _web_grant(action)
         files = _staged_files(action)
+        # The exact-value channel: the node's resolved inputs ride into
+        # the sandbox as DATA (./bindings.json), so the function reads
+        # the values the runtime bound — never literals the model
+        # retyped, never values it imagined.
+        if bindings:
+            import json as _json
+
+            files = {
+                **files,
+                "bindings.json": _json.dumps(
+                    bindings, ensure_ascii=False, sort_keys=True, default=str
+                ),
+            }
         # A large tree rides as a content-addressed bundle: resolve its id
         # to a packed archive (cache-first) once, here, and hand it to every
         # backend run below instead of a per-file dict.

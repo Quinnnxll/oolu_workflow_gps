@@ -75,3 +75,79 @@ def screen_script(script: str) -> list[str]:
     the sandbox and the verify-by-execution gate."""
     text = str(script or "")
     return [reason for pattern, reason in _SIGNALS if pattern.search(text)]
+
+
+# --------------------------------------------------------------------------- #
+# The exact-value screen: mock code is a lie the sandbox cannot catch.         #
+# --------------------------------------------------------------------------- #
+# A mocked function RUNS — it emits a baked-in answer and every gate that
+# only checks "did it execute" passes. The tell is deterministic: the
+# result handed to emit_result is a constant the model wrote, or the code
+# names its own pretending (mock/placeholder/dummy/sample data). The LLM
+# decides structure; the runtime supplies values — a function that cannot
+# reach its real data must emit_error, never fabricate.
+# Substring, not word-bounded: the pretending hides inside identifiers
+# too (make_mock_data, sample_data_rows).
+_MOCK_MARKERS = re.compile(
+    r"(mock|placeholder|dummy|fake[_ ]?data|sample[_ ]?data"
+    r"|simulated|lorem ipsum)",
+    re.IGNORECASE,
+)
+
+
+def _constant_only(node) -> bool:
+    import ast
+
+    if isinstance(node, ast.Constant):
+        return True
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return all(_constant_only(e) for e in node.elts)
+    if isinstance(node, ast.Dict):
+        return all(
+            (k is None or _constant_only(k)) and _constant_only(v)
+            for k, v in zip(node.keys, node.values)
+        )
+    if isinstance(node, ast.JoinedStr):
+        # An f-string of constants is still a constant in costume.
+        return all(
+            isinstance(v, ast.Constant)
+            or (isinstance(v, ast.FormattedValue) and _constant_only(v.value))
+            for v in node.values
+        )
+    return False
+
+
+def mock_smells(script: str) -> list[str]:
+    """The reasons an AUTHORED function reads as pretending — empty means
+    it computes. Deterministic and AST-based, so the refusal is the same
+    every time and the model can fix exactly what is named."""
+    import ast
+
+    text = str(script or "")
+    reasons = []
+    if _MOCK_MARKERS.search(text):
+        reasons.append(
+            "it names mock/placeholder/dummy/sample data — compute the "
+            "real thing from real inputs, or emit_error naming what is "
+            "missing; never fabricate"
+        )
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return reasons  # the sandbox speaks to syntax; this screen is quiet
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = getattr(func, "id", None) or getattr(func, "attr", None)
+        if name != "emit_result" or not node.args:
+            continue
+        if _constant_only(node.args[0]):
+            reasons.append(
+                "emit_result is handed a constant the model wrote — the "
+                "result must be COMPUTED from real inputs (./bindings.json, "
+                "staged files, the webhook payload, or http_request), "
+                "never a baked-in value"
+            )
+            break
+    return reasons
