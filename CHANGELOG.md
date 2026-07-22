@@ -4,6 +4,56 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Typed output ports, port edges, and lineage — the typed-workflow
+contract binds every run:
+
+- **The dropped stamps (bug).** The node-function route copied only the
+  egress keys and inline files onto the run's action — `bundle`,
+  `bindings`, and `_value_tenant` were silently DROPPED. A node whose
+  `src/` tree had been frozen into a content-addressed bundle ran
+  without its own files, and the exact-value binder had no tenant wall
+  on node-function runs. The engine now carries every stamped key
+  (`bundle`, `bindings`, `_value_tenant`, `_output_ports`, egress,
+  files), so what the gateway resolved is what the sandbox runs.
+- **Output ports enforced.** A node has always DECLARED what it
+  produces (its `produces` slots) — now the runtime holds every
+  successful payload against that declaration before trusting or
+  caching it. `output_port_problems` (runtime/contract.py) is the
+  deterministic output validator: a missing declared port or a
+  mistyped value fails the run with the gap named — the exact shape a
+  mocked answer takes ("executed once, nothing real computed") is now
+  a failure, not a success. The gateway stamps `_output_ports` from
+  the node's own contract; the script runner validates on every path —
+  cached (contract drift stales the cache), provided (the repair model
+  hears `output_contract_violation: …` in correctable words),
+  repaired, and synthesized (never cached on violation). Legacy nodes
+  with no declaration validate nothing and keep working.
+- **Port edges: `output://{node}/{port}`.** The edge form of a
+  reference — "whatever the named producer last filed on that port."
+  A per-tenant PORT INDEX points each (producer, port) at the newest
+  snapshot (history stays append-only; retries never overwrite, they
+  move the pointer), and the binder resolves the edge to the exact
+  stored value at run time — an empty port is an honest miss, and the
+  provenance keeps the edge next to the value it resolved to. This is
+  how a downstream node consumes an upstream answer without any value
+  being retyped through a model.
+- **Lineage.** `value_lineage` records which stored values went INTO
+  producing which stored values, and through whom — append-only,
+  idempotent, walled per tenant, both directions
+  (`ValueStore.lineage`). When a node-function run COMPLETES, the
+  gateway files its payload per port (filling the port index) and
+  records lineage from the run's resolved input references — so every
+  execution can be reconstructed from stored state. `GET
+  /v1/runs/{id}/lineage` answers each output field's ref with the
+  inputs it was computed from and the work later computed from it,
+  submitter-walled like every run read.
+- **Tests.** The validator naming every gap; the runner refusing a
+  success that skips declared ports (and the repair loop hearing the
+  gap); the route carrying every stamped key; port edges resolving
+  through the index with honest misses and the tenant wall; lineage
+  both directions and idempotent; completion filing ports + lineage;
+  the endpoint walled.
+
 The exact-value reference layer: refs in, exact values out:
 
 - **`oolu/values.py`.** The architectural form of the exact-value rule.

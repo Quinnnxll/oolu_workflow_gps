@@ -334,10 +334,13 @@ class NodeScriptRunner:
         # values and the sandbox stages them verbatim. A reference
         # that cannot be honored blocks the run with the reason named;
         # a missing authoritative value is never filled from memory.
+        # The provenance lines ride the outcome's evidence, so completion
+        # can write the lineage from inputs to outputs.
+        provenance: list = []
         if self._value_resolver is not None:
             tenant = str(action.parameters.get("_value_tenant") or "")
             try:
-                bindings, _provenance = self._value_resolver(bindings, tenant)
+                bindings, provenance = self._value_resolver(bindings, tenant)
             except Exception as exc:  # noqa: BLE001 - honest refusal
                 return self._outcome(
                     action,
@@ -346,6 +349,10 @@ class NodeScriptRunner:
                     started,
                     error=f"unresolved value reference: {exc}",
                 )
+        # The node's declared output ports: what a run MUST produce for
+        # its success to count. Stamped by the gateway from the node's
+        # own contract; absent for legacy nodes, which validate nothing.
+        ports = list(action.parameters.get("_output_ports") or [])
         node_key = str(action.parameters.get("node_key") or goal)
         provided = action.parameters.get("script")
         # The tree's identity joins the key: an edited bundle (new
@@ -394,7 +401,8 @@ class NodeScriptRunner:
                 bundle=bundle,
             )
             record = classify(result)
-            if record is None:
+            gap = self._answer_gap(result, ports) if record is None else None
+            if record is None and gap is None:
                 self._cache.store_success(
                     key,
                     script=cached.script,
@@ -407,16 +415,19 @@ class NodeScriptRunner:
                     idempotency_key,
                     ExecutionStatus.SUCCEEDED,
                     started,
-                    evidence={
-                        "cache": "hit",
-                        "cache_key": key,
-                        "result": result.contract_payload,
-                    },
+                    evidence=self._success_evidence(
+                        "hit", key, result, provenance
+                    ),
                 )
-            # Environment drift: the world moved under a proven script. Count
-            # the failure and fall through to single-node re-synthesis.
+            # Environment drift — or contract drift: a run that no longer
+            # produces the node's declared output ports is stale the same
+            # way. Count the failure and fall through to re-synthesis.
             self._cache.record_failure(key)
-            stale_error = f"cached script failed: {record.error_class.value}"
+            stale_error = (
+                f"cached script failed: {record.error_class.value}"
+                if record is not None
+                else f"cached script broke the output contract: {gap}"
+            )
             logger.info("node cache stale for %s (%s)", node_key, stale_error)
 
         # --- provided path: a planner-supplied script is a proposal ------ #
@@ -434,7 +445,8 @@ class NodeScriptRunner:
                     bundle=bundle,
                 )
                 record = classify(result)
-                if record is None:
+                gap = self._answer_gap(result, ports) if record is None else None
+                if record is None and gap is None:
                     self._cache.store_success(
                         key,
                         script=str(provided),
@@ -447,23 +459,25 @@ class NodeScriptRunner:
                         idempotency_key,
                         ExecutionStatus.SUCCEEDED,
                         started,
-                        evidence={
-                            "cache": "provided",
-                            "cache_key": key,
-                            "result": result.contract_payload,
-                        },
+                        evidence=self._success_evidence(
+                            "provided", key, result, provenance
+                        ),
                     )
                 if (
-                    record.error_class is ErrorClass.MISSING_DEPENDENCY
+                    record is not None
+                    and record.error_class is ErrorClass.MISSING_DEPENDENCY
                     and record.missing_module
                     and record.missing_module not in deps
                 ):
                     deps.append(record.missing_module)
                     continue
                 break
-            stale_error = (
-                f"provided script failed verification: {record.error_class.value}"
+            failure_label = (
+                record.error_class.value
+                if record is not None
+                else "output_contract_violation"
             )
+            stale_error = f"provided script failed verification: {failure_label}"
             logger.info("provided script failed for %s (%s)", node_key, stale_error)
 
             # --- edit path: the model REPAIRS the node's own function ---- #
@@ -473,10 +487,7 @@ class NodeScriptRunner:
             repairer = getattr(self._synthesizer, "repair", None)
             if repairer is not None:
                 current = str(provided)
-                failure_words = (
-                    f"{record.error_class.value}: "
-                    + (result.stderr or result.stdout or "")[-800:]
-                )
+                failure_words = self._failure_words(result, record, gap)
                 for attempt in range(1, 3):
                     edited = repairer(
                         render_node_goal(str(goal), bindings),
@@ -495,7 +506,12 @@ class NodeScriptRunner:
                         bundle=bundle,
                     )
                     record = classify(result)
-                    if record is None:
+                    gap = (
+                        self._answer_gap(result, ports)
+                        if record is None
+                        else None
+                    )
+                    if record is None and gap is None:
                         # The repaired function is the node's function now:
                         # cached under the FAILING code's key (so this exact
                         # provided script heals on replay) AND under its own
@@ -521,8 +537,9 @@ class NodeScriptRunner:
                             ExecutionStatus.SUCCEEDED,
                             started,
                             evidence={
-                                "cache": "repaired",
-                                "cache_key": key,
+                                **self._success_evidence(
+                                    "repaired", key, result, provenance
+                                ),
                                 "repair_rounds": attempt,
                                 # The healed code itself — the channel the
                                 # gateway promotes into the node's drawer
@@ -530,17 +547,18 @@ class NodeScriptRunner:
                                 # seat, AFTER the run: the run itself never
                                 # mutates files mid-flight.
                                 "repaired_script": edited,
-                                "result": result.contract_payload,
                             },
                         )
                     current = edited
-                    failure_words = (
-                        f"{record.error_class.value}: "
-                        + (result.stderr or result.stdout or "")[-800:]
-                    )
+                    failure_words = self._failure_words(result, record, gap)
                 stale_error = (
                     "the function failed and repair could not close the "
-                    f"gap: {record.error_class.value}"
+                    "gap: "
+                    + (
+                        record.error_class.value
+                        if record is not None
+                        else f"output contract violated — {gap}"
+                    )
                 )
 
         # --- miss / repair path: re-synthesize THIS node only ------------ #
@@ -582,13 +600,19 @@ class NodeScriptRunner:
             bundle=bundle,
         )
         record = classify(result)
-        if record is not None:
+        gap = self._answer_gap(result, ports) if record is None else None
+        if record is not None or gap is not None:
+            reason = (
+                record.error_class.value
+                if record is not None
+                else f"output contract violated — {gap}"
+            )
             return self._outcome(
                 action,
                 idempotency_key,
                 ExecutionStatus.FAILED,
                 started,
-                error=f"synthesized script failed verification: {record.error_class.value}",
+                error=f"synthesized script failed verification: {reason}",
                 evidence={"cache": "miss", "cache_key": key},
             )
         self._cache.store_success(
@@ -603,14 +627,54 @@ class NodeScriptRunner:
             idempotency_key,
             ExecutionStatus.SUCCEEDED,
             started,
-            evidence={
-                "cache": "resynthesized" if stale_error else "miss",
-                "cache_key": key,
-                "result": result.contract_payload,
-            },
+            evidence=self._success_evidence(
+                "resynthesized" if stale_error else "miss",
+                key,
+                result,
+                provenance,
+            ),
         )
 
     # ------------------------------------------------------------------ #
+    @staticmethod
+    def _answer_gap(result: ExecutionResult, ports: list[dict]) -> str | None:
+        """The output validator (declared ports held against the emitted
+        payload) — None when the answer honors the node's contract, else
+        every gap named in one correctable sentence. A run that classified
+        clean but skipped its declared ports is a mocked answer, not a
+        success."""
+        from .contract import output_port_problems
+
+        problems = output_port_problems(result.contract_payload, ports)
+        return "; ".join(problems) if problems else None
+
+    @staticmethod
+    def _failure_words(result, record, gap: str | None) -> str:
+        """What the repair model is told: the classified failure with its
+        diagnostics tail, or the named output-contract gap."""
+        if record is not None:
+            return (
+                f"{record.error_class.value}: "
+                + (result.stderr or result.stdout or "")[-800:]
+            )
+        return f"output_contract_violation: {gap}"
+
+    @staticmethod
+    def _success_evidence(
+        cache: str, key: str, result: ExecutionResult, provenance: list
+    ) -> dict:
+        """One success evidence shape for every path — the payload the run
+        came for, plus the binder's provenance lines when references were
+        resolved, so completion can file the input→output lineage."""
+        evidence: dict = {
+            "cache": cache,
+            "cache_key": key,
+            "result": result.contract_payload,
+        }
+        if provenance:
+            evidence["value_provenance"] = list(provenance)
+        return evidence
+
     def _run_script(
         self,
         script: str,

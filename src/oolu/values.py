@@ -40,6 +40,14 @@ class ValueError_(LookupError):
 
 _REF_RE = re.compile(r"^value://(?P<tenant>[^/]+)/(?P<value_id>[A-Za-z0-9_-]+)$")
 
+# The edge form: an output PORT reference — "whatever the named producer
+# last filed on that port". An edge never copies a value; it declares the
+# relationship, and the binder resolves it through the port index at run
+# time (the doc's ``nodeA.output.port``).
+_OUT_RE = re.compile(
+    r"^output://(?P<producer>[A-Za-z0-9_:.-]+)/(?P<port>[A-Za-z0-9_.-]+)$"
+)
+
 # The trinity the slot vocabulary knows, plus the doc's exact-critical
 # types. "json" carries structured values verbatim.
 VALUE_TYPES = (
@@ -99,6 +107,30 @@ _SCHEMA = """CREATE TABLE IF NOT EXISTS value_records (
     PRIMARY KEY (tenant_id, value_id)
 )"""
 
+# The port index: (producer, port) -> the value LAST filed there. One row
+# per port that always points at the newest snapshot; the history stays in
+# the append-only value_records — retries never overwrite a value, they
+# move this pointer.
+_PORTS_SCHEMA = """CREATE TABLE IF NOT EXISTS value_ports (
+    tenant_id TEXT NOT NULL,
+    producer TEXT NOT NULL,
+    port TEXT NOT NULL,
+    value_id TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, producer, port)
+)"""
+
+# The lineage ledger: which stored values went INTO producing which stored
+# values, and through whom. Append-only; one row per (input, output, node).
+_LINEAGE_SCHEMA = """CREATE TABLE IF NOT EXISTS value_lineage (
+    tenant_id TEXT NOT NULL,
+    output_value_id TEXT NOT NULL,
+    input_value_id TEXT NOT NULL,
+    node TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, output_value_id, input_value_id, node)
+)"""
+
 
 def parse_ref(ref: Any) -> tuple[str, str] | None:
     """(tenant, value_id) when ``ref`` is a value reference — a plain
@@ -113,6 +145,20 @@ def parse_ref(ref: Any) -> tuple[str, str] | None:
     return match.group("tenant"), match.group("value_id")
 
 
+def parse_output_ref(ref: Any) -> tuple[str, str] | None:
+    """(producer, port) when ``ref`` is an output-port reference — the
+    ``output://{producer}/{port}`` edge form (plain string or the
+    ``{"$ref": …}`` envelope) — else None."""
+    if isinstance(ref, dict) and set(ref) >= {"$ref"}:
+        ref = ref.get("$ref")
+    if not isinstance(ref, str):
+        return None
+    match = _OUT_RE.match(ref)
+    if match is None:
+        return None
+    return match.group("producer"), match.group("port")
+
+
 class ValueStore:
     """The immutable, content-addressed home of every exact value."""
 
@@ -121,6 +167,8 @@ class ValueStore:
         self._clock = clock or _now
         with self._conn.transaction() as db:
             db.execute(_SCHEMA)
+            db.execute(_PORTS_SCHEMA)
+            db.execute(_LINEAGE_SCHEMA)
 
     # -- storing --------------------------------------------------------- #
     def put(
@@ -163,6 +211,18 @@ class ValueStore:
 
     # -- reading (the wall lives here) ------------------------------------ #
     def get(self, ref: str, *, tenant: str) -> ValueRecord:
+        out = parse_output_ref(ref)
+        if out is not None:
+            # The edge form: resolve the port to the value last filed
+            # there, inside THIS tenant's index alone. An empty port is
+            # an honest miss — the upstream node has not produced yet.
+            resolved = self.port_ref(tenant, out[0], out[1])
+            if resolved is None:
+                raise ValueError_(
+                    f"no value filed on output port '{out[1]}' of "
+                    f"'{out[0]}' — the upstream node has not produced it"
+                )
+            return self.get(resolved, tenant=tenant)
         parsed = parse_ref(ref)
         if parsed is None:
             raise ValueError_(f"'{ref}' is not a value reference")
@@ -206,36 +266,50 @@ class ValueStore:
         resolved: dict[str, Any] = {}
         provenance: list[dict] = []
         for name, raw in dict(bindings or {}).items():
+            out = parse_output_ref(raw)
             parsed = parse_ref(raw)
-            if parsed is None:
+            if out is None and parsed is None:
                 resolved[name] = raw
                 continue
+            ref = (
+                f"output://{out[0]}/{out[1]}"
+                if out is not None
+                else f"value://{parsed[0]}/{parsed[1]}"
+            )
             try:
-                record = self.get(
-                    f"value://{parsed[0]}/{parsed[1]}", tenant=tenant
-                )
+                record = self.get(ref, tenant=tenant)
             except ValueError_ as exc:
                 raise ValueError_(f"binding '{name}': {exc}") from exc
             resolved[name] = record.value
-            provenance.append(
-                {
-                    "parameter": name,
-                    "value_ref": record.ref,
-                    "value_type": record.value_type,
-                    "sha256": record.sha256,
-                    "source": record.source,
-                }
-            )
+            line = {
+                "parameter": name,
+                "value_ref": record.ref,
+                "value_type": record.value_type,
+                "sha256": record.sha256,
+                "source": record.source,
+            }
+            if out is not None:
+                # The edge the planner wrote, kept next to the value it
+                # resolved to — the audit reads both.
+                line["port_source"] = ref
+            provenance.append(line)
         return resolved, provenance
 
     # -- result snapshots -------------------------------------------------- #
     def snapshot_outputs(
-        self, tenant: str, outputs: Any, *, label: str = ""
+        self,
+        tenant: str,
+        outputs: Any,
+        *,
+        label: str = "",
+        producer: str = "",
     ) -> dict[str, str]:
         """A run's result outputs, filed as immutable values — the refs
         the renderer (and any later plan) speaks about them by. Scalar
         fields of dict outputs become one value each; anything else is
-        filed whole as JSON."""
+        filed whole as JSON. Naming a ``producer`` also points the port
+        index at each filed value, so ``output://{producer}/{port}``
+        edges resolve to this run's answer from now on."""
         refs: dict[str, str] = {}
 
         def _file(name: str, value: Any) -> None:
@@ -254,6 +328,8 @@ class ValueStore:
                 source="result",
             )
             refs[name] = record.ref
+            if producer:
+                self._point_port(tenant, producer, name, record.value_id)
 
         if isinstance(outputs, dict):
             for name, value in outputs.items():
@@ -261,6 +337,120 @@ class ValueStore:
         else:
             _file("result", outputs)
         return refs
+
+    # -- the port index ---------------------------------------------------- #
+    def _point_port(
+        self, tenant: str, producer: str, port: str, value_id: str
+    ) -> None:
+        with self._conn.transaction() as db:
+            db.execute(
+                """INSERT INTO value_ports
+                       (tenant_id, producer, port, value_id, updated_at)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(tenant_id, producer, port)
+                   DO UPDATE SET value_id = excluded.value_id,
+                                 updated_at = excluded.updated_at""",
+                (tenant, producer, port, value_id, self._clock().isoformat()),
+            )
+
+    def port_ref(self, tenant: str, producer: str, port: str) -> str | None:
+        """The ``value://`` reference last filed on a producer's output
+        port — the edge's current answer — or None while the port is
+        still empty. Walled: only this tenant's index is consulted."""
+        with self._conn.lock:
+            row = self._conn.db.execute(
+                "SELECT value_id FROM value_ports"
+                " WHERE tenant_id = ? AND producer = ? AND port = ?",
+                (tenant, producer, port),
+            ).fetchone()
+        if row is None:
+            return None
+        return f"value://{tenant}/{row['value_id']}"
+
+    def ports_of(self, tenant: str, producer: str) -> dict[str, str]:
+        """Every output port a producer has filed, with its current ref —
+        the shape downstream work binds against."""
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                "SELECT port, value_id FROM value_ports"
+                " WHERE tenant_id = ? AND producer = ? ORDER BY port",
+                (tenant, producer),
+            ).fetchall()
+        return {
+            row["port"]: f"value://{tenant}/{row['value_id']}" for row in rows
+        }
+
+    # -- lineage ------------------------------------------------------------ #
+    def record_lineage(
+        self,
+        tenant: str,
+        node: str,
+        input_refs: list[str],
+        output_refs: list[str],
+    ) -> int:
+        """File the input→output relationships one execution created:
+        every input value fed every output value, through ``node``.
+        Idempotent (a retry files the same rows once); non-references
+        among the inputs are skipped — literals have no lineage."""
+        rows = 0
+        stamp = self._clock().isoformat()
+        with self._conn.transaction() as db:
+            for out_ref in output_refs:
+                out = parse_ref(out_ref)
+                if out is None or out[0] != tenant:
+                    continue
+                for in_ref in input_refs:
+                    parsed = parse_ref(in_ref)
+                    if parsed is None or parsed[0] != tenant:
+                        continue
+                    db.execute(
+                        """INSERT OR IGNORE INTO value_lineage
+                               (tenant_id, output_value_id, input_value_id,
+                                node, created_at)
+                           VALUES (?, ?, ?, ?, ?)""",
+                        (tenant, out[1], parsed[1], node, stamp),
+                    )
+                    rows += 1
+        return rows
+
+    def lineage(self, tenant: str, ref: str) -> dict:
+        """A value's place in the chain, both directions: the inputs it
+        was computed FROM, and the outputs computed from IT — each line
+        naming the node that did the work. An unknown reference answers
+        empty lists, never an invention."""
+        parsed = parse_ref(ref)
+        if parsed is None or parsed[0] != tenant:
+            return {"inputs": [], "outputs": []}
+        value_id = parsed[1]
+        with self._conn.lock:
+            made_from = self._conn.db.execute(
+                "SELECT input_value_id, node FROM value_lineage"
+                " WHERE tenant_id = ? AND output_value_id = ?"
+                " ORDER BY input_value_id",
+                (tenant, value_id),
+            ).fetchall()
+            went_into = self._conn.db.execute(
+                "SELECT output_value_id, node FROM value_lineage"
+                " WHERE tenant_id = ? AND input_value_id = ?"
+                " ORDER BY output_value_id",
+                (tenant, value_id),
+            ).fetchall()
+        return {
+            "inputs": [
+                {
+                    "value_ref": f"value://{tenant}/{row['input_value_id']}",
+                    "node": row["node"],
+                }
+                for row in made_from
+            ],
+            "outputs": [
+                {
+                    "value_ref": f"value://{tenant}/{row['output_value_id']}",
+                    "node": row["node"],
+                }
+                for row in went_into
+            ],
+        }
 
 
 # --------------------------------------------------------------------------- #

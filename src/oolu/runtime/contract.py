@@ -164,3 +164,76 @@ def strip_result_blocks(stdout: str) -> str:
     """Return stdout with all result blocks removed — i.e. just the diagnostics,
     suitable for rich logging without dumping the (possibly large) payload twice."""
     return _BLOCK_RE.sub("", stdout).strip()
+
+
+# --------------------------------------------------------------------------- #
+# OUTPUT PORTS — the declared-interface half of the contract.                  #
+# --------------------------------------------------------------------------- #
+# A node declares what it produces (its output ports) before it ever runs;
+# the runtime holds the answer against that declaration AFTER it runs. An
+# execution that "succeeds" without producing its declared ports is not a
+# success — it is the exact shape a mocked function takes, and it fails here
+# with the missing port named. Deterministic, non-retryable: rerunning the
+# same code cannot make an absent port appear.
+
+_DECIMAL_RE = re.compile(r"^-?\d+(\.\d+)?$")
+
+# Port type -> predicate over the emitted value. Decimals and dates ride as
+# strings (scale and format survive verbatim); "number" means a real number,
+# and a bool is NOT a number. "json" accepts any present value.
+_PORT_CHECKS = {
+    "str": lambda v: isinstance(v, str),
+    "path": lambda v: isinstance(v, str),
+    "identifier": lambda v: isinstance(v, str),
+    "email": lambda v: isinstance(v, str),
+    "date": lambda v: isinstance(v, str),
+    "datetime": lambda v: isinstance(v, str),
+    "currency": lambda v: isinstance(v, str),
+    "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+    "decimal": lambda v: (
+        isinstance(v, str) and bool(_DECIMAL_RE.match(v))
+    )
+    or (isinstance(v, (int, float)) and not isinstance(v, bool)),
+    "json": lambda v: True,
+}
+
+
+def output_port_problems(payload: object, ports: list[dict]) -> list[str]:
+    """The output validator: the emitted payload held against the node's
+    declared output ports. Empty list means the answer honors the
+    declaration; otherwise every gap is named — a missing port, a
+    mistyped value — so the failure is correctable, never mysterious.
+
+    ``emit_result`` wraps a non-dict answer as ``{"result": value}``, so a
+    single-port declaration matches either the dict key of that name or a
+    lone ``result`` payload standing for it.
+    """
+    declared = [
+        {"name": str(p.get("name", "")), "type": str(p.get("type", "str"))}
+        for p in (ports or [])
+        if p.get("name")
+    ]
+    if not declared:
+        return []
+    if not isinstance(payload, dict):
+        payload = {"result": payload}
+    problems: list[str] = []
+    for port in declared:
+        name, kind = port["name"], port["type"]
+        if name in payload:
+            value = payload[name]
+        elif len(declared) == 1 and set(payload) == {"result"}:
+            # One declared port, one wrapped scalar: the scalar IS the port.
+            value = payload["result"]
+        else:
+            problems.append(
+                f"declared output port '{name}' is missing from the result"
+            )
+            continue
+        check = _PORT_CHECKS.get(kind)
+        if check is not None and not check(value):
+            problems.append(
+                f"output port '{name}' declares type {kind} but the result "
+                f"carries {type(value).__name__}"
+            )
+    return problems

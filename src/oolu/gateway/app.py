@@ -1250,6 +1250,7 @@ class GatewayApp:
         # as immutable refs, and the deterministic renderer that puts
         # exact stored values into a model-shaped response.
         r.add("GET", "/v1/runs/{run_id}/values", self._run_values)
+        r.add("GET", "/v1/runs/{run_id}/lineage", self._run_lineage)
         r.add("POST", "/v1/values/render", self._values_render)
         r.add("POST", "/v1/nodeplace", self._contribute)
         r.add("POST", "/v1/nodeplace/{node_id}/revoke", self._revoke_node)
@@ -3546,6 +3547,7 @@ class GatewayApp:
                 # ride the function into the run — the same regimes the
                 # contract path stamps, applied to the node-function route.
                 **self._node_function_extras(session, node.node_id),
+                **self._declared_ports(node),
             }
         )
 
@@ -3716,8 +3718,22 @@ class GatewayApp:
                     or f"node:{node.skill_id}"
                 ),
                 **self._node_function_extras(session, node.node_id),
+                **self._declared_ports(node),
             }
         )
+
+    @staticmethod
+    def _declared_ports(node) -> dict:
+        """The node's declared output ports, as the run-time stamp the
+        script hand validates every successful payload against — the
+        contract the node PUBLISHED is the contract its runs answer to,
+        so a mocked emit that skips the declared ports fails with the
+        gap named instead of passing as a success."""
+        ports = [
+            {"name": s.name, "type": s.value_type}
+            for s in (getattr(node, "produces", None) or ())
+        ]
+        return {"_output_ports": ports} if ports else {}
 
     def _find_similar_function_node(self, session, goal: str) -> dict | None:
         """The twin guard's lookup: the user's own function node whose goal
@@ -8003,6 +8019,40 @@ class GatewayApp:
         )
         return json_response(200, {"run_id": state.run_id, "fields": refs})
 
+    def _run_lineage(self, request, session, params) -> Response:
+        """A run's values in their chain, both directions: each output
+        field's reference, the inputs it was computed FROM, and the work
+        later computed from it. Snapshots are content-addressed, so
+        re-deriving the refs here lands on the exact rows completion
+        filed — no second copy, no drift."""
+        store = self._require_values()
+        state = self._durable.runs.get(params["run_id"])
+        if (
+            state is None
+            or state.contract.metadata.get("tenant_id") != session.tenant_id
+            or state.contract.submitted_by != session.principal_id
+        ):
+            raise GatewayError(404, "not_found", "no such run of yours")
+        items: list[dict] = []
+        for output in (state.result or {}).get("outputs") or []:
+            # The payload the function emitted is what completion filed;
+            # the evidence wrapper around it is bookkeeping, not a value.
+            payload = (
+                output.get("result") if isinstance(output, dict) else None
+            )
+            if payload is None:
+                continue
+            refs = store.snapshot_outputs(session.tenant_id, payload)
+            for name, ref in refs.items():
+                items.append(
+                    {
+                        "field": name,
+                        "value_ref": ref,
+                        **store.lineage(session.tenant_id, ref),
+                    }
+                )
+        return json_response(200, {"run_id": state.run_id, "items": items})
+
     def _values_render(self, request, session, params) -> Response:
         """The deterministic renderer: the model shapes the sentence,
         the store supplies every value — a missing reference refuses,
@@ -9154,6 +9204,9 @@ class GatewayApp:
         # And a run that healed its own function promotes the healed code
         # into the drawer — the node.repair seat's write, after the run.
         self._promote_repaired_function(state)
+        # And the run's real outputs are FILED: immutable values, the
+        # node's port index, and the input→output lineage.
+        self._file_run_values(state)
         if self._metering is None or self._nodeplace is None:
             return
         if state.phase is Phase.COMPLETED:
@@ -9185,6 +9238,52 @@ class GatewayApp:
         # and error/restricted states are never healed here either way.
         if recorded and outcome == "succeeded" and self._desk is not None:
             self._desk.mark_verified(node_id)
+
+    def _file_run_values(self, state: RunState) -> None:
+        """A COMPLETED node-function run's outputs, filed where the typed
+        workflow model wants them: each payload field an immutable exact
+        value, the node's PORT INDEX pointed at the fresh refs — so an
+        ``output://{node_id}/{port}`` edge in any later binding resolves
+        to THIS answer — and the lineage from the run's resolved input
+        references recorded next to them. Content-addressed puts and
+        insert-or-ignore lineage make a retry file the same rows once.
+        Best-effort: a bonus on a succeeded run, never a new way for it
+        to fail."""
+        if self._values is None or state.phase is not Phase.COMPLETED:
+            return
+        function = (state.contract.metadata or {}).get("node_function")
+        if not isinstance(function, dict) or not function.get("node_id"):
+            return
+        execution = state.execution
+        if execution is None:
+            return
+        tenant = str(state.contract.metadata.get("tenant_id", ""))
+        node_id = str(function["node_id"])
+        try:
+            for outcome in execution.action_outcomes:
+                if outcome.status is not ExecutionStatus.SUCCEEDED:
+                    continue
+                evidence = outcome.evidence or {}
+                payload = evidence.get("result")
+                if payload is None:
+                    continue
+                refs = self._values.snapshot_outputs(
+                    tenant, payload, label=node_id, producer=node_id
+                )
+                inputs = [
+                    str(line.get("value_ref"))
+                    for line in evidence.get("value_provenance") or []
+                    if line.get("value_ref")
+                ]
+                if inputs and refs:
+                    self._values.record_lineage(
+                        tenant, node_id, inputs, list(refs.values())
+                    )
+        except Exception:  # noqa: BLE001 — filing is bookkeeping on a
+            # finished run; the answer stands either way.
+            logging.getLogger("oolu.gateway").warning(
+                "value filing failed for run %s", state.run_id, exc_info=True
+            )
 
     def _promote_repaired_function(self, state: RunState) -> None:
         """A COMPLETED run that healed its own function writes the healed

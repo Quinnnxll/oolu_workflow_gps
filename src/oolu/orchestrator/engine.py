@@ -278,9 +278,22 @@ class WorkflowOrchestrator:
             ),
             "skill_id": str(function.get("skill_id") or "node-function"),
         }
-        # The node's egress consent and its staged files ride along when the
-        # gateway attached them — the script hand reads these exact keys.
-        for carried in ("_egress_hosts", "_egress_open", "_egress_blocked", "files"):
+        # Everything the gateway stamped on the function rides along — the
+        # script hand reads these exact keys. Dropping one here silently
+        # changes what runs: no ``bundle`` and the node's frozen src tree
+        # never reaches the sandbox; no ``_value_tenant`` and the exact-value
+        # binder has no wall; no ``_output_ports`` and a mocked answer is
+        # never held against the node's declared contract.
+        for carried in (
+            "_egress_hosts",
+            "_egress_open",
+            "_egress_blocked",
+            "files",
+            "bundle",
+            "bindings",
+            "_value_tenant",
+            "_output_ports",
+        ):
             if carried in function:
                 parameters[carried] = function[carried]
         action = ActionEvent(
