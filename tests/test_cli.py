@@ -177,3 +177,19 @@ def test_desktop_rejects_non_loopback_host(tmp_path):
         sys.stderr = orig
     assert code == 2
     assert "loopback" in err.getvalue()
+
+
+def test_env_origins_admit_the_hosted_panel():
+    """OOLU_ALLOW_ORIGIN: comma-separated CORS origins from .env — the
+    hosted investor panel's door, no container-command override."""
+    from oolu.cli import _env_origins
+
+    assert _env_origins({}) == frozenset()
+    assert _env_origins(
+        {"OOLU_ALLOW_ORIGIN": "https://investors.largecollaborationmodel.com"}
+    ) == frozenset({"https://investors.largecollaborationmodel.com"})
+    # Commas split, whitespace trims, a trailing slash goes (an origin
+    # never carries a path), empties vanish.
+    assert _env_origins(
+        {"OOLU_ALLOW_ORIGIN": " https://a.example/ , https://b.example ,, "}
+    ) == frozenset({"https://a.example", "https://b.example"})

@@ -80,6 +80,9 @@ services:
       OOLU_SMS_FROM: ${OOLU_SMS_FROM:-}
       OOLU_TWILIO_ACCOUNT_SID: ${OOLU_TWILIO_ACCOUNT_SID:-}
       OOLU_TWILIO_AUTH_TOKEN: ${OOLU_TWILIO_AUTH_TOKEN:-}
+      # CORS origins allowed to call this API from another domain —
+      # e.g. the hosted investor panel. Comma-separated.
+      OOLU_ALLOW_ORIGIN: ${OOLU_ALLOW_ORIGIN:-}
     volumes:
       - oolu-data:/data
     depends_on:

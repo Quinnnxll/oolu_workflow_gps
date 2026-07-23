@@ -126,6 +126,23 @@ Two doors, both real, both metered:
   keys follow the environment on every boot — set is stored encrypted,
   unset is removed.
 
+### Hosting the investor panel
+
+`deploy/investor-panel.html` is a static page — host it anywhere (e.g.
+`investors.largecollaborationmodel.com` behind your own TLS). It calls
+this API cross-origin, so the server must admit that origin:
+
+```bash
+# .env — comma-separated for more than one origin; scheme included,
+# no trailing slash:
+OOLU_ALLOW_ORIGIN=https://investors.largecollaborationmodel.com
+```
+
+Restart (`docker compose -f docker-compose.prod.yml up -d`), open the
+panel, and point it at `https://<your app domain>` with a token whose
+role carries `metrics:view` (plus `approve:metrics.record` if that
+person also records manual metrics or competitor observations).
+
 ### Mail: reset codes, e-mailed passwords, verification
 
 Three account doors ride outbound mail — the **reset code**

@@ -1647,6 +1647,20 @@ def _cmd_desktop(args, out) -> int:
     return 0
 
 
+def _env_origins(environ) -> frozenset[str]:
+    """CORS origins from ``OOLU_ALLOW_ORIGIN`` — comma-separated, so a
+    Docker deployment can admit an external page (the investor panel's
+    domain, a status page) from ``.env`` without overriding the
+    container command. Trailing slashes are trimmed: an origin never
+    carries a path."""
+    raw = environ.get("OOLU_ALLOW_ORIGIN", "")
+    return frozenset(
+        origin.strip().rstrip("/")
+        for origin in raw.split(",")
+        if origin.strip()
+    )
+
+
 def _cmd_host(args, out) -> int:
     """Multi-user web hosting: the full multi-tenant gateway, local accounts.
 
@@ -1670,7 +1684,8 @@ def _cmd_host(args, out) -> int:
     from .gateway import GatewayConfig
 
     config = GatewayConfig(
-        allowed_origins=frozenset(args.allow_origin),
+        allowed_origins=frozenset(args.allow_origin)
+        | _env_origins(os.environ),
         open_registration=args.open_registration,
         registration_tenant=args.tenant,
         server_url=os.environ.get("OOLU_SERVER_URL"),
