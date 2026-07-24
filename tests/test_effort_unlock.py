@@ -184,7 +184,11 @@ def test_an_openai_reasoning_model_takes_the_modern_knobs(rig, monkeypatch):
     assert "max_tokens" not in body
 
 
-def test_tool_consultations_ride_temperature_but_not_thinking_yet(rig):
+def test_tool_consultations_think_too_now(rig):
+    """Phase 2 lifted Phase 1's hold-back: the thinking annex carries
+    thoughts back across tool turns, so the seat's reasoning budget
+    rides tool consultations as well — and temperature correctly stays
+    out of thinking's way."""
     keyring, transport = rig
     keyring.store("t1", "anthropic", "sk-ant-0123456789")
     transport.script(
@@ -208,11 +212,8 @@ def test_tool_consultations_ride_temperature_but_not_thinking_yet(rig):
 
     body = transport.requests[-1]["body"]
     assert body["max_tokens"] == 16384
-    # The neutral transcript cannot carry thinking blocks back across
-    # tool turns yet (plan Phase 2) — so no thinking, and temperature
-    # rides in its place.
-    assert "thinking" not in body
-    assert body["temperature"] == 0.2
+    assert body["thinking"] == {"type": "enabled", "budget_tokens": 4096}
+    assert "temperature" not in body
 
 
 def test_an_explicit_constructor_ceiling_still_wins(rig):

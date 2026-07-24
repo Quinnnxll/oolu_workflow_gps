@@ -257,33 +257,51 @@ provider; the keyed before/after benchmark runs remain the live acceptance.)
 two stacks mean every fix lands twice and every capability check is an
 `hasattr` probe (`gateway/app.py:5324`).*
 
-- [ ] **Canonical request.** One internal request type — messages, tools,
-      `response_schema`, generation profile (max_output_tokens, temperature,
-      reasoning_effort), execution policy (`allow_tools`, `max_tool_rounds`) —
-      compiled to provider wire formats only inside adapters.
-      `providers/tools.py` (canonical transcript + dual renderers) is the
-      seed; extend it to cover the synthesis stack's `AssembledPrompt` so
-      `routing/gateway.py` and `providers/chatmodel.py` consume one shape.
-- [ ] **Model registry manifests.** Per-model capability flags — tool_calling,
-      structured_output, prompt_caching, thinking, context_window,
-      max_output_tokens — declared in config (seeded from
-      `capabilities()` discovery, `providers/apikey.py:93-110`, today unused
-      by routing). Routing consults the manifest, not `hasattr`.
-- [ ] **Structured output as the only delivery channel for capable models.**
-      The schema-validated `finish_node` path (`author.py:222-241`) becomes
-      the contract; fence-scraping (`extract_script`) and the prose `IO:` line
-      (`chat.py:1044-1076`) are demoted to a legacy fallback for local models
-      whose manifest says no-tools. Silent IO degradation becomes a hard,
-      model-visible error.
-- [ ] **Token accounting.** Integrate real tokenizers (tiktoken + Anthropic
-      count-tokens endpoint) behind one `count_tokens(request)` seam — the
-      prerequisite for Phase 3's budgeter. Today nothing counts tokens before
-      sending.
+- [x] **Canonical request.** The chat stack now constructs every provider
+      request through ONE path: `reply` / `consult` / `structured` all route
+      through `_execute` into `_call_provider` / `_call_local`
+      (`providers/chatmodel.py`) — `reply` is simply the request with no
+      tools, and the per-provider wire branches exist exactly once. The
+      neutral transcript gained a provider annex: Anthropic thinking blocks
+      ride `ToolReply.thinking_blocks` verbatim, re-attached by the Anthropic
+      renderer and shed by every other dialect — which lifted Phase 1's
+      hold-back, so the seat's reasoning budget now rides tool consultations
+      too. (Remaining, deliberately: the synthesis stack keeps its LiteLLM
+      transport and `AssembledPrompt` — same generation vocabulary, separate
+      wire — until a later consolidation proves worth the churn.)
+- [x] **Model registry manifests.** `providers/registry.py`: declared
+      manifests for the tier models, conservative family inference for
+      unknown ids (unrecognized local tags = no native tool calling — the
+      fenced-code path exists for exactly them), and an
+      `OOLU_MODEL_MANIFESTS` JSON overlay for operators. Routing asks the
+      manifest, not the object shape: `ChatModelRouter.answering_model()` /
+      `manifest_now()` / `consult_ready()`, and the authoring door
+      (`gateway/app.py:_author_function`) dispatches on `consult_ready` —
+      the old `hasattr(consult)` probe never distinguished models at all
+      (every router has `consult`). The adapter capability predicates moved
+      into the registry: one table for routing AND wire construction.
+- [x] **Structured output as the contract for capable models.**
+      `ChatModelRouter.structured(messages, schema=...)`: a schema-forced
+      synthetic tool, arguments validated before return, a correction round
+      on violation, `StructuredOutputError` instead of a silent default. And
+      the one-shot prose channel is honest now: a PRESENT-but-broken `IO:`
+      line refuses the build with the problem named
+      (`chat.py:parse_node_io_checked`) — an absent line stays lenient for
+      the no-tool local models the prose channel serves.
+- [x] **Token accounting.** `providers/tokens.py`: `estimate_tokens` /
+      `count_request_tokens` — a deterministic, deliberately-conservative
+      character heuristic by default, real tiktoken counting for
+      OpenAI-family ids when the `tokens` extra is installed. The counting
+      seam Phase 3's budgeter compiles against; the provider's own `usage`
+      remains the after-the-fact truth the meter books.
 
 **Acceptance:** the spec's tests — "model provider changes mid-task → task
-continues from canonical state"; "a model proposes an unsupported tool call →
-the adapter rejects it before execution." One code path constructs every
-provider request.
+continues from canonical state" (pinned: a thinking+tool transcript renders
+onto the OpenAI wire with thoughts shed and the task intact); "a model
+proposes an unsupported tool call → rejected before execution" (pinned:
+`ToolRouter.dispatch` refuses undeclared names before any handler). One code
+path constructs every keyed chat request. All in
+`tests/test_canonical_interface.py`.
 
 ---
 

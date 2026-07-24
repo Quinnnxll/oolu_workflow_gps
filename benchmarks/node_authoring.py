@@ -763,12 +763,16 @@ class Authored:
 def author_goal(
     model, goal: BenchGoal, runner: BenchScriptRunner
 ) -> Authored:
-    """Mirror of ``gateway/app.py:_author_function``: a tool-calling
-    model works as the ``NodeAuthorAgent`` (bench catalog, recorded
-    upstream outputs, and a verify hand that stages the goal's
-    bindings); a plain ``reply`` model keeps the one-shot
-    ``author_node_function`` gates unchanged."""
-    if not hasattr(model, "consult"):
+    """Mirror of ``gateway/app.py:_author_function``: a model whose
+    MANIFEST says it speaks tools works as the ``NodeAuthorAgent``
+    (bench catalog, recorded upstream outputs, and a verify hand that
+    stages the goal's bindings); anything else keeps the one-shot
+    ``author_node_function`` gates. ``consult_ready`` (the manifest
+    port) decides where it exists; plain object shape decides for
+    injected stubs — the same dispatch the gateway runs."""
+    ready = getattr(model, "consult_ready", None)
+    agentic = bool(ready()) if callable(ready) else hasattr(model, "consult")
+    if not agentic:
         script, io, refusal = author_node_function(model, goal.goal)
         return Authored(script, io or {}, refusal, consultations=1)
 
@@ -827,6 +831,7 @@ class GoalResult:
 _REFUSAL_CLASSES = (
     ("only pretends", "mocked"),
     ("no usable function", "no_script"),
+    ("broken interface declaration", "bad_interface"),
     ("reads as conversation", "refused"),
     ("could not be reached", "transport"),
     ("ran out of authoring steps", "no_script"),

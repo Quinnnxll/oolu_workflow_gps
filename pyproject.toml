@@ -24,6 +24,7 @@ http = ["httpx>=0.27"]                 # real HttpTransport for providers (works
 # The desktop/host shell: the ASGI server plus the real HTTP transport so a
 # pasted model key can actually reach its provider from a setup.bat install.
 serve = ["uvicorn>=0.30", "httpx>=0.27"]
+tokens = ["tiktoken>=0.7"]             # exact OpenAI-family token counting (providers/tokens.py)
 browser = ["playwright>=1.40"]         # Playwright browser ActionExecutor (web skills)
 # The engineering hand: CadQuery/OpenCascade geometry kernel for the cad
 # adapter (heavy binary wheels — deliberately opt-in).

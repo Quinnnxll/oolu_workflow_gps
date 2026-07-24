@@ -99,12 +99,21 @@ class ToolResult:
 class ToolReply:
     """A structured consultation result: the text (may be empty on a pure
     tool-call turn), the calls (may be empty on a final answer), and the
-    usage the meter books."""
+    usage the meter books.
+
+    ``thinking_blocks`` is a provider annex: Anthropic extended-thinking
+    blocks carried VERBATIM, because the API requires an assistant
+    turn's thinking blocks re-sent unchanged when its tool calls are
+    answered. The annex rides the neutral transcript as an extra key —
+    the Anthropic renderer re-attaches it, every other dialect drops it
+    (a provider switch mid-task simply sheds thoughts the new provider
+    never had), so portability survives thinking."""
 
     text: str
     tool_calls: tuple[ToolCall, ...] = ()
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    thinking_blocks: tuple[dict, ...] = ()
 
     def as_message(self) -> dict[str, Any]:
         message: dict[str, Any] = {"role": "assistant", "content": self.text}
@@ -113,6 +122,8 @@ class ToolReply:
                 {"id": c.id, "name": c.name, "arguments": c.arguments}
                 for c in self.tool_calls
             ]
+        if self.thinking_blocks:
+            message["thinking_blocks"] = [dict(b) for b in self.thinking_blocks]
         return message
 
 
@@ -122,6 +133,11 @@ class ToolArgumentError(ValueError):
 
 class ToolLoopLimit(RuntimeError):
     """The bounded loop ran out of steps before the model finished."""
+
+
+class StructuredOutputError(RuntimeError):
+    """The model never delivered a schema-valid structured result within
+    the correction budget — surfaced, never silently defaulted."""
 
 
 # --------------------------------------------------------------------------- #
@@ -264,11 +280,15 @@ def to_anthropic_messages(messages: list[dict]) -> list[dict]:
     for message in messages:
         role = message.get("role")
         calls = message.get("tool_calls")
-        if role == "assistant" and calls:
+        thinking = message.get("thinking_blocks") or ()
+        if role == "assistant" and (calls or thinking):
             blocks: list[dict] = []
+            # Thinking blocks lead, verbatim — the API refuses a tool
+            # transcript whose thoughts were dropped or reworded.
+            blocks.extend(dict(b) for b in thinking)
             if message.get("content"):
                 blocks.append({"type": "text", "text": message["content"]})
-            for call in calls:
+            for call in calls or ():
                 blocks.append(
                     {
                         "type": "tool_use",
@@ -337,11 +357,16 @@ def parse_anthropic_tool_reply(data: dict) -> ToolReply:
     parsed JSON on this wire — malformation is an OpenAI-dialect problem)."""
     text_parts: list[str] = []
     calls: list[ToolCall] = []
+    thinking: list[dict] = []
     for block in data.get("content") or []:
         if not isinstance(block, dict):
             continue
         if block.get("type") == "text":
             text_parts.append(block.get("text", ""))
+        elif block.get("type") in ("thinking", "redacted_thinking"):
+            # Carried verbatim — signatures and all — so a tool turn can
+            # send them back exactly as issued.
+            thinking.append(dict(block))
         elif block.get("type") == "tool_use":
             raw = block.get("input")
             arguments = raw if isinstance(raw, dict) else {}
@@ -364,6 +389,7 @@ def parse_anthropic_tool_reply(data: dict) -> ToolReply:
         tool_calls=tuple(calls),
         prompt_tokens=int(usage.get("input_tokens", 0) or 0),
         completion_tokens=int(usage.get("output_tokens", 0) or 0),
+        thinking_blocks=tuple(thinking),
     )
 
 

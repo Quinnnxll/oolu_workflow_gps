@@ -5318,10 +5318,22 @@ class GatewayApp:
         """``(script, io, refusal)`` through the strongest path the seated
         model supports: a tool-calling brain works as the
         :class:`NodeAuthorAgent` — the desk's contracts and upstream
-        outputs in hand, plus a drawer read for revisions — while a plain
-        ``reply`` model keeps the one-shot ``author_node_function`` gates
-        unchanged."""
-        if not hasattr(author, "consult"):
+        outputs in hand, plus a drawer read for revisions — while a model
+        without reliable native tool calling keeps the one-shot
+        ``author_node_function`` gates unchanged.
+
+        "Supports" is the MANIFEST's answer (``consult_ready``: which
+        model would answer, what its registry entry says), not an object
+        probe — every router exposes ``consult``, so ``hasattr`` never
+        distinguished models at all; a small local model now honestly
+        routes to the fenced-code path built for it. Injected authors
+        without the manifest port (test stubs, custom seams) keep the
+        old shape-based dispatch."""
+        ready = getattr(author, "consult_ready", None)
+        agentic = (
+            bool(ready()) if callable(ready) else hasattr(author, "consult")
+        )
+        if not agentic:
             return author_node_function(author, goal, demonstrated=demonstrated)
         agent = NodeAuthorAgent(
             author,

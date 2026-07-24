@@ -4,6 +4,53 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Context-harness Phase 2 — one canonical model interface:
+
+- **Model manifests** (`providers/registry.py`). What each model can
+  do is declared once — tool calling, structured output, extended
+  thinking, the reasoning-effort dial, prompt caching, window sizes —
+  with conservative family inference for unknown ids (an unrecognized
+  local tag is assumed to speak NO reliable native tool calling; the
+  fenced-code path exists for exactly those models) and an
+  `OOLU_MODEL_MANIFESTS` JSON overlay for operators. The adapter's
+  capability predicates moved here: one table serves routing and wire
+  construction alike.
+- **Routing asks the manifest, not the object shape.**
+  `ChatModelRouter.answering_model()` names the (provider, model) that
+  would answer next; `consult_ready()` answers whether it reliably
+  speaks tools. The authoring door dispatches on that — the old
+  `hasattr(consult)` probe never distinguished models (every router
+  has `consult`), so small local models were being trusted with tool
+  JSON they emit badly; they now route honestly to the one-shot path.
+- **One construction path for every chat request.** `reply`,
+  `consult`, and the new `structured` all flow through `_execute` into
+  `_call_provider`/`_call_local`; the Anthropic and OpenAI wire
+  branches exist exactly once. The neutral transcript gained a
+  provider annex — thinking blocks carried verbatim in
+  `ToolReply.thinking_blocks`, re-attached by the Anthropic renderer,
+  shed cleanly by the OpenAI dialect — which lifts Phase 1's
+  hold-back: the seat's reasoning budget now rides tool consultations
+  too, and a provider switch mid-task keeps the task while shedding
+  the thoughts the new provider never issued.
+- **Structured output, schema-forced.**
+  `ChatModelRouter.structured(messages, schema=...)` forces a
+  synthetic delivery tool, validates the arguments against the schema,
+  gives the model one correction round with the violation named, and
+  raises `StructuredOutputError` rather than defaulting silently.
+- **The prose IO channel is honest.** A present-but-broken `IO:` line
+  now REFUSES the build with the problem named
+  (`parse_node_io_checked`); only a genuinely absent line keeps the
+  lenient default. The bench classifies the new refusal under
+  `bad_interface`.
+- **Token accounting exists** (`providers/tokens.py`): a
+  deterministic, deliberately conservative estimate by default, exact
+  tiktoken counts for OpenAI-family ids via the new `tokens` extra —
+  the seam Phase 3's context-pack budgeter compiles against.
+- **Pinned** by `tests/test_canonical_interface.py`, including the
+  plan's two acceptance scenarios: a provider switch mid-task keeps
+  the task from canonical state, and an undeclared tool call is
+  refused before any handler runs.
+
 Context-harness Phase 1 — the model is unstarved:
 
 - **Seat generation profiles** (`providers/profiles.py`). Effort now

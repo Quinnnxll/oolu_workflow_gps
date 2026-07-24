@@ -13,44 +13,17 @@ from __future__ import annotations
 import json
 from typing import Any, Iterator
 
-import re
-
 from .base import BaseProviderAdapter, HttpTransport
 from .errors import classify_status
+from .registry import anthropic_thinking_model, openai_reasoning_model
 from .tools import ToolSpec
 from .vault import CredentialRef, SecretVault
 
-# OpenAI's reasoning models (o-series, gpt-5 family) take
-# ``max_completion_tokens`` and ``reasoning_effort`` and reject a
-# sampling temperature; everything else (gpt-4o family, and every local
-# OpenAI-compatible server this adapter also fronts) speaks the classic
-# ``max_tokens`` + ``temperature``. One predicate, both decisions.
-_OPENAI_REASONING_MODEL_RE = re.compile(r"^(o\d|gpt-5)")
-
-
-def _openai_reasoning_model(model: str) -> bool:
-    return bool(_OPENAI_REASONING_MODEL_RE.match(str(model or "").strip()))
-
-
-# Anthropic extended thinking arrived with Claude 3.7; the families
-# before it reject the ``thinking`` block. Deny the known elders, trust
-# the rest of the claude line (4.x, 4.5, 5, ...).
-_ANTHROPIC_NO_THINKING_PREFIXES = (
-    "claude-2",
-    "claude-instant",
-    "claude-3-haiku",
-    "claude-3-opus",
-    "claude-3-sonnet",
-    "claude-3-5",
-)
-
-
-def _anthropic_thinking_model(model: str) -> bool:
-    name = str(model or "").strip().lower()
-    if not name.startswith("claude"):
-        return False
-    return not any(name.startswith(p) for p in _ANTHROPIC_NO_THINKING_PREFIXES)
-
+# Which models speak which knobs is the registry's knowledge
+# (providers/registry.py) — one capability table for routing AND wire
+# construction. The adapters keep only the wire-level guards.
+_openai_reasoning_model = openai_reasoning_model
+_anthropic_thinking_model = anthropic_thinking_model
 
 # Anthropic's floor for a thinking budget; below it the block is invalid.
 _MIN_THINKING_BUDGET = 1024

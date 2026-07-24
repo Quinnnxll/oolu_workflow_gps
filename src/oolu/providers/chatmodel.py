@@ -28,13 +28,17 @@ from .base import HttpTransport
 from .errors import ProviderError
 from .keyring import PROVIDERS, KeyringError, ModelKeyring, fingerprint
 from .profiles import SeatProfile, resolve_profile
+from .registry import ModelManifest, manifest_for
 from .tools import (
+    StructuredOutputError,
     ToolReply,
+    ToolResult,
     ToolSpec,
     parse_anthropic_tool_reply,
     parse_openai_tool_reply,
     to_anthropic_messages,
     to_openai_messages,
+    validate_arguments,
 )
 from .vault import SecretVault
 
@@ -256,11 +260,9 @@ class ChatModelRouter:
         return False
 
     def reply(self, messages: list[dict]) -> str:
+        """Plain text consultation — the canonical call with no tools."""
         self._check_budget()
-        return self._route(
-            keyed=lambda provider, secret: self._ask(provider, secret, messages),
-            local=lambda: self._ask_local(messages),
-        )
+        return self._execute(messages, None, "auto").text
 
     def consult(
         self,
@@ -276,12 +278,125 @@ class ChatModelRouter:
         tool exchanges (the neutral shape ``providers.tools`` documents);
         each dialect conversion happens here, per provider."""
         self._check_budget()
+        return self._execute(messages, tools, tool_choice)
+
+    def _execute(
+        self,
+        messages: list[dict],
+        tools: list[ToolSpec] | None,
+        tool_choice: str,
+    ) -> ToolReply:
+        """The ONE path every consultation shape takes: same routing,
+        same seat profile, same books — ``reply`` is simply the request
+        with no tools. Provider dialects exist only below this line."""
         return self._route(
-            keyed=lambda provider, secret: self._consult_provider(
+            keyed=lambda provider, secret: self._call_provider(
                 provider, secret, messages, tools, tool_choice
             ),
-            local=lambda: self._consult_local(messages, tools, tool_choice),
+            local=lambda: self._call_local(messages, tools, tool_choice),
         )
+
+    def structured(
+        self,
+        messages: list[dict],
+        *,
+        schema: dict,
+        name: str = "deliver_result",
+        max_attempts: int = 2,
+    ) -> dict:
+        """Schema-forced delivery: the model must CALL the synthetic tool
+        whose parameters ARE the schema, and the arguments come back
+        validated — the channel that retires regex-scraping structured
+        answers out of prose. A schema violation costs a correction
+        round, not a silent default; running out of rounds raises
+        :class:`StructuredOutputError`."""
+        spec = ToolSpec(
+            name=name,
+            description=(
+                "Deliver the final structured result. Call exactly once "
+                "with the complete answer as arguments."
+            ),
+            parameters=schema,
+        )
+        transcript = list(messages)
+        problems: list[str] = []
+        for _attempt in range(max(1, int(max_attempts))):
+            reply = self.consult(transcript, tools=[spec], tool_choice=name)
+            transcript.append(reply.as_message())
+            delivered = next(
+                (c for c in reply.tool_calls if c.name == name), None
+            )
+            if delivered is None:
+                problems = [f"no {name} call was made"]
+                transcript.append(
+                    {
+                        "role": "user",
+                        "content": f"Deliver the result by calling {name}.",
+                    }
+                )
+                continue
+            problems = (
+                [delivered.malformed]
+                if delivered.malformed
+                else validate_arguments(schema, delivered.arguments)
+            )
+            if not problems:
+                return delivered.arguments
+            transcript.append(
+                ToolResult(
+                    tool_call_id=delivered.id,
+                    name=name,
+                    success=False,
+                    content="invalid arguments: " + "; ".join(problems),
+                ).as_message()
+            )
+        raise StructuredOutputError(
+            "no schema-valid result within "
+            f"{max_attempts} attempts: " + "; ".join(problems)
+        )
+
+    # ------------------------------------------------------------------ #
+    # What would answer, and what it can do — the manifest, not hasattr.  #
+    # ------------------------------------------------------------------ #
+    def answering_model(self) -> tuple[str, str]:
+        """``(provider, model_id)`` that would answer the next
+        consultation under the current settings — ``("", "")`` when
+        nothing would. Pure inspection: no request is made."""
+        tier = self._tier()
+        source = self._source()
+        if source == "local":
+            return ("local", str(self._local_model() or "").strip())
+        if (
+            source == "subscription"
+            and self._subscription is not None
+            and self._subscription.configured()
+        ):
+            for provider in PROVIDERS:  # the plan's order: Claude first
+                if self._subscription.secret_for(provider) is not None:
+                    return (provider, chat_model_for(provider, tier))
+            return ("", "")
+        for provider in self._order():
+            try:
+                secret = self._keyring.secret_for(self._tenant, provider)
+            except KeyringError:
+                continue
+            if secret is None:
+                continue
+            return (provider, chat_model_for(provider, tier))
+        return ("", "")
+
+    def manifest_now(self) -> ModelManifest:
+        """The capability manifest of the model that would answer now."""
+        provider, model_id = self.answering_model()
+        return manifest_for(model_id, provider=provider)
+
+    def consult_ready(self) -> bool:
+        """Whether the answering model reliably speaks native tool
+        calling — the MANIFEST's answer, replacing the old ``hasattr``
+        probe that every router passed regardless of the model seated.
+        A small local model without the power routes to the fenced-code
+        path built for exactly that."""
+        return bool(self.manifest_now().tool_calling)
 
     def _route(self, *, keyed, local):
         """One routing skeleton for every consultation shape: local means
@@ -558,7 +673,14 @@ class ChatModelRouter:
         self._adapters[cache_key] = adapter
         return adapter
 
-    def _ask_local(self, messages: list[dict]) -> str:
+    def _call_local(
+        self,
+        messages: list[dict],
+        tools: list[ToolSpec] | None,
+        tool_choice: str,
+    ) -> ToolReply:
+        """The local OpenAI-compatible wire, one body for every
+        consultation shape — tools ride only when the caller sent any."""
         url = str(self._local_url() or "").strip().rstrip("/")
         model_id = str(self._local_model() or "").strip()
         if not url or not model_id:
@@ -570,86 +692,42 @@ class ChatModelRouter:
         effort = self._profile
         try:
             data = self._local_adapter(url).chat(
-                messages,
+                to_openai_messages(messages),
                 model=model_id,
+                tools=tools,
+                tool_choice=tool_choice,
                 max_tokens=effort.max_tokens,
                 temperature=effort.temperature,
             )
         except ProviderError as exc:
             raise ModelUnavailable(f"local ({url}): {exc}") from exc
-        text, prompt_tokens, completion_tokens = _parse_openai_shape(data)
+        reply = parse_openai_tool_reply(data)
         # Local turns still enter the books — usage is real telemetry
         # even when the marginal dollar cost is the machine's own.
         self._book(
             model=str(data.get("model") or model_id),
             tier="local",
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
+            prompt_tokens=reply.prompt_tokens,
+            completion_tokens=reply.completion_tokens,
             started=started,
             finish_reason=_openai_finish_reason(data),
             context_chars=_context_chars(messages),
         )
-        if not text:
+        if not reply.text and not reply.tool_calls:
             raise ModelUnavailable(f"local ({url}) returned an empty reply")
-        return text
+        return reply
 
-    def _ask(self, provider: str, secret: str, messages: list[dict]) -> str:
-        tier = self._tier()
-        model_id = chat_model_for(provider, tier)
-        effort = self._profile
-        adapter = self._adapter(provider, secret)
-        started = time.monotonic()
-        if provider == "anthropic":
-            system, rest = _split_system(messages)
-            data = adapter.messages(
-                rest,
-                model=model_id,
-                max_tokens=effort.max_tokens,
-                system=system,
-                web_search=self._web_search(),
-                temperature=effort.temperature,
-                thinking_budget=effort.thinking_budget,
-            )
-            text = "".join(
-                block.get("text", "")
-                for block in data.get("content", [])
-                if isinstance(block, dict) and block.get("type") == "text"
-            )
-            usage = data.get("usage", {}) or {}
-            prompt_tokens = int(usage.get("input_tokens", 0) or 0)
-            completion_tokens = int(usage.get("output_tokens", 0) or 0)
-            finish_reason = _anthropic_finish_reason(data)
-        else:
-            data = adapter.chat(
-                messages,
-                model=model_id,
-                max_tokens=effort.max_tokens,
-                temperature=effort.temperature,
-                reasoning_effort=effort.reasoning_effort,
-            )
-            text, prompt_tokens, completion_tokens = _parse_openai_shape(data)
-            finish_reason = _openai_finish_reason(data)
-        self._book(
-            model=str(data.get("model") or model_id),
-            tier=tier,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            started=started,
-            finish_reason=finish_reason,
-            context_chars=_context_chars(messages),
-        )
-        if not text:
-            raise ModelUnavailable(f"{provider} returned an empty reply")
-        return text
-
-    def _consult_provider(
+    def _call_provider(
         self,
         provider: str,
         secret: str,
         messages: list[dict],
-        tools: list[ToolSpec],
+        tools: list[ToolSpec] | None,
         tool_choice: str,
     ) -> ToolReply:
+        """One compilation per provider dialect — the ONLY place the
+        keyed Anthropic and OpenAI chat wires are constructed, whatever
+        the consultation shape. ``reply`` is this with no tools."""
         tier = self._tier()
         model_id = chat_model_for(provider, tier)
         effort = self._profile
@@ -666,12 +744,13 @@ class ChatModelRouter:
                 tool_choice=tool_choice,
                 web_search=self._web_search(),
                 temperature=effort.temperature,
-                # Extended thinking stays OFF on tool consultations for
-                # now: the neutral transcript (providers.tools) does not
-                # yet carry thinking blocks back, and Anthropic requires
-                # them re-sent verbatim across tool turns. The canonical
-                # interface (plan Phase 2) lifts this.
-                thinking_budget=None,
+                # The annex (ToolReply.thinking_blocks) now carries
+                # thoughts back across tool turns verbatim, so the
+                # seat's reasoning budget rides EVERY consultation
+                # shape; the adapter still refuses it where the wire's
+                # own rules do (forced tool_choice, elder models,
+                # too-small ceilings).
+                thinking_budget=effort.thinking_budget,
             )
             reply = parse_anthropic_tool_reply(data)
             finish_reason = _anthropic_finish_reason(data)
@@ -700,43 +779,6 @@ class ChatModelRouter:
         # with neither words nor calls is a dead one.
         if not reply.text and not reply.tool_calls:
             raise ModelUnavailable(f"{provider} returned an empty reply")
-        return reply
-
-    def _consult_local(
-        self, messages: list[dict], tools: list[ToolSpec], tool_choice: str
-    ) -> ToolReply:
-        url = str(self._local_url() or "").strip().rstrip("/")
-        model_id = str(self._local_model() or "").strip()
-        if not url or not model_id:
-            raise ModelUnavailable(
-                "local model is selected but not configured — set the "
-                "local model URL and name in Settings"
-            )
-        started = time.monotonic()
-        effort = self._profile
-        try:
-            data = self._local_adapter(url).chat(
-                to_openai_messages(messages),
-                model=model_id,
-                tools=tools,
-                tool_choice=tool_choice,
-                max_tokens=effort.max_tokens,
-                temperature=effort.temperature,
-            )
-        except ProviderError as exc:
-            raise ModelUnavailable(f"local ({url}): {exc}") from exc
-        reply = parse_openai_tool_reply(data)
-        self._book(
-            model=str(data.get("model") or model_id),
-            tier="local",
-            prompt_tokens=reply.prompt_tokens,
-            completion_tokens=reply.completion_tokens,
-            started=started,
-            finish_reason=_openai_finish_reason(data),
-            context_chars=_context_chars(messages),
-        )
-        if not reply.text and not reply.tool_calls:
-            raise ModelUnavailable(f"local ({url}) returned an empty reply")
         return reply
 
     def _book(

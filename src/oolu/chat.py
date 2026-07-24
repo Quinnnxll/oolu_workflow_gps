@@ -1041,23 +1041,39 @@ values; the function computes with them:
   success every time."""
 
 
-_IO_LINE_RE = re.compile(r"^\s*IO:\s*(\{.*\})\s*$", re.M)
+# Any IO: line at all — the payload's validity is judged by json.loads,
+# not by the regex, so a PRESENT-but-broken declaration is seen (and can
+# be refused) instead of silently reading as absent.
+_IO_LINE_RE = re.compile(r"^\s*IO:\s*(.+?)\s*$", re.M)
 _IO_TYPES = {"str", "path", "number"}
 
 
-def parse_node_io(raw: str) -> dict:
-    """The declared interface from the model's IO: line — normalized to
+def parse_node_io_checked(raw: str) -> tuple[dict, str]:
+    """``(io, problem)`` from the model's IO: line, normalized to
     ``{"inputs": [...], "outputs": [...]}`` with only the fields the slot
-    vocabulary knows. A missing or broken declaration degrades to the
-    honest default: no inputs, one string result."""
+    vocabulary knows.
+
+    An ABSENT line stays lenient — the default (no inputs, one string
+    result) is legitimate for a no-input function, and the no-tool local
+    models this prose channel serves earn some slack. A line that is
+    PRESENT but cannot be honored (broken JSON, not an object) returns a
+    non-empty ``problem`` instead of degrading silently: a node whose
+    declared interface was quietly replaced by a guess chains wrong on
+    every route it joins (context-harness plan, Phase 2 — silent IO
+    degradation becomes a model-visible error)."""
     default = {"inputs": [], "outputs": [{"name": "result", "type": "str"}]}
     match = _IO_LINE_RE.search(raw or "")
     if not match:
-        return default
+        return default, ""
     try:
         declared = json.loads(match.group(1))
-    except ValueError:
-        return default
+    except ValueError as exc:
+        return default, f"the IO: line is not valid JSON ({exc})"
+    if not isinstance(declared, dict):
+        return default, (
+            "the IO: line must declare a JSON object with inputs/outputs,"
+            f" got {type(declared).__name__}"
+        )
     def clean(items):
         out = []
         for item in items if isinstance(items, list) else []:
@@ -1073,7 +1089,15 @@ def parse_node_io(raw: str) -> dict:
         return out
     inputs = clean(declared.get("inputs"))
     outputs = clean(declared.get("outputs")) or default["outputs"]
-    return {"inputs": inputs, "outputs": outputs}
+    return {"inputs": inputs, "outputs": outputs}, ""
+
+
+def parse_node_io(raw: str) -> dict:
+    """The lenient face of :func:`parse_node_io_checked` — the io alone,
+    problems swallowed. Callers that can refuse should use the checked
+    form; this remains for paths that must always produce an interface."""
+    io, _problem = parse_node_io_checked(raw)
+    return io
 
 _CHAT_SHAPED = frozenset(
     phrase for rule in DEFAULT_RULES for phrase in rule.phrases
@@ -1155,7 +1179,14 @@ def author_node_function(
             "the model wrote a function that only pretends — "
             + "; ".join(smells)
         )
-    return script, parse_node_io(raw), ""
+    io, io_problem = parse_node_io_checked(raw)
+    if io_problem:
+        return None, {}, (
+            "the function arrived with a broken interface declaration — "
+            f"{io_problem} — so nothing was built; a node whose interface "
+            "is guessed chains wrong on every route it joins"
+        )
+    return script, io, ""
 
 
 class NodeChatTools(GatewayChatTools):
