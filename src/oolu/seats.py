@@ -163,6 +163,19 @@ SEATS: dict[str, Seat] = {
             ),
             audited=False,
         ),
+        Seat(
+            purpose="node.review",
+            charge=(
+                "judge a verified function before it is listed — contract "
+                "fit, the exact-value rule, slot-vocabulary reuse; a block "
+                "names its reason and publishes nothing"
+            ),
+            # Judgement only: it reads what the author wrote, holds no
+            # tools, writes nothing — the reviewer that can edit is an
+            # author with extra steps.
+            reads=("src/",),
+            audited=True,
+        ),
     )
 }
 

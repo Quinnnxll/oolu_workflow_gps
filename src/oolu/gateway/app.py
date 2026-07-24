@@ -3422,6 +3422,7 @@ class GatewayApp:
                     script=script,
                     problem=problem,
                     states=transaction,
+                    model=self._author_model_id(author),
                 )
                 return (
                     "error: the function failed birth verification — "
@@ -3442,6 +3443,7 @@ class GatewayApp:
                     script=script,
                     problem=problem,
                     states=transaction,
+                    model=self._author_model_id(author),
                 )
                 return (
                     "error: the function failed birth verification — "
@@ -3451,6 +3453,39 @@ class GatewayApp:
             script = edited
             if edited_io is not None:
                 io = edited_io
+        # --- draft → review (context-harness plan, Phase 6) ------------- #
+        # A seated reviewer judges the VERIFIED function before it lists:
+        # contract fit, the exact-value rule, slot-vocabulary reuse — a
+        # different consultation under its own purpose, possibly a
+        # different provider than the author. Availability is advisory
+        # (no reviewer seated → publish as before; an unreachable
+        # reviewer never blocks); a seated reviewer's block is final and
+        # its reason becomes the goal's next lesson.
+        reviewer = self._seat_actor(
+            self._node_reviewer(session.tenant_id), session.principal_id
+        )
+        if reviewer is not None:
+            from ..reviewer import review_node_function
+
+            approved, concern = review_node_function(reviewer, goal, script, io)
+            if approved:
+                transaction.append("reviewed")
+            else:
+                transaction.append(f"review-blocked:{concern[:120]}")
+                self._ledger_note(
+                    session.tenant_id,
+                    skill_id,
+                    goal,
+                    status="refused",
+                    script=script,
+                    problem=f"the publish reviewer blocked it: {concern}",
+                    states=transaction,
+                    model=self._author_model_id(author),
+                )
+                return (
+                    "error: the publish reviewer blocked this function — "
+                    f"{concern or 'no reason given'} — nothing was published"
+                )
         cost_note = self._build_cost_note(meter, spent_before)
         name = concise_name(goal)
         skill = ReusableSkill.model_validate(
@@ -3527,6 +3562,7 @@ class GatewayApp:
             status="published",
             states=tuple(transaction) + ("published",),
             node_id=new_id,
+            model=self._author_model_id(author),
         )
         # The function becomes a FILE the human can open: src/main.py in
         # the node's own drawer — written through the node.build SEAT, so
@@ -5551,6 +5587,34 @@ class GatewayApp:
                 list(pack.excluded),
             )
         return pack.text
+
+    def _node_reviewer(self, tenant: str):
+        """The publish reviewer's brain — the tenant's model seated
+        APART under ``node.review`` (its own purpose in the meter and
+        the books), or None when no model is configured: review is
+        advisory in availability, decisive in verdict."""
+        try:
+            return self._tenant_model(tenant, purpose="node.review")
+        except TypeError:
+            # An injected single-purpose chat brain (test seams stub
+            # _tenant_model without the purpose keyword) is the CHAT's
+            # model, not a reviewer — review stays unseated rather than
+            # conscripting whatever sat closest.
+            return None
+
+    @staticmethod
+    def _author_model_id(author) -> str:
+        """WHO sat in the seat, for the ledger's per-model outcome
+        history — the router names its answering model; injected stubs
+        stay anonymous rather than invented."""
+        fn = getattr(author, "answering_model", None)
+        if callable(fn):
+            try:
+                provider, model = fn()
+                return str(model or provider or "")
+            except Exception:  # noqa: BLE001 - identity is telemetry
+                return ""
+        return ""
 
     def _ledger_note(self, tenant: str, goal_key: str, goal: str, **kwargs) -> None:
         """One build outcome onto the ledger — advisory memory, so a

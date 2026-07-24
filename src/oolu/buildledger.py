@@ -48,6 +48,7 @@ _SCHEMA_ATTEMPTS = """CREATE TABLE IF NOT EXISTS build_attempts (
     problem TEXT NOT NULL DEFAULT '',
     states TEXT NOT NULL DEFAULT '[]',
     node_id TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
 )"""
 
@@ -88,11 +89,14 @@ class BuildLedger:
         problem: str = "",
         states: tuple[str, ...] | list[str] = (),
         node_id: str = "",
+        model: str = "",
     ) -> int:
         """One attempt on the record; returns its row id (the provenance
         every lesson cites). A refusal admits a lesson; a publish
         supersedes the goal's open lessons — corrections beat stale
-        warnings, per the plan's write-back policy."""
+        warnings, per the plan's write-back policy. ``model`` names WHO
+        sat in the seat for the attempt — the per-model outcome history
+        performance-fed routing reads (Phase 6)."""
         if status not in _STATUSES:
             raise ValueError(f"unknown build status {status!r}")
         stamp = datetime.now(UTC).isoformat()
@@ -100,8 +104,8 @@ class BuildLedger:
             cursor = db.execute(
                 """INSERT INTO build_attempts
                    (tenant, goal_key, goal, status, script, problem,
-                    states, node_id, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    states, node_id, model, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     tenant,
                     goal_key,
@@ -111,6 +115,7 @@ class BuildLedger:
                     problem or "",
                     json.dumps(list(states), ensure_ascii=False),
                     node_id or "",
+                    model or "",
                     stamp,
                 ),
             )
@@ -176,6 +181,39 @@ class BuildLedger:
             "goal": str(row[4]),
             "created_at": str(row[5]),
         }
+
+    def seat_performance(self, tenant: str) -> list[dict]:
+        """Per-model outcome history for the build seat, best first:
+        who published, who kept getting refused, at what rate — the
+        evidence performance-fed routing demotes on, and the honest
+        answer to "is this model earning the node.build seat?". Rows
+        without a model name (stub authors, pre-Phase-6 attempts) are
+        aggregated under ``""`` rather than dropped — history is
+        history."""
+        with self._conn.transaction() as db:
+            rows = db.execute(
+                """SELECT model,
+                          SUM(CASE WHEN status = 'published' THEN 1 ELSE 0 END),
+                          SUM(CASE WHEN status = 'refused' THEN 1 ELSE 0 END)
+                   FROM build_attempts
+                   WHERE tenant = ? AND status IN ('published', 'refused')
+                   GROUP BY model""",
+                (tenant,),
+            ).fetchall()
+        board = []
+        for model, published, refused in rows:
+            published, refused = int(published or 0), int(refused or 0)
+            total = published + refused
+            board.append(
+                {
+                    "model": str(model or ""),
+                    "published": published,
+                    "refused": refused,
+                    "success_rate": (published / total) if total else 0.0,
+                }
+            )
+        board.sort(key=lambda row: (-row["success_rate"], -row["published"]))
+        return board
 
     def attempts(self, tenant: str, goal_key: str) -> list[dict]:
         """The goal's full attempt history, oldest first — the audit

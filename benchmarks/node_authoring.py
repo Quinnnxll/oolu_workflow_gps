@@ -1129,6 +1129,14 @@ class BenchReport:
     def total_wall_s(self) -> float:
         return sum(r.wall_s for r in self.results)
 
+    @property
+    def cost_per_verified(self) -> float:
+        """Dollars per VERIFIED build — the plan's continuous-audition
+        trend line: success should rise while this falls. Zero verified
+        builds price at the full spend (never quietly free)."""
+        verified = sum(r.verified for r in self.build_results)
+        return self.total_cost / verified if verified else self.total_cost
+
     def taxonomy(self) -> Counter:
         return Counter(r.failure_class for r in self.results)
 
@@ -1143,6 +1151,7 @@ class BenchReport:
             "truncations": self.truncations,
             "model_calls": self.total_calls,
             "cost": round(self.total_cost, 6),
+            "cost_per_verified": round(self.cost_per_verified, 6),
             "wall_s": round(self.total_wall_s, 2),
             "fit": fit_for_the_seat(self),
             "taxonomy": dict(self.taxonomy()),
@@ -1447,6 +1456,54 @@ def scripted_author() -> ScriptedAuthor:
 
 
 # --------------------------------------------------------------------------- #
+# The continuous audition — every run a row, drift visible the day it lands    #
+# --------------------------------------------------------------------------- #
+def record_report(
+    report: BenchReport, path, *, model: str = "", ceiling: int = 0
+) -> dict:
+    """Append one audition row to the JSONL scoreboard at ``path`` —
+    the plan's continuous-audition ledger (Phase 6). Run it on a
+    cadence per configured model (cron, CI, a Routine):
+
+        python benchmarks/node_authoring.py --record data/auditions.jsonl
+
+    and the file becomes the trend the plan reads: success rising,
+    cost-per-verified falling — or a provider drifting, visible the
+    day it drifts instead of the week users feel it."""
+    from datetime import UTC, datetime
+
+    row = {
+        "at": datetime.now(UTC).isoformat(),
+        "model": model,
+        "ceiling": ceiling,
+        **report.as_dict(),
+    }
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return row
+
+
+def audition_history(path) -> list[dict]:
+    """The scoreboard's rows, oldest first — tolerant of a missing file
+    (no history is an empty trend, not an error)."""
+    path = Path(path)
+    if not path.exists():
+        return []
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rows.append(json.loads(line))
+        except ValueError:
+            continue  # a torn write never poisons the trend
+    return rows
+
+
+# --------------------------------------------------------------------------- #
 # The live audition                                                            #
 # --------------------------------------------------------------------------- #
 def build_brain(workdir: Path, *, tier: str, max_tokens: int | None):
@@ -1510,6 +1567,15 @@ def main() -> int:
         "--goals", default="", help="run only goals whose key contains this"
     )
     parser.add_argument("--json", action="store_true", dest="as_json")
+    parser.add_argument(
+        "--record",
+        default="",
+        help=(
+            "append this run's report to a JSONL audition scoreboard "
+            "(the continuous-audition ledger — run on a cadence and the "
+            "file becomes the quality trend per model)"
+        ),
+    )
     args = parser.parse_args()
 
     goals = tuple(g for g in GOALS if args.goals in g.key) or GOALS
@@ -1549,6 +1615,12 @@ def main() -> int:
             meter=meter,
             echo=echo,
         )
+
+        if args.record:
+            _provider, answering = router.answering_model()
+            record_report(
+                challenger, args.record, model=answering, ceiling=ceiling
+            )
 
         if args.as_json:
             print(json.dumps(challenger.as_dict(), indent=2))

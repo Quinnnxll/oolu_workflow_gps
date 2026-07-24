@@ -83,6 +83,14 @@ SEAT_PROFILES: dict[str, SeatProfile] = {
     "plan.route": SeatProfile(max_tokens=2048, temperature=0.2),
     # Drafts in the user's voice keep the provider's sampling default.
     "rep.draft": SeatProfile(max_tokens=2048),
+    # The publish reviewer: judgement, not generation — a verdict and
+    # its reasons, thought about properly (Phase 6 draft → review).
+    "node.review": SeatProfile(
+        max_tokens=2048,
+        temperature=0.2,
+        thinking_budget=1024,
+        reasoning_effort="medium",
+    ),
     # The authoring bench audits the node.build seat — same effort, so
     # its scoreboard measures the seat, not a bench-only configuration.
     "bench.node_authoring": _CODE_SEAT,

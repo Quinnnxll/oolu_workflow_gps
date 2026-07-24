@@ -462,24 +462,42 @@ fully with server-side conversation truth.
 *Objective: the spec's `model_router` strategies, now that one canonical
 interface (Phase 2) makes models interchangeable mid-task.*
 
-- [ ] **Draft → review for publishing.** A second seat (`node.review`)
-      critiques the verified function — contract fit, exact-value rule,
-      slot-vocabulary reuse — before listing. High-risk (write-risk) nodes
-      require it; the reviewer may be a different provider.
-- [ ] **Planner → executor split.** Let the reasoning tier plan the interface
-      and approach, the fast tier draft the body, verification arbitrate —
-      the routing matrix's ladder generalized across seats.
-- [ ] **Performance-fed routing.** Per-seat, per-model outcome history (from
-      Phase 0's telemetry) feeds tier choice: a model that keeps failing
-      `node.build` verification loses the seat, the way `earns_its_cost`
-      already gates the token planner (`docs/node-token-planner.md` §5).
-- [ ] **Continuous audition.** The Phase 0 benchmark runs on a cadence per
-      configured model; the scoreboard (context precision, validation
-      success, cost per completed build) lands beside the investor-panel
-      metrics so quality regressions are visible the day a provider drifts.
+- [x] **Draft → review for publishing.** The `node.review` seat (declared in
+      `seats.py` — reads, never writes, holds no hands — with its own
+      generation profile and metering purpose) judges the VERIFIED function
+      before it lists: contract fit, the exact-value rule, slot-vocabulary
+      reuse (`src/oolu/reviewer.py`; structured delivery when the model
+      speaks it, the VERDICT line otherwise). Availability is advisory — no
+      reviewer seated, or an unreachable one, publishes exactly as before —
+      but a seated reviewer's block is final: the build refuses, the reason
+      lands on the ledger as the goal's next lesson, and the transaction
+      records `reviewed` / `review-blocked`. The reviewer may be a different
+      provider (`OOLU_CHAT_MODEL_*` per seat). (A hard "write-risk nodes
+      REQUIRE review" policy waits until operators actually seat reviewers.)
+- [ ] **Planner → executor split.** Deliberately open: the build seat
+      already defaults to the top tier with a thinking budget, so there is
+      no cheaper drafter whose quality is measured yet — the split pays only
+      when the audition scoreboard shows a fast drafter earning it. Revisit
+      on that evidence.
+- [x] **Performance-fed routing — the evidence half.** Build attempts now
+      record WHO sat in the seat (`answering_model()` → the ledger's
+      `model` column), and `BuildLedger.seat_performance(tenant)` ranks
+      models by published/refused outcomes — the per-seat history the plan
+      calls for. The automatic demotion policy (a failing model losing the
+      seat) stays open until there is volume and an operator-agreed rule;
+      the board makes the case visible today.
+- [x] **Continuous audition — the ledger half.** `record_report` /
+      `audition_history` (`benchmarks/node_authoring.py`) append every
+      audition run to a JSONL scoreboard — model, ceiling, rates, taxonomy,
+      and the new `cost_per_verified` trend line — one cron/Routine
+      invocation per configured model
+      (`python benchmarks/node_authoring.py --record data/auditions.jsonl`).
+      Landing the trend beside the investor-panel metrics remains open
+      (panel integration).
 
-**Acceptance:** provider failover mid-build loses no state; per-model FIT
-lines published; cost-per-verified-node trends down while success trends up.
+**Acceptance:** provider failover mid-build loses no state (Phase 2's
+canonical-state test); per-model FIT lines publish to the scoreboard; the
+success and cost-per-verified trends are read off the recorded runs.
 
 ---
 

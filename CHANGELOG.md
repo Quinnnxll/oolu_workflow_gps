@@ -4,6 +4,44 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Context-harness Phase 6 — multi-model strategies and continuous
+evaluation (the plan's final phase):
+
+- **Draft → review for publishing** (``src/oolu/reviewer.py``, the
+  ``node.review`` seat). Birth verification proves a function
+  executes; it cannot prove the function is the right citizen — that
+  the declared interface is the code's truth, that the answer is
+  computed rather than smuggled past the mock screen, that the slot
+  vocabulary is reused instead of forked. A seated reviewer now judges
+  the verified function before it lists, under its own purpose in the
+  meter and the books, possibly a different provider than the author.
+  Availability is advisory — no reviewer, or an unreachable one,
+  publishes exactly as before — but a seated reviewer's block is
+  final: the build refuses, the reason becomes the goal's next lesson
+  on the ledger, and the transaction records reviewed/review-blocked.
+  The seat is declared in the registry (reads, never writes, no
+  hands: a reviewer that can edit is an author with extra steps).
+- **Performance-fed routing, the evidence half.** Build attempts
+  record WHO sat in the seat (the router's answering model), and
+  ``BuildLedger.seat_performance`` ranks models by published/refused
+  outcomes — the per-seat history a demotion policy will read; the
+  board makes the case visible before any rule acts on it.
+- **The continuous-audition scoreboard.** ``--record`` appends every
+  benchmark run to a JSONL ledger — model, ceiling, rates, the failure
+  taxonomy, and the new cost-per-verified trend line — so one cron or
+  Routine invocation per configured model turns the Phase 0 bench into
+  a standing quality trend: a provider drifting is visible the day it
+  drifts.
+- **Deliberately open, on the record:** the planner→executor split
+  waits for scoreboard evidence that a cheaper drafter earns it, and
+  automatic seat demotion waits for volume and an operator-agreed
+  rule.
+- **Pinned** by ``tests/test_multi_model.py``: the verdict protocol
+  (pass, block-with-reason, unreachable-never-blocks, structured
+  preferred), the block-becomes-lesson flow at the real build door,
+  the reviewed publish on the audit transaction, the performance
+  board, and the audition scoreboard.
+
 Context-harness Phase 5 — memory and continuity:
 
 - **The build ledger** (``src/oolu/buildledger.py``). A build that
