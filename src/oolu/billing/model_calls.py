@@ -36,6 +36,14 @@ class ModelCallRecord(BaseModel):
     cost: float = 0.0
     duration_s: float = 0.0
     at: datetime
+    # Effort telemetry (context-harness plan, Phase 0). How the completion
+    # ENDED and how much context rode in — so "did node.build truncate?"
+    # and "how starved was the call?" are answerable from the books alone.
+    # finish_reason keeps the provider's own word ("end_turn", "stop",
+    # "max_tokens", "length", "tool_use", ...); empty = the caller didn't
+    # know, never a guess.
+    finish_reason: str = ""
+    context_chars: int = 0  # total characters of the messages sent
 
 
 class ModelPriceTable(BaseModel):
@@ -111,6 +119,11 @@ class ModelCallMeter:
             ),
             duration_s=result.duration_s,
             at=self._clock(),
+            # getattr keeps the duck-typing promise: telemetry objects that
+            # predate these fields (the routing gateway's SynthesisResult)
+            # meter exactly as before.
+            finish_reason=str(getattr(result, "finish_reason", "") or ""),
+            context_chars=int(getattr(result, "context_chars", 0) or 0),
         )
         with self._lock:
             self._records.append(entry)

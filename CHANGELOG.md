@@ -4,6 +4,37 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Context-harness Phase 0 — the node-authoring seat, measured before it
+is re-upholstered:
+
+- **The node-authoring bench** (`benchmarks/node_authoring.py`). 24
+  goals — easy transforms to route-position and brokered-web tasks,
+  plus three conversation goals the author must decline — run through
+  the REAL authoring paths (one-shot `author_node_function`, or the
+  `NodeAuthorAgent` loop for tool-calling models), and every authored
+  function is verified by executing it against the real runtime
+  contract: the `sandbox_shim` staged as `_oolu_runtime`, the goal's
+  `bindings.json`, the stdout envelope parsed by `runtime/contract`,
+  a web broker that refuses every call with the taught status-0
+  contract, and dependency healing through an injectable installer.
+  The scoreboard reports verified/answer/interface/first-pass rates,
+  a twelve-bucket failure taxonomy (truncated, mocked, bad_interface,
+  built_conversation, …), and per-goal effort (calls, tokens, cost,
+  wall time) sliced from the call meter. A scripted incumbent holds
+  the reference FIT line offline; `main()` is the live audition in
+  the Level B pattern, `--max-tokens` previewing the Phase 1 ceiling
+  lift. Pinned end to end by `tests/test_node_authoring_bench.py`.
+- **Effort books.** `ModelCallRecord` now carries `finish_reason` and
+  `context_chars`, booked by `ChatModelRouter` on all four consult
+  paths — so "did `node.build` hit its 1024-token ceiling?" is
+  answerable from storage alone. Older telemetry shapes (the routing
+  gateway's) meter unchanged.
+- **Two Phase 4 findings** documented where the bench diverges from
+  production on purpose: `_author_verifier` stages no `bindings.json`
+  (an honest input-reading function cannot pass it today) and mounts
+  no web exchange (`http_request` raises instead of answering the
+  taught refusal).
+
 The context-harness build plan — why node creation with external LLM
 APIs trails the frontier coding harnesses, and the phases that close
 the gap:

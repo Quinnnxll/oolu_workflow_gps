@@ -79,6 +79,8 @@ class _Telemetry:
     prompt_tokens: int
     completion_tokens: int
     duration_s: float
+    finish_reason: str = ""
+    context_chars: int = 0
 
 
 def _parse_openai_shape(data: dict) -> tuple[str, int, int]:
@@ -93,6 +95,33 @@ def _parse_openai_shape(data: dict) -> tuple[str, int, int]:
         int(usage.get("prompt_tokens", 0) or 0),
         int(usage.get("completion_tokens", 0) or 0),
     )
+
+
+def _openai_finish_reason(data: dict) -> str:
+    """The first choice's finish_reason — "length" is the truncation flag
+    the effort books exist to catch."""
+    choices = data.get("choices") or []
+    if not choices:
+        return ""
+    return str((choices[0] or {}).get("finish_reason") or "")
+
+
+def _anthropic_finish_reason(data: dict) -> str:
+    """Anthropic's stop_reason — "max_tokens" is its truncation flag."""
+    return str(data.get("stop_reason") or "")
+
+
+def _context_chars(messages: list[dict]) -> int:
+    """A cheap, tokenizer-free measure of how much context rode in — the
+    honest proxy until real token counting arrives (plan Phase 2)."""
+    total = 0
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, str):
+            total += len(content)
+        elif content is not None:
+            total += len(str(content))
+    return total
 
 
 def _split_system(messages: list[dict]) -> tuple[str, list[dict]]:
@@ -523,6 +552,8 @@ class ChatModelRouter:
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             started=started,
+            finish_reason=_openai_finish_reason(data),
+            context_chars=_context_chars(messages),
         )
         if not text:
             raise ModelUnavailable(f"local ({url}) returned an empty reply")
@@ -552,15 +583,19 @@ class ChatModelRouter:
             usage = data.get("usage", {}) or {}
             prompt_tokens = int(usage.get("input_tokens", 0) or 0)
             completion_tokens = int(usage.get("output_tokens", 0) or 0)
+            finish_reason = _anthropic_finish_reason(data)
         else:
             data = adapter.chat(messages, model=model_id)
             text, prompt_tokens, completion_tokens = _parse_openai_shape(data)
+            finish_reason = _openai_finish_reason(data)
         self._book(
             model=str(data.get("model") or model_id),
             tier=tier,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             started=started,
+            finish_reason=finish_reason,
+            context_chars=_context_chars(messages),
         )
         if not text:
             raise ModelUnavailable(f"{provider} returned an empty reply")
@@ -592,6 +627,7 @@ class ChatModelRouter:
                 web_search=self._web_search(),
             )
             reply = parse_anthropic_tool_reply(data)
+            finish_reason = _anthropic_finish_reason(data)
         else:
             data = adapter.chat(
                 to_openai_messages(messages),
@@ -600,12 +636,15 @@ class ChatModelRouter:
                 tool_choice=tool_choice,
             )
             reply = parse_openai_tool_reply(data)
+            finish_reason = _openai_finish_reason(data)
         self._book(
             model=str(data.get("model") or model_id),
             tier=tier,
             prompt_tokens=reply.prompt_tokens,
             completion_tokens=reply.completion_tokens,
             started=started,
+            finish_reason=finish_reason,
+            context_chars=_context_chars(messages),
         )
         # A pure tool-call turn legitimately has no text; only a reply
         # with neither words nor calls is a dead one.
@@ -640,6 +679,8 @@ class ChatModelRouter:
             prompt_tokens=reply.prompt_tokens,
             completion_tokens=reply.completion_tokens,
             started=started,
+            finish_reason=_openai_finish_reason(data),
+            context_chars=_context_chars(messages),
         )
         if not reply.text and not reply.tool_calls:
             raise ModelUnavailable(f"local ({url}) returned an empty reply")
@@ -653,6 +694,8 @@ class ChatModelRouter:
         prompt_tokens: int,
         completion_tokens: int,
         started: float,
+        finish_reason: str = "",
+        context_chars: int = 0,
     ) -> None:
         if self._meter is None:
             return
@@ -664,6 +707,8 @@ class ChatModelRouter:
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 duration_s=time.monotonic() - started,
+                finish_reason=finish_reason,
+                context_chars=context_chars,
             ),
         )
         self._book_usage(record)

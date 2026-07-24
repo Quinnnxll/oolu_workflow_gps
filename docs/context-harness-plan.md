@@ -159,24 +159,42 @@ measured against them.
 auditions for planning (`benchmarks/level_b_audition.py`) but no numeric
 node-authoring benchmark at all.*
 
-- [ ] **Node-authoring benchmark** (`benchmarks/node_authoring.py`): a fixed
-      suite of ~30 build goals spanning easy (slugify) to hard (multi-input
-      transforms, brokered `http_request` use, downstream-shape matching).
-      Each goal runs the real build door, then verifies by sandbox execution
-      (`_author_verifier` machinery, `gateway/app.py:5336-5386`). Report per
-      goal: first-pass validity, published-node run success, truncation
-      (`finish_reason=length`) rate, IO-degradation rate, tokens in/out, cost,
-      wall time, repair rounds. Print a FIT line like the Level B audition.
-- [ ] **Per-seat effort telemetry**: the `ModelCallMeter` already books tokens
-      by purpose (`billing/model_calls.py`); add finish_reason, tool-round
-      count, and context-size to the booked record so "how much effort did
-      `node.build` actually spend" is answerable from storage.
-- [ ] **Failure taxonomy**: classify benchmark failures (truncated, mocked,
-      wrong interface, runtime error, wrong shape vs upstream) — these
-      categories become the acceptance axes for Phases 1–4.
+- [x] **Node-authoring benchmark** (`benchmarks/node_authoring.py`): a fixed
+      suite of goals spanning easy (slugify) to hard (multi-input transforms,
+      brokered `http_request` use, downstream-shape matching) plus judgement
+      goals that must be declined — landed as 24 goals (21 build + 3
+      conversation). Each goal runs the real authoring paths (one-shot
+      `author_node_function` or the `NodeAuthorAgent` loop, dispatched the
+      way `gateway/app.py:_author_function` does), then verifies by executing
+      the function against the real runtime contract (`sandbox_shim`,
+      `bindings.json`, envelope parsing) with a refusing web broker. Reports
+      per goal: first-pass validity, verified/answer/interface rates,
+      truncation (`finish_reason=length`) flags, tokens in/out, cost, wall
+      time, heals. A scripted incumbent holds the reference FIT line offline
+      (`tests/test_node_authoring_bench.py` pins it); `main()` is the live
+      audition in the Level B pattern, with `--max-tokens` to preview the
+      Phase 1 ceiling lift.
+- [x] **Per-seat effort telemetry**: `ModelCallRecord` now books
+      `finish_reason` and `context_chars` per call
+      (`billing/model_calls.py`), fed by `ChatModelRouter` on all four paths
+      (`providers/chatmodel.py:_book`); rounds per task = records per
+      purpose. "Did `node.build` truncate, and how starved was the call?"
+      is now answerable from the books alone.
+- [x] **Failure taxonomy**: benchmark failures classify into refused,
+      no_script, mocked, truncated, bad_interface, missing_dependency,
+      contract_violation, script_error, wrong_answer, built_conversation,
+      timeout, transport — the acceptance axes for Phases 1–4.
 
 **Deliverable:** a reproducible baseline scoreboard checked into
 `benchmarks/`, run against at least one Anthropic and one OpenAI keyed model.
+(The bench and its offline reference are in; the keyed baseline runs are the
+remaining step — `python benchmarks/node_authoring.py` with a key set.)
+
+Two findings the bench surfaced for Phase 4, documented in its docstring:
+production's `_author_verifier` stages no `bindings.json`, so an honest
+function that reads its declared inputs cannot pass the production verify
+hand today; and it mounts no web exchange, so `http_request` raises
+`WebGrantError` there instead of answering the taught status-0 refusal.
 
 ---
 
