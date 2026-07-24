@@ -192,9 +192,11 @@ forever, universal prohibitions never.*
 contiguous-motif mining over the verified trace corpus (failed runs never
 teach), spine-backed candidacy with fresh-count supersession, promotion at
 the doc's thresholds (support ≥5, contexts ≥3), and `skills_for` as the
-route-side reader. Remaining, recorded: replay-against-history + mutation
-testing as the final gate, and marketplace publication of promoted skills
-(`tests/test_skill_induction.py`).
+route-side reader. The replay gate and publication landed in the
+follow-up: `replay_gate` (contradiction budget ≤5%, closedness, order
+significance — every failed bar named) and `publish_skill` through an
+injected contribute door, recording ``skill-published`` with listing
+provenance (`tests/test_skill_induction.py`).
 
 *Repeated verified subgraphs become parameterized skills — the step
 that makes capability compound instead of repeat.*

@@ -148,3 +148,124 @@ def skills_for(spine, *, tenant: str, subject_steps: list[str]) -> list[dict]:
                 if row not in hits:
                     hits.append(row)
     return hits
+
+
+# ---------------------------------------------------------------------- #
+# The final promotion gate — replay against history, mutation testing.    #
+# ---------------------------------------------------------------------- #
+def replay_gate(store, *, steps: list[str]) -> dict:
+    """The deterministic form of capability-web §19's replay-and-mutate,
+    over the same corpus ``orchestrator/replay.py`` audits planners on:
+
+    - **Replay against history:** the motif is re-measured over the
+      FULL corpus as it stands now (including runs recorded since
+      candidacy), and its contradiction rate — runs where the motif's
+      steps all ran but the run still FAILED — must stay within the
+      doc's 5% unexplained-failure budget.
+    - **Mutation — closedness:** a longer motif with the same support
+      means the candidate is a fragment riding its parent's coattails;
+      the parent promotes, the fragment waits.
+    - **Mutation — order significance:** every adjacent swap must be
+      strictly LESS supported, or the "sequence" is a bag with an
+      accidental ordering, not a procedure.
+
+    Returns ``{"passed": bool, "reasons": [...]}`` — every failed bar
+    named, because a gate that says only "no" teaches nothing."""
+    motif = tuple(str(s) for s in steps)
+    reasons: list[str] = []
+
+    def support_of(target: tuple[str, ...], sequences) -> int:
+        count = 0
+        for _goal, keys in sequences:
+            for start in range(len(keys) - len(target) + 1):
+                if tuple(keys[start : start + len(target)]) == target:
+                    count += 1
+                    break
+        return count
+
+    verified = _verified_step_sequences(store)
+    contradicted = 0
+    appearances = 0
+    for run in store.runs():
+        keys = [
+            str(s[0]) if isinstance(s, (list, tuple)) else str(s.node_key)
+            for s in run.steps
+        ]
+        present = any(
+            tuple(keys[i : i + len(motif)]) == motif
+            for i in range(max(0, len(keys) - len(motif) + 1))
+        )
+        if present:
+            appearances += 1
+            if not getattr(run, "success", False):
+                contradicted += 1
+    if appearances and contradicted / appearances > 0.05:
+        reasons.append(
+            f"contradiction rate {contradicted}/{appearances} exceeds the"
+            " 5% unexplained-failure budget"
+        )
+    base = support_of(motif, verified)
+    step_keys = sorted({k for _g, keys in verified for k in keys})
+    for extra in step_keys:
+        for longer in ((extra,) + motif, motif + (extra,)):
+            if support_of(longer, verified) >= base > 0:
+                reasons.append(
+                    f"not closed: {'→'.join(longer)} has equal support —"
+                    " the fragment waits for its parent"
+                )
+                break
+        if reasons and reasons[-1].startswith("not closed"):
+            break
+    for i in range(len(motif) - 1):
+        swapped = list(motif)
+        swapped[i], swapped[i + 1] = swapped[i + 1], swapped[i]
+        if support_of(tuple(swapped), verified) >= base > 0:
+            reasons.append(
+                f"order-insignificant at step {i + 1}: the adjacent swap"
+                " is equally supported — a bag, not a procedure"
+            )
+            break
+    return {"passed": not reasons, "reasons": reasons}
+
+
+def publish_skill(
+    spine, store, *, tenant: str, motif_key: str, contribute
+) -> dict:
+    """Publication — a promoted skill becomes a marketplace node bundle
+    through the injected ``contribute`` door (the gateway/nodeplace owns
+    the actual listing walls). Refuses in words without a promoted
+    skill or past a failed replay gate; success records
+    ``skill-published`` on the spine citing both the skill and the
+    listing."""
+    scope = (tenant, f"motif:{motif_key}")
+    found = spine.recall(scope, kinds=("skill",), limit=1)
+    if not found:
+        return {"published": False, "reason": "no promoted skill for this motif"}
+    skill = found[0]
+    steps = list((skill.get("structured_value") or {}).get("steps", []))
+    verdict = replay_gate(store, steps=steps)
+    if not verdict["passed"]:
+        return {
+            "published": False,
+            "reason": "replay gate failed: " + "; ".join(verdict["reasons"]),
+        }
+    manifest = {
+        "kind": "skill-bundle",
+        "motif": motif_key,
+        "steps": steps,
+        "support": (skill.get("structured_value") or {}).get("support"),
+        "contexts": (skill.get("structured_value") or {}).get("contexts"),
+        "evidence": list(skill.get("provenance") or []),
+    }
+    listing = contribute(manifest)
+    spine.admit(
+        "skill-published",
+        f"skill [{motif_key}] published as a marketplace bundle",
+        scope_ids=scope,
+        verification_state="verified",
+        provenance=(f"memory:{skill['memory_id']}", f"listing:{listing}"),
+        confidence=0.95,
+        structured_value=manifest,
+        source_seat="skill.induction",
+    )
+    return {"published": True, "listing": listing, "manifest": manifest}

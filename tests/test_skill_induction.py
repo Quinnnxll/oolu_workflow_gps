@@ -94,3 +94,75 @@ def test_reinduction_supersedes_the_prior_candidate(tmp_path):
         assert only["structured_value"]["support"] == 3  # fresh counts serve
     finally:
         conn.close()
+
+
+def test_the_replay_gate_passes_a_real_procedure_and_names_failures(tmp_path):
+    store, conn, spine = _rig(tmp_path)
+    try:
+        for goal in ("g1", "g2", "g3", "g4", "g5"):
+            store.record_run(
+                goal=goal,
+                steps=[_ok("route:a"), _ok("route:b"), _ok("route:c")],
+                success=True,
+            )
+        verdict = si.replay_gate(store, steps=["route:a", "route:b", "route:c"])
+        assert verdict["passed"], verdict["reasons"]
+        # A fragment of the procedure is NOT closed — its parent has
+        # equal support, so the fragment waits.
+        fragment = si.replay_gate(store, steps=["route:a", "route:b"])
+        assert not fragment["passed"]
+        assert any("not closed" in r for r in fragment["reasons"])
+    finally:
+        conn.close()
+
+
+def test_contradicted_motifs_fail_the_replay_budget(tmp_path):
+    store, conn, spine = _rig(tmp_path)
+    try:
+        store.record_run(
+            goal="g1", steps=[_ok("route:a"), _ok("route:b")], success=True
+        )
+        for goal in ("g2", "g3"):
+            store.record_run(
+                goal=goal, steps=[_ok("route:a"), _ok("route:b")], success=False
+            )
+        verdict = si.replay_gate(store, steps=["route:a", "route:b"])
+        assert not verdict["passed"]
+        assert any("contradiction rate" in r for r in verdict["reasons"])
+    finally:
+        conn.close()
+
+
+def test_publication_requires_promotion_and_the_gate(tmp_path):
+    store, conn, spine = _rig(tmp_path)
+    try:
+        listings = []
+        contribute = lambda manifest: listings.append(manifest) or f"L{len(listings)}"  # noqa: E731
+
+        refused = si.publish_skill(
+            spine, store, tenant="t1", motif_key="route:a→route:b→route:c",
+            contribute=contribute,
+        )
+        assert not refused["published"] and "no promoted skill" in refused["reason"]
+
+        for goal in ("g1", "g2", "g3", "g4", "g5"):
+            store.record_run(
+                goal=goal,
+                steps=[_ok("route:a"), _ok("route:b"), _ok("route:c")],
+                success=True,
+            )
+        si.induce(store, spine, tenant="t1")
+        si.promote(spine, tenant="t1", motif_key="route:a→route:b→route:c")
+        published = si.publish_skill(
+            spine, store, tenant="t1", motif_key="route:a→route:b→route:c",
+            contribute=contribute,
+        )
+        assert published["published"]
+        assert listings[0]["kind"] == "skill-bundle"
+        assert listings[0]["steps"] == ["route:a", "route:b", "route:c"]
+        (record,) = spine.recall(
+            ("t1", "motif:route:a→route:b→route:c"), kinds=("skill-published",)
+        )
+        assert "listing:L1" in record["provenance"]
+    finally:
+        conn.close()

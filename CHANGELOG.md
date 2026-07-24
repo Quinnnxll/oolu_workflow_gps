@@ -4,6 +4,27 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Memory-stack M4 remainders — the final gate and the marketplace door:
+
+- **`replay_gate`** (``skillinduction.py``): the deterministic form of
+  capability-web §19's replay-and-mutate, over the same corpus the
+  planner audition replays. Replay against history re-measures the
+  motif on the corpus AS IT STANDS (contradiction rate — runs where
+  the motif ran whole but the run failed — within the 5% budget);
+  mutation testing holds closedness (a fragment with an equally
+  supported parent waits for its parent) and order significance
+  (every adjacent swap strictly less supported, or the sequence is a
+  bag, not a procedure). Every failed bar is named — a gate that says
+  only "no" teaches nothing.
+- **`publish_skill`**: a promoted skill becomes a marketplace bundle
+  through an injected contribute door (the gateway/nodeplace owns the
+  listing walls); refuses in words without promotion or past a failed
+  gate, and success records ``skill-published`` on the spine citing
+  both the skill and the listing.
+- **Pinned**: the gate passing a real procedure and naming both
+  failure modes, the contradiction budget, and publication refusing
+  then succeeding with listing provenance on the spine.
+
 Memory-stack M4 — skill induction, the ignition:
 
 - **`src/oolu/skillinduction.py`.** Repeated verified subgraphs become
