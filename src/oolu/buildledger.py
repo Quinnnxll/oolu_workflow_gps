@@ -69,10 +69,18 @@ _STATUSES = ("published", "refused", "declined")
 
 
 class BuildLedger:
-    """Durable build attempts and their lessons, per (tenant, goal_key)."""
+    """Durable build attempts and their lessons, per (tenant, goal_key).
 
-    def __init__(self, conn) -> None:
+    ``spine`` is the atomic memory spine (memoryspine.py, plan M0):
+    when present, every lesson dual-writes there — the writers-bridge-
+    never-fork rule — with the attempt row as provenance, and a publish
+    supersedes the goal's spine lessons exactly as it supersedes the
+    ledger's own. The ledger remains authoritative for build history;
+    the spine is where every tier's memory meets one reader."""
+
+    def __init__(self, conn, *, spine=None) -> None:
         self._conn = conn
+        self._spine = spine
         with self._conn.transaction() as db:
             db.execute(_SCHEMA_ATTEMPTS)
             db.execute(_SCHEMA_LESSONS)
@@ -90,6 +98,7 @@ class BuildLedger:
         states: tuple[str, ...] | list[str] = (),
         node_id: str = "",
         model: str = "",
+        provenance: tuple[str, ...] | list[str] = (),
     ) -> int:
         """One attempt on the record; returns its row id (the provenance
         every lesson cites). A refusal admits a lesson; a publish
@@ -145,6 +154,42 @@ class BuildLedger:
                          AND superseded_by IS NULL""",
                     (attempt_id, tenant, goal_key),
                 )
+        # The spine bridge, outside the ledger's transaction: memory is
+        # advisory, so a spine hiccup never voids the attempt row.
+        if self._spine is not None:
+            try:
+                scope = (tenant, goal_key)
+                if status == "refused" and problem:
+                    self._spine.admit(
+                        "lesson",
+                        (
+                            "a previous attempt at this goal failed birth "
+                            f"verification with: {problem[:400]}"
+                        ),
+                        scope_ids=scope,
+                        verification_state="observed",
+                        provenance=tuple(provenance)
+                        + (f"build-attempt:{attempt_id}",),
+                        confidence=0.8,
+                        source_seat="node.build",
+                    )
+                elif status == "published":
+                    closing = self._spine.admit(
+                        "lesson-closed",
+                        f"the goal published as node {node_id or 'unknown'}"
+                        " — its earlier warnings no longer apply",
+                        scope_ids=scope,
+                        verification_state="observed",
+                        provenance=tuple(provenance)
+                        + (f"build-attempt:{attempt_id}",),
+                        confidence=0.9,
+                        source_seat="node.build",
+                    )
+                    self._spine.supersede_scope(
+                        scope, memory_type="lesson", by=closing
+                    )
+            except Exception:  # noqa: BLE001 - memory is advisory
+                pass
         return attempt_id
 
     # ------------------------------------------------------------------ #

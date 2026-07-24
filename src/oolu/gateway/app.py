@@ -5627,20 +5627,34 @@ class GatewayApp:
                     )
                 )
 
-        # The goal's standing lessons from the build ledger: warnings
-        # born from real refused attempts, superseded the moment a later
-        # publish closes the book — a build interrupted by days of other
-        # work resumes knowing what already failed.
+        # The goal's standing lessons — read from the atomic memory
+        # spine (the one reader, plan M0), where superseded and expired
+        # records are excluded by the query's shape, not a caller's
+        # discipline; the ledger remains the fallback for hosts whose
+        # spine could not open.
         lessons: list[str] = []
-        ledger = self._build_ledger()
-        if ledger is not None:
+        goal_key = self._function_skill_id(session.tenant_id, goal)
+        spine = self._memory_spine()
+        if spine is not None:
             try:
-                lessons = ledger.lessons_for(
-                    session.tenant_id,
-                    self._function_skill_id(session.tenant_id, goal),
-                )
+                lessons = [
+                    m["statement"]
+                    for m in spine.recall(
+                        (session.tenant_id, goal_key),
+                        goal,
+                        kinds=("lesson",),
+                        limit=3,
+                    )
+                ]
             except Exception:  # noqa: BLE001 - memory is advisory
                 lessons = []
+        if not lessons:
+            ledger = self._build_ledger()
+            if ledger is not None:
+                try:
+                    lessons = ledger.lessons_for(session.tenant_id, goal_key)
+                except Exception:  # noqa: BLE001 - memory is advisory
+                    lessons = []
 
         pack = ContextPackCompiler(window=window, embedder=embedder).compile(
             goal,
@@ -5690,11 +5704,32 @@ class GatewayApp:
 
     def _ledger_note(self, tenant: str, goal_key: str, goal: str, **kwargs) -> None:
         """One build outcome onto the ledger — advisory memory, so a
-        broken ledger never breaks a build."""
+        broken ledger never breaks a build. Refusals first land a
+        ``model.memory`` event on the hash-chained audit log, and its
+        id rides as the lesson's provenance: every memory answers
+        "where did you come from" with a link the chain can verify."""
         ledger = self._build_ledger()
         if ledger is None:
             return
         try:
+            if kwargs.get("status") == "refused":
+                record = self._durable.audit.append(
+                    "model.memory",
+                    {
+                        "kind": "build-lesson",
+                        "tenant": tenant,
+                        "goal_key": goal_key,
+                        "problem": str(kwargs.get("problem", ""))[:400],
+                    },
+                )
+                audit_id = getattr(record, "entry_id", None) or getattr(
+                    record, "id", ""
+                )
+                if audit_id:
+                    kwargs = {
+                        **kwargs,
+                        "provenance": (f"audit:{audit_id}",),
+                    }
             ledger.record(tenant, goal_key, goal, **kwargs)
         except Exception:  # noqa: BLE001 - memory is advisory
             pass
@@ -5715,10 +5750,30 @@ class GatewayApp:
         try:
             from ..buildledger import BuildLedger
 
-            self._build_ledger_obj = BuildLedger(conn)
+            self._build_ledger_obj = BuildLedger(
+                conn, spine=self._memory_spine()
+            )
         except Exception:  # noqa: BLE001 - memory is advisory, never fatal
             return None
         return self._build_ledger_obj
+
+    def _memory_spine(self):
+        """The atomic memory spine (memoryspine.py, plan M0), lazily on
+        the same durable connection — the one table every memory tier's
+        records meet, and the one reader the context pack consults."""
+        cached = getattr(self, "_memory_spine_obj", None)
+        if cached is not None:
+            return cached
+        conn = getattr(self._durable, "conn", None)
+        if conn is None or not hasattr(conn, "transaction"):
+            return None
+        try:
+            from ..memoryspine import MemorySpine
+
+            self._memory_spine_obj = MemorySpine(conn)
+        except Exception:  # noqa: BLE001 - memory is advisory, never fatal
+            return None
+        return self._memory_spine_obj
 
     @staticmethod
     def _birth_problem(script: str, io: dict) -> str | None:

@@ -4,6 +4,31 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Memory-stack M0 — the atomic memory spine:
+
+- **`src/oolu/memoryspine.py`.** The BuildLedger pattern promoted to
+  the platform's memory contract: one table for every tier's records —
+  type, statement, structured value, scope, validity, confidence,
+  verification state, provenance, supersession. Three structural laws:
+  admission is earned (``observed`` and better REQUIRE provenance;
+  only ``proposed`` arrives bare), supersession is a WHERE clause (a
+  corrected value cannot re-enter an executable context by oversight —
+  the exclusion is the query's shape, not a caller's discipline), and
+  history is never erased.
+- **Writers bridge, never fork.** The BuildLedger dual-writes its
+  lessons onto the spine with double provenance — the hash-chained
+  audit event the gateway now appends on every refusal
+  (``model.memory``) plus the attempt row — and a publish supersedes
+  the goal's spine lessons exactly as it supersedes the ledger's own.
+- **One reader.** The build context pack's lessons come spine-first
+  (scope-walled, validity-filtered, ranked by the shared retrieval
+  scorer), with the ledger as fallback. The loop-closure test drives
+  the full circle through the real build door: refusal → audit event →
+  spine lesson → retry's pack → publish closes the book everywhere.
+- **Pinned** by ``tests/test_memory_spine.py``: earned admission,
+  structural supersession, expiry, scope walls, ranked recall, the
+  dual-write bridge, and the gateway loop.
+
 The memory-stack build plan — phases for the atomic chain reaction:
 
 - **`docs/memory-stack-plan.md`.** The building phases for the

@@ -68,6 +68,12 @@ route learning stops at context-free posteriors.
 
 ### Phase M0 — the atomic memory spine (generalize what Phase 5 proved)
 
+**Status: LANDED** — `src/oolu/memoryspine.py`; the BuildLedger dual-writes
+lessons with audit-chain + attempt-row provenance; the gateway reads packs
+spine-first; the loop-closure test drives refusal → spine → retry pack →
+publish-supersedes through the real build door
+(`tests/test_memory_spine.py`).
+
 *The `BuildLedger` pattern — durable rows, provenance, lessons,
 supersede-on-correction — promoted from one seat's memory to the
 platform's memory contract.*
