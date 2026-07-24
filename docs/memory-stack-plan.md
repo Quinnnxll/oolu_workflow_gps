@@ -129,6 +129,15 @@ a projection, never a transcript summary.*
 
 ### Phase M2 — episodic memory and hierarchical summaries
 
+**Status: LANDED (core)** — `src/oolu/episodes.py` rides the M0 spine (no
+new store): episodes verbatim with provenance, extractive summaries citing
+their episodes and superseding only each other, read-side invalidation
+(a stale summary NEVER serves). The build door writes episodes for both
+outcomes; the chat window names its own truncation with the earliest
+dropped user asks verbatim. Remaining: the persisted-thread source for
+chat (client-contract change) and project-level rollups as volume demands
+(`tests/test_episodes.py`).
+
 *The first real compaction in the codebase — under the standing law
 that commitments survive verbatim.*
 

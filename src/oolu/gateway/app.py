@@ -1659,7 +1659,24 @@ class GatewayApp:
                         say=built, source="tool", actions=[{"tool": "build_node"}]
                     )
         if turn is None:
-            recent = [h for h in history if isinstance(h, dict)][-20:]
+            cleaned = [h for h in history if isinstance(h, dict)]
+            recent = cleaned[-20:]
+            # Server-side conversation truth, first step (plan M2): when
+            # the window drops older turns, the drop is NAMED and the
+            # earliest standing user asks survive verbatim — commitments
+            # outlive compaction instead of vanishing silently.
+            dropped = [
+                str(h.get("content", ""))
+                for h in cleaned[:-20]
+                if h.get("role") == "user" and str(h.get("content", "")).strip()
+            ]
+            if dropped:
+                context_note = (
+                    context_note
+                    + "\nEarlier in this conversation, beyond the visible "
+                    "window, the user said (oldest first): "
+                    + " | ".join(d[:160] for d in dropped[:3])
+                )
             if emit is not None:
                 # Stream the model's reasoning to the client as it thinks;
                 # the finalized turn is still built from the complete text.
@@ -5734,6 +5751,27 @@ class GatewayApp:
                         "provenance": (f"audit:{audit_id}",),
                     }
             ledger.record(tenant, goal_key, goal, **kwargs)
+            # The episode writer (plan M2): the same outcome lands as a
+            # stretch-of-work record on the spine — objective, outcome,
+            # unresolved problem verbatim — so a project interrupted for
+            # weeks restores from the stack, not a transcript.
+            spine = self._memory_spine()
+            status = str(kwargs.get("status", ""))
+            if spine is not None and status in ("published", "refused"):
+                from ..episodes import record_episode
+
+                problem = str(kwargs.get("problem", ""))
+                record_episode(
+                    spine,
+                    tenant=tenant,
+                    subject=goal_key,
+                    kind="build",
+                    objective=goal,
+                    outcome=status,
+                    unresolved=(problem,) if problem else (),
+                    sources=tuple(kwargs.get("provenance", ()))
+                    or (f"goal:{goal_key}",),
+                )
         except Exception:  # noqa: BLE001 - memory is advisory
             pass
 

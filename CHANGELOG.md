@@ -4,6 +4,29 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Memory-stack M2 — episodic memory, summaries, overflow truth:
+
+- **`src/oolu/episodes.py`.** Episodes are atomic memories on the M0
+  spine — no new store, which is the point of a spine. Summaries are
+  DERIVED and extractive (no model, no paraphrase, never global): the
+  newest objective and outcome, every open unresolved item VERBATIM —
+  commitments survive compaction — citing the episode rows compressed,
+  superseding only prior summaries. Invalidation is read-side law:
+  a summary older than its subject's newest episode never serves.
+- **The build door writes episodes** for publishes and refusals alike,
+  so a project interrupted for weeks restores its objective, latest
+  outcome, and open problem from the stack — the capability-web exit
+  test, landed for builds.
+- **The window names its own truncation.** When chat history overflows
+  the 20-turn window, the earliest dropped user asks ride into the
+  context note verbatim instead of vanishing silently — the first step
+  of server-side conversation truth, with the persisted-thread source
+  still open (it touches the client contract).
+- **Pinned** by ``tests/test_episodes.py``: citation and supersession,
+  the never-serve-stale law, verbatim commitments, the interrupted-
+  project restore through the real build door, and the overflow note
+  present exactly when history overflows.
+
 Memory-stack M1 — the temporal graph and state projections:
 
 - **`src/oolu/temporalgraph.py`.** Relations get what facts got in M0:
