@@ -4,6 +4,25 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Memory-stack M3 — negative knowledge, first-class:
+
+- **`src/oolu/negative.py`.** Failure records ride the spine,
+  dual-scoped to their goal AND their mechanism, carrying
+  applicability conditions, reproduction counts (recurrence supersedes
+  with the count raised — evidence promotes), and reopen conditions.
+- **The graduated pre-commitment check.** One failure never blocks —
+  the lesson rides and the retry proceeds. A REPRODUCED failure blocks
+  an identical retry at the build door BEFORE any authoring spend,
+  naming the failure and what would make a retest material; a
+  different model in the seat or a matched reopen condition allows the
+  retest with the difference named. Never an unjustified universal
+  prohibition. A publish resolves the goal's failure records the way
+  it closes its lessons: superseded, never erased.
+- **Pinned** by ``tests/test_negative_knowledge.py``: the graduation,
+  block/allow/reopen verdicts, the mechanism twin, the gate refusing
+  the third identical attempt with zero model calls, and
+  publish-resolves.
+
 Memory-stack M2 — episodic memory, summaries, overflow truth:
 
 - **`src/oolu/episodes.py`.** Episodes are atomic memories on the M0

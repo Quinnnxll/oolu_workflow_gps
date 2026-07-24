@@ -3379,6 +3379,22 @@ class GatewayApp:
                 "function, and no model is configured to write it — "
                 "add a model key (or a local model) in Settings"
             )
+        # The negative-knowledge check (plan M3), before any authoring
+        # spend: a REPRODUCED failure blocks an identical retry in words;
+        # one failure never blocks, and a material difference (another
+        # model in the seat, a reopen condition) allows the retest.
+        spine_now = self._memory_spine()
+        if spine_now is not None:
+            from ..negative import negative_check
+
+            verdict = negative_check(
+                spine_now,
+                tenant=session.tenant_id,
+                subject=skill_id,
+                context={"model": self._author_model_id(author)},
+            )
+            if verdict.get("blocked"):
+                return f"error: {verdict['reason']}"
         # Writing the function is the expensive step; meter it so the user
         # sees what building the node actually drew (the resource question).
         meter = getattr(self, "_model_meter", None)
@@ -5772,6 +5788,19 @@ class GatewayApp:
                     sources=tuple(kwargs.get("provenance", ()))
                     or (f"goal:{goal_key}",),
                 )
+                if status == "refused" and problem:
+                    from ..negative import record_failure
+
+                    record_failure(
+                        spine,
+                        tenant=tenant,
+                        subject=goal_key,
+                        problem=problem,
+                        applicability={
+                            "model": str(kwargs.get("model", ""))
+                        },
+                        sources=tuple(kwargs.get("provenance", ())),
+                    )
         except Exception:  # noqa: BLE001 - memory is advisory
             pass
 

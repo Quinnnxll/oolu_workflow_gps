@@ -188,6 +188,9 @@ class BuildLedger:
                     self._spine.supersede_scope(
                         scope, memory_type="lesson", by=closing
                     )
+                    self._spine.supersede_scope(
+                        scope, memory_type="failure", by=closing
+                    )
             except Exception:  # noqa: BLE001 - memory is advisory
                 pass
         return attempt_id

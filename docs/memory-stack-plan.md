@@ -159,6 +159,14 @@ that commitments survive verbatim.*
 
 ### Phase M3 — negative knowledge, first-class
 
+**Status: LANDED** — `src/oolu/negative.py`: failure records on the spine,
+dual-scoped (goal + mechanism), with applicability, reproduction counts,
+and reopen conditions. The check is graduated: one failure warns, a
+reproduced failure blocks an IDENTICAL retry at the build door before any
+authoring spend, a material difference or reopen condition allows the
+retest with the difference named; a publish resolves the goal's records
+(`tests/test_negative_knowledge.py`).
+
 *Failures become scoped records with applicability conditions — useful
 forever, universal prohibitions never.*
 
