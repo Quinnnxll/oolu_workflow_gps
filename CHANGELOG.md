@@ -4,6 +4,38 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Context-harness Phase 5 — memory and continuity:
+
+- **The build ledger** (``src/oolu/buildledger.py``). A build that
+  fails birth verification used to be forgotten the moment the turn
+  ended; the retry started from zero, free to repeat the exact mistake
+  that sank it. Every build outcome is now a durable row — goal,
+  script, problem, transaction states — on the same connection every
+  other promise rides, surviving unrelated turns, restarts, and
+  processes. Refusals admit LESSONS citing their attempt row (the
+  provenance); the lessons enter the next attempt's context pack
+  through the Phase 3 lessons port, now wired; and a publish
+  SUPERSEDES the goal's open lessons — corrections beat stale
+  warnings, and the ledger never forgets, it only supersedes.
+- **One retrieval scorer, seamed** (``src/oolu/retrieval.py``). The
+  context pack's example ranking and the representative's voice recall
+  now share one scorer — words plus character trigrams, so
+  "normalizing invoices" recalls "normalize invoice csv" with no
+  stemmer and no dependency — behind the ``Embedder`` protocol a
+  model-backed index implements to upgrade every consumer at once. The
+  representative keeps its stricter silence gate: no shared words, no
+  memory, whatever the trigrams think.
+- **Focus, shaped around a consent invariant.** The growth offer still
+  lives for exactly one message — consent detached from its question
+  is not consent, and that wall stands. What survives an interruption
+  is the WORK: the spec's "daily chat interrupts coding" scenario now
+  passes end to end — a failing build, unrelated turns between, and a
+  retry whose context pack names exactly what already failed.
+- **Pinned** by ``tests/test_memory_continuity.py``: the scorer's
+  properties and seam, lesson provenance, supersession-on-publish,
+  ledger durability across connections, tenant walls, and both
+  gateway-level acceptance scenarios.
+
 Context-harness Phase 4 — verify at birth:
 
 - **The birth-verify primitive**

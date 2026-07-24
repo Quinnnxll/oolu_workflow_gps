@@ -35,34 +35,19 @@ belongs.
 from __future__ import annotations
 
 import json
-import math
-import re
-from collections import Counter
 from dataclasses import dataclass
 
 from .providers.tokens import estimate_tokens
-
-_WORD_RE = re.compile(r"[a-z0-9]+")
-
-
-def _bag(text: str) -> Counter:
-    return Counter(_WORD_RE.findall(str(text or "").lower()))
+from .retrieval import score as _retrieval_score
 
 
 def similarity(a: str, b: str) -> float:
-    """Token-overlap cosine between two texts — 0.0 (disjoint) to 1.0
-    (identical bags). Deterministic and cheap; the retrieval floor the
-    embedding index will one day raise, behind the same call."""
-    bag_a, bag_b = _bag(a), _bag(b)
-    if not bag_a or not bag_b:
-        return 0.0
-    dot = sum(count * bag_b[word] for word, count in bag_a.items())
-    if dot == 0:
-        return 0.0
-    norm = math.sqrt(sum(c * c for c in bag_a.values())) * math.sqrt(
-        sum(c * c for c in bag_b.values())
-    )
-    return dot / norm
+    """How alike two texts are — delegated to the ONE retrieval scorer
+    every recall site shares (``oolu.retrieval``, Phase 5): words plus
+    character trigrams, deterministic and dependency-free, behind the
+    Embedder seam a model-backed index replaces for all consumers at
+    once."""
+    return _retrieval_score(a, b)
 
 
 @dataclass(frozen=True)

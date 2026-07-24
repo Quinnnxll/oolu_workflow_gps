@@ -3414,6 +3414,15 @@ class GatewayApp:
                 transaction.append(validated)
                 break
             if repair_rounds >= 2:
+                self._ledger_note(
+                    session.tenant_id,
+                    skill_id,
+                    goal,
+                    status="refused",
+                    script=script,
+                    problem=problem,
+                    states=transaction,
+                )
                 return (
                     "error: the function failed birth verification — "
                     f"{problem} — and repair could not close the gap, so "
@@ -3425,6 +3434,15 @@ class GatewayApp:
                 author, goal, script, problem
             )
             if not edited:
+                self._ledger_note(
+                    session.tenant_id,
+                    skill_id,
+                    goal,
+                    status="refused",
+                    script=script,
+                    problem=problem,
+                    states=transaction,
+                )
                 return (
                     "error: the function failed birth verification — "
                     f"{problem} — and the model produced no usable repair, "
@@ -3499,6 +3517,17 @@ class GatewayApp:
         except (ContributionError, OwnershipError, ValueError) as exc:
             return f"error: {exc}"
         new_id = result.node.node_id
+        # The publish closes the book: this goal's open lessons are
+        # superseded on the ledger — a warning about a problem that no
+        # longer exists must never enter another context pack.
+        self._ledger_note(
+            session.tenant_id,
+            skill_id,
+            goal,
+            status="published",
+            states=tuple(transaction) + ("published",),
+            node_id=new_id,
+        )
         # The function becomes a FILE the human can open: src/main.py in
         # the node's own drawer — written through the node.build SEAT, so
         # the write is scope-checked, attested, and audited like every
@@ -5440,8 +5469,6 @@ class GatewayApp:
         )
 
         catalog = self._author_catalog(session)
-        if not catalog:
-            return ""
         window = 32_000
         manifest = getattr(author, "manifest_now", None)
         if callable(manifest):
@@ -5492,8 +5519,27 @@ class GatewayApp:
                     )
                 )
 
+        # The goal's standing lessons from the build ledger: warnings
+        # born from real refused attempts, superseded the moment a later
+        # publish closes the book — a build interrupted by days of other
+        # work resumes knowing what already failed.
+        lessons: list[str] = []
+        ledger = self._build_ledger()
+        if ledger is not None:
+            try:
+                lessons = ledger.lessons_for(
+                    session.tenant_id,
+                    self._function_skill_id(session.tenant_id, goal),
+                )
+            except Exception:  # noqa: BLE001 - memory is advisory
+                lessons = []
+
         pack = ContextPackCompiler(window=window).compile(
-            goal, catalog=catalog, examples=examples, upstream=upstream
+            goal,
+            catalog=catalog,
+            examples=examples,
+            upstream=upstream,
+            lessons=lessons,
         )
         if not pack.empty:
             # The per-call trace the plan's observability starts from:
@@ -5505,6 +5551,38 @@ class GatewayApp:
                 list(pack.excluded),
             )
         return pack.text
+
+    def _ledger_note(self, tenant: str, goal_key: str, goal: str, **kwargs) -> None:
+        """One build outcome onto the ledger — advisory memory, so a
+        broken ledger never breaks a build."""
+        ledger = self._build_ledger()
+        if ledger is None:
+            return
+        try:
+            ledger.record(tenant, goal_key, goal, **kwargs)
+        except Exception:  # noqa: BLE001 - memory is advisory
+            pass
+
+    def _build_ledger(self):
+        """The durable build ledger (buildledger.py), lazily over the
+        same connection every other promise rides — a failed build's
+        state survives unrelated turns, restarts, and processes, and its
+        lessons feed the next attempt's context pack. None only when the
+        durable service carries no usable connection (exotic test
+        doubles) — the door then simply builds without memory."""
+        cached = getattr(self, "_build_ledger_obj", None)
+        if cached is not None:
+            return cached
+        conn = getattr(self._durable, "conn", None)
+        if conn is None or not hasattr(conn, "transaction"):
+            return None
+        try:
+            from ..buildledger import BuildLedger
+
+            self._build_ledger_obj = BuildLedger(conn)
+        except Exception:  # noqa: BLE001 - memory is advisory, never fatal
+            return None
+        return self._build_ledger_obj
 
     @staticmethod
     def _birth_problem(script: str, io: dict) -> str | None:

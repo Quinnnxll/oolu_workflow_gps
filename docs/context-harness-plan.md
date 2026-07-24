@@ -412,30 +412,48 @@ read off the keyed runs.
 *Objective: the spec's memory layers and write-back, so effort compounds
 across turns and runs instead of restarting from zero.*
 
-- [ ] **Task ledger for builds.** A build interrupted by chat, a question, or
-      a decline resumes with goal, acceptance criteria, partial script, and
-      error ledger intact — the spec's `task_ledger`, persisted through the
-      existing durable stores (`durable/records.py`), not the model's
-      transcript.
-- [ ] **Write-back with provenance.** After each verified build/repair,
-      admit structured records: new error patterns, dependency hints
-      (extending `knowledge/client.py`), and "lessons" scoped to the node —
-      each carrying source event ids and confidence, per the spec's admission
-      policy. Superseded values are excluded from future packs (corrections
-      beat stale summaries).
-- [ ] **Semantic recall upgrades.** Replace token-overlap cosine in
-      representative recall (`representative/memory.py:57-88`) and power the
-      Phase 3 node-library index with a real embedding index — one retrieval
-      service, three consumers (authoring examples, chat recall,
-      representative voice).
-- [ ] **Focus discipline in chat.** A side question during a build creates a
-      temporary episode and returns — the spec's interrupt stack — so the
-      build context pack is not diluted by unrelated turns.
+- [x] **Task ledger for builds** (`src/oolu/buildledger.py`). Every build
+      outcome is a durable row — goal, script, problem, transaction states —
+      through the same `DurableConnection` every other promise rides, never
+      the model's transcript. A failed build's state survives unrelated
+      turns, restarts, and processes; the gateway records refusals and
+      publishes at the gate (`_ledger_note`), lazily over
+      `self._durable.conn` with zero constructor plumbing.
+- [x] **Write-back with provenance and supersession.** A refused attempt
+      admits a lesson citing its attempt row (the provenance); the lessons
+      feed the next attempt's context pack through the Phase 3 `lessons`
+      port (now wired); and a PUBLISH supersedes the goal's open lessons —
+      corrections beat stale warnings, and the ledger never forgets, it only
+      supersedes. (Dependency-hint write-back into `knowledge/client.py`
+      from birth-verify heals remains open — the gateway does not hold a
+      knowledge client today.)
+- [x] **Semantic recall upgrades — one scorer, seamed**
+      (`src/oolu/retrieval.py`). Words plus character trigrams behind the
+      `Embedder` protocol: `contextpack.similarity` and the representative's
+      recall both delegate to it (the representative keeps its own stricter
+      silence gate — no shared words, no memory), so "normalizing invoices"
+      finally recalls "normalize invoice csv". A model-backed embedding
+      index implements `Embedder` and upgrades every consumer at once; that
+      model integration itself is the remaining half of this box.
+- [x] **Focus discipline, shaped around a consent invariant.** The growth
+      offer deliberately still lives for exactly one message ("consent
+      detached from the question it answered is not consent" — that wall
+      stands). What survives an interruption is the WORK: the failed
+      attempt's state in the ledger, rehydrated into the pack the moment the
+      user returns to the goal — the interrupt stack for the thing that
+      actually needed one.
+- [ ] **Server-side conversation truth** (carried from Phase 3): feed chat
+      turns from the persisted `AssistantHistoryStore` rather than the
+      client's last-20 window, with an overflow note preserving the earliest
+      standing instructions verbatim — still open; it touches the desktop
+      client's pinned `/v1` contract and deserves its own change.
 
-**Acceptance:** the spec's scenarios pass as tests: "daily chat interrupts
-coding → build resumes with plan and unresolved error intact"; "user corrects
-an earlier requirement → old value superseded and excluded from executable
-context."
+**Acceptance:** the spec's first scenario passes as a test
+(`tests/test_memory_continuity.py`): daily chat interrupts a failing build
+and the retry resumes knowing exactly what already failed; the supersession
+scenario passes as "a publish clears the warning from future packs." The
+requirement-correction scenario rides the same supersession rule and lands
+fully with server-side conversation truth.
 
 ---
 

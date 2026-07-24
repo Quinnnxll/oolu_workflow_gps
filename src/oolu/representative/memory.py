@@ -1,9 +1,14 @@
 """What the user has actually said: fuzzy recall over remembered exchanges.
 
 The port allows a real embedding index later; the default is deliberately
-dependency-free — normalized token-set cosine over the store's most recent
-exchanges, scored in Python. A person's message history is human-sized;
-this stays fast well past the point where an adapter is worth training.
+dependency-free. Ranking now rides the ONE retrieval scorer every recall
+site shares (``oolu.retrieval``, context-harness plan Phase 5 — words
+plus character trigrams, so "invoices" recalls "invoice"), behind the
+same Embedder seam a model-backed index replaces for all consumers at
+once. The silence gate stays local and stricter: an exchange that shares
+no normalized WORDS with the message is never a hit, whatever the
+trigrams think. A person's message history is human-sized; this stays
+fast well past the point where an adapter is worth training.
 """
 
 from __future__ import annotations
@@ -57,9 +62,12 @@ class StoreExchangeMemory:
     def recall(
         self, scope: str, text: str, *, k: int = 4, peer: str | None = None
     ) -> list[RecallHit]:
+        from ..retrieval import score as retrieval_score
+
         query = _tokens(text)
         if not query:
             return []
+        normalized_query = normalize_message(text)
         hits: list[RecallHit] = []
         for row in self._store.exchanges(scope, limit=self._candidate_limit):
             document = _tokens(row["prompt_text"])
@@ -67,10 +75,15 @@ class StoreExchangeMemory:
                 continue
             shared = len(query & document)
             if shared == 0:
+                # The silence gate: no shared words, no memory — however
+                # the trigrams lean.
                 continue
-            # Cosine over binary token vectors: symmetric, and long
-            # messages don't win just by mentioning everything.
-            score = shared / (len(query) * len(document)) ** 0.5
+            # The shared scorer ranks: words plus character trigrams,
+            # symmetric, and long messages don't win by mentioning
+            # everything.
+            score = retrieval_score(
+                normalized_query, normalize_message(row["prompt_text"])
+            )
             row_peer = str(row["peer"] or "")
             if peer and row_peer != peer:
                 score *= CROSS_PEER_DISCOUNT
