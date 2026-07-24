@@ -106,11 +106,15 @@ def test_a_wire_true_brain_earns_the_seat_and_pays_its_way(tmp_path):
     assert sum(c.cost for c in charges) > 0
 
     # The wire is honest Anthropic shape: the planner's protocol rides
-    # as the system PARAMETER, the key in its one header, and the
-    # kernel's feedback reached the model as conversation turns.
+    # as the system PARAMETER — carried as a block with the prompt-cache
+    # breakpoint on it since Phase 1 — the key in its one header, and
+    # the kernel's feedback reached the model as conversation turns.
     first = wire.requests[0]
     assert "/messages" in first["url"]
-    assert "planning seat" in first["body"]["system"]
+    system_blocks = first["body"]["system"]
+    assert isinstance(system_blocks, list)
+    assert any("planning seat" in b.get("text", "") for b in system_blocks)
+    assert system_blocks[0]["cache_control"] == {"type": "ephemeral"}
     assert first["headers"]["x-api-key"] == "sk-ant-0123456789"
     last = wire.requests[-1]
     assert any(

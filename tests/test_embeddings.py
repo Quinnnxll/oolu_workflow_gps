@@ -13,8 +13,8 @@ from __future__ import annotations
 import pytest
 
 from oolu.contextpack import ContextPackCompiler
-from oolu.providers.base import ProviderResponse
 from oolu.providers.apikey import OpenAiAdapter
+from oolu.providers.base import ProviderResponse
 from oolu.providers.embeddings import (
     DEFAULT_OPENAI_EMBEDDING_MODEL,
     ModelEmbedder,

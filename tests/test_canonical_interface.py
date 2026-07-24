@@ -333,7 +333,7 @@ def test_parse_node_io_checked_names_the_problem():
 # The bench dispatch honors the manifest port                                  #
 # --------------------------------------------------------------------------- #
 def test_the_bench_routes_a_manifestless_tool_speaker_one_shot():
-    from node_authoring import BenchScriptRunner, GOALS, author_goal
+    from node_authoring import GOALS, BenchScriptRunner, author_goal
 
     class OneShotByManifest:
         """Has consult (as every router does) but the manifest port says
