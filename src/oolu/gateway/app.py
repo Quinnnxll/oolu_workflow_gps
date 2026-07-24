@@ -5490,6 +5490,74 @@ class GatewayApp:
         already_verified = verify is not None and authored.script is not None
         return authored.script, authored.io, authored.refusal, already_verified
 
+    def _author_embedder(self, session):
+        """The model-backed embedder for authoring recall, when the
+        operator turned it on — ``OOLU_EMBEDDINGS=openai`` (the tenant's
+        keyed adapter) or ``local`` (the machine's own OpenAI-compatible
+        server), ``OOLU_EMBEDDING_MODEL`` naming the model. Off, unset,
+        unkeyed, or broken all mean None: ranking stays lexical, builds
+        never wait on an embedding endpoint that isn't there."""
+        import os
+
+        choice = os.environ.get("OOLU_EMBEDDINGS", "").strip().lower()
+        if choice in ("", "off"):
+            return None
+        cache = getattr(self, "_embedders", None)
+        if cache is None:
+            cache = self._embedders = {}
+        key = (session.tenant_id, choice)
+        if key in cache:
+            return cache[key]
+        embedder = None
+        try:
+            from ..providers.apikey import OpenAiAdapter
+            from ..providers.embeddings import (
+                DEFAULT_OPENAI_EMBEDDING_MODEL,
+                ModelEmbedder,
+                openai_embedding_fn,
+            )
+            from ..providers.vault import SecretVault
+
+            transport = self._model_transport
+            if transport is None:
+                from ..providers.transport import HttpxTransport
+
+                transport = HttpxTransport()
+            adapter = None
+            model = os.environ.get("OOLU_EMBEDDING_MODEL", "").strip()
+            if choice == "openai" and self._model_keys is not None:
+                secret = self._model_keys.secret_for(session.tenant_id, "openai")
+                if secret:
+                    vault = SecretVault()
+                    adapter = OpenAiAdapter(
+                        vault=vault,
+                        transport=transport,
+                        api_key_ref=vault.put(secret, kind="api_key"),
+                    )
+                    model = model or DEFAULT_OPENAI_EMBEDDING_MODEL
+            elif choice == "local" and self._settings is not None:
+                url = str(
+                    self._settings.effective(session.tenant_id).get(
+                        "model.local_url", ""
+                    )
+                ).strip().rstrip("/")
+                if url and model:
+                    vault = SecretVault()
+                    adapter = OpenAiAdapter(
+                        vault=vault,
+                        transport=transport,
+                        api_key_ref=vault.put("local", kind="api_key"),
+                        base_url=url,
+                    )
+            if adapter is not None:
+                embedder = ModelEmbedder(
+                    openai_embedding_fn(adapter, model=model)
+                )
+        except Exception:  # noqa: BLE001 - recall stays lexical, never fatal
+            embedder = None
+        cache[key] = embedder
+        return embedder
+
     def _author_context(self, session, author, goal: str) -> str:
         """The compiled desk pack for one build (contextpack.py): slot
         vocabulary, upstream shapes for nodes the goal names, similar
@@ -5498,11 +5566,15 @@ class GatewayApp:
         so the author starts informed instead of writing blind. An empty
         desk (or a missing nodeplace) compiles nothing and the build
         proceeds exactly as before."""
-        from ..contextpack import (
-            ContextPackCompiler,
-            NodeExample,
-            similarity as _pack_similarity,
-        )
+        from ..contextpack import ContextPackCompiler, NodeExample
+        from ..retrieval import score as _pack_score
+
+        # Model-backed when the operator configured one; lexical always
+        # otherwise — same seam, same call, per the retrieval contract.
+        embedder = self._author_embedder(session)
+
+        def _pack_similarity(a: str, b: str) -> float:
+            return _pack_score(a, b, embedder=embedder)
 
         catalog = self._author_catalog(session)
         window = 32_000
@@ -5570,7 +5642,7 @@ class GatewayApp:
             except Exception:  # noqa: BLE001 - memory is advisory
                 lessons = []
 
-        pack = ContextPackCompiler(window=window).compile(
+        pack = ContextPackCompiler(window=window, embedder=embedder).compile(
             goal,
             catalog=catalog,
             examples=examples,

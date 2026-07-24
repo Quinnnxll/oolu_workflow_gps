@@ -427,14 +427,19 @@ across turns and runs instead of restarting from zero.*
       supersedes. (Dependency-hint write-back into `knowledge/client.py`
       from birth-verify heals remains open — the gateway does not hold a
       knowledge client today.)
-- [x] **Semantic recall upgrades — one scorer, seamed**
-      (`src/oolu/retrieval.py`). Words plus character trigrams behind the
-      `Embedder` protocol: `contextpack.similarity` and the representative's
-      recall both delegate to it (the representative keeps its own stricter
-      silence gate — no shared words, no memory), so "normalizing invoices"
-      finally recalls "normalize invoice csv". A model-backed embedding
-      index implements `Embedder` and upgrades every consumer at once; that
-      model integration itself is the remaining half of this box.
+- [x] **Semantic recall upgrades — one scorer, seamed AND filled**
+      (`src/oolu/retrieval.py` + `src/oolu/providers/embeddings.py`). Words
+      plus character trigrams behind the `Embedder` protocol:
+      `contextpack.similarity` and the representative's recall both delegate
+      to it (the representative keeps its own stricter silence gate). The
+      model half is in: `ModelEmbedder` fills the seam over the OpenAI-shaped
+      `/embeddings` wire — hosted key or any local OpenAI-compatible server,
+      through the same authenticated adapter pipeline — cached per process,
+      fail-open to lexical, self-silencing after consecutive endpoint
+      failures. Opt in with `OOLU_EMBEDDINGS=openai|local` (+
+      `OOLU_EMBEDDING_MODEL`); the compiler's ranking and the gateway's
+      example retrieval obey it, and ranking stays lexical the instant
+      anything is missing or broken — recall is advisory, builds never wait.
 - [x] **Focus discipline, shaped around a consent invariant.** The growth
       offer deliberately still lives for exactly one message ("consent
       detached from the question it answered is not consent" — that wall
@@ -498,6 +503,18 @@ interface (Phase 2) makes models interchangeable mid-task.*
 **Acceptance:** provider failover mid-build loses no state (Phase 2's
 canonical-state test); per-model FIT lines publish to the scoreboard; the
 success and cost-per-verified trends are read off the recorded runs.
+
+## The arc's before/after
+
+`python benchmarks/harness_delta.py` prints the measurable half of the
+before/after — every model-independent number the six phases changed,
+computed live from the current machinery (ceilings, budgets, pushed-context
+tokens, gates, repair rounds, memory, backoff, caching, dispatch). The model
+half is two keyed commands away, and `--record` turns them into the standing
+audition trend:
+
+    python benchmarks/node_authoring.py --max-tokens 1024        # pre-arc
+    python benchmarks/node_authoring.py --record data/auditions.jsonl
 
 ---
 

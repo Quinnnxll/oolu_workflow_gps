@@ -4,6 +4,39 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Context-harness epilogue — the arc measured, the seam filled:
+
+- **The harness-delta scorecard** (``benchmarks/harness_delta.py``).
+  The measurable before/after on the whole six-phase arc, computed
+  live from the current machinery — output ceilings (1024 → 16384),
+  reasoning budgets (0 → 4096), pushed context (0 → ~440 tokens avg
+  per bench goal, budgeted and traced), upstream-shape coverage on
+  route goals (0/2 → 2/2), gates before publish (mock-smells-on-one-
+  path → six walls on every path), repair rounds (0 → 2), build
+  memory (none → the durable ledger), backoff, caching, dispatch.
+  Deterministic and offline; the model half (verified rate,
+  $/verified) is two keyed ``node_authoring.py`` commands away, and
+  ``--record`` turns those into the standing audition trend.
+- **The embedding-model integration**
+  (``src/oolu/providers/embeddings.py``). The retrieval seam Phase 5
+  left open is filled: ``ModelEmbedder`` implements the Embedder
+  protocol over the OpenAI-shaped ``/embeddings`` wire — the hosted
+  key or any local OpenAI-compatible server (Ollama, LM Studio),
+  through the same authenticated adapter pipeline every provider call
+  rides. Cached per process (compiles repeat), fail-open to lexical
+  (recall degrades, builds proceed), self-silencing after consecutive
+  endpoint failures (a dead endpoint must not tax every compile).
+  Opt in with ``OOLU_EMBEDDINGS=openai|local`` +
+  ``OOLU_EMBEDDING_MODEL``; the context-pack compiler's ranking and
+  the gateway's example retrieval obey the configured embedder and
+  stay lexical the instant anything is missing or broken.
+- **Pinned** by ``tests/test_embeddings.py``: dense vectors through
+  the shared cosine, the embed-once cache, fail-open and the failure
+  ceiling with recovery reset, the exact ``/embeddings`` wire body
+  through the authenticated adapter, a contrarian embedder visibly
+  steering the compiler's ranking, and the gateway's off/unkeyed
+  paths staying None.
+
 Context-harness Phase 6 — multi-model strategies and continuous
 evaluation (the plan's final phase):
 

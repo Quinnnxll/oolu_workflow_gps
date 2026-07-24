@@ -113,15 +113,22 @@ class ContextPackCompiler:
     ``window`` is the answering model's context window; the pack takes
     at most ``max_share`` of it (the spec's code-or-artifacts
     allocation), leaving the rest for the system contract, the request,
-    the tool transcript, and the response reserve."""
+    the tool transcript, and the response reserve. ``embedder``
+    upgrades the RANKING (which contracts and examples ride) to a
+    model-backed one when configured — the pack's shape and budget
+    never change with the scorer."""
 
     window: int = 32_000
     max_share: float = 0.30
     max_examples: int = 3
     max_contracts: int = 8
+    embedder: object | None = None  # retrieval.Embedder
 
     def budget_tokens(self) -> int:
         return max(0, int(self.window * self.max_share))
+
+    def _score(self, a: str, b: str) -> float:
+        return _retrieval_score(a, b, embedder=self.embedder)
 
     # ------------------------------------------------------------------ #
     def compile(
@@ -147,7 +154,7 @@ class ContextPackCompiler:
         )[: self.max_examples]
         ranked_contracts = sorted(
             catalog,
-            key=lambda node: similarity(
+            key=lambda node: self._score(
                 goal, f"{node.get('title', '')} {node.get('goal', '')}"
             ),
             reverse=True,

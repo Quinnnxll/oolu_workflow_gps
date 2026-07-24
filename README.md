@@ -480,6 +480,8 @@ Environment overrides (applied on top of any config):
 | `OOLU_API_BASE` | Override both tiers' endpoint |
 | `OOLU_FAST_MODEL` / `OOLU_REASONING_MODEL` | Override per-tier model strings (synthesis engine) |
 | `OOLU_CHAT_MODEL_<PROVIDER>_<TIER>` | Override the chat/authoring model registry, e.g. `OOLU_CHAT_MODEL_ANTHROPIC_REASONING=claude-sonnet-5`, `OOLU_CHAT_MODEL_OPENAI_FAST=gpt-4o-mini` |
+| `OOLU_EMBEDDINGS` | Model-backed retrieval for authoring recall: `openai` (the tenant's key), `local` (the machine's OpenAI-compatible server), `off` (default — lexical ranking) |
+| `OOLU_EMBEDDING_MODEL` | The embedding model id (default `text-embedding-3-small` for `openai`; required for `local`, e.g. `nomic-embed-text`) |
 | `OOLU_BACKEND` | `subprocess` or `docker` |
 | `OOLU_PINNED_INDEX_URL` | Package index for Phase-A installs |
 
