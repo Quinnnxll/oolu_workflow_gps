@@ -218,6 +218,10 @@ class BrainTransport:
 
     def request(self, method, url, *, headers=None, body=None, timeout=30.0):
         system = (body or {}).get("system", "")
+        if isinstance(system, list):  # the cache-marked block shape
+            system = "".join(
+                b.get("text", "") for b in system if isinstance(b, dict)
+            )
         if "structured brief" in system:
             return ProviderResponse(200, _anthropic_reply(INTAKE_JSON))
         if "Pick the route" in system:

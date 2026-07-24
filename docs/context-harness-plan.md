@@ -203,42 +203,51 @@ hand today; and it mounts no web exchange, so `http_request` raises
 *Objective: remove the artificial ceilings. No architecture changes; only
 parameters, defaults, and retry hygiene.*
 
-- [ ] **Per-seat generation budgets.** Give `ChatModelRouter` a per-purpose
-      generation profile (max_tokens, temperature, thinking budget) instead of
-      one constructor default (`providers/chatmodel.py:135`). Defaults:
-      `node.build` / `plan.rebuild` / `node.repair` → 16k output tokens;
-      `chat.turn` → 4k; `plan.intake` / `plan.route` → 2k. Fix the asymmetry
-      where the OpenAI adapter sends no `max_tokens`/`temperature` at all
-      (`providers/apikey.py:165-190`).
-- [ ] **Reasoning effort.** Plumb extended thinking through both adapters —
-      Anthropic `thinking: {type: enabled, budget_tokens}` and OpenAI
-      `reasoning_effort` — as a seat-profile field. Default `node.build` to a
-      real thinking budget (≥4k tokens) on models that support it.
-- [ ] **Default authoring to the reasoning tier.** Change `model.build_tier`'s
-      effective default from `inherit`(→fast) to `reasoning`
-      (`gateway/app.py:5261-5269`, `settings_node.py:302-309`). Code authoring
-      is precisely the task the reasoning tier exists for; the meter and
-      budget caps (`chatmodel.py:422-442`) already keep spend honest.
-- [ ] **Sampling control.** Send temperature on authoring calls (low, ~0.2,
-      matching the synthesis stack's fast-tier 0.1) with the rut-driven bump
-      ladder ported from `routing/matrix.py:207-213`.
-- [ ] **Retry hygiene.** Give `ChatModelRouter` a real backoff sleep
-      (`providers/base.py:126` currently a no-op → hammers 429s), and
-      configure request-level retries on the LiteLLM gateway
-      (`routing/gateway.py:166-171`).
-- [ ] **Prompt caching on the paid path.** Emit Anthropic `cache_control`
-      breakpoints on the frozen prefix (system prompt + tool specs). The
-      prompts are already assembled frozen-prefix-first
-      (`routing/prompting.py`); the marker is all that's missing. This cuts
-      the cost of Phase 4's longer loops before they arrive.
-- [ ] **Configurable chat-model registry.** Lift `DEFAULT_MODELS`
-      (`providers/chatmodel.py:50-59`) into config + env overrides, exactly as
-      the synthesis stack already does (`config.py:41-43`), so a model rename
-      is a config change, not a code change.
+- [x] **Per-seat generation budgets.** `providers/profiles.py`: a
+      `SeatProfile` table keyed by the seat vocabulary — `node.build` /
+      `node.repair` / `plan.rebuild` → 16k output tokens + temp 0.2;
+      `plan.synthesize` → 8k; `chat.turn` → 4k; `plan.intake` / `plan.route`
+      → 2k; unknown purposes → 4k, never the old 1024. `ChatModelRouter`
+      resolves the profile from its purpose (constructor `max_tokens` remains
+      an explicit override for benches). The OpenAI path now carries
+      `max_tokens` + `temperature` too — the per-provider asymmetry is gone.
+- [x] **Reasoning effort.** Anthropic `thinking: {type: enabled,
+      budget_tokens: 4096}` rides on `reply` calls for thinking-capable
+      models (capability-gated, budget floored/fitted under the ceiling,
+      temperature correctly dropped beside it); OpenAI reasoning models
+      (o-series/gpt-5) get `reasoning_effort` + `max_completion_tokens`.
+      One deliberate hold-back: thinking stays OFF on tool consultations
+      until the canonical transcript can carry thinking blocks back across
+      tool turns (Anthropic requires them re-sent verbatim) — Phase 2 lifts
+      this.
+- [x] **Default authoring to the reasoning tier.** `model.build_tier` now
+      defaults to `reasoning` (`settings_node.py`, `gateway/app.py:_tier_now`);
+      `inherit` remains for users who prefer the shared tier. The meter and
+      budget caps keep spend honest.
+- [x] **Sampling control.** Code seats author at temperature 0.2 on every
+      provider that accepts one. (The rut-driven bump ladder waits for
+      Phase 4's build transaction — the one-shot path has no failure loop to
+      bump inside yet.)
+- [x] **Retry hygiene.** The provider backoff is real (`_default_backoff` in
+      `providers/base.py`, late-bound so offline tests neutralize it in one
+      conftest fixture), and the LiteLLM gateway retries transient failures
+      (rate limit / timeout / connection / 5xx, matched by exception name)
+      with backoff before surfacing `GatewayError` — via an injectable
+      `completion_fn` seam.
+- [x] **Prompt caching on the paid path.** The Anthropic system prompt now
+      rides as a block with `cache_control: {type: ephemeral}` — the frozen
+      prefix (tools + system) gets its breakpoint, so multi-turn authoring
+      loops stop re-paying the full prompt every step.
+- [x] **Configurable chat-model registry.** `chat_model_for(provider, tier)`
+      reads `OOLU_CHAT_MODEL_<PROVIDER>_<TIER>` env overrides at call time,
+      falling back to `DEFAULT_MODELS` — a model rename is a config change.
+      (Full config-file manifests arrive with the Phase 2 registry.)
 
 **Acceptance:** benchmark truncation rate ≈ 0; first-pass validity up
 materially with no other change; per-seat telemetry shows `node.build`
 spending an order of magnitude more thinking+output tokens than today.
+(Pinned offline by `tests/test_effort_unlock.py` — wire bodies asserted per
+provider; the keyed before/after benchmark runs remain the live acceptance.)
 
 ---
 

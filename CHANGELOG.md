@@ -4,6 +4,48 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Context-harness Phase 1 — the model is unstarved:
+
+- **Seat generation profiles** (`providers/profiles.py`). Effort now
+  rides per PURPOSE, not per constructor default: the code-writing
+  seats (`node.build`, `node.repair`, `plan.rebuild`) get 16k output
+  tokens, temperature 0.2, and a 4k reasoning budget; `plan.synthesize`
+  8k; `chat.turn` 4k; intake/route 2k; unknown purposes 4k — never the
+  old universal 1024 that forced whole node functions through a
+  keyhole (the bench's truncated bucket made the cost visible).
+  `ChatModelRouter` resolves its seat's profile from its purpose;
+  an explicit constructor ceiling remains for benches.
+- **Reasoning effort, capability-gated.** Anthropic extended thinking
+  (`thinking: enabled, budget_tokens 4096`) rides on reply calls for
+  thinking-capable Claude models — budget floored and fitted under the
+  ceiling, temperature correctly absent beside it; OpenAI reasoning
+  models (o-series, gpt-5) take `reasoning_effort` +
+  `max_completion_tokens` and no temperature; the classic OpenAI wire
+  (and every local OpenAI-compatible server) now carries `max_tokens`
+  + `temperature` — the per-provider asymmetry is gone. Thinking stays
+  off on tool consultations until the canonical transcript can return
+  thinking blocks across tool turns (Phase 2).
+- **The author thinks by default.** `model.build_tier` defaults to
+  `reasoning` — code authoring is the work that tier exists for; the
+  spending cap still governs. `inherit` remains a choice.
+- **Retries wait now.** The provider backoff is real (late-bound seam;
+  offline tests neutralize it in one conftest fixture), and the
+  LiteLLM synthesis gateway retries transient failures (rate limit,
+  timeout, connection, 5xx — matched by exception name) with backoff
+  through an injectable `completion_fn` seam before surfacing
+  `GatewayError`.
+- **Prompt caching on the paid path.** The Anthropic system prompt
+  rides as a block carrying `cache_control: ephemeral` — the frozen
+  prefix finally earns its cache discipline on hosted Claude, not just
+  on local vLLM.
+- **The chat model registry is configuration.**
+  `OOLU_CHAT_MODEL_<PROVIDER>_<TIER>` overrides the (provider, tier)
+  model ids at call time; `DEFAULT_MODELS` is the fallback, and a
+  model rename is no longer a code change.
+- **Pinned** by `tests/test_effort_unlock.py` — the wire bodies
+  themselves asserted per provider, profile table, env overrides, both
+  retry ladders, and the explicit-ceiling override.
+
 Context-harness Phase 0 — the node-authoring seat, measured before it
 is re-upholstered:
 

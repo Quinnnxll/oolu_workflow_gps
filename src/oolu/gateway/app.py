@@ -5259,11 +5259,11 @@ class GatewayApp:
         ):
             return None
         def _tier_now() -> str:
-            # The author's seat may think harder than the conversation:
-            # model.build_tier overrides the shared tier for node.build
-            # consultations; "inherit" (the default) follows model.tier.
+            # The author's seat thinks harder than the conversation by
+            # default: model.build_tier (default "reasoning") governs
+            # node.build consultations; "inherit" follows model.tier.
             if purpose == "node.build":
-                chosen = str(_effective("model.build_tier", "inherit"))
+                chosen = str(_effective("model.build_tier", "reasoning"))
                 if chosen in ("fast", "reasoning"):
                     return chosen
             return str(_effective("model.tier", "fast"))

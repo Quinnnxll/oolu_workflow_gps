@@ -478,7 +478,8 @@ Environment overrides (applied on top of any config):
 | `OPENAI_API_KEY` | Credential for the OpenAI-compatible endpoint |
 | `OOLU_CONFIG` | Path to a settings YAML |
 | `OOLU_API_BASE` | Override both tiers' endpoint |
-| `OOLU_FAST_MODEL` / `OOLU_REASONING_MODEL` | Override per-tier model strings |
+| `OOLU_FAST_MODEL` / `OOLU_REASONING_MODEL` | Override per-tier model strings (synthesis engine) |
+| `OOLU_CHAT_MODEL_<PROVIDER>_<TIER>` | Override the chat/authoring model registry, e.g. `OOLU_CHAT_MODEL_ANTHROPIC_REASONING=claude-sonnet-5`, `OOLU_CHAT_MODEL_OPENAI_FAST=gpt-4o-mini` |
 | `OOLU_BACKEND` | `subprocess` or `docker` |
 | `OOLU_PINNED_INDEX_URL` | Package index for Phase-A installs |
 

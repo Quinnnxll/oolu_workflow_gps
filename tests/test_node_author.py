@@ -380,10 +380,11 @@ def test_a_crashed_sandbox_is_answered_in_words(tmp_path):
 
 
 def test_the_author_seat_may_think_harder_than_the_chat(tmp_path):
-    """model.build_tier: the node author's consultations may ride the
-    reasoning tier while the conversation stays fast — and "inherit"
-    (the default) follows the shared model.tier, so nothing changes
-    until the user asks for it."""
+    """model.build_tier: the node author's consultations ride the
+    reasoning tier BY DEFAULT while the conversation stays fast — code
+    authoring is the work the reasoning tier exists for (context-harness
+    plan, Phase 1) — and "inherit" still follows the shared model.tier
+    for users who ask for it."""
     from oolu.providers.keyring import ModelKeyring
     from oolu.settings_node import SettingsNode, SettingsStore
 
@@ -397,8 +398,11 @@ def test_the_author_seat_may_think_harder_than_the_chat(tmp_path):
         chat_router = app._tenant_model("t1")
         author_router = app._tenant_model("t1", purpose="node.build")
         assert chat_router is not author_router
-        # The default inherits the shared tier.
-        assert (chat_router._tier(), author_router._tier()) == ("fast", "fast")
+        # The default: the author already thinks harder than the chat.
+        assert (chat_router._tier(), author_router._tier()) == (
+            "fast",
+            "reasoning",
+        )
 
         # The author thinks harder; the chat does not move.
         settings.set("t1", "model.build_tier", "reasoning")

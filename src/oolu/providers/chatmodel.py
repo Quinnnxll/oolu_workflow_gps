@@ -17,8 +17,9 @@ assistant says out loud; nothing is silently skipped.
 
 from __future__ import annotations
 
+import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable
 
 from ..chat import ModelBudgetExceeded, ModelUnavailable
@@ -26,6 +27,7 @@ from .apikey import AnthropicAdapter, OpenAiAdapter
 from .base import HttpTransport
 from .errors import ProviderError
 from .keyring import PROVIDERS, KeyringError, ModelKeyring, fingerprint
+from .profiles import SeatProfile, resolve_profile
 from .tools import (
     ToolReply,
     ToolSpec,
@@ -57,6 +59,26 @@ DEFAULT_MODELS: dict[str, dict[str, str]] = {
         "reasoning": "gpt-4o",
     },
 }
+
+
+def chat_model_for(provider: str, tier: str) -> str:
+    """The model id behind one (provider, tier) — env-overridable, so a
+    model rename is a config change, not a code change (the synthesis
+    stack has had this since OOLU_FAST_MODEL; the chat stack now keeps
+    the same promise). Override with, e.g.::
+
+        OOLU_CHAT_MODEL_ANTHROPIC_REASONING=claude-sonnet-5
+        OOLU_CHAT_MODEL_OPENAI_FAST=gpt-4o-mini
+
+    Read at call time, never cached — a changed environment reaches the
+    very next consultation."""
+    override = os.environ.get(
+        f"OOLU_CHAT_MODEL_{provider.upper()}_{tier.upper()}", ""
+    ).strip()
+    if override:
+        return override
+    table = DEFAULT_MODELS.get(provider, {})
+    return table.get(tier) or table.get("fast", "")
 
 # The purpose tag every chat consultation is metered under.
 CHAT_PURPOSE = "chat.turn"
@@ -161,7 +183,10 @@ class ChatModelRouter:
         # (Anthropic today). The search happens inside the API call — the
         # local machine needs no web access of its own.
         web_search: Callable[[], bool] | None = None,
-        max_tokens: int = 1024,
+        # None = the seat profile decides (providers/profiles.py) — the
+        # per-purpose effort table that replaced the old universal 1024.
+        # A number here is an explicit override (benches, tests).
+        max_tokens: int | None = None,
         purpose: str = CHAT_PURPOSE,  # what the meter books this under
         # billing.SubscriptionBrain: the HOSTED plan's keys + allowance.
         # None (every self-hosted install) keeps the honest "not live yet".
@@ -180,8 +205,13 @@ class ChatModelRouter:
         self._local_url = local_url or (lambda: "")
         self._local_model = local_model or (lambda: "")
         self._web_search = web_search or (lambda: False)
-        self._max_tokens = max_tokens
         self._purpose = purpose
+        # The seat's standing effort, with the constructor's max_tokens
+        # (when given) as an explicit ceiling override on top of it.
+        profile = resolve_profile(purpose)
+        if max_tokens is not None:
+            profile = replace(profile, max_tokens=int(max_tokens))
+        self._profile: SeatProfile = profile
         self._adapters: dict[tuple[str, str], Any] = {}
         # WHO is drawing right now. Routers are cached per (tenant,
         # purpose) and many users can share one tenant (the global
@@ -358,9 +388,7 @@ class ChatModelRouter:
 
     def _stream_openai(self, provider, secret, messages):  # pragma: no cover - live
         tier = self._tier()
-        model_id = DEFAULT_MODELS[provider].get(
-            tier, DEFAULT_MODELS[provider]["fast"]
-        )
+        model_id = chat_model_for(provider, tier)
         started = time.monotonic()
         parts: list[str] = []
         usage: dict = {}
@@ -539,8 +567,14 @@ class ChatModelRouter:
                 "local model URL and name in Settings"
             )
         started = time.monotonic()
+        effort = self._profile
         try:
-            data = self._local_adapter(url).chat(messages, model=model_id)
+            data = self._local_adapter(url).chat(
+                messages,
+                model=model_id,
+                max_tokens=effort.max_tokens,
+                temperature=effort.temperature,
+            )
         except ProviderError as exc:
             raise ModelUnavailable(f"local ({url}): {exc}") from exc
         text, prompt_tokens, completion_tokens = _parse_openai_shape(data)
@@ -561,9 +595,8 @@ class ChatModelRouter:
 
     def _ask(self, provider: str, secret: str, messages: list[dict]) -> str:
         tier = self._tier()
-        model_id = DEFAULT_MODELS[provider].get(
-            tier, DEFAULT_MODELS[provider]["fast"]
-        )
+        model_id = chat_model_for(provider, tier)
+        effort = self._profile
         adapter = self._adapter(provider, secret)
         started = time.monotonic()
         if provider == "anthropic":
@@ -571,9 +604,11 @@ class ChatModelRouter:
             data = adapter.messages(
                 rest,
                 model=model_id,
-                max_tokens=self._max_tokens,
+                max_tokens=effort.max_tokens,
                 system=system,
                 web_search=self._web_search(),
+                temperature=effort.temperature,
+                thinking_budget=effort.thinking_budget,
             )
             text = "".join(
                 block.get("text", "")
@@ -585,7 +620,13 @@ class ChatModelRouter:
             completion_tokens = int(usage.get("output_tokens", 0) or 0)
             finish_reason = _anthropic_finish_reason(data)
         else:
-            data = adapter.chat(messages, model=model_id)
+            data = adapter.chat(
+                messages,
+                model=model_id,
+                max_tokens=effort.max_tokens,
+                temperature=effort.temperature,
+                reasoning_effort=effort.reasoning_effort,
+            )
             text, prompt_tokens, completion_tokens = _parse_openai_shape(data)
             finish_reason = _openai_finish_reason(data)
         self._book(
@@ -610,9 +651,8 @@ class ChatModelRouter:
         tool_choice: str,
     ) -> ToolReply:
         tier = self._tier()
-        model_id = DEFAULT_MODELS[provider].get(
-            tier, DEFAULT_MODELS[provider]["fast"]
-        )
+        model_id = chat_model_for(provider, tier)
+        effort = self._profile
         adapter = self._adapter(provider, secret)
         started = time.monotonic()
         if provider == "anthropic":
@@ -620,11 +660,18 @@ class ChatModelRouter:
             data = adapter.messages(
                 to_anthropic_messages(rest),
                 model=model_id,
-                max_tokens=self._max_tokens,
+                max_tokens=effort.max_tokens,
                 system=system,
                 tools=tools,
                 tool_choice=tool_choice,
                 web_search=self._web_search(),
+                temperature=effort.temperature,
+                # Extended thinking stays OFF on tool consultations for
+                # now: the neutral transcript (providers.tools) does not
+                # yet carry thinking blocks back, and Anthropic requires
+                # them re-sent verbatim across tool turns. The canonical
+                # interface (plan Phase 2) lifts this.
+                thinking_budget=None,
             )
             reply = parse_anthropic_tool_reply(data)
             finish_reason = _anthropic_finish_reason(data)
@@ -634,6 +681,9 @@ class ChatModelRouter:
                 model=model_id,
                 tools=tools,
                 tool_choice=tool_choice,
+                max_tokens=effort.max_tokens,
+                temperature=effort.temperature,
+                reasoning_effort=effort.reasoning_effort,
             )
             reply = parse_openai_tool_reply(data)
             finish_reason = _openai_finish_reason(data)
@@ -663,12 +713,15 @@ class ChatModelRouter:
                 "local model URL and name in Settings"
             )
         started = time.monotonic()
+        effort = self._profile
         try:
             data = self._local_adapter(url).chat(
                 to_openai_messages(messages),
                 model=model_id,
                 tools=tools,
                 tool_choice=tool_choice,
+                max_tokens=effort.max_tokens,
+                temperature=effort.temperature,
             )
         except ProviderError as exc:
             raise ModelUnavailable(f"local ({url}): {exc}") from exc

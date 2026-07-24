@@ -378,7 +378,13 @@ def test_consult_rides_anthropic_natively_and_parses_tool_use(rig):
     assert reply.tool_calls[0].arguments == {"node_id": "n-1"}
     body = transport.requests[-1]["body"]
     assert body["tools"] == [READ_UPSTREAM.as_anthropic()]
-    assert body["system"] == "You are OoLu."
+    assert body["system"] == [
+        {
+            "type": "text",
+            "text": "You are OoLu.",
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
     # A pure tool-call turn (no text) is a live answer, and it enters the
     # books like any other consultation.
     (charge,) = meter.charges()

@@ -303,11 +303,13 @@ SETTINGS_CATALOG: tuple[SettingField, ...] = (
         group="model",
         label="Code-writing tier",
         kind=SettingKind.CHOICE,
-        default="inherit",
+        default="reasoning",
         choices=("inherit", "fast", "reasoning"),
         description="The tier the node author writes and revises code "
-        "with. Inherit follows the model tier above; reasoning thinks "
-        "harder about the code while your chat stays fast.",
+        "with. Reasoning (the default) thinks harder about the code "
+        "while your chat stays fast; inherit follows the model tier "
+        "above. Code authoring is exactly the work the reasoning tier "
+        "exists for — the spending cap still applies.",
     ),
     SettingField(
         key="budget.model_cap",

@@ -13,10 +13,47 @@ from __future__ import annotations
 import json
 from typing import Any, Iterator
 
+import re
+
 from .base import BaseProviderAdapter, HttpTransport
 from .errors import classify_status
 from .tools import ToolSpec
 from .vault import CredentialRef, SecretVault
+
+# OpenAI's reasoning models (o-series, gpt-5 family) take
+# ``max_completion_tokens`` and ``reasoning_effort`` and reject a
+# sampling temperature; everything else (gpt-4o family, and every local
+# OpenAI-compatible server this adapter also fronts) speaks the classic
+# ``max_tokens`` + ``temperature``. One predicate, both decisions.
+_OPENAI_REASONING_MODEL_RE = re.compile(r"^(o\d|gpt-5)")
+
+
+def _openai_reasoning_model(model: str) -> bool:
+    return bool(_OPENAI_REASONING_MODEL_RE.match(str(model or "").strip()))
+
+
+# Anthropic extended thinking arrived with Claude 3.7; the families
+# before it reject the ``thinking`` block. Deny the known elders, trust
+# the rest of the claude line (4.x, 4.5, 5, ...).
+_ANTHROPIC_NO_THINKING_PREFIXES = (
+    "claude-2",
+    "claude-instant",
+    "claude-3-haiku",
+    "claude-3-opus",
+    "claude-3-sonnet",
+    "claude-3-5",
+)
+
+
+def _anthropic_thinking_model(model: str) -> bool:
+    name = str(model or "").strip().lower()
+    if not name.startswith("claude"):
+        return False
+    return not any(name.startswith(p) for p in _ANTHROPIC_NO_THINKING_PREFIXES)
+
+
+# Anthropic's floor for a thinking budget; below it the block is invalid.
+_MIN_THINKING_BUDGET = 1024
 
 
 def openai_sse_events(
@@ -171,8 +208,25 @@ class OpenAiAdapter(ApiKeyProviderAdapter):
         tool_choice: str | None = None,
         idempotency_key: str | None = None,
         cost: float = 1.0,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        reasoning_effort: str | None = None,
     ) -> dict:
         body: dict[str, Any] = {"model": model, "messages": messages}
+        # Effort rides per model family: reasoning models take the
+        # modern ceiling + effort dial and refuse a temperature; the
+        # classic wire (gpt-4o, every local OpenAI-compatible server)
+        # takes max_tokens + temperature and predates the dial.
+        if _openai_reasoning_model(model):
+            if max_tokens is not None:
+                body["max_completion_tokens"] = int(max_tokens)
+            if reasoning_effort:
+                body["reasoning_effort"] = str(reasoning_effort)
+        else:
+            if max_tokens is not None:
+                body["max_tokens"] = int(max_tokens)
+            if temperature is not None:
+                body["temperature"] = float(temperature)
         if tools:
             body["tools"] = [spec.as_openai() for spec in tools]
             # "auto" is this wire's default; only a real preference rides.
@@ -260,16 +314,45 @@ class AnthropicAdapter(ApiKeyProviderAdapter):
         idempotency_key: str | None = None,
         cost: float = 1.0,
         web_search: bool = False,
+        temperature: float | None = None,
+        thinking_budget: int | None = None,
     ) -> dict:
         body: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
             "messages": messages,
         }
+        # Extended thinking, where the seat asks for it AND the model
+        # speaks it. The API's own rules ride here: the budget needs a
+        # floor, must fit under the output ceiling, refuses a sampling
+        # temperature beside it, and requires the model's own choice of
+        # tools (auto) — a forced tool_choice keeps thinking off.
+        thinking = (
+            thinking_budget is not None
+            and thinking_budget >= _MIN_THINKING_BUDGET
+            and _anthropic_thinking_model(model)
+            and (not tool_choice or tool_choice == "auto")
+        )
+        if thinking:
+            budget = min(int(thinking_budget), max(max_tokens // 2, _MIN_THINKING_BUDGET))
+            if budget >= _MIN_THINKING_BUDGET and budget < max_tokens:
+                body["thinking"] = {"type": "enabled", "budget_tokens": budget}
+            else:
+                thinking = False
+        if temperature is not None and not thinking:
+            body["temperature"] = float(temperature)
         # Anthropic takes the system prompt as a top-level parameter, not a
-        # "system"-role message.
+        # "system"-role message — carried as a block so the frozen prefix
+        # (tools + system) gets a prompt-cache breakpoint: multi-turn
+        # authoring loops stop re-paying the full prompt every step.
         if system:
-            body["system"] = system
+            body["system"] = [
+                {
+                    "type": "text",
+                    "text": system,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
         wire_tools: list[dict[str, Any]] = [
             spec.as_anthropic() for spec in tools or []
         ]

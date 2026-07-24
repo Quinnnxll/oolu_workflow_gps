@@ -87,8 +87,16 @@ def test_anthropic_answers_and_the_system_prompt_rides_apart(rig):
     assert text == "Hi there."
     call = transport.requests[-1]
     assert "/messages" in call["url"]
-    # Anthropic's wire shape: system as a parameter, never a message role.
-    assert call["body"]["system"] == "You are OoLu."
+    # Anthropic's wire shape: system as a parameter, never a message role —
+    # carried as a block with the prompt-cache breakpoint on it, so the
+    # frozen prefix stops being re-paid every turn.
+    assert call["body"]["system"] == [
+        {
+            "type": "text",
+            "text": "You are OoLu.",
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
     assert all(m["role"] != "system" for m in call["body"]["messages"])
     # The key rode the right header, and only there.
     assert call["headers"]["x-api-key"] == "sk-ant-0123456789"

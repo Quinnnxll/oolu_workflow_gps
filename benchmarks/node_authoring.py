@@ -1427,8 +1427,9 @@ def main() -> int:
         type=int,
         default=None,
         help=(
-            "override the router's output ceiling (default: the router's "
-            "own 1024 — the strangled baseline the plan documents)"
+            "override the seat profile's output ceiling (default: the "
+            "node.build profile's 16384; pass 1024 to recreate the "
+            "pre-Phase-1 starvation and watch the truncated bucket fill)"
         ),
     )
     parser.add_argument(
@@ -1453,7 +1454,12 @@ def main() -> int:
             return 2
         router, meter = brain
 
-        ceiling = args.max_tokens if args.max_tokens is not None else 1024
+        if args.max_tokens is not None:
+            ceiling = args.max_tokens
+        else:
+            from oolu.providers.profiles import resolve_profile
+
+            ceiling = resolve_profile(BENCH_PURPOSE).max_tokens
         print(
             f"Node-authoring bench · tier {args.tier} · output ceiling "
             f"{ceiling} tokens · {len(goals)} goals\n"

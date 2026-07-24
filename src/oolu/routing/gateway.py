@@ -135,23 +135,62 @@ class Gateway(Protocol):
     def close(self) -> None: ...
 
 
+# Exception class names that mean "the same request may well succeed in a
+# moment" — rate limits, timeouts, connection blips, provider 5xx. Matched
+# by name so no LiteLLM exception taxonomy is imported or version-pinned.
+_TRANSIENT_ERROR_MARKS = (
+    "ratelimit",
+    "timeout",
+    "connection",
+    "internalserver",
+    "serviceunavailable",
+    "overloaded",
+)
+
+
+def _transient(exc: Exception) -> bool:
+    return any(mark in type(exc).__name__.lower() for mark in _TRANSIENT_ERROR_MARKS)
+
+
+def _default_backoff(seconds: float) -> None:
+    """Real wait between retries; a module seam tests neutralize."""
+    time.sleep(seconds)
+
+
 class LiteLLMGateway:
-    """Real gateway over LiteLLM -> vLLM (OpenAI-compatible)."""
+    """Real gateway over LiteLLM -> vLLM (OpenAI-compatible).
+
+    Transient transport failures (rate limit, timeout, connection, 5xx)
+    are retried with backoff before becoming a ``GatewayError`` — the
+    chat stack has always retried those; the synthesis stack now keeps
+    the same promise. ``completion_fn`` is the injectable seam: tests
+    exercise the retry ladder without litellm installed."""
 
     def __init__(
-        self, *, request_timeout: float = 120.0, drop_unsupported_params: bool = True
+        self,
+        *,
+        request_timeout: float = 120.0,
+        drop_unsupported_params: bool = True,
+        max_attempts: int = 3,
+        sleep: Callable[[float], None] | None = None,
+        completion_fn: Callable[..., object] | None = None,
     ):
-        try:
-            import litellm
-        except ImportError as exc:
-            raise GatewayUnavailable(
-                "litellm not installed (`pip install 'oolu[engine]'`)"
-            ) from exc
-        self._litellm = litellm
-        # vLLM rejects unknown params; dropping them keeps tier configs portable.
-        if drop_unsupported_params:
-            litellm.drop_params = True
+        if completion_fn is None:
+            try:
+                import litellm
+            except ImportError as exc:
+                raise GatewayUnavailable(
+                    "litellm not installed (`pip install 'oolu[engine]'`)"
+                ) from exc
+            # vLLM rejects unknown params; dropping them keeps tier configs
+            # portable.
+            if drop_unsupported_params:
+                litellm.drop_params = True
+            completion_fn = litellm.completion
+        self._completion = completion_fn
         self._timeout = request_timeout
+        self._max_attempts = max(1, int(max_attempts))
+        self._sleep = sleep
 
     @property
     def name(self) -> str:
@@ -163,12 +202,18 @@ class LiteLLMGateway:
         kwargs = decision.to_completion_kwargs()
         kwargs.setdefault("timeout", self._timeout)
         start = time.monotonic()
-        try:
-            response = self._litellm.completion(messages=prompt.messages, **kwargs)
-        except Exception as exc:  # noqa: BLE001 - any failure to GET a completion is a GatewayError
-            raise GatewayError(
-                f"completion failed via {kwargs.get('model')}: {exc}"
-            ) from exc
+        response = None
+        for attempt in range(1, self._max_attempts + 1):
+            try:
+                response = self._completion(messages=prompt.messages, **kwargs)
+                break
+            except Exception as exc:  # noqa: BLE001 - any failure to GET a completion is a GatewayError
+                if _transient(exc) and attempt < self._max_attempts:
+                    (self._sleep or _default_backoff)(float(attempt))
+                    continue
+                raise GatewayError(
+                    f"completion failed via {kwargs.get('model')}: {exc}"
+                ) from exc
         duration = time.monotonic() - start
 
         choice = response.choices[0]

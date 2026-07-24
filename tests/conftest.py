@@ -30,6 +30,23 @@ def _has(spec: str) -> bool:
     return importlib.util.find_spec(spec) is not None
 
 
+# --------------------------------------------------------------------------- #
+# No real backoff in offline tests. Production retries now actually wait       #
+# between attempts (providers/base.py, routing/gateway.py); a suite full of    #
+# scripted 429/500s must not serve that sentence. The seams are late-bound     #
+# module functions, so neutralizing them here covers every construction        #
+# site without touching the callers' contracts.                                #
+# --------------------------------------------------------------------------- #
+@pytest.fixture(autouse=True)
+def _no_retry_backoff(monkeypatch):
+    monkeypatch.setattr(
+        "oolu.providers.base._default_backoff", lambda _seconds: None
+    )
+    monkeypatch.setattr(
+        "oolu.routing.gateway._default_backoff", lambda _seconds: None
+    )
+
+
 def _docker_up() -> bool:
     if not _has("docker"):
         return False

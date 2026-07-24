@@ -9,6 +9,7 @@ contract suite exercises against every provider.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
@@ -58,6 +59,14 @@ class RequestContext:
 class RetryPolicy:
     max_attempts: int = 3
     retryable_statuses: frozenset[int] = RETRYABLE_STATUSES
+
+
+def _default_backoff(seconds: float) -> None:
+    """The real wait between retries. A module-level seam (late-bound at
+    the call site) so offline tests neutralize it in one place — the
+    old default was a silent no-op, which meant every production retry
+    fired back-to-back into the very 429 it was retrying."""
+    time.sleep(seconds)
 
 
 class RateLimiter:
@@ -123,7 +132,9 @@ class BaseProviderAdapter:
         self._retry = retry or RetryPolicy()
         self._rate_limiter = rate_limiter
         self._budget = budget
-        self._sleep = sleep or (lambda _seconds: None)
+        # None = the module's real backoff, resolved at call time so a
+        # test can neutralize _default_backoff without touching callers.
+        self._sleep = sleep
         # Audit log holds request metadata only — never headers or secrets.
         self.audit: list[dict[str, Any]] = []
         self._idempotency_cache: dict[str, dict[str, Any]] = {}
@@ -222,7 +233,7 @@ class BaseProviderAdapter:
                 and attempt < self._retry.max_attempts
             ):
                 last_error = error_cls(f"{self.name}: status {response.status}")
-                self._sleep(float(attempt))
+                (self._sleep or _default_backoff)(float(attempt))
                 continue
             message = self._vault.redact(str(response.json) or "")
             raise error_cls(f"{self.name}: status {response.status}: {message}")
