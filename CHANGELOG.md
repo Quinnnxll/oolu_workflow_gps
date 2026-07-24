@@ -4,6 +4,28 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Memory-stack M1 — the temporal graph and state projections:
+
+- **`src/oolu/temporalgraph.py`.** Relations get what facts got in M0:
+  validity intervals, mandatory provenance (an edge nobody can trace
+  is a rumor), supersession-not-deletion — adjacency rows on the same
+  durable connection, no graph database until a measured bottleneck.
+  Every read is time-scoped: "what depended on X when Y happened" is
+  one query (``dependents_at``), and a closed edge never contributes
+  proximity again (``neighborhood`` — the term retrieval ranks with).
+- **Publishes land their relations.** Every published node connects
+  ``satisfies`` to its goal and ``consumes``/``produces`` to its slots,
+  the registry row as provenance — the edges route position and
+  proximity ranking read as they accumulate.
+- **State cards are projections.** ``_node_state_card`` derives a
+  node's current truth (contract, valid relations, open lessons) from
+  the stores on every call — never stored, so rebuild-equals-read
+  holds by construction.
+- **Pinned** by ``tests/test_temporal_graph.py``: provenance law,
+  the as-of-then dependents query, closed-edge proximity silence,
+  hop-bounded neighborhoods, and the publish-to-card loop through the
+  real build door.
+
 Memory-stack M0 — the atomic memory spine:
 
 - **`src/oolu/memoryspine.py`.** The BuildLedger pattern promoted to

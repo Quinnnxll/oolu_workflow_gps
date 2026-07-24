@@ -100,6 +100,13 @@ platform's memory contract.*
 
 ### Phase M1 — the temporal graph and state projections
 
+**Status: LANDED (core)** — `src/oolu/temporalgraph.py` (validity-interval
+edges, provenance-mandatory, time-scoped reads, `neighborhood` proximity,
+`dependents_at` as one query); publishes land satisfies/consumes/produces
+edges; state cards are pure projections (`_node_state_card`). Remaining:
+the proximity BONUS inside pack ranking waits for edge volume worth
+ranking on (`tests/test_temporal_graph.py`).
+
 *Facts and relationships get validity intervals; "current state" becomes
 a projection, never a transcript summary.*
 

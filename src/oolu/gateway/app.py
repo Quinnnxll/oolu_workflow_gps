@@ -3564,6 +3564,9 @@ class GatewayApp:
             node_id=new_id,
             model=self._author_model_id(author),
         )
+        # The publish lands its relations on the temporal graph — the
+        # registry row is the provenance every edge cites.
+        self._graph_note_publish(new_id, skill_id, io, f"nodeplace:{new_id}")
         # The function becomes a FILE the human can open: src/main.py in
         # the node's own drawer — written through the node.build SEAT, so
         # the write is scope-checked, attested, and audited like every
@@ -5756,6 +5759,80 @@ class GatewayApp:
         except Exception:  # noqa: BLE001 - memory is advisory, never fatal
             return None
         return self._build_ledger_obj
+
+    def _temporal_graph(self):
+        """The temporal graph (temporalgraph.py, plan M1), lazily on the
+        same durable connection — time-scoped relations the retrieval
+        layer reads for proximity and the cards project from."""
+        cached = getattr(self, "_temporal_graph_obj", None)
+        if cached is not None:
+            return cached
+        conn = getattr(self._durable, "conn", None)
+        if conn is None or not hasattr(conn, "transaction"):
+            return None
+        try:
+            from ..temporalgraph import TemporalGraph
+
+            self._temporal_graph_obj = TemporalGraph(conn)
+        except Exception:  # noqa: BLE001 - relations are advisory
+            return None
+        return self._temporal_graph_obj
+
+    def _graph_note_publish(
+        self, node_id: str, goal_key: str, io: dict, provenance: str
+    ) -> None:
+        """A publish lands its relations: the node satisfies its goal,
+        and consumes/produces its slots — the edges proximity ranking
+        and route position read from now on. Advisory, never fatal."""
+        graph = self._temporal_graph()
+        if graph is None:
+            return
+        try:
+            graph.connect(
+                "satisfies", node_id, f"goal:{goal_key}", provenance=(provenance,)
+            )
+            for item in (io or {}).get("inputs", []):
+                graph.connect(
+                    "consumes",
+                    node_id,
+                    f"slot:{item.get('name')}",
+                    provenance=(provenance,),
+                )
+            for item in (io or {}).get("outputs", []):
+                graph.connect(
+                    "produces",
+                    node_id,
+                    f"slot:{item.get('name')}",
+                    provenance=(provenance,),
+                )
+        except Exception:  # noqa: BLE001 - relations are advisory
+            pass
+
+    def _node_state_card(self, session, node_id: str) -> dict:
+        """One node's current truth, PROJECTED — derived from the stores
+        on every call, never stored, so rebuild-equals-read holds by
+        construction (plan M1: state is a projection, not a transcript
+        summary)."""
+        card: dict = {"node_id": node_id, "contract": None, "relations": []}
+        for node in self._author_catalog(session):
+            if node.get("node_id") == node_id:
+                card["contract"] = node
+                break
+        graph = self._temporal_graph()
+        if graph is not None:
+            card["relations"] = [
+                {k: e[k] for k in ("edge_type", "source_id", "target_id")}
+                for e in graph.neighbors(node_id)
+            ]
+        spine = self._memory_spine()
+        if spine is not None:
+            card["open_lessons"] = [
+                m["statement"]
+                for m in spine.recall(
+                    (session.tenant_id, node_id), kinds=("lesson",)
+                )
+            ]
+        return card
 
     def _memory_spine(self):
         """The atomic memory spine (memoryspine.py, plan M0), lazily on
