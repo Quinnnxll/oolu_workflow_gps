@@ -4,6 +4,26 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The operator console speaks the app's language:
+
+- **"Runs" and "Assemble" were console-only words** — nothing in the
+  app is called either, so an operator arriving from the app met an
+  object model they had never seen. The nav now says **Workflows** and
+  **Route preview**; the header names the face ("operator console");
+  and both screens explain themselves in the app's own objects: a
+  workflow drives toward a DESTINATION over the NODES on the desk
+  (built in the app, in chat), and the ROUTE is chosen automatically
+  from verified run history — never written by hand. Table columns
+  follow (run → workflow, intent → destination, step → node,
+  listing → node), "Run this plan" is "Drive this route", and the
+  explore toggle says what it actually does (try a less-proven node)
+  with the Thompson mechanics in parentheses. Hash routes, API calls,
+  and deep links are unchanged — only the words moved.
+- **Pinned**: the browser tests drive the renamed screens
+  (``test_gateway_frontend.py``, ``test_desktop_unified.py``) — the
+  empty state, the labels, and the sign-in flow against the real host
+  runtime in a real Chromium.
+
 The investor panel gets its own door (deploy fix):
 
 - **``OOLU_INVESTORS_DOMAIN``.** The panel was documented as "host it

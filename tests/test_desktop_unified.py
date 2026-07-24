@@ -86,7 +86,7 @@ def test_the_browser_opens_straight_into_the_shell(tmp_path):
             page = browser.new_page()
             page.goto(server.url + "/#auth=" + token)
             # Straight into the shell — the sign-in screen never appears.
-            expect(page.get_by_text("No runs yet")).to_be_visible()
+            expect(page.get_by_text("No workflows yet")).to_be_visible()
             expect(page.get_by_text("local ·")).to_be_visible()
             # The token has left the URL for sessionStorage.
             assert "#auth=" not in page.url

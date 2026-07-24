@@ -181,9 +181,10 @@ async function guard(mount, loader) {
   }
 }
 
-/* ---- runs ---- */
+/* ---- workflows: destinations the engine drives toward ---- */
 async function runsScreen() {
-  const intent = h("input", { id: "intent", placeholder: "describe the task" });
+  const intent = h("input", { id: "intent",
+    placeholder: "the destination — what should get done" });
   const submitOut = h("div", {});
   async function start(event) {
     event.preventDefault();
@@ -195,20 +196,28 @@ async function runsScreen() {
     } catch (e) { submitOut.append(h("div", { class: "error" }, e.message)); }
   }
   const form = h("form", { onsubmit: start, class: "card" },
-    h("label", { for: "intent" }, "Start a workflow"), intent,
+    h("label", { for: "intent" }, "Start a workflow — name the destination"),
+    intent,
+    h("p", { class: "muted" },
+      "The engine picks the route itself: nodes come from the desk "
+      + "(built in the app, in chat), the order comes from verified run "
+      + "history. A workflow pauses here when it needs clarification, "
+      + "confirmation, or an approval."),
     h("button", { type: "submit" }, "Start"), submitOut);
 
   const data = await api("GET", "/v1/runs");
   const listing = data.items.length
     ? h("table", {},
-        h("tr", {}, h("th", {}, "run"), h("th", {}, "phase"),
-          h("th", {}, "intent"), h("th", {}, "waiting on")),
+        h("tr", {}, h("th", {}, "workflow"), h("th", {}, "phase"),
+          h("th", {}, "destination"), h("th", {}, "waiting on")),
         data.items.map((r) => h("tr", {},
           h("td", {}, h("a", { href: "#/run/" + r.run_id }, r.run_id.slice(0, 12))),
           h("td", {}, badge(r.phase, r.phase === "failed" ? "bad" : undefined)),
           h("td", {}, r.intent),
           h("td", {}, r.awaiting || "—"))))
-    : h("p", { class: "muted" }, "No runs yet — start one above, or try Assemble.");
+    : h("p", { class: "muted" },
+        "No workflows yet — name a destination above, or preview the "
+        + "route the engine would take first.");
   return h("div", {}, form, listing);
 }
 
@@ -319,7 +328,7 @@ async function runDetail(runId) {
       terminal ? null : h("button", { class: "small", onclick: async () => {
         try { await api("POST", "/v1/runs/" + runId + "/cancel", {}); render(); }
         catch (e) { cancelErr.textContent = e.message; }
-      } }, "Cancel run"),
+      } }, "Cancel workflow"),
       cancelErr),
     await pausePanel(run),
     h("h2", {}, "timeline"), live, timeline);
@@ -337,7 +346,7 @@ function skillsScreen() {
         "GET", "/v1/listings?q=" + encodeURIComponent(query.value || ""));
       out.append(data.items.length
         ? h("table", {},
-            h("tr", {}, h("th", {}, "listing"), h("th", {}, "summary"),
+            h("tr", {}, h("th", {}, "node"), h("th", {}, "summary"),
               h("th", {}, "status"), h("th", {}, "tags")),
             data.items.map((item) => h("tr", {},
               h("td", {}, item.title),
@@ -358,7 +367,7 @@ function skillsScreen() {
     out);
 }
 
-/* ---- assemble ---- */
+/* ---- route preview: the route the engine would drive, inspectable ---- */
 function assembleScreen() {
   const goal = h("input", { id: "goal", placeholder: "e.g. clean-the-books" });
   const want = h("input", { id: "want", placeholder: "slot name, e.g. tidy" });
@@ -407,7 +416,8 @@ function assembleScreen() {
       p.selected.map((name) => badge(name)),
       p.missing.length
         ? h("div", { class: "muted" },
-            "missing: " + p.missing.map((s) => s.name).join(", "))
+            "missing slots — no published node produces them yet: "
+            + p.missing.map((s) => s.name).join(", "))
         : null,
       h("div", { class: "muted" },
         "estimated total: " + money(p.estimated_gross_total)
@@ -417,7 +427,7 @@ function assembleScreen() {
         ? h("div", { class: "error" }, p.budget.reasons.join("; "))
         : null,
       h("table", {},
-        h("tr", {}, h("th", {}, "step"), h("th", {}, "kind"),
+        h("tr", {}, h("th", {}, "node"), h("th", {}, "kind"),
           h("th", {}, "price"), h("th", {}, "payouts")),
         p.nodes.map((node) => h("tr", {},
           h("td", {}, node.name + (node.gap ? " (gap)" : "")),
@@ -426,18 +436,29 @@ function assembleScreen() {
           h("td", {}, node.payout_previews
             .map((x) => x.noder_principal + " " + money(x.amount))
             .join(", "))))),
-      p.complete && p.contract ? h("button", { onclick: run }, "Run this plan") : null,
+      p.complete && p.contract
+        ? h("button", { onclick: run }, "Drive this route") : null,
       confirmOut);
   }
 
   return h("div", {},
+    h("p", { class: "muted" },
+      "Routes are never written by hand: the engine chains published "
+      + "nodes backward from the slot the destination wants, ranked by "
+      + "each node's verified run history. This screen shows the route "
+      + "it would pick right now — nodes, prices, payouts — before "
+      + "anything drives. Nodes themselves are built in the app (in "
+      + "chat) or arrive from the marketplace."),
     h("form", { onsubmit: preview, class: "card" },
-      h("label", { for: "goal" }, "Goal"), goal,
-      h("label", { for: "want" }, "Wanted slot"), want,
+      h("label", { for: "goal" }, "Destination"), goal,
+      h("label", { for: "want" }, "Wanted slot (what the route must produce)"),
+      want,
       h("label", { for: "want-type" }, "Slot type"), wantType,
       h("label", { for: "cost-weight" }, "Cost weight (0 = quality first)"), costWeight,
-      h("label", {}, explore, " explore (Thompson-sample the picks)"),
-      h("button", { type: "submit" }, "Preview")),
+      h("label", {}, explore,
+        " explore — let the engine try a less-proven node "
+        + "(Thompson-sample instead of exploiting verified history)"),
+      h("button", { type: "submit" }, "Preview the route")),
     out);
 }
 
@@ -900,8 +921,8 @@ async function financeScreen() {
 
 /* ---- router ---- */
 const ROUTES = [
-  ["#/runs", "Runs", runsScreen],
-  ["#/assemble", "Assemble", assembleScreen],
+  ["#/runs", "Workflows", runsScreen],
+  ["#/assemble", "Route preview", assembleScreen],
   ["#/inbox", "Inbox", inboxScreen],
   ["#/skills", "Skills", skillsScreen],
   ["#/earnings", "Earnings", earningsScreen],
@@ -920,7 +941,8 @@ function render() {
   const nav = h("nav", {}, ROUTES.map(([href, label]) =>
     h("a", { href, class: hash.startsWith(href) ? "active" : "" }, label)));
   app.append(h("header", {},
-    h("h1", {}, "OoLu"), nav,
+    h("h1", {}, "OoLu"),
+    h("span", { class: "muted" }, "operator console"), nav,
     h("span", { class: "who" }, session.principal + " · ",
       h("a", { href: "#", onclick: (e) => {
         e.preventDefault(); session.signOut();

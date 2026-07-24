@@ -120,7 +120,7 @@ def test_a_user_signs_in_works_and_signs_out(host_server):
         expect(page.get_by_text("invalid credentials")).to_be_visible()
 
         _sign_in(page, host_server.url, "admin", "first-pass")
-        expect(page.get_by_text("No runs yet")).to_be_visible()
+        expect(page.get_by_text("No workflows yet")).to_be_visible()
         expect(page.get_by_text("admin ·")).to_be_visible()
 
         # Health renders the live metrics table.
@@ -174,7 +174,7 @@ def test_members_see_screens_degrade_honestly(host_server):
         page.get_by_role("link", name="sign out").click()
 
         _sign_in(page, host_server.url, "carol", "carols-password")
-        expect(page.get_by_text("No runs yet")).to_be_visible()
+        expect(page.get_by_text("No workflows yet")).to_be_visible()
         # No stored users:manage authority: the screen says so, plainly.
         page.get_by_role("link", name="Users").click()
         expect(page.get_by_text("Your account does not have authority")).to_be_visible()
