@@ -1116,7 +1116,11 @@ def obviously_chat(goal: str) -> bool:
 
 
 def author_node_function(
-    model: ChatModel, goal: str, *, demonstrated: list[str] | None = None
+    model: ChatModel,
+    goal: str,
+    *,
+    demonstrated: list[str] | None = None,
+    context: str = "",
 ) -> tuple[str | None, dict, str]:
     """``(script, io, refusal_reason)`` — the creation gates in one call.
 
@@ -1130,23 +1134,18 @@ def author_node_function(
     steps (plus the runs their window logged). The steps ARE the plan —
     the model's one job is to write the function that performs them in
     order, never to re-plan the work its teacher already laid out.
+
+    ``context`` is the compiled desk context pack (contextpack.py):
+    slot vocabulary, upstream shapes, similar contracts, verified
+    examples — PUSHED into the request so even the prose channel stops
+    writing blind. Empty keeps the request the bare goal, unchanged.
     """
+    from .contextpack import compose_build_request
     from .routing.gateway import extract_script
 
-    content = goal
-    if demonstrated:
-        numbered = "\n".join(
-            f"{i}. {step}" for i, step in enumerate(demonstrated, start=1)
-        )
-        content = (
-            f"{goal}\n\n"
-            "The user DEMONSTRATED this procedure step by step — imitate "
-            "it exactly. The numbered steps below ARE the plan: write the "
-            "function that performs them in this order; do not invent a "
-            "different approach. Lines marked (observed: …) are execution "
-            "logs recorded while they demonstrated.\n"
-            f"{numbered}"
-        )
+    content = compose_build_request(
+        goal, demonstrated=demonstrated, context=context
+    )
     try:
         raw = model.reply(
             [

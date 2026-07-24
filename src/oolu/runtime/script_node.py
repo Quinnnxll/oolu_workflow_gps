@@ -488,11 +488,24 @@ class NodeScriptRunner:
             if repairer is not None:
                 current = str(provided)
                 failure_words = self._failure_words(result, record, gap)
+                # The repair ledger: every round's failure rides along
+                # inside the error text (context-harness plan, Phase 3),
+                # so round two knows what round one already tried and
+                # failed at — no synthesizer signature change, the words
+                # ARE the channel.
+                failure_ledger: list[str] = []
                 for attempt in range(1, 3):
+                    words = failure_words
+                    if failure_ledger:
+                        words = (
+                            failure_words
+                            + "\n\nEarlier repair attempts this run failed with:\n- "
+                            + "\n- ".join(failure_ledger[-2:])
+                        )
                     edited = repairer(
                         render_node_goal(str(goal), bindings),
                         current,
-                        failure_words,
+                        words,
                     )
                     if not edited or edited.strip() == current.strip():
                         break
@@ -550,6 +563,7 @@ class NodeScriptRunner:
                             },
                         )
                     current = edited
+                    failure_ledger.append(failure_words)
                     failure_words = self._failure_words(result, record, gap)
                 stale_error = (
                     "the function failed and repair could not close the "

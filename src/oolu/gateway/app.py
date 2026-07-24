@@ -5333,8 +5333,11 @@ class GatewayApp:
         agentic = (
             bool(ready()) if callable(ready) else hasattr(author, "consult")
         )
+        context = self._author_context(session, author, goal)
         if not agentic:
-            return author_node_function(author, goal, demonstrated=demonstrated)
+            return author_node_function(
+                author, goal, demonstrated=demonstrated, context=context
+            )
         agent = NodeAuthorAgent(
             author,
             catalog=lambda: self._author_catalog(session),
@@ -5342,8 +5345,91 @@ class GatewayApp:
             read_file=read_file,
             verify=self._author_verifier(),
         )
-        authored = agent.author(goal, demonstrated=demonstrated)
+        authored = agent.author(
+            goal, demonstrated=demonstrated, context=context
+        )
         return authored.script, authored.io, authored.refusal
+
+    def _author_context(self, session, author, goal: str) -> str:
+        """The compiled desk pack for one build (contextpack.py): slot
+        vocabulary, upstream shapes for nodes the goal names, similar
+        contracts, and verified example functions read seat-scoped from
+        their drawers — PUSHED into the request on both authoring paths,
+        so the author starts informed instead of writing blind. An empty
+        desk (or a missing nodeplace) compiles nothing and the build
+        proceeds exactly as before."""
+        from ..contextpack import (
+            ContextPackCompiler,
+            NodeExample,
+            similarity as _pack_similarity,
+        )
+
+        catalog = self._author_catalog(session)
+        if not catalog:
+            return ""
+        window = 32_000
+        manifest = getattr(author, "manifest_now", None)
+        if callable(manifest):
+            try:
+                window = int(manifest().context_window) or window
+            except Exception:  # noqa: BLE001 - advisory sizing, never fatal
+                pass
+
+        goal_words = set(re.findall(r"[a-z0-9]+", goal.casefold()))
+        upstream = []
+        for node in catalog:
+            title = str(node.get("title") or "").strip()
+            title_words = {
+                w for w in re.findall(r"[a-z0-9]+", title.casefold()) if len(w) > 2
+            }
+            if not title_words or not title_words.issubset(goal_words):
+                continue
+            outputs = self._author_node_outputs(session, node["node_id"])
+            if outputs:
+                upstream.append(
+                    {
+                        "node_id": node["node_id"],
+                        "title": title,
+                        "outputs": outputs,
+                    }
+                )
+
+        ranked = sorted(
+            catalog,
+            key=lambda node: _pack_similarity(
+                goal, f"{node.get('title', '')} {node.get('goal', '')}"
+            ),
+            reverse=True,
+        )
+        examples = []
+        for node in ranked[:3]:
+            script = self._node_drawer_read(
+                session, node["node_id"], "src/main.py"
+            )
+            if script:
+                examples.append(
+                    NodeExample(
+                        card=node,
+                        script=script,
+                        score=_pack_similarity(
+                            goal, f"{node.get('title', '')} {node.get('goal', '')}"
+                        ),
+                    )
+                )
+
+        pack = ContextPackCompiler(window=window).compile(
+            goal, catalog=catalog, examples=examples, upstream=upstream
+        )
+        if not pack.empty:
+            # The per-call trace the plan's observability starts from:
+            # what rode, what the budget dropped, and the tokens it cost.
+            logging.getLogger("oolu.gateway").info(
+                "node.build context pack: %d tokens, included=%s, excluded=%s",
+                pack.tokens,
+                list(pack.included),
+                list(pack.excluded),
+            )
+        return pack.text
 
     def _author_verifier(self):
         """The author's finish gate made real: a sandbox dry-run of the
@@ -5409,20 +5495,30 @@ class GatewayApp:
             )
         except Exception:  # noqa: BLE001 - the library is advisory context
             return []
-        return [
-            {
-                "node_id": node.node_id,
-                "title": node.title,
-                "goal": node.summary,
-                "consumes": [
-                    {"name": s.name, "type": s.value_type} for s in node.consumes
-                ],
-                "produces": [
-                    {"name": s.name, "type": s.value_type} for s in node.produces
-                ],
-            }
-            for node in nodes[:40]
-        ]
+        catalog: list[dict] = []
+        for node in nodes[:40]:
+            try:
+                catalog.append(
+                    {
+                        "node_id": node.node_id,
+                        "title": node.title,
+                        "goal": node.summary,
+                        "consumes": [
+                            {"name": s.name, "type": s.value_type}
+                            for s in node.consumes
+                        ],
+                        "produces": [
+                            {"name": s.name, "type": s.value_type}
+                            for s in node.produces
+                        ],
+                    }
+                )
+            except AttributeError:
+                # A listing shape without the contract fields (older
+                # stores, test doubles) is skipped, not fatal — the
+                # catalog is advisory context, never a gate.
+                continue
+        return catalog
 
     def _author_node_outputs(self, session, node_id: str) -> list[dict]:
         """A node's recent run results — the shape its work ACTUALLY

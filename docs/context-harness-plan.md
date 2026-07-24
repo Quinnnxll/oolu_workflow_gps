@@ -311,43 +311,43 @@ path constructs every keyed chat request. All in
 scoped to the two seats that write code (`node.build`, `plan.synthesize`).
 Stop making the model guess what the workspace looks like.*
 
-- [ ] **The node-library index.** Embeddings + metadata over every published
-      node: goal, contract (consumes/produces slots), verified `src/main.py`,
-      success stats from the `TraceStore`. This replaces exact-sentence cache
-      keying (`cache/signature.py`) as the *retrieval* mechanism — the cache
-      stays for replay; retrieval feeds prompts.
-- [ ] **The build context pack.** For every `node.build` call, compile:
-      1. the system contract (today's `NODE_FUNCTION_PROMPT` + a distilled
-         `docs/node-generation.md`),
-      2. the goal verbatim,
-      3. **route position**: the actual contracts and last verified output
-         shapes of the upstream/downstream nodes this node must sit between —
-         today's #1 silent failure (authoring against an imagined shape),
-      4. the slot vocabulary in use (so slot names are reused, which is what
-         makes route-finding work),
-      5. 2–3 *similar verified node functions* retrieved from the index as
-         few-shot examples,
-      6. applicable lessons and error patterns
-         (`knowledge/client.py` `error_patterns`, today never prompted),
-      7. the **full error ledger** on repair/rebuild turns, not just
-         `latest_error` (`routing/prompting.py:161`).
-- [ ] **The budgeter.** Allocate the pack against the model's context window
-      using Phase 2's token counting, with the spec's compaction order:
-      preserve verbatim (goal, contracts, current errors, exact values) →
-      compress (older discussion, duplicate examples) → discard first
-      (unrelated chatter). Assembly stays frozen-prefix-first so the
-      cache discipline (`routing/prompting.py:1-26`) and Phase 1's
-      `cache_control` markers keep paying.
-- [ ] **Server-side conversation truth.** Feed chat turns from the persisted
-      `AssistantHistoryStore` rather than trusting the client's last-20 window
-      (`gateway/app.py:1661`, `1447-1454`), with a rolling episode summary
-      once the window overflows — the first compaction in the codebase, done
-      under principle 4 (commitments survive verbatim).
+- [x] **The node-library retrieval.** Similar nodes are retrieved by
+      token-overlap cosine over title+goal (`contextpack.similarity`) and
+      their verified `src/main.py` read seat-scoped from their drawers
+      (`_node_drawer_read`, the `node.build` seat) — retrieval feeds prompts;
+      the exact-match cache stays for replay. The ranking is deliberately a
+      seam: Phase 5's embedding index replaces the scorer, not the pack.
+- [x] **The build context pack** (`src/oolu/contextpack.py`, wired in
+      `gateway/app.py:_author_context` for BOTH authoring paths — pushed, not
+      pull-only): the slot vocabulary in circulation, **route position**
+      (recent verified output shapes of the upstream nodes the goal names —
+      the #1 silent failure closed), similar node contracts, and 2–3 verified
+      example functions. The pack rides ahead of the request via
+      `compose_build_request`; the frozen system contract keeps its cache
+      breakpoint. Lessons ride through the compiler's `lessons` port
+      (error-pattern wiring lands with Phase 5's write-back). And the **full
+      error ledger** now reaches the model: distinct earlier failures render
+      in the synthesis action message (`routing/prompting.py:_render_action`,
+      still cache-safe — fingerprint pinned) and the runner's second repair
+      round carries round one's failure inside the error text
+      (`runtime/script_node.py`, no synthesizer signature change).
+- [x] **The budgeter.** The pack takes at most 30% of the answering model's
+      window (`manifest_now().context_window` when the author exposes it),
+      measured with the Phase 2 token seam, compacted in the spec's order —
+      verbatim classes (vocabulary, upstream shapes) survive whole; examples
+      drop first (lowest score first), then extra contracts, then lessons —
+      and **every drop is recorded** in the pack's included/excluded trace,
+      logged per call.
+- [ ] **Server-side conversation truth.** Deferred to Phase 5 (memory &
+      continuity), where the episode summary it needs lives: feed chat turns
+      from the persisted `AssistantHistoryStore` rather than the client's
+      last-20 window (`gateway/app.py:1661`, `1447-1454`), with a rolling
+      summary once the window overflows, under principle 4.
 
-**Acceptance:** benchmark adds route-position goals (build a node between two
-existing nodes); wrong-shape failures drop to near zero; context-pack traces
-(what was included/excluded, token allocation) are logged per call — the
-spec's observability starting set.
+**Acceptance:** benchmark route-position goals now see their upstream shapes
+on BOTH paths (`bench_context_pack`, pinned in `tests/test_context_pack.py`);
+context-pack traces (included/excluded/tokens) log per call. The live
+wrong-shape delta is read off the keyed benchmark runs.
 
 ---
 

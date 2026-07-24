@@ -75,6 +75,11 @@ if str(_SRC) not in sys.path:  # runnable as a script from the repo root
 
 from oolu.author import NodeAuthorAgent  # noqa: E402
 from oolu.chat import author_node_function  # noqa: E402
+from oolu.contextpack import (  # noqa: E402
+    ContextPackCompiler,
+    NodeExample,
+    similarity,
+)
 from oolu.runtime import sandbox_shim  # noqa: E402
 from oolu.runtime.contract import ContractStatus, parse_stdout  # noqa: E402
 
@@ -184,6 +189,65 @@ BENCH_OUTPUTS: dict[str, list[dict]] = {
         }
     ],
 }
+
+# The catalog nodes' own verified functions — the drawer scripts the
+# context pack offers as few-shot. Deliberately OTHER work than any
+# bench goal: examples teach style and contract, never the answer.
+BENCH_EXAMPLE_SCRIPTS: dict[str, str] = {
+    "node-fetch-sales": (
+        "import json\n"
+        "from _oolu_runtime import emit_result, http_request\n"
+        "answer = http_request('https://ledger.example.com/v1/sales')\n"
+        "if not answer.get('status'):\n"
+        "    from _oolu_runtime import emit_error\n"
+        "    emit_error('the ledger was unreachable: ' + str(answer.get('error')))\n"
+        "else:\n"
+        "    emit_result({'sales_rows': answer['body']})\n"
+    ),
+    "node-notify": (
+        "import json\n"
+        "from _oolu_runtime import emit_result\n"
+        "with open('bindings.json', encoding='utf-8') as fh:\n"
+        "    bindings = json.load(fh)\n"
+        "emit_result({'delivery': 'queued: ' + bindings['message'][:80]})\n"
+    ),
+}
+
+
+def bench_context_pack(goal: BenchGoal) -> str:
+    """The bench's mirror of the gateway's ``_author_context``: the same
+    compiler, fed from the synthetic desk — slot vocabulary, the goal's
+    declared upstream shapes, similar contracts, and the catalog nodes'
+    own verified functions as examples."""
+    upstream = []
+    if goal.upstream:
+        entry = next(
+            (n for n in BENCH_CATALOG if n["node_id"] == goal.upstream), None
+        )
+        outputs = BENCH_OUTPUTS.get(goal.upstream, [])
+        if entry is not None and outputs:
+            upstream.append(
+                {
+                    "node_id": goal.upstream,
+                    "title": entry["title"],
+                    "outputs": outputs,
+                }
+            )
+    examples = [
+        NodeExample(
+            card=node,
+            script=BENCH_EXAMPLE_SCRIPTS[node["node_id"]],
+            score=similarity(
+                goal.goal, f"{node.get('title', '')} {node.get('goal', '')}"
+            ),
+        )
+        for node in BENCH_CATALOG
+        if node["node_id"] in BENCH_EXAMPLE_SCRIPTS
+    ]
+    pack = ContextPackCompiler().compile(
+        goal.goal, catalog=BENCH_CATALOG, examples=examples, upstream=upstream
+    )
+    return pack.text
 
 
 def _goals() -> tuple[BenchGoal, ...]:
@@ -772,8 +836,11 @@ def author_goal(
     injected stubs — the same dispatch the gateway runs."""
     ready = getattr(model, "consult_ready", None)
     agentic = bool(ready()) if callable(ready) else hasattr(model, "consult")
+    context = bench_context_pack(goal)
     if not agentic:
-        script, io, refusal = author_node_function(model, goal.goal)
+        script, io, refusal = author_node_function(
+            model, goal.goal, context=context
+        )
         return Authored(script, io or {}, refusal, consultations=1)
 
     def verify(script: str) -> dict:
@@ -788,7 +855,7 @@ def author_goal(
         outputs=lambda node_id: BENCH_OUTPUTS.get(node_id, []),
         verify=verify,
     )
-    authored = agent.author(goal.goal)
+    authored = agent.author(goal.goal, context=context)
     return Authored(
         authored.script,
         authored.io or {},
@@ -1361,12 +1428,14 @@ _CANNED_REPLIES: dict[str, str] = {
 class ScriptedAuthor:
     """The incumbent: a ``reply``-only model that answers every bench
     goal perfectly and refuses every conversation goal — zero model
-    calls, the reference the bench machinery is proven against."""
+    calls, the reference the bench machinery is proven against. The
+    goal is FOUND in the request (the content now carries the desk
+    context pack ahead of it), exactly as a real model reads it."""
 
     def reply(self, messages: list[dict]) -> str:
-        goal_text = str(messages[-1].get("content", ""))
+        content = str(messages[-1].get("content", ""))
         for goal in GOALS:
-            if goal.goal == goal_text:
+            if goal.goal in content:
                 if goal.kind == "conversation":
                     return "NO_TASK"
                 return _CANNED_REPLIES[goal.key]

@@ -4,6 +4,44 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Context-harness Phase 3 — the build seat gets its context pushed,
+budgeted, and traced:
+
+- **The build context pack** (`src/oolu/contextpack.py`). The node
+  author used to write nearly blind — the one-shot path saw only the
+  goal sentence; the agentic path had to think to pull. Every
+  ``node.build`` call now compiles a pack the way the frontier
+  harnesses do: the slot vocabulary in circulation (routes chain on
+  exact names), the route position — recent VERIFIED output shapes of
+  the upstream nodes the goal names, closing the author's #1 silent
+  failure (code written against an imagined shape) — similar node
+  contracts, and 2–3 verified example functions read seat-scoped from
+  their drawers. Pushed on BOTH authoring paths ahead of the request
+  (``compose_build_request``); the frozen system contract keeps its
+  prompt-cache breakpoint.
+- **Budgeted, compacted, traced.** The pack takes at most 30% of the
+  answering model's window, measured with the Phase 2 token seam and
+  compacted in the spec's order — the verbatim classes (vocabulary,
+  upstream shapes) survive whole; examples drop first, then extra
+  contracts, then lessons — and every drop lands in the pack's
+  included/excluded trace, logged per call. A silently truncated pack
+  reads as complete; this one says what it left out.
+- **The full error ledger reaches the model.** The synthesis prompt
+  now renders the DISTINCT earlier failures, not just the latest
+  (deduped, capped, inside the volatile action message — the
+  cache-safe prefix fingerprint is pinned unchanged), and the runner's
+  second repair round carries round one's failure inside the error
+  text, with no synthesizer signature change.
+- **Retrieval is a seam.** Similarity is token-overlap cosine today —
+  deterministic, offline, dependency-free; Phase 5's embedding index
+  replaces the scorer, not the pack. The bench mirrors the gateway
+  (``bench_context_pack``), so route-position goals now see their
+  upstream shapes on the one-shot path too.
+- **Pinned** by `tests/test_context_pack.py`: pack contents, the
+  compaction order with recorded drops, both authoring paths carrying
+  the pack, the bench mirror, the prompt ledger, the pinned prefix
+  fingerprint, and the repair ledger through the real runner loop.
+
 Context-harness Phase 2 — one canonical model interface:
 
 - **Model manifests** (`providers/registry.py`). What each model can

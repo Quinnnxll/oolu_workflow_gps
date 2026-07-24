@@ -119,22 +119,20 @@ class NodeAuthorAgent:
 
     # ------------------------------------------------------------------ #
     def author(
-        self, goal: str, *, demonstrated: list[str] | None = None
+        self,
+        goal: str,
+        *,
+        demonstrated: list[str] | None = None,
+        context: str = "",
     ) -> AuthoredFunction:
-        content = goal
-        if demonstrated:
-            numbered = "\n".join(
-                f"{i}. {step}" for i, step in enumerate(demonstrated, start=1)
-            )
-            content = (
-                f"{goal}\n\n"
-                "The user DEMONSTRATED this procedure step by step — imitate "
-                "it exactly. The numbered steps below ARE the plan: write the "
-                "function that performs them in this order, never a different "
-                "approach. Lines marked (observed: …) are execution logs "
-                "recorded while they demonstrated.\n"
-                f"{numbered}"
-            )
+        """``context`` is the compiled desk pack (contextpack.py) —
+        pushed, so the agent starts informed instead of having to think
+        to pull; the hands stay available for anything deeper."""
+        from .contextpack import compose_build_request
+
+        content = compose_build_request(
+            goal, demonstrated=demonstrated, context=context
+        )
         outcome: dict[str, Any] = {}
         router = self._hands(outcome)
         transcript: list[dict] = [

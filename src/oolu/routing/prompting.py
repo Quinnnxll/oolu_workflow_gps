@@ -159,6 +159,29 @@ class PromptAssembler:
 
         err = state.latest_error
         if err is not None:
+            # The DISTINCT earlier failures ride too (context-harness
+            # plan, Phase 3): the model used to see only the latest
+            # error and could re-make a mistake from two rounds ago.
+            # Deduped and capped, oldest first, latest excluded — all of
+            # it inside the volatile action message, so the cache-safe
+            # prefix discipline is untouched.
+            earlier: list[str] = []
+            seen: set[tuple[str, str]] = set()
+            for record in state.error_history[:-1]:
+                key = (record.error_class.value, record.message)
+                if key in seen or key == (err.error_class.value, err.message):
+                    continue
+                seen.add(key)
+                earlier.append(
+                    f"  * {record.error_class.value}: {record.message[:200]}"
+                )
+            if earlier:
+                lines.append("")
+                lines.append(
+                    "Earlier attempts already failed these DIFFERENT ways"
+                    " (do not reintroduce any of them):"
+                )
+                lines.extend(earlier[-4:])
             lines.append("")
             lines.append("The previous attempt failed:")
             lines.append(f"- error: {err.error_class.value}")
