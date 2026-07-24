@@ -188,15 +188,19 @@ forever, universal prohibitions never.*
 
 ### Phase M4 — skill induction (ignition)
 
-**Status: LANDED (induction half)** — `src/oolu/skillinduction.py`:
+**Status: LANDED** — `src/oolu/skillinduction.py`:
 contiguous-motif mining over the verified trace corpus (failed runs never
 teach), spine-backed candidacy with fresh-count supersession, promotion at
 the doc's thresholds (support ≥5, contexts ≥3), and `skills_for` as the
-route-side reader. The replay gate and publication landed in the
-follow-up: `replay_gate` (contradiction budget ≤5%, closedness, order
-significance — every failed bar named) and `publish_skill` through an
-injected contribute door, recording ``skill-published`` with listing
-provenance (`tests/test_skill_induction.py`).
+route-side reader (consulted by M5's reranker seat). The replay gate and
+publication landed in the follow-up: `replay_gate` (contradiction budget
+≤5%, closedness, order significance — every failed bar named) and
+`publish_skill` through an injected contribute door, recording
+``skill-published`` with listing provenance; a failed gate writes an M3
+failure record scoped to the motif — the exhaust is fuel
+(`tests/test_skill_induction.py`). Remaining: value abstraction /
+parameter anti-unification (promoted skills are verbatim motifs until
+the corpus carries parameterizable volume worth abstracting).
 
 *Repeated verified subgraphs become parameterized skills — the step
 that makes capability compound instead of repeat.*
@@ -218,6 +222,29 @@ that makes capability compound instead of repeat.*
   caught by mutation testing and stored as negative knowledge.
 
 ### Phase M5 — reinforcement route learning (the RL rungs, in order)
+
+**Status: LANDED (core)** — `src/oolu/routelearning.py` +
+`route_observations` on the TraceStore (rung 1: one row per route
+decision; the §20 reward with the verified-only bar — an unverified run
+has NO reward, not a magnitude). Rung 2: `context_bucket` folds goal
+class / desk shape / model manifest into the context key every standing
+Thompson choice already buckets by — posterior per (route, bucket),
+global fallback as the cold-start floor. Rung 3: `ObservationReranker`
+behind the `ProposalModel` port at `DEFAULT_PROPOSAL_STRENGTH`
+(no-evidence candidates omitted, exceptions downgrade to no-advice,
+rollback is unplugging the port) — and it consults `skills_for`, wiring
+M4's route-side reader to a live seat. Rung 4: `grow_corpus` widens the
+exporter's JSONL with promoted skills and reward-carrying observations
+(source-tagged); training stays off-box and nothing bills until
+`earns_its_cost` passes in the standing replay harness. Rung 5:
+`exploration_rng` is the only door randomness enters a chooser through —
+OFF by default, irreversible actions refused structurally, risk budget
+and spend cap enforced before an rng exists. Every rung's OFF switch is
+a `RouteLearningConfig` field (`tests/test_route_learning.py`; the
+acceptance replay shows contextual `route_regret` strictly below the
+frozen heuristic's). Remaining: the off-box 3B training run itself, and
+gateway seats passing live desk/manifest features as observation volume
+arrives.
 
 *The doc's progression, each rung gated by the last — never skipping to
 online RL.*

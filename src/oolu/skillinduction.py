@@ -13,12 +13,13 @@ how to plan) — with promotion holding the doc's thresholds:
 
 Candidates and promotions ride the M0 spine (``skill-candidate`` →
 ``skill``), provenance citing the supporting runs, supersession
-carrying candidacy into promotion. What is deliberately NOT here yet,
-recorded in the plan: replay-against-history and mutation testing
-(`orchestrator/replay.py`) as the final promotion gate, and the
-publication of a promoted skill as a marketplace node bundle — the
-induction half had to exist before the audition half has anything to
-audition.
+carrying candidacy into promotion. The audition half lives below:
+``replay_gate`` (replay against the corpus as it stands, plus the
+closedness and order-significance mutations) is the final bar, and
+``publish_skill`` turns a promoted, gate-passing skill into a
+marketplace bundle through an injected contribute door. A promotion
+that fails the gate writes an M3 failure record — the chain
+reaction's exhaust is fuel, never silence.
 """
 
 from __future__ import annotations
@@ -234,9 +235,11 @@ def publish_skill(
     """Publication — a promoted skill becomes a marketplace node bundle
     through the injected ``contribute`` door (the gateway/nodeplace owns
     the actual listing walls). Refuses in words without a promoted
-    skill or past a failed replay gate; success records
-    ``skill-published`` on the spine citing both the skill and the
-    listing."""
+    skill or past a failed replay gate — and a failed gate writes an
+    M3 failure record scoped to the motif, so the false promotion is
+    stored as negative knowledge instead of vanishing into a refusal
+    string. Success records ``skill-published`` on the spine citing
+    both the skill and the listing."""
     scope = (tenant, f"motif:{motif_key}")
     found = spine.recall(scope, kinds=("skill",), limit=1)
     if not found:
@@ -245,6 +248,16 @@ def publish_skill(
     steps = list((skill.get("structured_value") or {}).get("steps", []))
     verdict = replay_gate(store, steps=steps)
     if not verdict["passed"]:
+        from .negative import record_failure  # local: M3 is the exhaust pipe
+
+        record_failure(
+            spine,
+            tenant=tenant,
+            subject=f"motif:{motif_key}",
+            problem="replay gate: " + "; ".join(verdict["reasons"]),
+            sources=(f"memory:{skill['memory_id']}",),
+            reopen_conditions=("corpus grew",),
+        )
         return {
             "published": False,
             "reason": "replay gate failed: " + "; ".join(verdict["reasons"]),

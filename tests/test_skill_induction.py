@@ -28,6 +28,9 @@ def test_a_repeated_motif_promotes_across_distinct_goals(tmp_path):
                 success=True,
             )
         si.induce(store, spine, tenant="t1")
+        (candidate,) = spine.recall(
+            ("t1", "motif:route:a→route:b→route:c"), kinds=("skill-candidate",)
+        )
         skill = si.promote(spine, tenant="t1", motif_key="route:a→route:b→route:c")
         assert skill is not None
         # The candidacy is superseded by the promotion — one record serves.
@@ -37,7 +40,9 @@ def test_a_repeated_motif_promotes_across_distinct_goals(tmp_path):
             limit=5,
         )
         assert only["verification_state"] == "verified"
-        assert f"memory:{skill - 0}" not in only["provenance"] or True
+        # The promotion answers where it came from: the superseded
+        # candidacy rides its provenance as a resolvable memory id.
+        assert f"memory:{candidate['memory_id']}" in only["provenance"]
         # The reader closes the loop: the motif inside a proposed route.
         hits = si.skills_for(
             spine, tenant="t1",
@@ -129,6 +134,49 @@ def test_contradicted_motifs_fail_the_replay_budget(tmp_path):
         verdict = si.replay_gate(store, steps=["route:a", "route:b"])
         assert not verdict["passed"]
         assert any("contradiction rate" in r for r in verdict["reasons"])
+    finally:
+        conn.close()
+
+
+def test_a_failed_promotion_is_stored_as_negative_knowledge(tmp_path):
+    store, conn, spine = _rig(tmp_path)
+    try:
+        # Enough clean history to promote — then the corpus turns on the
+        # motif: contradictions past the 5% budget arrive AFTER candidacy.
+        for goal in ("g1", "g2", "g3", "g4", "g5"):
+            store.record_run(
+                goal=goal, steps=[_ok("route:a"), _ok("route:b")], success=True
+            )
+        si.induce(store, spine, tenant="t1")
+        si.promote(spine, tenant="t1", motif_key="route:a→route:b")
+        store.record_run(
+            goal="g6", steps=[_ok("route:a"), _ok("route:b")], success=False
+        )
+        contribute = lambda manifest: "L1"  # noqa: E731
+        refused = si.publish_skill(
+            spine, store, tenant="t1", motif_key="route:a→route:b",
+            contribute=contribute,
+        )
+        assert not refused["published"]
+        # The exhaust is fuel: the false promotion rides the spine as an
+        # M3 failure record, scoped to the motif, citing the skill row.
+        (failure,) = spine.recall(
+            ("t1", "motif:route:a→route:b"), kinds=("failure",)
+        )
+        value = failure["structured_value"]
+        assert value["mechanism"] == "replay gate"
+        assert value["reproductions"] == 1
+        assert any(p.startswith("memory:") for p in failure["provenance"])
+        # A second failed attempt REPRODUCES the failure — evidence
+        # promotes the record instead of stacking duplicates.
+        si.publish_skill(
+            spine, store, tenant="t1", motif_key="route:a→route:b",
+            contribute=contribute,
+        )
+        (failure,) = spine.recall(
+            ("t1", "motif:route:a→route:b"), kinds=("failure",)
+        )
+        assert failure["structured_value"]["reproductions"] == 2
     finally:
         conn.close()
 

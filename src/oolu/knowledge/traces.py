@@ -25,6 +25,13 @@ goals and sharpen with every run:
   "what did whole successful plans look like" — the training corpus for
   learned planners (``knowledge.corpus``), exportable for offline model
   training without a second bookkeeping path.
+- **Route observations** (memory-stack plan M5, rung 1): one row per
+  route DECISION — context features and bucket, the route chosen, node
+  versions, outcome score, actual cost/latency, interventions, reuse
+  created. The run log records what happened; this records what was
+  chosen and what the choice cost, which is exactly the (context,
+  action, consequence) shape route policies learn from
+  (``oolu.routelearning`` owns the reward expression and the readers).
 
 Everything is persisted in SQLite, so the statistics accumulate across
 processes and sessions: the system grows with the user's executions without a
@@ -103,6 +110,28 @@ class RecordedRun:
         return frozenset(step.node_key for step in self.steps)
 
 
+@dataclass(frozen=True, slots=True)
+class RouteObservation:
+    """One route DECISION and what came of it — the route-learning
+    dataset unit (memory-stack plan M5, rung 1). Where ``RecordedRun``
+    keeps what happened step by step, this row keeps the choice: the
+    context the chooser stood in, the route it committed to, and the
+    measured consequences a reward can be computed from."""
+
+    goal: str
+    route: str
+    context_bucket: str
+    features: dict
+    success: bool
+    outcome_score: float
+    cost: float
+    latency: float
+    node_versions: tuple[str, ...]
+    interventions: int
+    reuse_created: int
+    recorded_at: str
+
+
 def _create(conn: sqlite3.Connection) -> None:
     conn.execute(
         """CREATE TABLE IF NOT EXISTS trace_node_stats (
@@ -147,9 +176,38 @@ def _drop_run_log(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE IF EXISTS trace_runs")
 
 
+def _create_route_observations(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS route_observations (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               goal TEXT NOT NULL,
+               route TEXT NOT NULL,
+               context_bucket TEXT NOT NULL DEFAULT '',
+               features TEXT NOT NULL DEFAULT '{}',
+               success INTEGER NOT NULL,
+               outcome_score REAL NOT NULL,
+               cost REAL NOT NULL DEFAULT 0,
+               latency REAL NOT NULL DEFAULT 0,
+               node_versions TEXT NOT NULL DEFAULT '[]',
+               interventions INTEGER NOT NULL DEFAULT 0,
+               reuse_created INTEGER NOT NULL DEFAULT 0,
+               recorded_at TEXT NOT NULL
+           )"""
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS route_observations_route_idx"
+        " ON route_observations (route, context_bucket)"
+    )
+
+
+def _drop_route_observations(conn: sqlite3.Connection) -> None:
+    conn.execute("DROP TABLE IF EXISTS route_observations")
+
+
 TRACE_STORE_MIGRATIONS: tuple[Migration, ...] = (
     Migration(up=_create, down=_drop),
     Migration(up=_create_run_log, down=_drop_run_log),
+    Migration(up=_create_route_observations, down=_drop_route_observations),
 )
 
 
@@ -297,6 +355,103 @@ class TraceStore:
                     NodeObservation(node_key=key, ok=bool(ok), cost=cost)
                     for key, ok, cost in json.loads(row["steps"])
                 ),
+                recorded_at=row["recorded_at"],
+            )
+            for row in rows
+        ]
+
+    # ------------------------------------------------------------------ #
+    # Route observations: the route-learning dataset (plan M5, rung 1).   #
+    # ------------------------------------------------------------------ #
+    def record_observation(
+        self,
+        *,
+        goal: str,
+        route: str,
+        success: bool,
+        outcome_score: float,
+        context_bucket: str = "",
+        features: dict | None = None,
+        cost: float = 0.0,
+        latency: float = 0.0,
+        node_versions: Sequence[str] = (),
+        interventions: int = 0,
+        reuse_created: int = 0,
+    ) -> int:
+        """One route decision's full consequence row; returns its id.
+
+        Deliberately separate from :meth:`record_run`: a run log entry is
+        what HAPPENED, an observation is what was CHOSEN and what the
+        choice cost — recorded by the seat that made the choice, with the
+        context bucket it stood in, so a policy can later be trained on
+        (context, choice, consequence) without re-deriving any of it.
+        """
+        now = datetime.now(UTC).isoformat()
+        with self._lock:
+            cursor = self._db.execute(
+                """INSERT INTO route_observations
+                   (goal, route, context_bucket, features, success,
+                    outcome_score, cost, latency, node_versions,
+                    interventions, reuse_created, recorded_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    goal,
+                    route,
+                    context_bucket,
+                    json.dumps(dict(features or {}), ensure_ascii=False),
+                    1 if success else 0,
+                    float(outcome_score),
+                    float(cost),
+                    float(latency),
+                    json.dumps([str(v) for v in node_versions]),
+                    int(interventions),
+                    int(reuse_created),
+                    now,
+                ),
+            )
+            self._db.commit()
+            return int(cursor.lastrowid)
+
+    def observations(
+        self,
+        *,
+        route: str | None = None,
+        context_bucket: str | None = None,
+        limit: int = 500,
+    ) -> list[RouteObservation]:
+        """Recorded route observations, newest first. ``None`` filters
+        mean "all"; the empty string is a real (global) bucket."""
+        query = (
+            "SELECT goal, route, context_bucket, features, success,"
+            " outcome_score, cost, latency, node_versions, interventions,"
+            " reuse_created, recorded_at FROM route_observations"
+        )
+        clauses, params = [], []
+        if route is not None:
+            clauses.append("route = ?")
+            params.append(route)
+        if context_bucket is not None:
+            clauses.append("context_bucket = ?")
+            params.append(context_bucket)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+        with self._lock:
+            rows = self._db.execute(query, params).fetchall()
+        return [
+            RouteObservation(
+                goal=row["goal"],
+                route=row["route"],
+                context_bucket=row["context_bucket"],
+                features=json.loads(row["features"] or "{}"),
+                success=bool(row["success"]),
+                outcome_score=float(row["outcome_score"]),
+                cost=float(row["cost"]),
+                latency=float(row["latency"]),
+                node_versions=tuple(json.loads(row["node_versions"] or "[]")),
+                interventions=int(row["interventions"]),
+                reuse_created=int(row["reuse_created"]),
                 recorded_at=row["recorded_at"],
             )
             for row in rows

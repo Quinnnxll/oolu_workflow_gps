@@ -4,6 +4,70 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Memory-stack M5 — reinforcement route learning, the rungs in order:
+
+- **Rung 1, the dataset.** ``route_observations`` extends the
+  TraceStore (its own migration, beside the run log): one row per
+  route DECISION — context features and bucket, chosen route, node
+  versions, outcome score, actual cost/latency, interventions, reuse
+  created. ``routelearning.reward`` is the §20 expression under the
+  repo's standing bar: only verified outcomes teach — an unverified
+  run has no reward, not a negative one (its failure already counts
+  once, in the Beta posterior).
+- **Rung 2, the contextual bandit.** ``context_bucket`` folds the
+  plan's features (goal class via the planner's bounded band, desk
+  shape, model manifest) into the canonical context key the
+  TraceStore's Thompson machinery already buckets by — posterior per
+  (route, context bucket), the store's global fallback as the
+  cold-start floor. No new chooser: the bandit was always there, the
+  context just reached it.
+- **Rung 3, the learned reranker.** ``ObservationReranker`` behind
+  the assembler's ``ProposalModel`` port at
+  ``DEFAULT_PROPOSAL_STRENGTH``: endorsements from mean verified
+  reward in the current bucket, no-evidence candidates omitted (no
+  opinion is never "advised against"), exceptions downgrading to
+  no-advice, rollback = unplugging the port. Promoted M4 skills speak
+  here too: ``skills_for`` is consulted and a candidate completing a
+  promoted motif is endorsed — M4's route-side reader, wired to a
+  live seat.
+- **Rung 4, the offline policy's corpus.** ``grow_corpus`` widens the
+  exporter's JSONL with promoted skills (verified sequences) and
+  observations (reward-carrying decision rows), every line naming its
+  ``source``; unverified rewards export as null — the training job
+  filters or weighs, the exporter never editorializes. Training stays
+  off-box; the audition is the standing replay harness and nothing
+  bills until ``earns_its_cost`` passes.
+- **Rung 5, constrained exploration.** ``exploration_rng`` is the
+  only door randomness enters a chooser through: OFF by default,
+  irreversible actions refused STRUCTURALLY (no budget buys them
+  back), the risk budget and spend cap enforced before an rng exists
+  — a policy violation is impossible by construction. Every rung's
+  OFF switch is a ``RouteLearningConfig`` field.
+- **Pinned** by ``tests/test_route_learning.py``: verbatim rows and
+  the verified-only reward, the acceptance replay (contextual
+  ``route_regret`` strictly below the frozen heuristic's), reranker
+  containment through the real assembler (advice decides the
+  thin-history tie; unplugged returns to the floor; a broken store
+  yields no-advice), the skill endorsement, the three-source corpus,
+  the audition gate refusing the abstainer, and every rung switch.
+
+Memory-stack M4 completion — the exhaust wired, the record honest:
+
+- **Failed promotions write failure records (M3).** ``publish_skill``
+  past a failed replay gate now lands the false promotion on the
+  spine as a scoped M3 failure record (mechanism ``replay gate``,
+  reopen condition "corpus grew", the skill row as provenance) —
+  the chain reaction's exhaust is fuel, not a vanished refusal
+  string. A second failed attempt REPRODUCES the record instead of
+  stacking duplicates.
+- **The stale docstring and the vacuous assertion.** The module
+  docstring claimed the replay gate and publication were "not here
+  yet" 130 lines above their implementations; the promotion test
+  carried an always-true assertion (``... or True``). Both are now
+  what they should have been: the docstring names the landed gate,
+  and the test pins the real provenance law — a promotion cites the
+  candidacy it superseded as a resolvable memory id.
+
 Memory-stack M4 remainders — the final gate and the marketplace door:
 
 - **`replay_gate`** (``skillinduction.py``): the deterministic form of
