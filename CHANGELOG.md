@@ -4,6 +4,24 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The memory-stack build plan — phases for the atomic chain reaction:
+
+- **`docs/memory-stack-plan.md`.** The building phases for the
+  Adaptive Capability Web's memory substrate: the atomic memory spine
+  (the BuildLedger pattern promoted to a platform contract), the
+  temporal graph with validity intervals, episodic memory and the
+  first hierarchical summaries, first-class scoped negative knowledge
+  with the pre-commitment check, skill induction from the trace
+  corpus, the reinforcement route-learning rungs (dataset → contextual
+  bandit → bounded reranker → the node-token planner trained offline →
+  constrained exploration), and multi-agent work over shared state.
+  Every phase ships its writer, its reader, and a loop-closure test —
+  records no seat consumes are deleted, not documented. Grounded
+  seam-by-seam in the completed context-harness arc: the durable
+  stores, TraceStore, ProposalModel containment, the Embedder seam,
+  seats, and the earns_its_cost replay gate are the ignition already
+  wired.
+
 Context-harness epilogue — the arc measured, the seam filled:
 
 - **The harness-delta scorecard** (``benchmarks/harness_delta.py``).
