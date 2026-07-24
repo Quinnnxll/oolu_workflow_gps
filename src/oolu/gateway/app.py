@@ -54,6 +54,7 @@ from ..chat import (
     ModelUnavailable,
     NodeChatTools,
     author_node_function,
+    repair_node_function,
     consent_answer,
     messaging_intent,
     mood_directive,
@@ -3365,11 +3366,73 @@ class GatewayApp:
         # sees what building the node actually drew (the resource question).
         meter = getattr(self, "_model_meter", None)
         spent_before = len(meter.charges()) if meter is not None else 0
-        script, io, refusal = self._author_function(
+        script, io, refusal, already_verified = self._author_function(
             session, author, goal, demonstrated
         )
         if script is None:
             return f"error: {refusal}"
+        # --- the birth gate (context-harness plan, Phase 4) ------------- #
+        # No node publishes without its function having proven it executes
+        # and speaks the contract. Static walls first (safety screen, mock
+        # smells, contract presence, interface honesty), then verify by
+        # execution where this host carries a script runtime — the same
+        # verify-before-trust bar runs already live by, moved to BIRTH. A
+        # failure buys bounded repair rounds (the runtime's edit-don't-
+        # rewrite discipline, before publish instead of after), then an
+        # honest refusal: an unpublished node beats an unstable one. The
+        # transaction states land on the audit log with the publish.
+        transaction: list[str] = ["proposed", "generated"]
+        repair_rounds = 0
+        while True:
+            problem = self._birth_problem(script, io)
+            validated = "validated-static"
+            if problem is None and already_verified and repair_rounds == 0:
+                # The agent's finish gate already ran this exact script
+                # in the sandbox — the walls stand; the run is not paid
+                # twice. A repaired script always re-verifies.
+                validated = "validated"
+            elif problem is None:
+                verify = self._author_verifier(ports=(io or {}).get("outputs"))
+                if verify is not None:
+                    report = verify(script)
+                    if report.get("ok"):
+                        validated = "validated"
+                        note = report.get("honest_error")
+                        if note:
+                            # Executed, spoke the contract, and honestly
+                            # named the data it cannot reach at birth —
+                            # recorded, never punished.
+                            transaction.append(
+                                f"honest-error:{str(note)[:120]}"
+                            )
+                    else:
+                        problem = str(
+                            report.get("error")
+                            or "the function failed in the sandbox"
+                        )
+            if problem is None:
+                transaction.append(validated)
+                break
+            if repair_rounds >= 2:
+                return (
+                    "error: the function failed birth verification — "
+                    f"{problem} — and repair could not close the gap, so "
+                    "nothing was published"
+                )
+            repair_rounds += 1
+            transaction.append(f"repair:{problem[:120]}")
+            edited, edited_io = repair_node_function(
+                author, goal, script, problem
+            )
+            if not edited:
+                return (
+                    "error: the function failed birth verification — "
+                    f"{problem} — and the model produced no usable repair, "
+                    "so nothing was published"
+                )
+            script = edited
+            if edited_io is not None:
+                io = edited_io
         cost_note = self._build_cost_note(meter, spent_before)
         name = concise_name(goal)
         skill = ReusableSkill.model_validate(
@@ -3453,6 +3516,7 @@ class GatewayApp:
                 consented=True,
             )
             desk_files.write("src/main.py", script)
+            transaction.append("published")
             self._durable.audit.append(
                 "model.seat",
                 {
@@ -3461,6 +3525,9 @@ class GatewayApp:
                     "by": session.principal_id,
                     "node_id": new_id,
                     "written": desk_files.written,
+                    # The birth transaction, on the record: proposed →
+                    # generated → (repairs) → validated → published.
+                    "transaction": list(transaction),
                 },
             )
             # The birth commit: the authored function is the chain's root.
@@ -3570,7 +3637,7 @@ class GatewayApp:
         )
         meter = getattr(self, "_model_meter", None)
         spent_before = len(meter.charges()) if meter is not None else 0
-        script, io, refusal = self._author_function(
+        script, io, refusal, _verified = self._author_function(
             session,
             author,
             goal,
@@ -5315,8 +5382,8 @@ class GatewayApp:
         return self._tenant_model(tenant, purpose="node.build")
 
     def _author_function(self, session, author, goal, demonstrated, *, read_file=None):
-        """``(script, io, refusal)`` through the strongest path the seated
-        model supports: a tool-calling brain works as the
+        """``(script, io, refusal, verified)`` through the strongest path
+        the seated model supports: a tool-calling brain works as the
         :class:`NodeAuthorAgent` — the desk's contracts and upstream
         outputs in hand, plus a drawer read for revisions — while a model
         without reliable native tool calling keeps the one-shot
@@ -5328,27 +5395,35 @@ class GatewayApp:
         distinguished models at all; a small local model now honestly
         routes to the fenced-code path built for it. Injected authors
         without the manifest port (test stubs, custom seams) keep the
-        old shape-based dispatch."""
+        old shape-based dispatch.
+
+        ``verified``: the returned script already passed the sandbox
+        verify hand (the agent's finish gate runs it on the exact script
+        delivered) — the birth gate keeps its static walls but skips a
+        redundant execution."""
         ready = getattr(author, "consult_ready", None)
         agentic = (
             bool(ready()) if callable(ready) else hasattr(author, "consult")
         )
         context = self._author_context(session, author, goal)
         if not agentic:
-            return author_node_function(
+            script, io, refusal = author_node_function(
                 author, goal, demonstrated=demonstrated, context=context
             )
+            return script, io, refusal, False
+        verify = self._author_verifier()
         agent = NodeAuthorAgent(
             author,
             catalog=lambda: self._author_catalog(session),
             outputs=lambda node_id: self._author_node_outputs(session, node_id),
             read_file=read_file,
-            verify=self._author_verifier(),
+            verify=verify,
         )
         authored = agent.author(
             goal, demonstrated=demonstrated, context=context
         )
-        return authored.script, authored.io, authored.refusal
+        already_verified = verify is not None and authored.script is not None
+        return authored.script, authored.io, authored.refusal, already_verified
 
     def _author_context(self, session, author, goal: str) -> str:
         """The compiled desk pack for one build (contextpack.py): slot
@@ -5431,23 +5506,89 @@ class GatewayApp:
             )
         return pack.text
 
-    def _author_verifier(self):
+    @staticmethod
+    def _birth_problem(script: str, io: dict) -> str | None:
+        """The birth gate's static walls, one correctable sentence each —
+        every path, every model, before any publish. The one-shot path
+        used to skip the safety screen and the emit_result check
+        entirely (they ran only at first execution, which is exactly
+        when 'node creation is unstable' was felt); and a script that
+        reads bindings the interface never declared is the silent
+        degradation Phase 2 made loud, now held at the door."""
+        from ..nodeplace.screening import mock_smells, screen_script
+
+        flags = screen_script(script)
+        if flags:
+            return "refused by the safety screen: " + "; ".join(flags)
+        smells = mock_smells(script)
+        if smells:
+            return "the function only pretends — " + "; ".join(smells)
+        if "emit_result" not in script and "emit_error" not in script:
+            return (
+                "the script never calls emit_result — it must import "
+                "emit_result from _oolu_runtime and call it exactly once "
+                "with its final answer"
+            )
+        if "bindings.json" in script and not (io or {}).get("inputs"):
+            return (
+                "the script reads ./bindings.json but the declared "
+                "interface lists no inputs — declare the inputs it "
+                "actually consumes so routes can bind them"
+            )
+        return None
+
+    def _author_verifier(self, ports: list[dict] | None = None):
         """The author's finish gate made real: a sandbox dry-run of the
-        candidate script through the SAME script hand contract runs use —
-        safety screen, dependency healing, contract classification — with
-        NO web grant and NO staged files, so nothing leaves the box (a
-        refused ``http_request`` answers status 0, exactly what the
-        script contract teaches the function to read and report). No
-        script runtime on this host → None: the agent authors without
-        the verify hand, exactly as before."""
+        candidate script — safety screen, dependency healing, contract
+        classification — with NO web grant and NO staged files, so
+        nothing leaves the box. No script runtime on this host → None:
+        the caller's gate degrades to its static checks.
+
+        Where the runner speaks ``verify_function`` (the birth-verify
+        primitive), the function under test is the function judged — no
+        repair, no resynthesis substituting a different script — and an
+        HONEST structured error passes: at birth no real bindings are
+        staged, so a function that names its missing data has proven it
+        executes and speaks the contract (the Phase 0 finding that an
+        honest input-reading function could never pass this hand,
+        fixed). Legacy runners without the primitive keep the old
+        execute-based dry run."""
         runner = self._contract_executors.get("script")
         if runner is None:
             return None
+        verify_fn = getattr(runner, "verify_function", None)
 
         def verify(script: str) -> dict:
             import hashlib
 
             digest = hashlib.sha256(script.encode()).hexdigest()[:16]
+            if callable(verify_fn):
+                try:
+                    report = verify_fn(
+                        "verify the authored function executes and speaks "
+                        "the contract",
+                        script,
+                        session_id=f"author-verify:{digest}",
+                        ports=list(ports or []),
+                    )
+                except Exception as exc:  # noqa: BLE001 - answered, never fatal
+                    return {
+                        "ok": False,
+                        "error": f"the sandbox could not run the script: {exc}",
+                    }
+                if report.get("ok"):
+                    return {"ok": True}
+                if report.get("honest_error"):
+                    return {
+                        "ok": True,
+                        "honest_error": str(report.get("error") or ""),
+                    }
+                return {
+                    "ok": False,
+                    "error": str(
+                        report.get("error") or "the script failed in the sandbox"
+                    ),
+                }
             action = ActionEvent(
                 correlation_id="author-verify",
                 adapter="script",

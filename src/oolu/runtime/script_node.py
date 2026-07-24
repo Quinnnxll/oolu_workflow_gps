@@ -650,6 +650,86 @@ class NodeScriptRunner:
         )
 
     # ------------------------------------------------------------------ #
+    def verify_function(
+        self,
+        goal: str,
+        script: str,
+        *,
+        session_id: str,
+        ports: list[dict] | None = None,
+    ) -> dict:
+        """One candidate function against the contract — the BIRTH-VERIFY
+        primitive (context-harness plan, Phase 4). The function under
+        test is the function judged: missing imports heal in place (the
+        same bounded loop a provided script gets), but there is NO model
+        repair and NO resynthesis here — a substitute passing is not the
+        authored function passing, and ``execute``'s recovery ladder
+        exists for RUNS, not for judging births.
+
+        Returns ``{"ok", "honest_error", "error", "healed"}``. ``ok``:
+        ran clean (and, when ``ports`` are declared, the payload carries
+        them — a run that skips its declared ports is a mocked answer).
+        ``honest_error``: the contract WORKED and the function reported
+        a structured failure (emit_error) — at birth, with no real
+        bindings staged, that is an honest function naming its missing
+        data, not a broken one; the caller decides what it is worth."""
+        from .contract import ContractStatus, parse_stdout
+
+        deps: list[str] = []
+        result: ExecutionResult | None = None
+        record = None
+        for _ in range(3):
+            result = self._run_script(
+                script, deps, session_id, web=None, files=None, bundle=None
+            )
+            record = classify(result)
+            if record is None:
+                gap = self._answer_gap(result, ports or [])
+                if gap is not None:
+                    return {
+                        "ok": False,
+                        "honest_error": False,
+                        "error": f"output contract violated — {gap}",
+                        "healed": list(deps),
+                    }
+                return {
+                    "ok": True,
+                    "honest_error": False,
+                    "error": "",
+                    "healed": list(deps),
+                }
+            if (
+                record.error_class is ErrorClass.MISSING_DEPENDENCY
+                and record.missing_module
+                and record.missing_module not in deps
+            ):
+                deps.append(record.missing_module)
+                continue
+            break
+        contract = parse_stdout((result.stdout if result else "") or "")
+        if contract.found and contract.status is ContractStatus.ERROR:
+            return {
+                "ok": False,
+                "honest_error": True,
+                "error": str(
+                    contract.error_message or "the function reported an error"
+                ),
+                "healed": list(deps),
+            }
+        detail = ""
+        if result is not None:
+            detail = (result.stderr or result.stdout or "")[-400:]
+        return {
+            "ok": False,
+            "honest_error": False,
+            "error": (
+                f"{record.error_class.value}: " if record is not None else ""
+            )
+            + (detail or (record.message if record is not None else "no result")),
+            "healed": list(deps),
+        }
+
+    # ------------------------------------------------------------------ #
     @staticmethod
     def _answer_gap(result: ExecutionResult, ports: list[dict]) -> str | None:
         """The output validator (declared ports held against the emitted

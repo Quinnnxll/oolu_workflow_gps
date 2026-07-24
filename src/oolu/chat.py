@@ -1188,6 +1188,57 @@ def author_node_function(
     return script, io, ""
 
 
+def repair_node_function(
+    model: ChatModel, goal: str, script: str, problem: str
+) -> tuple[str | None, dict | None]:
+    """One birth-repair turn (context-harness plan, Phase 4): the model
+    sees the goal, the failing function, and the exact problem the birth
+    gate named, and returns the corrected COMPLETE script — the same
+    edit-don't-rewrite discipline the runtime's in-run repair uses, now
+    available BEFORE a node is published.
+
+    Returns ``(script, io)``: the edited script (None when the model
+    could not be reached or wrote no usable code) and the re-declared
+    interface when the reply carries a fresh, valid ``IO:`` line (None
+    keeps the caller's current interface). The caller re-runs its gates
+    on whatever comes back — repair output earns nothing by arriving."""
+    from .routing.gateway import extract_script
+    from .runtime.script_node import REPAIR_SYSTEM_PROMPT
+
+    try:
+        raw = model.reply(
+            [
+                {"role": "system", "content": REPAIR_SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": (
+                        f"Goal:\n{goal}\n\nCurrent function:\n"
+                        f"```python\n{script}\n```\n\n"
+                        "It failed BIRTH VERIFICATION with:\n"
+                        f"{problem}\n\n"
+                        "Return the corrected COMPLETE script. If the "
+                        "node's interface changes, also repeat the IO: "
+                        "line with the corrected inputs/outputs."
+                    ),
+                },
+            ]
+        )
+    except Exception:  # noqa: BLE001 - a dead model repairs nothing
+        return None, None
+    edited = extract_script(raw)
+    if not edited:
+        return None, None
+    io, io_problem = parse_node_io_checked(raw)
+    if io_problem:
+        return edited, None
+    # Only a line the reply actually carried updates the interface; the
+    # lenient default parse_node_io_checked returns for an ABSENT line
+    # must not overwrite the interface the build already declared.
+    if _IO_LINE_RE.search(raw or "") is None:
+        return edited, None
+    return edited, io
+
+
 class NodeChatTools(GatewayChatTools):
     """The gateway tools plus one node's own desk, bound by injected hands.
 

@@ -4,6 +4,48 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Context-harness Phase 4 — verify at birth:
+
+- **The birth-verify primitive**
+  (``NodeScriptRunner.verify_function``). One candidate function
+  against the runtime contract: dependency healing in place, but NO
+  model repair and NO resynthesis — the function under test is the
+  function judged, where ``execute``'s recovery ladder would let a
+  substitute script pass for the authored one. Declared output ports
+  are held against the emitted payload (a run that skips its ports is
+  a mocked answer), and an honest structured ``emit_error`` PASSES the
+  contract — at birth, with no real bindings staged, a function naming
+  its missing data has proven it executes and speaks the protocol.
+  This closes the Phase 0 finding that an honest input-reading
+  function could never pass the author's verify hand.
+- **The build door is a transaction.** ``proposed → generated →
+  (repair:…) → validated → published``, recorded on the hash-chained
+  audit log inside the ``model.seat`` publish event. The gate runs the
+  safety screen, mock smells, the emit_result presence check, and
+  interface honesty on EVERY authoring path before a node is created
+  (the one-shot path used to skip the screen entirely — validation was
+  deferred to the node's first real run, which is exactly what "node
+  creation is unstable" felt like); sandbox verification runs wherever
+  the host carries a script runtime, degrading to ``validated-static``
+  where it doesn't. The agent's finish-gate verification is trusted
+  for the exact script it delivered — no double-paying the sandbox —
+  and any repaired script re-verifies.
+- **Repair at birth.** A gate failure buys two bounded repair rounds
+  (``repair_node_function`` — the runtime's edit-don't-rewrite
+  discipline under the same REPAIR prompt, before publish instead of
+  after), then an honest refusal: an unpublished node beats an
+  unstable one. The agent's step budget doubles to 12 — a verify-fix
+  cycle costs two steps, and the seat's spend cap is the real budget.
+- **Interface honesty, the sneaky half.** A script that reads
+  ``./bindings.json`` while declaring no inputs is held at the door,
+  named, and repaired or refused — never published input-less to break
+  quietly on every route it joins.
+- **Pinned** by ``tests/test_verify_at_birth.py``: the primitive's
+  verdicts (clean, honest error, crash, skipped ports, no
+  substitution), repair-at-birth publishing with the transaction on
+  the audit log, the unrepairable build refusing to publish, and the
+  doubled agent budget.
+
 Context-harness Phase 3 — the build seat gets its context pushed,
 budgeted, and traced:
 

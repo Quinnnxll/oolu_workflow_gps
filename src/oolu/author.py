@@ -108,7 +108,10 @@ class NodeAuthorAgent:
         outputs: Callable[[str], list[dict]] | None = None,
         read_file: Callable[[str], str | None] | None = None,
         verify: Callable[[str], dict] | None = None,
-        max_steps: int = 6,
+        # Twelve, not six (context-harness plan, Phase 4): a verify-fix
+        # cycle costs two steps, and the seat's spend cap — not a small
+        # constant — is the real budget on a build.
+        max_steps: int = 12,
     ) -> None:
         self._model = model
         self._catalog = catalog

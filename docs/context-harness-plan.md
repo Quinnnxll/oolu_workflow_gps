@@ -357,37 +357,53 @@ wrong-shape delta is read off the keyed benchmark runs.
 successfully once. Creation gets the same recovery ladder the runtime already
 has. This is the phase that kills "node creation is unstable."*
 
-- [ ] **One authoring path.** Retire the one-shot/agentic fork
-      (`gateway/app.py:5317-5334`). Every build runs the loop; for manifest
-      no-tools models the *harness* drives the same loop (generate → validate
-      → execute → feed errors back) with fenced-block parsing as the transport.
-- [ ] **The build transaction.** Adopt the spec's edit-transaction states —
-      `proposed → context_verified → generated → validated → published /
-      failed` — recorded on the node's version history. `verify_function`
-      (`gateway/app.py:5336-5386`) stops being an optional tool the model may
-      call and becomes a **mandatory gate** the harness runs before
-      `nodeplace.contribute`; `screen_script` and the `emit_result` check run
-      at creation on every path (today one-shot skips both,
-      `chat.py:1139-1158`).
-- [ ] **Repair at birth.** On a failed verification, reuse the runtime's
-      repair muscle (`ChatModelSynthesizer.repair`,
-      `runtime/script_node.py:145-170`) inside the transaction: dependency
-      heal → repair with exact error → escalate tier/thinking (Phase 1
-      profiles) → decline honestly. Budgets: raise `max_steps` 6 → 12
-      (`author.py:111`), bounded by the seat's spend cap rather than a small
-      constant.
-- [ ] **Interface honesty.** A build that cannot produce a schema-valid
-      interface *fails*; it never silently publishes as
-      `{inputs:[], outputs:[result:str]}` (`chat.py:1053-1060`).
-- [ ] **Keep the walls.** Everything stays inside the existing governance:
-      the `node.build` seat's DeskFiles scopes, consent doors, metering
-      purposes, audit events (`docs/model-seats.md`) — the transaction adds
-      states, not new authority.
+- [x] **One authoring path through one gate.** The one-shot/agentic fork
+      remains (the manifest decides the transport a model can be trusted
+      with), but every build now converges on the SAME mandatory birth gate
+      in `_build_function_node` — the harness drives generate → validate →
+      execute → feed errors back for prose-channel models exactly as the
+      agent loop does for tool-speakers, with `repair_node_function`
+      (`chat.py`) as the correction turn.
+- [x] **The build transaction.** `proposed → generated → (repair:…) →
+      validated / validated-static → published`, recorded on the hash-chained
+      audit log inside the `model.seat` publish event. The gate runs
+      `screen_script`, `mock_smells`, the emit_result presence check, and
+      interface honesty on EVERY path before `nodeplace.contribute`; sandbox
+      verification runs wherever the host carries a script runtime (a host
+      without one degrades to `validated-static` — the same posture as
+      `require_isolation`). The agent's finish-gate verification is trusted
+      for the exact script it delivered, so the run is not paid twice; any
+      repaired script re-verifies.
+- [x] **The birth-verify primitive.** `NodeScriptRunner.verify_function`:
+      the function under test is the function judged — dependency healing
+      yes, model repair and resynthesis NO (a substitute passing is not the
+      authored function passing, which `execute`'s recovery ladder would
+      silently allow); declared output ports are held against the emitted
+      payload; and an HONEST structured `emit_error` passes the contract —
+      the Phase 0 finding that an honest input-reading function could never
+      pass the verify hand, fixed. `_author_verifier` prefers the primitive
+      and keeps the legacy execute path for runners without it.
+- [x] **Repair at birth.** A gate failure buys two bounded repair rounds —
+      the runtime's edit-don't-rewrite discipline (same REPAIR prompt),
+      before publish instead of after — then an honest refusal: an
+      unpublished node beats an unstable one. `max_steps` 6 → 12 on the
+      agent (`author.py`); the seat's spend cap remains the real budget.
+      (Tier/thinking escalation inside the loop waits for Phase 6's
+      performance-fed routing.)
+- [x] **Interface honesty.** Phase 2 made a broken `IO:` line refuse; the
+      gate now also holds the door on the sneaky case: a script that READS
+      `./bindings.json` while declaring no inputs is named and repaired or
+      refused, never published input-less.
+- [x] **Keep the walls.** The gate added states, not authority: same seat
+      scopes, same consent attestation, same metering purposes; the
+      transaction rides the existing `model.seat` audit event.
 
-**Acceptance:** every published node carries ≥1 verified execution at birth;
-benchmark "published node first-run success" ≥95%; the failure taxonomy shows
-truncated/mocked/wrong-interface classes eliminated (caught in-transaction,
-not by users).
+**Acceptance:** every published node carries ≥1 verified execution at birth
+wherever a script runtime exists (pinned in `tests/test_verify_at_birth.py`:
+repair-at-birth publishes, unrepairable never publishes, honest errors pass,
+the transaction is on the audit log); benchmark "published node first-run
+success" ≥95% and the truncated/mocked/wrong-interface buckets emptying are
+read off the keyed runs.
 
 ---
 
