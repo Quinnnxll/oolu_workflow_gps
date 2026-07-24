@@ -4,6 +4,20 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The context-harness build plan — why node creation with external LLM
+APIs trails the frontier coding harnesses, and the phases that close
+the gap:
+
+- **`docs/context-harness-plan.md`.** A source-anchored diagnosis (the
+  1024-token authoring ceiling, fast-tier default, zero reasoning
+  effort, goal-only context, no verification at birth, two divergent
+  provider stacks) and six building phases: baseline benchmark →
+  effort unlock → one canonical model interface → budgeted context
+  packs → the verify-at-birth build transaction → memory and
+  multi-model strategies. Maps the Continuity Context Harness
+  specification onto OoLu's existing modules; keeps seats,
+  verify-by-execution, and prefix-cache discipline as the foundation.
+
 Investor panel Phase 3 — competitor intelligence, moat, scenarios,
 the automated report:
 
