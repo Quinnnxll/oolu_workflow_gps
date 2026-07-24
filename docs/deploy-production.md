@@ -128,20 +128,34 @@ Two doors, both real, both metered:
 
 ### Hosting the investor panel
 
-`deploy/investor-panel.html` is a static page — host it anywhere (e.g.
-`investors.largecollaborationmodel.com` behind your own TLS). It calls
-this API cross-origin, so the server must admit that origin:
+`deploy/investor-panel.html` is a static page with its own door in the
+production stack. Two settings in `.env`, both required — one serves
+the page, the other lets it call the API:
 
 ```bash
-# .env — comma-separated for more than one origin; scheme included,
-# no trailing slash:
+# .env — the hostname Caddy serves the PANEL at (a static page, not
+# the gateway). Do NOT also list this hostname in OOLU_DOMAIN: any
+# hostname that reaches the gateway gets the user shell, so a
+# double-listed panel domain shows the app instead of the panel.
+OOLU_INVESTORS_DOMAIN=investors.largecollaborationmodel.com
+
+# The panel calls the API cross-origin, so the API must admit that
+# origin — comma-separated for more than one; scheme included, no
+# trailing slash:
 OOLU_ALLOW_ORIGIN=https://investors.largecollaborationmodel.com
 ```
 
-Restart (`docker compose -f docker-compose.prod.yml up -d`), open the
-panel, and point it at `https://<your app domain>` with a token whose
-role carries `metrics:view` (plus `approve:metrics.record` if that
-person also records manual metrics or competitor observations).
+Point the subdomain's DNS at this box exactly like the app and admin
+domains (proxied through Cloudflare, SSL/TLS "Full (strict)"), restart
+(`docker compose -f docker-compose.prod.yml up -d`), open
+`https://investors.largecollaborationmodel.com`, and point the panel at
+`https://<your app domain>` with a token whose role carries
+`metrics:view` (plus `approve:metrics.record` if that person also
+records manual metrics or competitor observations).
+
+The page is also self-contained — hosting it anywhere else (a static
+host, Cloudflare Pages) works the same, with `OOLU_ALLOW_ORIGIN` still
+naming wherever it lives and `OOLU_INVESTORS_DOMAIN` left unset.
 
 ### Mail: reset codes, e-mailed passwords, verification
 

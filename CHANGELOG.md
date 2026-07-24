@@ -4,6 +4,21 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The investor panel gets its own door (deploy fix):
+
+- **``OOLU_INVESTORS_DOMAIN``.** The panel was documented as "host it
+  anywhere", but pointing ``investors.<domain>`` at the production box
+  showed the APP: the gateway answers every non-admin Host with the
+  user shell, and nothing served ``deploy/investor-panel.html``
+  (``OOLU_ALLOW_ORIGIN`` is only the API's CORS admission — it deploys
+  nothing). ``deploy/Caddyfile`` now carries a third site block that
+  serves the panel as a static page at ``OOLU_INVESTORS_DOMAIN``
+  (mounted read-only into the caddy container; unset, the block idles
+  on an unpublished loopback address so existing deployments boot
+  unchanged). ``docs/deploy-production.md`` names the trap: the panel
+  hostname must NOT also appear in ``OOLU_DOMAIN``, or the app shell
+  wins.
+
 Memory-stack M6 — multi-agent work over shared state:
 
 - **The typed baton.** ``handoffs.Handoff`` carries current state

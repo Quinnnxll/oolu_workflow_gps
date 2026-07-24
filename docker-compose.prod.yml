@@ -15,8 +15,15 @@ services:
     environment:
       OOLU_DOMAIN: ${OOLU_DOMAIN:?the app hostname users visit, e.g. app.example.com}
       OOLU_ADMIN_DOMAIN: ${OOLU_ADMIN_DOMAIN:?the operator console hostname, e.g. admin.example.com}
+      # The investor panel's hostname (optional). Set it and Caddy
+      # serves deploy/investor-panel.html there as a static page — the
+      # hostname must NOT also appear in OOLU_DOMAIN, or the gateway's
+      # user shell answers instead. Unset, the block idles on an
+      # unpublished loopback address so Caddy boots unchanged.
+      OOLU_INVESTORS_DOMAIN: ${OOLU_INVESTORS_DOMAIN:-http://127.0.0.1:8199}
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./deploy/investor-panel.html:/srv/investors/investor-panel.html:ro
       - caddy-data:/data
       - caddy-config:/config
     depends_on:

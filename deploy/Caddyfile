@@ -20,3 +20,17 @@
 	encode gzip
 	reverse_proxy oolu:8765
 }
+
+# The investor panel — a STATIC page, served here rather than proxied:
+# the gateway answers every non-admin Host with the user shell, so this
+# hostname must never reach it (and must not be listed in OOLU_DOMAIN,
+# or the app shell wins). The panel calls the API cross-origin, which
+# is what OOLU_ALLOW_ORIGIN admits on the oolu service. Unset,
+# OOLU_INVESTORS_DOMAIN defaults (in docker-compose.prod.yml) to a
+# loopback placeholder so Caddy still boots without this door.
+{$OOLU_INVESTORS_DOMAIN} {
+	encode gzip
+	root * /srv/investors
+	rewrite * /investor-panel.html
+	file_server
+}
