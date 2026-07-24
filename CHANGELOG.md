@@ -4,6 +4,23 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Memory-stack M4 — skill induction, the ignition:
+
+- **`src/oolu/skillinduction.py`.** Repeated verified subgraphs become
+  candidate skills: contiguous motifs (2–5 steps) mined over the trace
+  corpus that already exists, one vote per run, failed runs teaching
+  nothing — the corpus's own law. Candidates ride the spine with
+  fresh-count supersession on re-induction; promotion holds the
+  capability-web thresholds (support ≥ 5 verified runs, ≥ 3 distinct
+  goals — generality, not habit) and supersedes candidacy into a
+  ``verified`` skill record. ``skills_for`` is the reader: the
+  promoted motifs found inside a proposed step sequence, closing the
+  loop route assembly consults. Recorded remainders: replay +
+  mutation as the final gate, and node-bundle publication.
+- **Pinned** by ``tests/test_skill_induction.py``: promotion across
+  distinct goals with candidacy superseded, failed runs and thin
+  support never promoting, and re-induction serving fresh counts.
+
 Memory-stack M3 — negative knowledge, first-class:
 
 - **`src/oolu/negative.py`.** Failure records ride the spine,

@@ -188,6 +188,14 @@ forever, universal prohibitions never.*
 
 ### Phase M4 — skill induction (ignition)
 
+**Status: LANDED (induction half)** — `src/oolu/skillinduction.py`:
+contiguous-motif mining over the verified trace corpus (failed runs never
+teach), spine-backed candidacy with fresh-count supersession, promotion at
+the doc's thresholds (support ≥5, contexts ≥3), and `skills_for` as the
+route-side reader. Remaining, recorded: replay-against-history + mutation
+testing as the final gate, and marketplace publication of promoted skills
+(`tests/test_skill_induction.py`).
+
 *Repeated verified subgraphs become parameterized skills — the step
 that makes capability compound instead of repeat.*
 
