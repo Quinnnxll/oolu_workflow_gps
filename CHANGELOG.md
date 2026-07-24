@@ -4,6 +4,46 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Memory-stack M6 — multi-agent work over shared state:
+
+- **The typed baton.** ``handoffs.Handoff`` carries current state
+  refs, completed execution refs, evidence, unresolved bindings, and
+  acceptance evaluators — a ``RunState`` excerpt, not a chat log, and
+  the shape is the wall: no transcript field exists, every item is
+  length-capped, and a baton that references nothing is refused.
+- **Claims are leases.** ``hand_off`` enqueues on the durable queue
+  and lands the shared-state record on the spine (evidence + task id
+  as provenance); ``claim`` leases — one owner, bounded time, a dead
+  claimant's baton reclaimed to a successor in the same call a
+  successor claims with. Duplicate claims are impossible by the
+  queue's own contract; execution authorization stays with the worker
+  control plane's signed single-use leases.
+- **Resume is a projection.** ``resume`` rebuilds the receiving
+  agent's context from events alone: M2's summary recomputed from
+  standing episodes, joined with the baton's verbatim commitments —
+  both sources' open items survive the interruption, and the
+  signature has nowhere to put a transcript.
+- **Expertise derives; judgement is independent.** ``expertise_board``
+  joins the seat scoreboard (``seat_performance``) with the agent's
+  own M5 model-bucket route posterior — read with ``fallback=False``,
+  a new ``TraceStore.posterior`` opt-out, because credit attribution
+  must not inherit the global record — into one Beta posterior where
+  volume beats luck and no evidence sits at the uniform prior.
+  ``assign_verifier`` routes to the best-scored agent that is NOT the
+  producer; ``record_verdict`` refuses a self-verdict in words.
+- **Disagreement is the record until resolved.** Rival proposals ride
+  the spine as ``proposed`` (bare arrival is that state's right) and
+  persist side by side; ``resolve`` admits one decision citing the
+  winner and supersedes every standing proposal — refused when the
+  resolver authored the winning position, and refused again once the
+  dispute is settled.
+- **Pinned** by ``tests/test_handoffs.py``: the plan's exit tests —
+  a colleague's task resumed from events alone (both commitment
+  sources verbatim), duplicate claims refused while death releases,
+  proposals persisting until an evaluator resolves, the producer
+  never scoring its own deliverable, expertise ranking flipped by
+  per-route trace outcomes, and a shared-family queue failing loudly.
+
 Memory-stack M5 — reinforcement route learning, the rungs in order:
 
 - **Rung 1, the dataset.** ``route_observations`` extends the

@@ -278,6 +278,28 @@ online RL.*
 
 ### Phase M6 — multi-agent work over shared state
 
+**Status: LANDED (core)** — `src/oolu/handoffs.py`. The typed baton
+(`Handoff`: state refs, completed execution refs, evidence, unresolved
+bindings, acceptance evaluators — length-capped items, no transcript
+field to fill, refs-or-refusal) rides the durable queue; `claim` leases
+it (duplicate claims impossible by the queue's own contract; a dead
+claimant's baton reclaims to a successor in the same call), while
+execution authorization stays with the worker control plane's signed
+leases. `resume` rebuilds the successor's context from events alone
+(M2's recomputed summary + the baton's verbatim commitments — the
+signature accepts no transcript). Expertise is a projection, never
+stored: `expertise_board` joins `seat_performance` with the agent's own
+M5 model-bucket route posterior (exact bucket, no global-credit
+fallback) into one Beta posterior — volume beats luck — feeding
+`expert_score` routing via `assign_verifier`. Independence is
+structural: `record_verdict` refuses a self-verdict, `resolve` refuses
+a resolver crowning their own proposal, and conflicting proposals
+persist side by side (`proposed`) until an evaluator or human resolves
+— the decision superseding them all, citing the winner
+(`tests/test_handoffs.py`). Remaining: wiring the live agent pool /
+worker loop to speak `Handoff` at its seams as multi-agent volume
+arrives.
+
 *Agents cooperate through the stack, never through each other's
 transcripts.*
 

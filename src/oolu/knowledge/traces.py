@@ -460,12 +460,16 @@ class TraceStore:
     # ------------------------------------------------------------------ #
     # Posteriors + selection.                                             #
     # ------------------------------------------------------------------ #
-    def posterior(self, node_key: str, context: str = "") -> NodePosterior:
+    def posterior(
+        self, node_key: str, context: str = "", *, fallback: bool = True
+    ) -> NodePosterior:
         """The Beta posterior for a node in a context bucket.
 
         A context bucket with no observations falls back to the global bucket,
         so a new context starts from the node's overall history rather than
-        from ignorance.
+        from ignorance. ``fallback=False`` reads the exact bucket only — for
+        callers attributing CREDIT (whose outcomes are these?) rather than
+        estimating odds, where inheriting the global record would misassign.
         """
         with self._lock:
             row = self._db.execute(
@@ -473,7 +477,7 @@ class TraceStore:
                 "WHERE node_key = ? AND context = ?",
                 (node_key, context),
             ).fetchone()
-            if row is None and context != "":
+            if row is None and context != "" and fallback:
                 row = self._db.execute(
                     "SELECT successes, failures FROM trace_node_stats "
                     "WHERE node_key = ? AND context = ''",
