@@ -416,7 +416,7 @@ class NodeScriptRunner:
                     ExecutionStatus.SUCCEEDED,
                     started,
                     evidence=self._success_evidence(
-                        "hit", key, result, provenance
+                        "hit", key, result, provenance, bindings
                     ),
                 )
             # Environment drift — or contract drift: a run that no longer
@@ -460,7 +460,7 @@ class NodeScriptRunner:
                         ExecutionStatus.SUCCEEDED,
                         started,
                         evidence=self._success_evidence(
-                            "provided", key, result, provenance
+                            "provided", key, result, provenance, bindings
                         ),
                     )
                 if (
@@ -551,7 +551,8 @@ class NodeScriptRunner:
                             started,
                             evidence={
                                 **self._success_evidence(
-                                    "repaired", key, result, provenance
+                                    "repaired", key, result, provenance,
+                                    bindings,
                                 ),
                                 "repair_rounds": attempt,
                                 # The healed code itself — the channel the
@@ -646,6 +647,7 @@ class NodeScriptRunner:
                 key,
                 result,
                 provenance,
+                bindings,
             ),
         )
 
@@ -755,11 +757,17 @@ class NodeScriptRunner:
 
     @staticmethod
     def _success_evidence(
-        cache: str, key: str, result: ExecutionResult, provenance: list
+        cache: str,
+        key: str,
+        result: ExecutionResult,
+        provenance: list,
+        bindings: dict | None = None,
     ) -> dict:
         """One success evidence shape for every path — the payload the run
         came for, plus the binder's provenance lines when references were
-        resolved, so completion can file the input→output lineage."""
+        resolved, so completion can file the input→output lineage — and
+        the RESOLVED bindings the run executed with (B3): what went in
+        rides the outcome, so the node's own drawer can keep its record."""
         evidence: dict = {
             "cache": cache,
             "cache_key": key,
@@ -767,6 +775,8 @@ class NodeScriptRunner:
         }
         if provenance:
             evidence["value_provenance"] = list(provenance)
+        if bindings:
+            evidence["bindings"] = dict(bindings)
         return evidence
 
     def _run_script(

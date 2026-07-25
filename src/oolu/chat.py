@@ -1307,6 +1307,9 @@ class NodeChatTools(GatewayChatTools):
         # (action, value) -> str: grant_host | block_host | block_user —
         # the account door's mutable slice, same walls, same audit.
         account_control=None,
+        # () -> str: the node's standing result in words (B3) — what the
+        # newest verified run produced, read from the node's own drawer.
+        last_result=None,
     ):
         super().__init__(
             store,
@@ -1326,6 +1329,7 @@ class NodeChatTools(GatewayChatTools):
         self._reviser = reviser
         self._member_creator = member_creator
         self._account_control = account_control
+        self._last_result = last_result
 
     def list_files(self) -> list[UserFile]:
         """The interact window's file hands reach THIS NODE's drawer —
@@ -1450,6 +1454,13 @@ class NodeChatTools(GatewayChatTools):
             return "error: access controls are not wired here"
         return self._account_control(action, value)
 
+    def last_result(self) -> str:
+        """What this node produced last (B3) — read from its own
+        drawer's run records, never from a transcript."""
+        if self._last_result is None:
+            return "error: this host keeps no run records for nodes"
+        return self._last_result()
+
 
 @runtime_checkable
 class NodeTools(Protocol):
@@ -1466,6 +1477,7 @@ class NodeTools(Protocol):
     def reply_hold(self, pending_id: str, message: str) -> str: ...
     def build_node(self, goal: str) -> str: ...
     def revise_node(self, change: str) -> str: ...
+    def last_result(self) -> str: ...
     def create_folder(self, path: str) -> str: ...
     def create_member(
         self, title: str, authority: int = 1, is_supernode: bool = False
@@ -1515,6 +1527,29 @@ _PENDING_PHRASES = frozenset(
     {"pending", "holds", "pending requests", "show pending", "what is pending",
      "what's pending"}
 )
+# The standing-result ask (B3): answered from the node's own drawer,
+# deterministically — no model needed to remember what the node did.
+_LAST_RESULT_PHRASES = frozenset(
+    {"last result", "latest result", "what did you produce last",
+     "what did you produce", "what was the last result"}
+)
+
+
+def _last_result_command(message: str, tools) -> ChatTurn | None:
+    """B3: the standing-result ask is DETERMINISTIC, model or not — the
+    same doctrine as settings and reminders: the reply is read from the
+    node's own drawer (the newest verified run's outputs), never the
+    model's narration of what it remembers producing."""
+    if not isinstance(tools, NodeTools):
+        return None
+    if message.strip().casefold().rstrip(".!?") not in _LAST_RESULT_PHRASES:
+        return None
+    result = tools.last_result()
+    if result.startswith("error:"):
+        return ChatTurn(say=f"I couldn't: {result[7:].strip()}", source="tool")
+    return ChatTurn(
+        say=result, source="tool", actions=[{"tool": "last_result"}]
+    )
 
 
 def _node_command(text: str, tools: "NodeTools") -> ChatTurn | None:
@@ -1555,6 +1590,10 @@ def _node_command(text: str, tools: "NodeTools") -> ChatTurn | None:
             "<message>” talks back first."
         )
         return ChatTurn(say=say, source="tool", actions=[{"tool": "node_holds"}])
+
+    last = _last_result_command(text, tools)
+    if last is not None:
+        return last
 
     sign_all = _SIGN_ALL_RE.match(text)
     if sign_all:
@@ -2557,6 +2596,12 @@ def _run_tool(tools: ChatTools, call: _ToolCall) -> tuple[str, dict | None]:
             None if result.startswith("error:") else {"tool": "revise_node"}
         )
         return result, action
+    if call.name == "last_result" and isinstance(tools, NodeTools):
+        result = tools.last_result()
+        action = (
+            None if result.startswith("error:") else {"tool": "last_result"}
+        )
+        return result, action
     if call.name == "create_folder" and isinstance(tools, NodeTools):
         result = tools.create_folder(str(call.args.get("path", "")).strip())
         action = (
@@ -2742,6 +2787,12 @@ class ChatAssistant:
             messaged = _message_command(message, tools)
             if messaged is not None:
                 return messaged
+        # And for the node's standing result (B3): "what did you produce
+        # last" reads the drawer's newest verified outputs — the answer
+        # is the real record, never the model's memory of the chat.
+        last = _last_result_command(message, tools)
+        if last is not None:
+            return last
 
         # A per-call model (the gateway's per-tenant router) outranks the
         # constructor's; either way an unusable model degrades, not dies.
@@ -2903,6 +2954,10 @@ class ChatAssistant:
             if messaged is not None:
                 yield {"type": "turn", "turn": messaged}
                 return
+        last = _last_result_command(message, tools)
+        if last is not None:
+            yield {"type": "turn", "turn": last}
+            return
         active = model or self._model
         if active is not None:
             try:

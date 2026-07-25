@@ -4,6 +4,33 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Conversational building B3 — the self-contained node: its data lives
+with it:
+
+- **The run's io lands in the node's own drawer.** A COMPLETED
+  node-function run files ``runs/<run_id>/inputs.json`` (the RESOLVED
+  bindings it executed with — now riding the runner's success
+  evidence on every path: hit, provided, repaired, resynthesized) and
+  ``outputs.json`` (the verified result), scrubbed by the corpus
+  discipline, idempotent per run, best-effort. The drawer becomes the
+  node's complete story: contract, function, and every verified
+  run's io — and a node exported as a bundle carries its history.
+- **The standing result is a projection.** ``_node_last_result``
+  reads the newest ``runs/*/outputs.json`` on demand (M1's law:
+  derived on every read, never stored as truth).
+- **"What did you produce last" is deterministic, model or not.**
+  The interact window answers the standing-result ask from the
+  drawer BEFORE any model is consulted — the same doctrine as
+  settings and reminders: the reply is the real record, never the
+  model's memory of the chat. The model keeps a ``last_result`` tool
+  for asks phrased less exactly.
+- **Pinned** by ``tests/test_run_io.py``: a run through the real
+  script hand lands both files verbatim; a secret shape in the
+  result is scrubbed; a retry files the same run once; and the
+  interact window answers from the drawer alone — before any run, a
+  plain "no story yet", after one, the result with its run id, the
+  chat model never consulted.
+
 Conversational building B2 — the function lands in src, transactionally:
 
 - **One landing for build and revise.** ``_land_src`` writes

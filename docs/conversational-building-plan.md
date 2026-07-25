@@ -182,6 +182,28 @@ heals on the next run and its inbox item leaves by itself).
 
 ### Phase B3 — the self-contained node: its data lives with it
 
+**Status: LANDED** — the runner's success evidence now carries the
+RESOLVED bindings the run executed with (`_success_evidence`, every
+path: hit, provided, repaired, resynthesized), and completion lands
+both sides in the node's OWN drawer: ``runs/<run_id>/inputs.json`` (the
+bindings) + ``outputs.json`` (the verified result), scrubbed by the
+corpus discipline, idempotent per run, best-effort (`_land_run_io`,
+riding the same terminal-run hook as value filing). The standing
+result is a PROJECTION (`_node_last_result`: the newest
+``runs/*/outputs.json``, derived on every read, never stored as
+truth), and "what did you produce last" in the interact window is
+DETERMINISTIC, model or not — the same doctrine as settings and
+reminders: `_last_result_command` answers from the drawer before any
+model is consulted, and the model keeps a ``last_result`` tool for
+asks phrased less exactly (`tests/test_run_io.py` — the full circle:
+a run through the real script hand lands both files, a secret shape
+in the result is scrubbed, a retry files the same run once, and the
+interact window answers from the drawer alone with the chat model
+never consulted). Retention needed no new law: run io lives in the
+drawer, so the frozen-tree store and sweep already govern it, and a
+node exported as a bundle carries its own history. Remaining: none
+for B3; B4 rides these stored outputs.
+
 *What went in and what came out are the node's own records.*
 
 - Every run lands two files in the node's drawer, under the run's id:

@@ -2981,6 +2981,33 @@ class GatewayApp:
                 return f"error: {body.get('message', 'refused')}"
             return did
 
+        def last_result() -> str:
+            # B3: the standing result — the drawer's newest verified
+            # outputs, spoken in words. No run yet is a plain answer,
+            # not an error: a new node simply has no story to tell.
+            standing = self._node_last_result(session.tenant_id, node_id)
+            if not standing:
+                return (
+                    "This node has not produced a verified result yet — "
+                    "run it once and its outputs will live in its drawer "
+                    "under runs/."
+                )
+            run_id = str(standing.get("run_id") or "")
+            when = str(standing.get("at") or "")
+            payload = standing.get("result")
+            if isinstance(payload, (dict, list)):
+                spoken = json.dumps(payload, ensure_ascii=False, default=str)
+            else:
+                spoken = str(payload)
+            say = f"Last verified result: {spoken}"
+            if run_id:
+                say += f" (run {run_id[:8]}"
+                if when:
+                    say += f", {when}"
+                say += ")"
+            say += " — the full record is in this node's drawer under runs/."
+            return say
+
         health = entry.health
         verified = health.verified_successes + health.verified_failures
         reliability = (
@@ -3023,6 +3050,7 @@ class GatewayApp:
             '  {"tool": "build_node", "args": {"goal": "<what it must do>"}}\n'
             '  {"tool": "revise_node", "args": {"change": "<what must '
             'change in THIS node\'s function>"}}\n'
+            '  {"tool": "last_result", "args": {}}\n'
             '  {"tool": "create_folder", "args": {"path": "<folder path>"}}\n'
             '  {"tool": "create_member", "args": {"title": "<member '
             'name>", "authority": 1, "is_supernode": false}}\n'
@@ -3030,7 +3058,10 @@ class GatewayApp:
             '  {"tool": "block_host", "args": {"host": "bad.example.com"}}\n'
             '  {"tool": "block_user", "args": {"user": "<principal>"}}\n'
             "write_file also takes an optional \"folder\" to upload into "
-            "a folder of this node's drawer. create_member mints a new "
+            "a folder of this node's drawer. last_result answers \"what "
+            "did you produce last\" from this node's own run records "
+            "(runs/<id>/ in the drawer) — use it instead of guessing "
+            "from memory. create_member mints a new "
             "node under this org's Supernode (unclaimed until someone "
             "onboards it); grant_host/block_host move this node's egress "
             "consent, and block_user refuses a principal — all through "
@@ -3067,6 +3098,7 @@ class GatewayApp:
             reviser=reviser,
             member_creator=member_creator,
             account_control=account_control,
+            last_result=last_result,
         )
         return tools, context_note
 
@@ -11546,6 +11578,9 @@ class GatewayApp:
         # And the run's real outputs are FILED: immutable values, the
         # node's port index, and the input→output lineage.
         self._file_run_values(state)
+        # B3: the node keeps its OWN record — the run's resolved inputs
+        # and emitted outputs land in the node's drawer, scrubbed.
+        self._land_run_io(state)
         if self._metering is None or self._nodeplace is None:
             return
         if state.phase is Phase.COMPLETED:
@@ -11619,6 +11654,105 @@ class GatewayApp:
                 logging.getLogger("oolu.gateway").warning(
                     "release sealing failed for %s", node_id, exc_info=True
                 )
+
+    def _land_run_io(self, state: RunState) -> None:
+        """B3 — the self-contained node: a COMPLETED node-function run
+        lands what went in and what came out in the node's OWN drawer,
+        under the run's id (``runs/<run_id>/inputs.json`` +
+        ``outputs.json``), scrubbed by the corpus discipline. The drawer
+        becomes the node's complete story — contract, function, and
+        every verified run's io — and the newest outputs project as the
+        node's standing result. Verified runs only (the corpus's own
+        law), idempotent per run, best-effort: bookkeeping on a
+        finished run is never a new way for it to fail."""
+        if self._files is None or state.phase is not Phase.COMPLETED:
+            return
+        function = (state.contract.metadata or {}).get("node_function")
+        if not isinstance(function, dict) or not function.get("node_id"):
+            return
+        execution = state.execution
+        if execution is None:
+            return
+        tenant = str(state.contract.metadata.get("tenant_id", ""))
+        node_id = str(function["node_id"])
+        folder = f"runs/{state.run_id}"
+        try:
+            existing = {
+                f.name
+                for f in self._files.list(tenant=tenant, node_id=node_id)
+                if f.folder == folder
+            }
+            if {"inputs.json", "outputs.json"} <= existing:
+                return  # a retry files the same run once
+            bindings: dict = {}
+            result_payload = None
+            for outcome in execution.action_outcomes:
+                if outcome.status is not ExecutionStatus.SUCCEEDED:
+                    continue
+                evidence = outcome.evidence or {}
+                if evidence.get("bindings") and not bindings:
+                    bindings = dict(evidence["bindings"])
+                if evidence.get("result") is not None:
+                    result_payload = evidence["result"]
+            from ..knowledge.scrubbing import scrub
+
+            stamp = state.updated_at.isoformat()
+
+            def _land(name: str, payload: dict) -> None:
+                if name in existing:
+                    return
+                self._files.save(
+                    UserFile(
+                        tenant_id=tenant,
+                        node_id=node_id,
+                        folder=folder,
+                        name=name,
+                        media_type="application/json",
+                        content=scrub(
+                            json.dumps(
+                                payload, ensure_ascii=False, default=str
+                            )
+                        ),
+                    )
+                )
+
+            _land(
+                "inputs.json",
+                {"run_id": state.run_id, "at": stamp, "bindings": bindings},
+            )
+            _land(
+                "outputs.json",
+                {
+                    "run_id": state.run_id,
+                    "at": stamp,
+                    "verified": True,
+                    "result": result_payload,
+                },
+            )
+        except Exception:  # noqa: BLE001 - the answer stands either way
+            logging.getLogger("oolu.gateway").warning(
+                "run io filing failed for run %s", state.run_id, exc_info=True
+            )
+
+    def _node_last_result(self, tenant: str, node_id: str) -> dict | None:
+        """The node's standing result — a PROJECTION over the drawer's
+        newest ``runs/*/outputs.json`` (M1's law: derived on every read,
+        never stored as truth). None when the node has not verified a
+        run yet, or keeps no drawer here."""
+        if self._files is None:
+            return None
+        newest = None
+        for file in self._files.list(tenant=tenant, node_id=node_id):
+            if file.name != "outputs.json" or not file.folder.startswith("runs/"):
+                continue
+            if newest is None or file.created_at > newest.created_at:
+                newest = file
+        if newest is None:
+            return None
+        try:
+            return json.loads(newest.content)
+        except ValueError:
+            return None
 
     def _file_run_values(self, state: RunState) -> None:
         """A COMPLETED node-function run's outputs, filed where the typed
