@@ -4,6 +4,35 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The operator console ENUMERATES the system instead of quizzing you:
+
+- **Everything in it is user-created and semantically named**, so no
+  operator can know what exists without being shown — a screen that
+  opens with a blank search box is a memory test. All three working
+  screens now list first and filter second.
+- **Workflows.** ``GET /v1/runs?scope=tenant`` lists every account's
+  workflows (with ``submitted_by`` named per row), behind the same
+  stored ``users:manage`` authority that administers those accounts —
+  per-account privacy stays the default, and the console falls back to
+  "your workflows only" in words when the authority is absent.
+- **Route preview.** ``GET /v1/market/library`` enumerates the
+  routable surface: every assembler-visible contract with what it
+  consumes and produces, plus the slot vocabulary those contracts span
+  (each slot naming its producers). The console shows the slots as
+  one-click chips (click → the preview form fills itself) and the node
+  library as a table under the preview.
+- **Skills.** ``GET /v1/nodes/overview`` (``users:manage``) lists
+  EVERY node in the tenant — title, owner, status, verified runs,
+  reliability — reusing the desk's own projection per owner so the
+  operator's view can never disagree with what each builder sees. The
+  published listings ride below, and the search box is now a
+  client-side filter that narrows the already-loaded lists (nothing
+  hides by default).
+- **Pinned** by ``test_multi_user_host.py`` (the authority walls and
+  the named tenant-wide listing), ``test_market_assemble.py`` (the
+  library and its slot vocabulary), and ``test_growth_trigger.py``
+  (a built node appears in the operator overview, its builder named).
+
 The investor panel: every metric explicit, wired live, no setup:
 
 - **Same-origin by construction.** The investors domain's Caddy block

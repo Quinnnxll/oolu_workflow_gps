@@ -423,3 +423,52 @@ def test_oolu_host_passes_database_url_and_cors_to_runtime(monkeypatch, tmp_path
         {"https://app.example", "https://alt.example"}
     )
     assert "postgres (online)" in out.getvalue()
+
+
+def test_tenant_wide_workflows_are_operator_authority_only(host):
+    """GET /v1/runs?scope=tenant: the operator's field of view — every
+    account's workflows, behind the same users:manage authority that
+    administers those accounts; a member still sees only their own."""
+    admin = _login(host, "admin", "first-pass").body["token"]
+    host.gateway.handle(
+        _req(
+            "POST",
+            "/v1/auth/users",
+            token=admin,
+            body={"username": "bob", "password": "bobs-password"},
+        )
+    )
+    bob = _login(host, "bob", "bobs-password").body["token"]
+    submitted = host.gateway.handle(
+        _req("POST", "/v1/runs", token=bob, body={"intent": "tidy the books"})
+    )
+    assert submitted.status == 202, submitted.body
+
+    # The member: own runs only, and the tenant-wide door is walled.
+    own = host.gateway.handle(_req("GET", "/v1/runs", token=bob))
+    assert [r["submitted_by"] for r in own.body["items"]] == ["bob"]
+    walled = host.gateway.handle(
+        _req("GET", "/v1/runs", token=bob, query={"scope": "tenant"})
+    )
+    assert walled.status == 403
+
+    # The operator: their OWN list stays personal (privacy is the
+    # default), while scope=tenant shows every account's work, named.
+    assert host.gateway.handle(
+        _req("GET", "/v1/runs", token=admin)
+    ).body["items"] == []
+    everyone = host.gateway.handle(
+        _req("GET", "/v1/runs", token=admin, query={"scope": "tenant"})
+    )
+    assert everyone.status == 200
+    assert [r["submitted_by"] for r in everyone.body["items"]] == ["bob"]
+
+    # The all-nodes overview rides the same authority.
+    assert host.gateway.handle(
+        _req("GET", "/v1/nodes/overview", token=bob)
+    ).status == 403
+    overview = host.gateway.handle(
+        _req("GET", "/v1/nodes/overview", token=admin)
+    )
+    assert overview.status == 200
+    assert overview.body == {"items": []}

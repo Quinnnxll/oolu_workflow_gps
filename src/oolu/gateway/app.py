@@ -163,6 +163,7 @@ from ..settings_node import SettingError, SettingsNode
 from ..skills.contract import (
     ContractEdge,
     NodeContract,
+    NodeStats,
     Slot,
     SubgraphBody,
     derive_data_edges,
@@ -1355,6 +1356,13 @@ class GatewayApp:
         r.add("POST", "/v1/versions/{version_id}/ratings", self._rate_version)
         r.add("GET", "/v1/versions/{version_id}/ratings", self._list_ratings)
         r.add("GET", "/v1/market/candidates", self._market_candidates)
+        r.add("GET", "/v1/market/library", self._market_library)
+        r.add(
+            "GET",
+            "/v1/nodes/overview",
+            self._nodes_overview,
+            requires_permission="users:manage",
+        )
         r.add("POST", "/v1/market/quotes", self._market_quote)
         r.add("POST", "/v1/market/assemble", self._market_assemble)
         r.add("POST", "/v1/runs/contract", self._submit_contract_run)
@@ -4602,12 +4610,24 @@ class GatewayApp:
         # A run belongs to the ACCOUNT that submitted it, not the whole
         # tenant: two people on one host must never see each other's Noder
         # activity. (The run quota below stays tenant-wide — that's a
-        # capacity limit on the host, not a visibility rule.)
+        # capacity limit on the host, not a visibility rule.) The ONE
+        # exception is explicit operator oversight: scope=tenant lists
+        # every account's workflows, and only for stored users:manage
+        # authority — the same authority that already administers those
+        # accounts — because an operator cannot steward activity they
+        # cannot see.
+        tenant_wide = request.query.get("scope") == "tenant"
+        if tenant_wide and not self._resolver.has_permission(
+            session, "users:manage"
+        ):
+            raise GatewayError(
+                403, "forbidden", "tenant-wide runs need users:manage authority"
+            )
         runs = [
             s
             for s in self._durable.runs.list(limit=10_000)
             if s.contract.metadata.get("tenant_id") == session.tenant_id
-            and s.contract.submitted_by == session.principal_id
+            and (tenant_wide or s.contract.submitted_by == session.principal_id)
         ]
         start = (page - 1) * size
         window = runs[start : start + size]
@@ -8692,6 +8712,92 @@ class GatewayApp:
                 400, "invalid_request", f"mode must be one of: {valid}"
             ) from exc
 
+    def _market_library(self, request, session, params) -> Response:
+        """The system's routable surface, ENUMERATED — every contract the
+        assembler can pick from, with what each consumes and produces,
+        plus the slot vocabulary those contracts span. Everything here is
+        user-created and semantically named, so no operator can be
+        expected to already know it; a route preview that starts from a
+        blank input is a memory test, and this endpoint is its answer.
+        Read-only, same wall as /v1/market/candidates."""
+        assembler, _book = self._require_market()
+        items = []
+        slots: dict[str, dict] = {}
+        for entry in assembler.contracts(""):
+            contract = entry.contract
+            stats = contract.stats or NodeStats()
+            items.append(
+                {
+                    "name": contract.name,
+                    "summary": contract.description,
+                    "consumes": [
+                        {"name": s.name, "type": s.value_type}
+                        for s in contract.consumes
+                    ],
+                    "produces": [
+                        {"name": s.name, "type": s.value_type}
+                        for s in contract.produces
+                    ],
+                    "verified_successes": stats.successes,
+                    "verified_failures": stats.failures,
+                    "success_mean": stats.success_mean,
+                }
+            )
+            for slot in contract.produces:
+                record = slots.setdefault(
+                    slot.name,
+                    {"name": slot.name, "type": slot.value_type, "producers": []},
+                )
+                if contract.name not in record["producers"]:
+                    record["producers"].append(contract.name)
+        return json_response(
+            200,
+            {
+                "items": items,
+                "slots": sorted(slots.values(), key=lambda s: s["name"]),
+            },
+        )
+
+    def _nodes_overview(self, request, session, params) -> Response:
+        """Every node in the CALLER's tenant, whoever built it — the
+        operator's field of view, behind the same users:manage authority
+        that already administers those accounts. Reuses the desk's own
+        projection per owner (titles, status, health, the deleted-node
+        tombstone filter), so this view can never disagree with what
+        each owner sees on their own desk."""
+        if self._nodeplace is None or self._desk is None:
+            raise GatewayError(404, "not_found", "nodes are not enabled on this host")
+        owners = sorted(
+            {
+                node.noder_principal
+                for node in self._nodeplace.all_nodes()
+                if node.tenant_id == session.tenant_id
+            }
+        )
+        items: list[dict] = []
+        seen: set[str] = set()
+        for owner in owners:
+            for entry in self._desk.overview(
+                principal=owner, tenant=session.tenant_id
+            ):
+                if entry.node_id in seen:
+                    continue
+                seen.add(entry.node_id)
+                health = entry.health
+                items.append(
+                    {
+                        "node_id": entry.node_id,
+                        "title": entry.title,
+                        "owner": entry.account.responsible,
+                        "status": entry.status,
+                        "health_score": health.score,
+                        "verified_runs": health.verified_successes
+                        + health.verified_failures,
+                    }
+                )
+        items.sort(key=lambda item: (item["owner"], item["title"]))
+        return json_response(200, {"items": items})
+
     def _market_candidates(self, request, session, params) -> Response:
         """Rank live candidates for a step. Read-only: never moves the book."""
         assembler, book = self._require_market()
@@ -11366,6 +11472,7 @@ class GatewayApp:
     def _run_dict(self, state: RunState) -> dict:
         return {
             "run_id": state.run_id,
+            "submitted_by": state.contract.submitted_by,
             "intent": state.intent,
             "updated_at": state.updated_at.isoformat(),
             "phase": state.phase.value,

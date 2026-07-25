@@ -560,3 +560,43 @@ def test_a_message_to_a_friend_is_never_a_node_to_build(tmp_path):
         assert "yes" not in say.lower()
     finally:
         conn.close()
+
+
+def test_the_operator_overview_lists_every_built_node(tmp_path):
+    """GET /v1/nodes/overview: the tenant's nodes, whoever built them —
+    the operator's field of view over a system its users created."""
+    from oolu.identity import AuthorityGrant, Role
+
+    app, conn, ident, desk, script_exec = _rig(tmp_path)
+    try:
+        ident.store.add_role(
+            Role(
+                tenant_id="t1", name="ops",
+                permissions=frozenset({"users:manage"}),
+            )
+        )
+        ident.store.add_grant(
+            AuthorityGrant(
+                tenant_id="t1", principal_id="ops-1", role_name="ops",
+                granted_by="x",
+            )
+        )
+        app._node_function_author = lambda tenant: FakeAuthor()
+        built = _chat(app, ident, "build me a node that " + GOAL)
+        assert built.status == 200, built.body
+
+        # The builder's own view and the operator's agree on the node...
+        walled = app.handle(
+            _req("GET", "/v1/nodes/overview", token=ident.token("user-1", "t1"))
+        )
+        assert walled.status == 403  # building grants no oversight
+        overview = app.handle(
+            _req("GET", "/v1/nodes/overview", token=ident.token("ops-1", "t1"))
+        )
+        assert overview.status == 200, overview.body
+        (item,) = overview.body["items"]
+        assert item["title"] == "Normalize Invoice Csv Files"
+        assert item["owner"] == "user-1"
+        assert item["status"]
+    finally:
+        conn.close()

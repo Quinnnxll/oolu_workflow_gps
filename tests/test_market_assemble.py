@@ -213,3 +213,27 @@ def test_assemble_validates_its_input(tmp_path):
         == 400
     )
     conn.close()
+
+
+def test_the_library_enumerates_every_contract_and_slot(tmp_path):
+    """GET /v1/market/library: the system's routable surface, listed —
+    an operator picks from what EXISTS instead of guessing semantic
+    names nobody outside their creators could know."""
+    app, conn, ident, registry, *_rest = _build(tmp_path)
+    _seed_market(app, ident, registry)
+
+    resp = app.handle(
+        _req("GET", "/v1/market/library", token=ident.token("consumer", "t2"))
+    )
+    assert resp.status == 200, resp.body
+    by_name = {item["name"]: item for item in resp.body["items"]}
+    assert set(by_name) == {"raw exporter", "invoice cleaner"}
+    assert [s["name"] for s in by_name["invoice cleaner"]["consumes"]] == ["raw"]
+    assert [s["name"] for s in by_name["invoice cleaner"]["produces"]] == ["tidy"]
+    assert by_name["raw exporter"]["consumes"] == []
+    # The slot vocabulary spans the library, each slot naming its makers.
+    slots = {s["name"]: s for s in resp.body["slots"]}
+    assert set(slots) == {"raw", "tidy"}
+    assert slots["tidy"]["producers"] == ["invoice cleaner"]
+    assert slots["raw"]["producers"] == ["raw exporter"]
+    assert slots["tidy"]["type"] == "path"

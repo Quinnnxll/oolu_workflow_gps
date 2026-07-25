@@ -205,20 +205,34 @@ async function runsScreen() {
       + "confirmation, or an approval."),
     h("button", { type: "submit" }, "Start"), submitOut);
 
-  const data = await api("GET", "/v1/runs");
+  // Everything on the host, when the operator's authority allows: the
+  // system is built by its users, so an admin cannot know what exists
+  // without being shown. Without users:manage, honest fallback to own.
+  let data, everyone = true;
+  try { data = await api("GET", "/v1/runs?scope=tenant&size=200"); }
+  catch (e) {
+    if (e.status !== 403) throw e;
+    everyone = false;
+    data = await api("GET", "/v1/runs?size=200");
+  }
+  const scopeNote = h("p", { class: "muted" }, everyone
+    ? "Every workflow on this host, every account — " + data.total + " total."
+    : "Your workflows only (tenant-wide view needs users:manage authority).");
   const listing = data.items.length
     ? h("table", {},
         h("tr", {}, h("th", {}, "workflow"), h("th", {}, "phase"),
+          everyone ? h("th", {}, "by") : null,
           h("th", {}, "destination"), h("th", {}, "waiting on")),
         data.items.map((r) => h("tr", {},
           h("td", {}, h("a", { href: "#/run/" + r.run_id }, r.run_id.slice(0, 12))),
           h("td", {}, badge(r.phase, r.phase === "failed" ? "bad" : undefined)),
+          everyone ? h("td", { class: "muted" }, r.submitted_by || "—") : null,
           h("td", {}, r.intent),
           h("td", {}, r.awaiting || "—"))))
     : h("p", { class: "muted" },
         "No workflows yet — name a destination above, or preview the "
         + "route the engine would take first.");
-  return h("div", {}, form, listing);
+  return h("div", {}, form, scopeNote, listing);
 }
 
 /* Pause panels: whatever the run is waiting on becomes an actionable card. */
@@ -334,47 +348,135 @@ async function runDetail(runId) {
     h("h2", {}, "timeline"), live, timeline);
 }
 
-/* ---- skills: the marketplace's published listings ---- */
-function skillsScreen() {
-  const query = h("input", { id: "q", placeholder: "search published nodes" });
+/* ---- skills: EVERY node on the host, then the published listings ---- */
+async function skillsScreen() {
+  // The system is its users' creations, semantically named — an operator
+  // cannot know what exists without being shown all of it. So: list
+  // everything first; the filter box only narrows what is already here.
+  const filter = h("input", { id: "q",
+    placeholder: "filter (narrows the lists below, nothing hides by default)" });
   const out = h("div", {});
-  async function search(event) {
-    if (event) event.preventDefault();
-    out.replaceChildren();
-    try {
-      const data = await api(
-        "GET", "/v1/listings?q=" + encodeURIComponent(query.value || ""));
-      out.append(data.items.length
-        ? h("table", {},
-            h("tr", {}, h("th", {}, "node"), h("th", {}, "summary"),
-              h("th", {}, "status"), h("th", {}, "tags")),
-            data.items.map((item) => h("tr", {},
-              h("td", {}, item.title),
-              h("td", { class: "muted" }, item.summary),
-              h("td", {}, badge(item.status)),
-              h("td", {}, (item.tags || []).map((t) => badge(t))))))
-        : h("p", { class: "muted" }, "No published nodes match."));
-    } catch (e) {
-      out.append(e.status === 404
-        ? notEnabled()
-        : h("div", { class: "error" }, e.message));
-    }
+  let nodes = null;
+  try { nodes = (await api("GET", "/v1/nodes/overview")).items; }
+  catch (e) { if (e.status !== 403 && e.status !== 404) throw e; }
+  let listings = [];
+  let listingsWall = null;
+  try { listings = (await api("GET", "/v1/listings?q=")).items; }
+  catch (e) {
+    if (e.status !== 404) throw e;
+    listingsWall = notEnabled();
   }
-  search();
+  function draw() {
+    const needle = (filter.value || "").trim().toLowerCase();
+    const hits = (text) => !needle
+      || String(text || "").toLowerCase().includes(needle);
+    out.replaceChildren();
+    if (nodes !== null) {
+      const shown = nodes.filter((n) =>
+        hits(n.title) || hits(n.owner) || hits(n.status));
+      out.append(h("h2", {},
+        "every node on this host (" + shown.length + " of "
+        + nodes.length + ")"));
+      out.append(shown.length
+        ? h("table", {},
+            h("tr", {}, h("th", {}, "node"), h("th", {}, "owner"),
+              h("th", {}, "status"), h("th", {}, "verified runs"),
+              h("th", {}, "reliability")),
+            shown.map((n) => h("tr", {},
+              h("td", {}, n.title),
+              h("td", { class: "muted" }, n.owner),
+              h("td", {}, badge(n.status)),
+              h("td", {}, String(n.verified_runs)),
+              h("td", {}, n.health_score === null ? "—"
+                : Math.round(n.health_score * 100) + "%"))))
+        : h("p", { class: "muted" }, "No nodes match that filter."));
+    } else {
+      out.append(h("p", { class: "muted" },
+        "The all-nodes view needs users:manage authority — showing the "
+        + "published listings below."));
+    }
+    const shownListings = listings.filter((item) =>
+      hits(item.title) || hits(item.summary)
+      || (item.tags || []).some(hits));
+    out.append(h("h2", {},
+      "published listings (" + shownListings.length + " of "
+      + listings.length + ")"));
+    if (listingsWall) { out.append(listingsWall); return; }
+    out.append(shownListings.length
+      ? h("table", {},
+          h("tr", {}, h("th", {}, "node"), h("th", {}, "summary"),
+            h("th", {}, "status"), h("th", {}, "tags")),
+          shownListings.map((item) => h("tr", {},
+            h("td", {}, item.title),
+            h("td", { class: "muted" }, item.summary),
+            h("td", {}, badge(item.status)),
+            h("td", {}, (item.tags || []).map((t) => badge(t))))))
+      : h("p", { class: "muted" },
+          listings.length ? "No published listings match that filter."
+            : "Nothing is published to the marketplace yet."));
+  }
+  filter.addEventListener("input", draw);
+  draw();
   return h("div", {},
-    h("form", { onsubmit: search }, h("label", { for: "q" }, "Search"), query,
-      h("button", { type: "submit" }, "Search")),
+    h("form", { onsubmit: (e) => e.preventDefault() },
+      h("label", { for: "q" }, "Filter"), filter),
     out);
 }
 
 /* ---- route preview: the route the engine would drive, inspectable ---- */
-function assembleScreen() {
+async function assembleScreen() {
   const goal = h("input", { id: "goal", placeholder: "e.g. clean-the-books" });
-  const want = h("input", { id: "want", placeholder: "slot name, e.g. tidy" });
+  const want = h("input", { id: "want", placeholder: "pick a slot below, or type one" });
   const wantType = h("input", { id: "want-type", value: "path" });
   const explore = h("input", { type: "checkbox", id: "explore", style: "width:auto" });
   const costWeight = h("input", { id: "cost-weight", value: "0" });
   const out = h("div", {});
+
+  // The system's routable surface, enumerated: what it can produce and
+  // which nodes produce it — user-created and semantically named, so
+  // the operator picks from what EXISTS instead of guessing words.
+  let library = null;
+  try { library = await api("GET", "/v1/market/library"); }
+  catch (e) { if (e.status !== 404) throw e; }
+
+  function slotChips() {
+    if (!library || !library.slots.length) return null;
+    return h("div", { class: "card" },
+      h("h2", {}, "what this host can produce ("
+        + library.slots.length + " slots)"),
+      h("div", {}, library.slots.map((slot) =>
+        h("button", { class: "small", type: "button", onclick: () => {
+          want.value = slot.name;
+          wantType.value = slot.type;
+          if (!goal.value) goal.value = "produce " + slot.name;
+        } }, slot.name + " (" + slot.type + ")"))),
+      h("p", { class: "muted" },
+        "Click a slot to preview the route that produces it."));
+  }
+
+  function libraryTable() {
+    if (!library) {
+      return h("p", { class: "muted" },
+        "The marketplace library is not enabled on this host.");
+    }
+    if (!library.items.length) {
+      return h("p", { class: "muted" },
+        "No routable nodes yet — nodes appear here once they are "
+        + "published to the marketplace.");
+    }
+    const io = (slots) => slots.map((s) => s.name).join(", ") || "—";
+    return h("div", {},
+      h("h2", {}, "the node library (" + library.items.length + " nodes)"),
+      h("table", {},
+        h("tr", {}, h("th", {}, "node"), h("th", {}, "consumes"),
+          h("th", {}, "produces"), h("th", {}, "verified")),
+        library.items.map((item) => h("tr", {},
+          h("td", { title: item.summary || "" }, item.name),
+          h("td", { class: "muted" }, io(item.consumes)),
+          h("td", {}, io(item.produces)),
+          h("td", {}, Math.round(item.success_mean * 100) + "% of "
+            + (item.verified_successes + item.verified_failures))))));
+  }
 
   async function preview(event) {
     event.preventDefault();
@@ -449,6 +551,7 @@ function assembleScreen() {
       + "it would pick right now — nodes, prices, payouts — before "
       + "anything drives. Nodes themselves are built in the app (in "
       + "chat) or arrive from the marketplace."),
+    slotChips(),
     h("form", { onsubmit: preview, class: "card" },
       h("label", { for: "goal" }, "Destination"), goal,
       h("label", { for: "want" }, "Wanted slot (what the route must produce)"),
@@ -459,7 +562,8 @@ function assembleScreen() {
         " explore — let the engine try a less-proven node "
         + "(Thompson-sample instead of exploiting verified history)"),
       h("button", { type: "submit" }, "Preview the route")),
-    out);
+    out,
+    libraryTable());
 }
 
 /* ---- inbox (held reserved contracts) ---- */
