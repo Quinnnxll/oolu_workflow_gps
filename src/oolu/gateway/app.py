@@ -199,16 +199,26 @@ NODE_REVIVAL_DAYS = 7.0
 # An explicit "build me a node ..." request in general chat. It REQUIRES the
 # word "node" so a plain "build me a report" stays ordinary work — only a
 # genuine node-build request is routed to the real builder (never the model,
-# which cannot create a node and must not narrate that it did).
+# which cannot create a node and must not narrate that it did). Adjectives
+# ride along ("a NEW node", "a weather-fetching node"), and the ask-shaped
+# forms count too ("i need a node that ..."), because every phrasing this
+# misses becomes a workflow run on the meta-sentence instead of a build.
 _NODE_BUILD_RE = re.compile(
     r"^\s*"
     # optional polite / addressing lead-in
     r"(?:(?:hey\s+)?oolu[,:]?\s+)?"
     r"(?:(?:please|can\s+you|could\s+you|would\s+you|will\s+you|"
-    r"i(?:'d| would)?\s+(?:like|want)\s+you\s+to|i\s+want\s+to)\s+)?"
+    r"i(?:'d| would)?\s+(?:like|want)\s+you\s+to|i\s+want\s+to|"
+    r"i\s+need\s+you\s+to)\s+)?"
     r"(?:please\s+)?"
-    r"(?:build|create|make|add|set\s+up)\s+(?:me\s+)?"
-    r"(?:a|an|the|another)\s+node\b"
+    # the build verb — or the ask-shaped "i need/want ..." with an
+    # indefinite article (definite forms like "i need the node logs"
+    # stay conversation)
+    r"(?:(?:build|create|make|add|set\s+up)\s+(?:me\s+)?"
+    r"(?:a|an|the|another|my)\s+"
+    r"|i\s+(?:need|want)\s+(?:a|an|another)\s+)"
+    r"(?:[\w()/-]+\s+){0,3}?"
+    r"node\b"
     r"\s*(?:for|that|to|which|:)?\s*(?P<goal>.*)$",
     re.IGNORECASE | re.DOTALL,
 )
@@ -1701,7 +1711,26 @@ class GatewayApp:
                     context=context_note,
                 )
         say = turn.say
-        if turn.task:
+        actions = turn.actions
+        build_task = (
+            explicit_node_build_goal(turn.task)
+            if turn.task and not in_node and self._nodeplace is not None
+            else None
+        )
+        if build_task is not None:
+            # The model routed an explicit node-build ask into the task
+            # lane (its prompt tells it to). Building is the WRITING
+            # door — author the function, pass the birth gate, land on
+            # the desk — never a workflow run on the meta-sentence: a
+            # run for "build a node to X" executes nothing but noise
+            # and leaves nothing in any node.
+            built = self._build_function_node(session, build_task)
+            if built.startswith("error:"):
+                say = f"I couldn't build that node: {built[7:].strip()}"
+            else:
+                say = built
+                actions = [*actions, {"tool": "build_node"}]
+        elif turn.task:
             try:
                 # With standing consent, the missing node is built BEFORE
                 # the run — function written, node on the desk, the route
@@ -1768,7 +1797,7 @@ class GatewayApp:
             {
                 "reply": say,
                 "source": turn.source,
-                "actions": turn.actions,
+                "actions": actions,
                 # The model's own thinking, when it showed it — the UI
                 # renders it dimmed so the user sees the work, not noise.
                 "reasoning": turn.reasoning,

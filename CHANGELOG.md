@@ -4,6 +4,30 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Building a node always reaches the door that WRITES the function:
+
+- **The build-shaped task lane.** The chat prompt tells the model to
+  put node-build asks in the task lane — but the gateway then executed
+  that task as a WORKFLOW: a run fired on the meta-sentence ("build a
+  node to X"), nothing was authored, and the node — when one appeared
+  at all — had nothing in it. A build-shaped task is now recognized at
+  the task lane and handed to the real builder (``explicit_node_build_
+  goal`` → ``_build_function_node``): executable-work judgement, the
+  authored function, the birth gate, the desk — and NO run fires for
+  the meta-sentence, because building was the ask.
+- **The detector hears more phrasings.** ``_NODE_BUILD_RE`` now allows
+  adjectives ("build me a NEW node…", "a weather-fetching node") and
+  the ask-shaped forms ("i need a node that…") — every phrasing it
+  misses is a workflow run on a meta-sentence. Definite references
+  ("i need the node logs") stay conversation.
+- **The prompt keeps the routing words.** The chat model is told to
+  set task to exactly "build a node to <goal>" for build asks — the
+  phrasing IS the route to the builder; a task stripped to the bare
+  goal executes a workflow instead of building.
+- **Pinned** by ``test_growth_trigger.py``: a build-shaped task from
+  the model lands a real node on the desk with no run fired, and the
+  phrasing table (builds vs conversation) holds.
+
 Forwarding a message is a delivery, not a display trick:
 
 - **The forward-to-OoLu path is now full.** Forwarding wrote to the

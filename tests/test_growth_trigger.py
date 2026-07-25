@@ -225,6 +225,58 @@ def test_explicit_build_creates_a_real_node_without_consulting_the_model(tmp_pat
         conn.close()
 
 
+def test_a_build_shaped_task_from_the_model_reaches_the_writing_door(tmp_path):
+    """Issue: a build ask the model routed into the task lane fired a
+    WORKFLOW on the meta-sentence ("build a node to …") — nothing was
+    written into any node. The gateway now recognizes a build-shaped task
+    and hands it to the real builder: function authored, node on the desk,
+    and no run started for the meta-sentence."""
+    app, conn, ident, desk, script_exec = _rig(tmp_path)
+    try:
+        # A phrasing the pre-model detector does not catch, answered by a
+        # model that (correctly, per its prompt) keeps the build words in
+        # the task lane.
+        _speak_work(
+            app,
+            ['{"say": "On it!", "task": "build a node to ' + GOAL + '"}'],
+        )
+        response = _chat(
+            app, ident, "hmm, so what I'm really after is a node doing " + GOAL
+        )
+        assert response.status == 200, response.body
+        reply = response.body["reply"]
+        assert "Built a NEW node" in reply
+        # No workflow fired for the meta-sentence — building WAS the task.
+        assert response.body["run_id"] is None
+        assert {"tool": "build_node"} in response.body["actions"]
+        mine = desk.overview(principal="user-1", tenant="t1")
+        assert [e.title for e in mine] == ["Normalize Invoice Csv Files"]
+    finally:
+        conn.close()
+
+
+def test_explicit_build_phrasings_reach_the_builder():
+    from oolu.gateway.app import explicit_node_build_goal
+
+    # Adjectives and ask-shaped forms are still explicit build requests.
+    for message in (
+        "build me a NEW node that cleans invoices",
+        "create a weather-fetching node for daily emails",
+        "i need a node that cleans invoices",
+        "can you make a simple node to fetch the weather",
+        "set up another node: archive receipts",
+    ):
+        assert explicit_node_build_goal(message), message
+    # Ordinary work, questions, and definite references stay conversation.
+    for message in (
+        "build me a report on last month",
+        "i need the node logs from yesterday",
+        "what is a node?",
+        "run my invoice node",
+    ):
+        assert explicit_node_build_goal(message) is None, message
+
+
 def test_a_bare_build_request_asks_what_the_node_should_do(tmp_path):
     app, conn, ident, desk, script_exec = _rig(tmp_path)
     try:
