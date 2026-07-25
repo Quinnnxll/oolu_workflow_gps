@@ -39,8 +39,12 @@ afterEach(() => {
 });
 
 describe("forwarding", () => {
-  it("drops a marked message into the destination thread's history", () => {
-    forwardMessage("the numbers are ready", "OoLu", {
+  it("delivers to a node's interact window and the node's model answers", async () => {
+    routes["POST /v1/chat"] = {
+      status: 200,
+      body: { reply: "received — I'll fold them in.", actions: [] },
+    };
+    await forwardMessage("the numbers are ready", {
       kind: "node",
       id: "n1",
       title: "Invoice Cleaner",
@@ -48,24 +52,56 @@ describe("forwarding", () => {
     const thread = JSON.parse(
       localStorage.getItem("oolu_node_chat_n1") ?? "[]",
     );
-    expect(thread).toHaveLength(1);
-    expect(thread[0].kind).toBe("user");
-    expect(thread[0].text).toContain(FORWARDED_MARK);
-    expect(thread[0].text).toContain("from OoLu");
-    expect(thread[0].text).toContain("the numbers are ready");
+    // The full path: the user's turn AND the model's answer, no note —
+    // exactly what the interact composer would have produced.
+    expect(thread).toHaveLength(2);
+    expect(thread[0]).toMatchObject({
+      kind: "user",
+      text: "the numbers are ready",
+    });
+    expect(thread[0].text).not.toContain(FORWARDED_MARK);
+    expect(thread[1]).toMatchObject({
+      kind: "assistant",
+      text: "received — I'll fold them in.",
+    });
+    const turn = calls.find(
+      (c) => c.method === "POST" && c.path === "/v1/chat",
+    );
+    expect(turn?.body).toMatchObject({
+      message: "the numbers are ready",
+      node_id: "n1",
+    });
+  });
 
-    // ...and into the OoLu conversation, preserving what was there.
+  it("delivers to the OoLu conversation under the ACCOUNT-scoped key", async () => {
+    routes["POST /v1/chat"] = {
+      status: 200,
+      body: { reply: "noted." },
+    };
+    // The key the Chat window actually reads (accountScope() with no
+    // session is "local") — seeded with an earlier turn that must both
+    // survive and ride the model call as history.
     localStorage.setItem(
-      "oolu_chat",
+      "oolu_chat::local",
       JSON.stringify([{ kind: "assistant", text: "hello" }]),
     );
-    forwardMessage("please review", "Invoice Cleaner", {
-      kind: "oolu",
-      title: "OoLu",
-    });
-    const oolu = JSON.parse(localStorage.getItem("oolu_chat") ?? "[]");
-    expect(oolu).toHaveLength(2);
-    expect(oolu[1].text).toContain("from Invoice Cleaner");
+    await forwardMessage("please review", { kind: "oolu", title: "OoLu" });
+    const oolu = JSON.parse(localStorage.getItem("oolu_chat::local") ?? "[]");
+    expect(oolu).toHaveLength(3);
+    expect(oolu[1]).toMatchObject({ kind: "user", text: "please review" });
+    expect(oolu[2]).toMatchObject({ kind: "assistant", text: "noted." });
+    const turn = calls.find(
+      (c) => c.method === "POST" && c.path === "/v1/chat",
+    );
+    const body = turn?.body as {
+      node_id?: string;
+      history: { role: string; content: string }[];
+    };
+    expect(body.node_id).toBeUndefined();
+    expect(body.history).toEqual([{ role: "assistant", content: "hello" }]);
+    // The old orphan key stays untouched — nothing writes beside the
+    // account-scoped thread the conversation reads.
+    expect(localStorage.getItem("oolu_chat")).toBeNull();
   });
 
   it("saves a forwarded message as a document in the Life drawer", async () => {
@@ -73,15 +109,14 @@ describe("forwarding", () => {
       status: 201,
       body: { file_id: "f1", name: "convert report pdf.md" },
     };
-    const name = await forwardMessageToFile(
-      "convert the report to pdf",
-      "OoLu",
-    );
+    const name = await forwardMessageToFile("convert the report to pdf");
     expect(name).toBe("convert report pdf.md");
     const create = calls.find((c) => c.method === "POST");
     const body = create?.body as { folder: string; content: string };
     expect(body.folder).toBe("forwarded");
-    expect(body.content).toContain(FORWARDED_MARK);
+    // The words alone — the "forwarded" folder already says how it
+    // arrived; no note is stitched into the user's own document.
+    expect(body.content).toBe("convert the report to pdf");
   });
 
   it("forwards a file as a COPY into the picked drawer", async () => {

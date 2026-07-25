@@ -1,12 +1,17 @@
-import { api } from "./api";
+import { accountScope, api } from "./api";
 import { conciseName } from "./naming";
 
 // Forwarding: messages and files move between conversations — the OoLu
 // chat, a node's interact window, and the file drawers — without retyping.
-// A forwarded message lands in the destination thread's stored history,
-// marked with where it came from, and appears when that conversation is
-// opened; a forwarded file is a copy into the destination drawer (each
-// drawer keeps its own independent record).
+// Forwarding to a conversation is a DELIVERY, not a display trick: the
+// words land in the destination thread's stored history exactly as if the
+// user had typed them there, and the destination's model answers in the
+// same turn — the full path the composer takes, nothing shorter. No
+// "forwarded from" note rides along to the user's own destinations: it is
+// their message, moved by their own hand. Only a FRIEND delivery keeps
+// the mark, because there a real recipient deserves to know these words
+// were carried, not typed live. A forwarded file is a copy into the
+// destination drawer (each drawer keeps its own independent record).
 
 export interface ForwardTarget {
   kind: "oolu" | "node" | "file" | "friend";
@@ -16,21 +21,44 @@ export interface ForwardTarget {
 
 export const FORWARDED_MARK = "↪ forwarded";
 
+interface ThreadMsg {
+  kind: string;
+  text?: string;
+  [extra: string]: unknown;
+}
+
+// The same storage keys the conversation windows themselves read: the
+// OoLu thread cache is PER ACCOUNT (see Chat.tsx — two people on one
+// device never read each other's OoLu), a node's thread is per node.
 function threadKey(target: ForwardTarget): string {
   return target.kind === "oolu"
-    ? "oolu_chat"
+    ? `oolu_chat::${accountScope()}`
     : `oolu_node_chat_${target.id ?? ""}`;
 }
 
-// Append one marked user-side message to a stored conversation thread.
-// Both thread models (the OoLu chat and a node's interact window) render
-// a {kind: "user", text} entry, so the forwarded line is readable there
-// the moment the conversation opens.
-export function forwardMessage(
+function loadThread(key: string): ThreadMsg[] {
+  try {
+    const raw = localStorage.getItem(key);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveThread(key: string, thread: ThreadMsg[]): void {
+  localStorage.setItem(key, JSON.stringify(thread));
+}
+
+// Deliver a message into the OoLu conversation or a node's interact
+// window: the text joins the destination thread as the user's own turn,
+// the destination's model answers it (with the thread's own recent
+// history, exactly like its composer), and the reply lands beside it —
+// both visible the moment that conversation opens.
+export async function forwardMessage(
   text: string,
-  from: string,
   target: ForwardTarget,
-): void {
+): Promise<void> {
   if (target.kind === "file") {
     throw new Error("use forwardMessageToFile for file targets");
   }
@@ -38,23 +66,33 @@ export function forwardMessage(
     throw new Error("use forwardMessageToFriend for friend targets");
   }
   const key = threadKey(target);
-  let thread: unknown[] = [];
-  try {
-    const raw = localStorage.getItem(key);
-    const parsed = raw ? JSON.parse(raw) : [];
-    thread = Array.isArray(parsed) ? parsed : [];
-  } catch {
-    thread = [];
-  }
+  const thread = loadThread(key);
+  const history = thread
+    .filter((m) => m.kind === "user" || m.kind === "assistant")
+    .slice(-12)
+    .map((m) => ({
+      role: m.kind === "user" ? ("user" as const) : ("assistant" as const),
+      content: String(m.text ?? ""),
+    }));
+  thread.push({ kind: "user", text });
+  saveThread(key, thread);
+  const turn = await api.chat(
+    text,
+    history,
+    target.kind === "node" ? target.id : undefined,
+  );
   thread.push({
-    kind: "user",
-    text: `${FORWARDED_MARK} from ${from}:\n${text}`,
+    kind: "assistant",
+    text: turn.reply,
+    ...(turn.actions && turn.actions.length ? { actions: turn.actions } : {}),
+    ...(turn.reasoning ? { reasoning: turn.reasoning } : {}),
   });
-  localStorage.setItem(key, JSON.stringify(thread));
+  saveThread(key, thread);
 }
 
-// Forwarding to a person is a real delivery: the marked line goes through
-// the server into their thread, not into any local storage.
+// Forwarding to a person is a real delivery through the server — and the
+// one destination that keeps the mark: the recipient is told these words
+// were carried from elsewhere, never presented as typed live.
 export async function forwardMessageToFriend(
   text: string,
   from: string,
@@ -63,18 +101,11 @@ export async function forwardMessageToFriend(
   await api.sendFriendMessage(peer, `${FORWARDED_MARK} from ${from}:\n${text}`);
 }
 
-// A forwarded message can also become a document in the Life drawer.
-export async function forwardMessageToFile(
-  text: string,
-  from: string,
-): Promise<string> {
+// A forwarded message can also become a document in the Life drawer —
+// the words alone; the "forwarded" folder already says how it arrived.
+export async function forwardMessageToFile(text: string): Promise<string> {
   const name = `${conciseName(text) || "forwarded"}.md`.toLowerCase();
-  const doc = await api.createFile(
-    name,
-    `> ${FORWARDED_MARK} from ${from}\n\n${text}`,
-    undefined,
-    "forwarded",
-  );
+  const doc = await api.createFile(name, text, undefined, "forwarded");
   return doc.name;
 }
 

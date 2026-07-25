@@ -50,9 +50,11 @@ export function ForwardMenu({ text, from }: { text: string; from: string }) {
   }, [open]);
 
   async function pick(target: ForwardTarget | "file") {
+    setDone("…"); // the menu folds; the ellipsis holds until delivery lands
+    setOpen(false);
     try {
       if (target === "file") {
-        const name = await forwardMessageToFile(text, from);
+        const name = await forwardMessageToFile(text);
         setDone(`saved to ${name}`);
       } else if (target.kind === "friend") {
         // A person is a real delivery through the server, not a local
@@ -60,13 +62,14 @@ export function ForwardMenu({ text, from }: { text: string; from: string }) {
         await forwardMessageToFriend(text, from, target.id ?? target.title);
         setDone(`sent to ${target.title}`);
       } else {
-        forwardMessage(text, from, target);
+        // The full path: the words join the destination thread and its
+        // model answers them before we call this forwarded.
+        await forwardMessage(text, target);
         setDone(`forwarded to ${target.title}`);
       }
     } catch (e) {
       setDone(`couldn't forward (${(e as Error).message})`);
     }
-    setOpen(false);
   }
 
   if (done) return <span className="forward-done">{done}</span>;

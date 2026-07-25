@@ -4,6 +4,33 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Forwarding a message is a delivery, not a display trick:
+
+- **The forward-to-OoLu path is now full.** Forwarding wrote to the
+  bare ``oolu_chat`` storage key while the conversation reads the
+  ACCOUNT-scoped one — the forwarded message dead-ended in an orphan
+  key and never appeared anywhere. The forward door now uses the same
+  key the Chat window reads.
+- **The destination's model answers.** Forwarding to OoLu or to a
+  node's interact window was a bare thread append: no model call, no
+  reply — a message into a room with nobody in it. ``forwardMessage``
+  now takes the composer's own path: the words join the destination
+  thread as the user's turn, ``/v1/chat`` runs with that thread's
+  recent history (the node's id riding along for interact windows),
+  and the model's reply lands beside it. The ↪ menu shows an ellipsis
+  until the delivery lands.
+- **No more "forwarded from" notes on your own destinations.** The
+  mark is dropped for the OoLu thread, node interact windows, and
+  saved files — it is the user's message, moved by their own hand
+  (the "forwarded" files folder already says how a document arrived).
+  A FRIEND delivery keeps the mark deliberately: a real recipient
+  deserves to know the words were carried, not typed live.
+- **Pinned** by ``forward.test.ts``/``ForwardMenu.test.tsx``: the
+  two-turn thread with no note, the account-scoped key with the
+  orphan key untouched, history riding the model call, the node id on
+  interact deliveries, and the friend mark surviving. Shell assets
+  rebuilt (``npm run build:shell``).
+
 The operator console speaks the app's language:
 
 - **"Runs" and "Assemble" were console-only words** — nothing in the
