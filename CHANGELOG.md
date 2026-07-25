@@ -4,6 +4,24 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The conversational-building plan (proposed):
+
+- **`docs/conversational-building-plan.md`.** Five phases for the
+  non-developer's node, grounded in the standing seams: B0 the
+  interrogation budget (no mechanism — format, API, schema — ever
+  reaches a human as a question; the builder decides, defaults, and
+  names it in the receipt), B1 values through conversation with forms
+  as strict checks over the declared inputs (plain-word labels and
+  examples authored at birth), B2 the function landing in
+  ``src/main.py`` transactionally (today's write is best-effort and
+  silent on refusal — a reliability defect, named), B3 the
+  self-contained node (every run's scrubbed inputs and outputs land in
+  the node's own drawer; the newest verified outputs project as its
+  standing result), B4 durable hand-off (run-cited provenance on the
+  produces/consumes edges; standing outputs offered — never silently
+  bound — as the next run's defaults). Laws, sequencing, loop-closure
+  rule, and metrics in the house pattern.
+
 Failures reach the inbox — the triggers defined, the wiring closed:
 
 - **``node.build_failed`` is now a defined event.** A refused build
