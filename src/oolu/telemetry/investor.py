@@ -24,7 +24,7 @@ series the monitor panel charts and the analysis report reads.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Callable
 
 
@@ -538,22 +538,41 @@ _SCHEMA = """CREATE TABLE IF NOT EXISTS metric_snapshots (
     PRIMARY KEY (metric, day)
 )"""
 
+# The intraday twin: one honest point per (metric, HOUR) — what the
+# hour scale charts, and what every coarser scale could rebuild from.
+_TICK_SCHEMA = """CREATE TABLE IF NOT EXISTS metric_ticks (
+    metric TEXT NOT NULL,
+    hour TEXT NOT NULL,
+    value REAL NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (metric, hour)
+)"""
+
+# The trend scales an investor reads a chart at — each bucket carries
+# its LAST recorded value (the closing price, not an average), because
+# a trend chart answers "where did it stand", not "what was typical".
+SERIES_SCALES = ("hour", "day", "week", "month", "year")
+_SCALE_POINTS = {"hour": 72, "day": 90, "week": 52, "month": 24, "year": 10}
+
 
 class MetricsSnapshotStore:
-    """The daily ledger every metric files into — auto and manual alike.
-    One row per (metric, day); a re-collection the same day updates in
-    place, so the series stays one honest point per day."""
+    """The metric ledger every source files into — auto and manual
+    alike. One row per (metric, day) and one per (metric, hour); a
+    re-collection in the same bucket updates in place, so every series
+    stays one honest point per bucket at every scale."""
 
     def __init__(self, conn, *, clock: Callable[[], datetime] | None = None):
         self._conn = conn
         self._clock = clock or (lambda: datetime.now(UTC))
         with self._conn.transaction() as db:
             db.execute(_SCHEMA)
+            db.execute(_TICK_SCHEMA)
 
     def _day(self) -> str:
         return self._clock().strftime("%Y-%m-%d")
 
     def record(self, metric: str, value: float, *, day: str | None = None) -> None:
+        now = self._clock()
         with self._conn.transaction() as db:
             db.execute(
                 """INSERT INTO metric_snapshots (metric, day, value, updated_at)
@@ -564,9 +583,35 @@ class MetricsSnapshotStore:
                     metric,
                     day or self._day(),
                     float(value),
-                    self._clock().isoformat(),
+                    now.isoformat(),
                 ),
             )
+            # A backdated manual entry belongs to its day alone; only a
+            # LIVE recording is also this hour's standing.
+            if day is None:
+                db.execute(
+                    """INSERT INTO metric_ticks (metric, hour, value, updated_at)
+                       VALUES (?, ?, ?, ?)
+                       ON CONFLICT(metric, hour) DO UPDATE SET
+                         value = excluded.value, updated_at = excluded.updated_at""",
+                    (
+                        metric,
+                        now.strftime("%Y-%m-%dT%H:00"),
+                        float(value),
+                        now.isoformat(),
+                    ),
+                )
+
+    def newest_tick_at(self) -> datetime | None:
+        """When ANY metric last ticked — the staleness check that lets
+        a panel view keep the intraday series alive without a scheduler."""
+        with self._conn.lock:
+            row = self._conn.db.execute(
+                "SELECT MAX(updated_at) AS at FROM metric_ticks"
+            ).fetchone()
+        if row is None or row["at"] is None:
+            return None
+        return datetime.fromisoformat(row["at"])
 
     def latest(self) -> dict[str, dict]:
         """Each metric's newest point: {metric: {value, day}}."""
@@ -594,6 +639,59 @@ class MetricsSnapshotStore:
                 {"day": r["day"], "value": r["value"]}
             )
         return {m: pts[-days:] for m, pts in series.items()}
+
+    def series(
+        self, *, scale: str = "day", points: int | None = None
+    ) -> dict[str, list[dict]]:
+        """Every metric's trend at one of the investor scales — hour,
+        day, week, month, year — oldest first, each point labeled with
+        its bucket and carrying the bucket's LAST value (a closing
+        price, never an average). ``points`` bounds how many buckets
+        ride back from the newest; each scale has a natural default
+        (72 hours, 90 days, 52 weeks, 24 months, 10 years)."""
+        if scale not in SERIES_SCALES:
+            raise ValueError(
+                f"scale must be one of {', '.join(SERIES_SCALES)}"
+            )
+        limit = points if points is not None else _SCALE_POINTS[scale]
+        limit = max(1, min(2000, int(limit)))
+        if scale == "hour":
+            with self._conn.lock:
+                rows = self._conn.db.execute(
+                    "SELECT metric, hour AS bucket, value FROM metric_ticks"
+                    " ORDER BY metric, hour"
+                ).fetchall()
+        else:
+            with self._conn.lock:
+                rows = self._conn.db.execute(
+                    "SELECT metric, day, value FROM metric_snapshots"
+                    " ORDER BY metric, day"
+                ).fetchall()
+        series: dict[str, list[dict]] = {}
+        for r in rows:
+            bucket = (
+                r["bucket"] if scale == "hour" else _bucket(r["day"], scale)
+            )
+            pts = series.setdefault(r["metric"], [])
+            if pts and pts[-1]["t"] == bucket:
+                pts[-1]["value"] = r["value"]  # the bucket's close serves
+            else:
+                pts.append({"t": bucket, "value": r["value"]})
+        return {m: pts[-limit:] for m, pts in series.items()}
+
+
+def _bucket(day: str, scale: str) -> str:
+    """A day label folded into its coarser bucket — ISO weeks so a week
+    never straddles a year ambiguously."""
+    if scale == "day":
+        return day
+    parsed = datetime.strptime(day, "%Y-%m-%d")
+    if scale == "week":
+        year, week, _ = parsed.isocalendar()
+        return f"{year}-W{week:02d}"
+    if scale == "month":
+        return day[:7]
+    return day[:4]  # year
 
 
 class InvestorMetricsService:
@@ -634,6 +732,24 @@ class InvestorMetricsService:
         for key, value in collected.items():
             self._store.record(key, value)
         return collected
+
+    def collect_if_stale(
+        self,
+        *,
+        max_age: timedelta = timedelta(hours=1),
+        now: datetime | None = None,
+    ) -> bool:
+        """Collect only when the newest tick is older than ``max_age`` —
+        the throttle that lets every panel VIEW keep the intraday series
+        alive (one collection per hour at most) without demanding a
+        scheduler anyone has to remember to set up. Returns whether a
+        collection actually ran."""
+        newest = self._store.newest_tick_at()
+        moment = now or datetime.now(UTC)
+        if newest is not None and moment - newest < max_age:
+            return False
+        self.collect()
+        return True
 
     def record_manual(self, key: str, value: float) -> MetricSpec:
         spec = self.spec(key)

@@ -9981,7 +9981,15 @@ class GatewayApp:
         return service
 
     def _metrics_view(self, request, session, params) -> Response:
-        return json_response(200, self._require_metrics().view())
+        service = self._require_metrics()
+        # Every panel view keeps the trend series alive: a collection
+        # runs at most once an hour, so no operator has to remember a
+        # scheduler for the hour-scale chart to have points on it.
+        try:
+            service.collect_if_stale(now=request.now or self._clock())
+        except Exception:  # noqa: BLE001 - the view outranks the tick
+            pass
+        return json_response(200, service.view())
 
     def _metrics_summary(self, request, session, params) -> Response:
         """The executive strip: each headline metric with the matrix's
@@ -10216,6 +10224,20 @@ class GatewayApp:
 
     def _metrics_history(self, request, session, params) -> Response:
         self._require_metrics()
+        scale = request.query.get("scale")
+        if scale is not None:
+            # The investor scales: hour/day/week/month/year, each bucket
+            # closing on its last recorded value — a stock chart's read.
+            try:
+                points = (
+                    int(request.query["points"])
+                    if "points" in request.query
+                    else None
+                )
+                series = self._metrics_store.series(scale=scale, points=points)
+            except ValueError as exc:
+                raise GatewayError(400, "invalid_request", str(exc)) from exc
+            return json_response(200, {"series": series, "scale": scale})
         days = max(1, min(3650, int(request.query.get("days", "90"))))
         return json_response(
             200, {"series": self._metrics_store.history(days=days)}

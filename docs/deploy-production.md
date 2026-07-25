@@ -143,14 +143,22 @@ OOLU_INVESTORS_DOMAIN=investors.largecollaborationmodel.com
 ```
 
 Point the subdomain's DNS at this box exactly like the app and admin
-domains (proxied through Cloudflare, SSL/TLS "Full (strict)"), restart
-(`docker compose -f docker-compose.prod.yml up -d`), and open
-`https://investors.largecollaborationmodel.com`. The panel shows a
+domains (proxied through Cloudflare, SSL/TLS "Full (strict)") — a
+one-time step, like the `.env` line above. From then on the deploy
+workflow covers this domain exactly like app and admin: every push to
+`main` rebuilds the stack AND validates + gracefully reloads Caddy's
+config (a bind-mounted Caddyfile edit never recreates the container by
+itself, so the reload step is what makes panel and routing changes
+land without touching the droplet). Open
+`https://investors.largecollaborationmodel.com`: the panel shows a
 sign-in; any account whose role carries `metrics:view` (plus
 `approve:metrics.record` if that person also records manual metrics or
 competitor observations) signs in and the boards are live — executive
 summary, scorecard, cohorts, competitive position, and every metric
-with its 90-day sparkline and description.
+with its trend sparkline and description. The header's H/D/W/M/Y row
+reads each trend at the investor scales — hourly (the panel's own
+views keep that series alive, one collection per hour at most), daily,
+and weekly/monthly/yearly closes.
 
 The page is also self-contained — hosting it anywhere else (a static
 host, Cloudflare Pages) still works: its Advanced section takes an API

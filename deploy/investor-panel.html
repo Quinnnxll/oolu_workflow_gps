@@ -173,6 +173,11 @@
   #signin summary { font-size: 0.8rem; color: var(--muted); cursor: pointer; }
   .toolbar { display: flex; gap: 0.6rem; align-items: center; }
   .toolbar button { font-size: 0.8rem; padding: 0.3rem 0.8rem; }
+  .scales { display: inline-flex; gap: 2px; border: 1px solid var(--baseline);
+    border-radius: 8px; overflow: hidden; }
+  .scales button { border: 0; border-radius: 0; font-size: 0.78rem;
+    padding: 0.3rem 0.65rem; background: var(--surface); color: var(--ink-2); }
+  .scales button.on { background: var(--series); color: #fff; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -181,6 +186,7 @@
   <span class="right">
     <span id="conn"><span class="live-dot"></span><span id="conn-text"></span></span>
     <span class="toolbar">
+      <span class="scales" id="scales" role="group" aria-label="trend scale"></span>
       <button id="report" type="button">Download report</button>
       <a class="plain" href="#" id="signout">sign out</a>
     </span>
@@ -231,6 +237,8 @@ const conf = {
   get server() { return localStorage.getItem("oolu_metrics_server") || ""; },
   get token() { return localStorage.getItem("oolu_metrics_token") || ""; },
   get who() { return localStorage.getItem("oolu_metrics_who") || ""; },
+  get scale() { return localStorage.getItem("oolu_metrics_scale") || "day"; },
+  set scale(value) { localStorage.setItem("oolu_metrics_scale", value); },
   set(server, token, who) {
     localStorage.setItem("oolu_metrics_server", server);
     localStorage.setItem("oolu_metrics_token", token);
@@ -241,6 +249,33 @@ const conf = {
     localStorage.removeItem("oolu_metrics_who");
   },
 };
+
+/* The trend scales an investor reads a chart at — a stock chart's
+   H / D / W / M / Y row; every sparkline follows the picked scale. */
+const SCALES = [
+  ["hour", "H", "hourly, last 72 hours"],
+  ["day", "D", "daily, last 90 days"],
+  ["week", "W", "weekly closes, last 52 weeks"],
+  ["month", "M", "monthly closes, last 24 months"],
+  ["year", "Y", "yearly closes"],
+];
+function drawScales() {
+  const mount = $("scales");
+  mount.replaceChildren();
+  for (const [key, label, title] of SCALES) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = label;
+    btn.title = title;
+    btn.className = key === conf.scale ? "on" : "";
+    btn.addEventListener("click", () => {
+      conf.scale = key;
+      drawScales();
+      refresh();
+    });
+    mount.append(btn);
+  }
+}
 
 function show(signedIn) {
   $("top").hidden = !signedIn;
@@ -337,10 +372,11 @@ function sparkline(points) {
   svg.setAttribute("class", "spark");
   svg.setAttribute("role", "img");
   const first = points[0], last = points[points.length - 1];
+  const at = (p) => p.t || p.day;
   const title = document.createElementNS(svg.namespaceURI, "title");
   title.textContent =
-    points.length + " days · " + first.day + " → " + last.day +
-    " · min " + fmt(lo) + " · max " + fmt(hi) + " · latest " + fmt(last.value);
+    points.length + " × " + conf.scale + " · " + at(first) + " → " + at(last)
+    + " · min " + fmt(lo) + " · max " + fmt(hi) + " · close " + fmt(last.value);
   const area = document.createElementNS(svg.namespaceURI, "polygon");
   area.setAttribute("class", "area");
   area.setAttribute("points",
@@ -631,7 +667,8 @@ async function refresh() {
         api("/v1/platform/metrics/scorecard"),
         api("/v1/platform/metrics/cohorts"),
         api("/v1/platform/competitors"),
-        api("/v1/platform/metrics/history?days=90").catch(() => ({ series: {} })),
+        api("/v1/platform/metrics/history?scale=" + conf.scale)
+          .catch(() => ({ series: {} })),
       ]);
     renderExec(summary);
     renderScorecard(scorecard);
@@ -658,6 +695,7 @@ $("report").addEventListener("click", async () => {
 /* ---- boot ----------------------------------------------------------- */
 $("server").value = conf.server;
 if (location.protocol === "file:") $("advanced").open = true;
+drawScales();
 show(Boolean(conf.token));
 refresh();
 setInterval(refresh, 60000);

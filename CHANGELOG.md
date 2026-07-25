@@ -4,6 +4,31 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The investor panel deploys itself, and trends read at stock scales:
+
+- **The deploy workflow now covers Caddy's config.** ``up -d`` never
+  recreates the caddy container for a bind-mounted Caddyfile edit (the
+  mount is unchanged; only the file's content moved) — which is exactly
+  why the investors domain kept needing manual compose on the droplet.
+  Every push to ``main`` now validates and gracefully reloads Caddy
+  after the rebuild, so app, admin, AND investors all land hands-free.
+- **Trend scales: H / D / W / M / Y.** ``metric_ticks`` joins the
+  daily ledger (one honest point per metric-hour, upserted);
+  ``MetricsSnapshotStore.series(scale=…)`` reads hour/day/week/month/
+  year with each bucket closing on its LAST value — a stock chart's
+  read, never an average — and ``/v1/platform/metrics/history?scale=``
+  serves it (the legacy day shape unchanged without the param).
+- **The panel keeps its own series alive.** ``collect_if_stale``
+  collects at most once an hour, triggered by the metrics view itself
+  — no scheduler to remember; looking at the panel is what feeds it.
+  The header gains the H/D/W/M/Y selector (persisted), and every
+  sparkline follows it, its tooltip naming the scale, range, and
+  close.
+- **Pinned** by ``test_investor_metrics.py``: bucket closes at every
+  scale (same-hour updates move the close instead of adding points),
+  the hourly throttle, the scaled route, the 400 on an unknown scale,
+  and the legacy shape byte-compatible.
+
 The operator console ENUMERATES the system instead of quizzing you:
 
 - **Everything in it is user-created and semantically named**, so no

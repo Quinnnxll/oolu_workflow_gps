@@ -498,3 +498,108 @@ def test_phase3_doors_answer_and_are_walled(tmp_path):
         assert items["moat.proprietary_events_total"]["value"] > 0
     finally:
         conn.close()
+
+
+def test_the_series_reads_at_every_investor_scale(tmp_path):
+    """hour/day/week/month/year — each bucket closing on its LAST
+    recorded value, the way a stock chart reads, never an average."""
+    conn = DurableConnection(tmp_path / "m.db")
+    tick = {"now": NOW}
+    store = MetricsSnapshotStore(conn, clock=lambda: tick["now"])
+    # Two collections inside one hour, one the next hour, one the next
+    # day, one the next YEAR — enough to exercise every bucket edge.
+    store.record("m", 1)
+    tick["now"] = NOW + timedelta(minutes=30)
+    store.record("m", 2)  # same hour: the close moves, no second point
+    tick["now"] = NOW + timedelta(hours=1)
+    store.record("m", 3)
+    tick["now"] = NOW + timedelta(days=1)
+    store.record("m", 4)
+    tick["now"] = NOW + timedelta(days=400)
+    store.record("m", 9)
+    try:
+        hours = store.series(scale="hour")["m"]
+        assert [p["value"] for p in hours] == [2.0, 3.0, 4.0, 9.0]
+        assert hours[0]["t"].endswith(":00")
+        days = store.series(scale="day")["m"]
+        assert [p["value"] for p in days] == [3.0, 4.0, 9.0]
+        weeks = store.series(scale="week")["m"]
+        assert weeks[0]["t"].startswith(str(NOW.year)) and "W" in weeks[0]["t"]
+        assert [p["value"] for p in weeks][-1] == 9.0
+        months = store.series(scale="month")["m"]
+        assert months[0]["t"] == NOW.strftime("%Y-%m")
+        years = store.series(scale="year")["m"]
+        assert [p["t"] for p in years] == [
+            str(NOW.year), str((NOW + timedelta(days=400)).year)]
+        assert [p["value"] for p in years] == [4.0, 9.0]
+        # points bounds ride back from the newest bucket.
+        assert [p["value"] for p in store.series(scale="hour", points=2)["m"]] \
+            == [4.0, 9.0]
+        import pytest as _pytest
+
+        with _pytest.raises(ValueError, match="scale must be one of"):
+            store.series(scale="fortnight")
+    finally:
+        conn.close()
+
+
+def test_a_view_keeps_the_series_alive_at_most_hourly(tmp_path):
+    conn = DurableConnection(tmp_path / "m.db")
+    tick = {"now": NOW}
+    store = MetricsSnapshotStore(conn, clock=lambda: tick["now"])
+    calls = {"n": 0}
+
+    def reader():
+        calls["n"] += 1
+        return calls["n"]
+
+    service = InvestorMetricsService(store, readers={"nodes.total": reader})
+    try:
+        assert service.collect_if_stale(now=NOW) is True
+        # Within the hour: the view rides the standing tick, no re-read.
+        assert service.collect_if_stale(now=NOW + timedelta(minutes=59)) is False
+        assert calls["n"] == 1
+        # Past it: the next view re-collects.
+        tick["now"] = NOW + timedelta(hours=2)
+        assert service.collect_if_stale(now=NOW + timedelta(hours=2)) is True
+        assert calls["n"] == 2
+    finally:
+        conn.close()
+
+
+def test_the_history_route_speaks_scales_and_stays_compatible(tmp_path):
+    gw, conn, ident = _host(tmp_path)
+    try:
+        operator = ident.token("operator", "t1")
+        recorded = gw.handle(
+            _req(
+                "PUT", "/v1/platform/metrics/code.commits",
+                token=operator, body={"value": 41},
+            )
+        )
+        assert recorded.status == 200, recorded.body
+        scaled = gw.handle(
+            _req(
+                "GET", "/v1/platform/metrics/history",
+                token=operator, query={"scale": "hour"},
+            )
+        )
+        assert scaled.status == 200, scaled.body
+        assert scaled.body["scale"] == "hour"
+        (point,) = scaled.body["series"]["code.commits"]
+        assert point["value"] == 41.0 and "t" in point
+        # The legacy day-shape stays exactly as it was.
+        legacy = gw.handle(
+            _req("GET", "/v1/platform/metrics/history", token=operator)
+        )
+        assert "scale" not in legacy.body
+        assert legacy.body["series"]["code.commits"][-1]["day"]
+        refused = gw.handle(
+            _req(
+                "GET", "/v1/platform/metrics/history",
+                token=operator, query={"scale": "fortnight"},
+            )
+        )
+        assert refused.status == 400
+    finally:
+        conn.close()

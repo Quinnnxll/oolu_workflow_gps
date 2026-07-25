@@ -75,6 +75,15 @@ jobs:
           git fetch origin main
           git reset --hard origin/main
           docker compose -f docker-compose.prod.yml up -d --build
+          # A bind-mounted Caddyfile edit does NOT recreate the caddy
+          # container (the mount is unchanged; only the file's content
+          # moved), so every domain it serves — app, admin, investors —
+          # gets its config reloaded explicitly: validate first, then a
+          # zero-downtime graceful reload.
+          docker compose -f docker-compose.prod.yml exec -T caddy \
+            caddy validate --config /etc/caddy/Caddyfile
+          docker compose -f docker-compose.prod.yml exec -T caddy \
+            caddy reload --config /etc/caddy/Caddyfile
           docker image prune -f
           docker compose -f docker-compose.prod.yml ps
           REMOTE
