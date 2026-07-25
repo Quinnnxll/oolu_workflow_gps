@@ -49,6 +49,7 @@ def test_every_path_the_frontend_calls_is_a_real_route():
         "/v1/auth/users",
         "/v1/runs",
         "/v1/market/assemble",
+        "/v1/inbox",
         "/v1/runs/contract",
         "/v1/runs/contract/holds",
         "/v1/earnings",

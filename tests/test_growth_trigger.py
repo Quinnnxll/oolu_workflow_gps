@@ -600,3 +600,93 @@ def test_the_operator_overview_lists_every_built_node(tmp_path):
         assert item["status"]
     finally:
         conn.close()
+
+
+def test_the_inbox_carries_failures_not_only_approvals(tmp_path):
+    """Issue: failed executions and failed node builds never reached
+    the operator's inbox. The triggers are now defined events —
+    workflow.failed (the engine's own) and node.build_failed (the
+    build door's) — and GET /v1/inbox projects them beside the
+    approval holds: the member sees their own, users:manage sees the
+    tenant's, and every item leaves when its cause resolves."""
+    from oolu.identity import AuthorityGrant, Role
+    from oolu.skills.models import ExecutionOutcome, ExecutionStatus
+
+    class _FailingExec:
+        name = "script"
+
+        def capabilities(self):
+            return frozenset({"run"})
+
+        def execute(self, action, *, idempotency_key):
+            return ExecutionOutcome(
+                idempotency_key=idempotency_key,
+                skill_id=action.correlation_id,
+                status=ExecutionStatus.FAILED,
+                error="the sandbox exploded",
+            )
+
+        def cancel(self, idempotency_key):
+            return None
+
+    app, conn, ident, desk, _exec = _rig(tmp_path, script_exec=_FailingExec())
+    try:
+        ident.store.add_role(
+            Role(
+                tenant_id="t1", name="ops",
+                permissions=frozenset({"users:manage"}),
+            )
+        )
+        ident.store.add_grant(
+            AuthorityGrant(
+                tenant_id="t1", principal_id="ops-1", role_name="ops",
+                granted_by="x",
+            )
+        )
+
+        # A refused build: the author writes nothing usable, and the
+        # DEFINED event lands on the hash-chained audit log.
+        app._node_function_author = lambda tenant: FakeAuthor("I cannot.")
+        refused = _chat(app, ident, "build me a node that polishes ledgers")
+        assert refused.status == 200
+        assert "couldn't build" in refused.body["reply"]
+        failed_events = [
+            e for e in app._durable.audit.records()
+            if e.event_type == "node.build_failed"
+        ]
+        assert failed_events, "the refusal defines its event"
+        assert failed_events[-1].payload["tenant"] == "t1"
+        assert "polishes ledgers" in failed_events[-1].payload["goal"]
+
+        # A failed execution: a healthy build, then the run explodes.
+        app._node_function_author = lambda tenant: FakeAuthor()
+        built = _chat(app, ident, "build me a node that " + GOAL)
+        assert "Built a NEW node" in built.body["reply"]
+        model = _FakeModel([TASK_TURN])
+        app._tenant_model = lambda tenant: model
+        ran = _chat(app, ident, "please " + GOAL)
+        assert ran.status == 200
+
+        # The member's inbox: their own failed workflow, no tenant keys.
+        mine = app.handle(
+            _req("GET", "/v1/inbox", token=ident.token("user-1", "t1"))
+        )
+        assert mine.status == 200, mine.body
+        assert mine.body["scope"] == "mine"
+        assert [r["intent"] for r in mine.body["failed_runs"]] == [GOAL]
+        assert mine.body["failed_builds"] == []
+        assert mine.body["holds"] == []
+
+        # The operator's inbox: everything, named — and the refused
+        # build stands while the published one never appears.
+        ops = app.handle(
+            _req("GET", "/v1/inbox", token=ident.token("ops-1", "t1"))
+        )
+        assert ops.body["scope"] == "tenant"
+        assert [r["submitted_by"] for r in ops.body["failed_runs"]] == ["user-1"]
+        assert ops.body["failed_runs"][0]["phase"] in ("failed", "recovery") or \
+            ops.body["failed_runs"][0]["awaiting"] == "incident"
+        (build,) = ops.body["failed_builds"]
+        assert "polishes ledgers" in build["goal"]
+    finally:
+        conn.close()

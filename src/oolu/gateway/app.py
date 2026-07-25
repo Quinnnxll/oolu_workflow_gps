@@ -1367,6 +1367,7 @@ class GatewayApp:
         r.add("POST", "/v1/market/assemble", self._market_assemble)
         r.add("POST", "/v1/runs/contract", self._submit_contract_run)
         r.add("GET", "/v1/runs/contract/holds", self._list_contract_holds)
+        r.add("GET", "/v1/inbox", self._inbox_view)
         r.add("GET", "/v1/runs/contract/holds/events", self._hold_events)
         r.add(
             "POST",
@@ -3440,6 +3441,20 @@ class GatewayApp:
             session, author, goal, demonstrated
         )
         if script is None:
+            # The earliest refusal — the model wrote nothing usable — is
+            # still a FAILED BUILD: it lands on the ledger (and so on the
+            # audit chain as node.build_failed) like every later gate's
+            # refusal, or the inbox would never see the most common way
+            # a build dies.
+            self._ledger_note(
+                session.tenant_id,
+                skill_id,
+                goal,
+                status="refused",
+                problem=refusal,
+                states=("proposed", "author-refused"),
+                model=self._author_model_id(author),
+            )
             return f"error: {refusal}"
         # --- the birth gate (context-harness plan, Phase 4) ------------- #
         # No node publishes without its function having proven it executes
@@ -5798,6 +5813,21 @@ class GatewayApp:
             return
         try:
             if kwargs.get("status") == "refused":
+                # The DEFINED failure event, distinct from the memory
+                # entry below: node.build_failed is what attention
+                # surfaces (the operator inbox) key on — a build that
+                # refused is something someone should SEE, not only
+                # something the next attempt remembers.
+                self._durable.audit.append(
+                    "node.build_failed",
+                    {
+                        "tenant": tenant,
+                        "goal_key": goal_key,
+                        "goal": str(goal)[:200],
+                        "problem": str(kwargs.get("problem", ""))[:400],
+                        "model": str(kwargs.get("model", "")),
+                    },
+                )
                 record = self._durable.audit.append(
                     "model.memory",
                     {
@@ -9308,10 +9338,8 @@ class GatewayApp:
             status=200, body="\n".join(frames) + "\n", content_type="text/event-stream"
         )
 
-    def _list_contract_holds(self, request, session, params) -> Response:
-        """Reserved contracts held for approval — the caller's tenant only."""
-        self._sweep_holds(request)
-        items = [
+    def _hold_items(self, session) -> list[dict]:
+        return [
             {
                 "pending_id": record.pending_id,
                 "name": str(record.contract.get("name", "contract")),
@@ -9327,7 +9355,63 @@ class GatewayApp:
             }
             for record in self._holds.list(tenant=session.tenant_id)
         ]
-        return json_response(200, {"items": items})
+
+    def _list_contract_holds(self, request, session, params) -> Response:
+        """Reserved contracts held for approval — the caller's tenant only."""
+        self._sweep_holds(request)
+        return json_response(200, {"items": self._hold_items(session)})
+
+    def _inbox_view(self, request, session, params) -> Response:
+        """Everything waiting on a human, in ONE feed: contracts held
+        for approval, workflows that FAILED, and node builds that
+        refused. The triggers are the defined events — the engine's
+        ``workflow.failed`` and the build door's ``node.build_failed``,
+        both on the hash-chained audit log — and the feed itself is a
+        projection of the stores those events came from, so an item
+        leaves the inbox the moment its cause resolves (a retry
+        succeeds, a rebuild publishes) with no flag anyone must clear.
+        Failed workflows list the caller's own by default; stored
+        users:manage authority widens them to the tenant and adds the
+        build refusals (the build ledger is tenant-keyed, not
+        per-person)."""
+        self._sweep_holds(request)
+        oversee = self._resolver.has_permission(session, "users:manage")
+        failed_runs = []
+        for s in self._durable.runs.list(limit=10_000):
+            if s.contract.metadata.get("tenant_id") != session.tenant_id:
+                continue
+            if not oversee and s.contract.submitted_by != session.principal_id:
+                continue
+            awaiting = _PAUSE_VALUE[s.pause.kind] if s.pause else None
+            if s.phase.value != "failed" and awaiting != "incident":
+                continue
+            failed_runs.append(
+                {
+                    "run_id": s.run_id,
+                    "intent": s.intent,
+                    "submitted_by": s.contract.submitted_by,
+                    "phase": s.phase.value,
+                    "awaiting": awaiting,
+                    "failure_reason": s.failure_reason,
+                    "updated_at": s.updated_at.isoformat(),
+                }
+            )
+        failed_runs.sort(key=lambda r: r["updated_at"], reverse=True)
+        ledger = self._build_ledger()
+        failed_builds = (
+            ledger.open_refusals(session.tenant_id)
+            if oversee and ledger is not None
+            else []
+        )
+        return json_response(
+            200,
+            {
+                "holds": self._hold_items(session),
+                "failed_runs": failed_runs[:25],
+                "failed_builds": failed_builds,
+                "scope": "tenant" if oversee else "mine",
+            },
+        )
 
     def _reply_contract_hold(self, request, session, params) -> Response:
         """Type and send an answer on a held request — the third option

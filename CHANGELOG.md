@@ -4,6 +4,36 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Failures reach the inbox — the triggers defined, the wiring closed:
+
+- **``node.build_failed`` is now a defined event.** A refused build
+  landed only as a memory entry (``model.memory``/build-lesson) — a
+  note for the NEXT attempt, invisible to any attention surface. Every
+  refusal now also lands ``node.build_failed`` on the hash-chained
+  audit log (tenant, goal, problem, model) beside the engine's
+  standing ``workflow.failed``. And the EARLIEST refusal — the model
+  wrote nothing usable — recorded nowhere at all; it now takes the
+  same ledger path as every later gate's refusal.
+- **``GET /v1/inbox``: one feed for everything waiting on a human.**
+  Approval holds (as before), failed workflows (phase failed or
+  awaiting an incident decision), and standing build refusals — the
+  feed is a PROJECTION of the stores the events came from, so an item
+  leaves the moment its cause resolves (a retry succeeds, a rebuild
+  publishes) with no flag to clear. Members see their own failures;
+  stored ``users:manage`` widens workflows to the tenant and adds the
+  build refusals (``BuildLedger.open_refusals`` — each goal's LAST
+  word, newest first, self-resolving on publish).
+- **The console's Inbox shows all three sections** — approvals to
+  decide, failed workflows (linked to their run detail, submitter
+  named), failed node builds (goal, refusal reason, model, when) —
+  and falls back to holds-only on an older host.
+- **Pinned** by ``test_growth_trigger.py`` (a refused build lands its
+  event and stands in the operator feed while a published rebuild
+  never appears; a run that fails in execution reaches both the
+  member's and the operator's inbox, named),
+  ``test_memory_continuity.py`` (open refusals resolve on publish,
+  tenant-walled), and the frontend route contract.
+
 The investor panel deploys itself, and trends read at stock scales:
 
 - **The deploy workflow now covers Caddy's config.** ``up -d`` never

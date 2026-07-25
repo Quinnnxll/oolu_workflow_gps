@@ -230,6 +230,35 @@ class BuildLedger:
             "created_at": str(row[5]),
         }
 
+    def open_refusals(self, tenant: str, *, limit: int = 25) -> list[dict]:
+        """Goals whose NEWEST attempt is a refusal — the failures still
+        standing, newest first. Self-resolving by construction: the
+        moment a later attempt publishes, the goal leaves this list,
+        because the query reads the ledger's last word per goal rather
+        than any flag someone must remember to clear."""
+        with self._conn.transaction() as db:
+            rows = db.execute(
+                """SELECT goal_key, goal, problem, model, created_at
+                   FROM build_attempts a
+                   WHERE tenant = ? AND status = 'refused'
+                     AND id = (SELECT MAX(id) FROM build_attempts
+                               WHERE tenant = a.tenant
+                                 AND goal_key = a.goal_key
+                                 AND status IN ('refused', 'published'))
+                   ORDER BY id DESC LIMIT ?""",
+                (tenant, int(limit)),
+            ).fetchall()
+        return [
+            {
+                "goal_key": str(r[0]),
+                "goal": str(r[1]),
+                "problem": str(r[2]),
+                "model": str(r[3] or ""),
+                "created_at": str(r[4]),
+            }
+            for r in rows
+        ]
+
     def seat_performance(self, tenant: str) -> list[dict]:
         """Per-model outcome history for the build seat, best first:
         who published, who kept getting refused, at what rate — the

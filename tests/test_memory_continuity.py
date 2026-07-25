@@ -191,3 +191,35 @@ def test_a_publish_clears_the_warning_from_future_packs(tmp_path):
         assert statuses == ["refused", "published"]
     finally:
         conn.close()
+
+
+def test_open_refusals_stand_until_a_publish_resolves_them(tmp_path):
+    """The inbox's build-failure feed is a projection: a goal whose
+    LAST word is a refusal stands; the moment a rebuild publishes, the
+    goal leaves — no flag anyone must remember to clear."""
+    from oolu.buildledger import BuildLedger
+    from oolu.durable import DurableConnection
+
+    conn = DurableConnection(tmp_path / "l.db")
+    try:
+        ledger = BuildLedger(conn)
+        ledger.record(
+            "t1", "g-polish", "polish the ledgers",
+            status="refused", problem="the model wrote no usable function",
+            model="m-8b",
+        )
+        ledger.record(
+            "t1", "g-tidy", "tidy the books",
+            status="refused", problem="refused by the safety screen",
+        )
+        open_now = ledger.open_refusals("t1")
+        assert [r["goal_key"] for r in open_now] == ["g-tidy", "g-polish"]
+        assert open_now[1]["problem"].startswith("the model wrote")
+        assert open_now[1]["model"] == "m-8b"
+        # A later publish closes ITS goal alone; the other stands.
+        ledger.record("t1", "g-tidy", "tidy the books", status="published")
+        assert [r["goal_key"] for r in ledger.open_refusals("t1")] == ["g-polish"]
+        # Another tenant sees nothing — the ledger wall holds.
+        assert ledger.open_refusals("t2") == []
+    finally:
+        conn.close()

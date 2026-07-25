@@ -566,13 +566,55 @@ async function assembleScreen() {
     libraryTable());
 }
 
-/* ---- inbox (held reserved contracts) ---- */
+/* ---- inbox: everything waiting on a human, one feed ---- */
 async function inboxScreen() {
-  const data = await api("GET", "/v1/runs/contract/holds");
-  if (!data.items.length) {
-    return h("p", { class: "muted" }, "Nothing is waiting for approval.");
+  // Approvals to decide, workflows that failed, node builds that
+  // refused — the triggers are the audit chain's own events
+  // (workflow.failed, node.build_failed); an item leaves the moment
+  // its cause resolves. Falls back to the holds-only endpoint on an
+  // older host.
+  let feed = null;
+  try { feed = await api("GET", "/v1/inbox"); }
+  catch (e) { if (e.status !== 404) throw e; }
+  if (feed === null) {
+    const holds = await api("GET", "/v1/runs/contract/holds");
+    feed = { holds: holds.items, failed_runs: [], failed_builds: [],
+      scope: "mine" };
   }
-  return h("div", {}, data.items.map((hold) => {
+  const sections = [];
+  if (feed.failed_runs.length) {
+    sections.push(h("h2", {},
+      "failed workflows (" + feed.failed_runs.length
+      + (feed.scope === "tenant" ? ", every account" : ", yours") + ")"));
+    sections.push(h("table", {},
+      h("tr", {}, h("th", {}, "workflow"), h("th", {}, "destination"),
+        h("th", {}, "by"), h("th", {}, "what happened")),
+      feed.failed_runs.map((r) => h("tr", {},
+        h("td", {}, h("a", { href: "#/run/" + r.run_id },
+          r.run_id.slice(0, 12))),
+        h("td", {}, r.intent),
+        h("td", { class: "muted" }, r.submitted_by || "—"),
+        h("td", {}, badge(r.awaiting === "incident" ? "incident" : "failed",
+          "bad"), " ",
+          h("span", { class: "muted" }, r.failure_reason || ""))))));
+  }
+  if (feed.failed_builds.length) {
+    sections.push(h("h2", {},
+      "failed node builds (" + feed.failed_builds.length + ")"));
+    sections.push(h("table", {},
+      h("tr", {}, h("th", {}, "goal"), h("th", {}, "why it refused"),
+        h("th", {}, "model"), h("th", {}, "when")),
+      feed.failed_builds.map((b) => h("tr", {},
+        h("td", {}, b.goal),
+        h("td", { class: "muted" }, b.problem),
+        h("td", { class: "muted" }, b.model || "—"),
+        h("td", { class: "muted" }, b.created_at)))));
+  }
+  if (!feed.holds.length && !sections.length) {
+    return h("p", { class: "muted" },
+      "Nothing is waiting on you — no approvals, no failures.");
+  }
+  function holdCard(hold) {
     const out = h("div", {});
     async function decide(approved) {
       try {
@@ -592,7 +634,12 @@ async function inboxScreen() {
       " ",
       h("button", { class: "small", onclick: () => decide(false) }, "Decline"),
       out);
-  }));
+  }
+  const approvals = feed.holds.length
+    ? [h("h2", {}, "waiting for approval (" + feed.holds.length + ")"),
+       ...feed.holds.map(holdCard)]
+    : [];
+  return h("div", {}, ...approvals, ...sections);
 }
 
 /* ---- earnings ---- */
