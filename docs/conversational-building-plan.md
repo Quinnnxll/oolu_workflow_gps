@@ -145,6 +145,21 @@ by form.*
 
 ### Phase B2 — the function lands in src, transactionally
 
+**Status: LANDED** — `_land_src` is the one landing for build AND
+revise (which previously crashed outright on a host without a file
+store): the seat-walled write, the audit line, and the birth/revise
+commit succeed together, or the miss is LOUD — ``node.src_unlanded``
+on the audit chain, the warning named in the receipt, and the
+divergence standing in the operator inbox (``src_issues``, a
+projection that leaves by itself). `_heal_drawer_src` reconciles at
+run time: a drawer missing its ``src/main.py`` is rewritten from the
+registered version before files stage, audited as
+``node.src_healed``. A drawer copy that DIFFERS from the version is
+deliberately not an issue — the file is the node; editing it is the
+design (`tests/test_src_transaction.py`: publish lands
+fingerprint-equal, a forced miss is loud and stands, a deleted copy
+heals on the next run and its inbox item leaves by itself).
+
 *The drawer copy is the node; a publish that cannot land it says so.*
 
 - ``src/main.py`` joins the publish TRANSACTION: written before the

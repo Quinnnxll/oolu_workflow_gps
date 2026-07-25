@@ -640,6 +640,15 @@ async function inboxScreen() {
         h("td", { class: "muted" }, b.model || "—"),
         h("td", { class: "muted" }, b.created_at)))));
   }
+  if ((feed.src_issues || []).length) {
+    sections.push(h("h2", {},
+      "function files needing attention (" + feed.src_issues.length + ")"));
+    sections.push(h("table", {},
+      h("tr", {}, h("th", {}, "node"), h("th", {}, "what's wrong")),
+      feed.src_issues.map((s) => h("tr", {},
+        h("td", {}, s.title),
+        h("td", { class: "muted" }, s.problem)))));
+  }
   if (!feed.holds.length && !sections.length) {
     return h("p", { class: "muted" },
       "Nothing is waiting on you — no approvals, no failures.");

@@ -4,6 +4,35 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Conversational building B2 — the function lands in src, transactionally:
+
+- **One landing for build and revise.** ``_land_src`` writes
+  ``src/main.py`` through the node.build seat with the audit line and
+  the file-chain commit as one act — and the revise path now goes
+  through it too, where it previously CRASHED outright on a host
+  without a file store.
+- **A miss is loud, never silent.** The drawer write previously
+  skipped silently when the file store was absent and left any seat
+  refusal unhandled. Now: ``node.src_unlanded`` lands on the audit
+  chain, the receipt names the miss in words ("the drawer copy did
+  not land — the node still runs from its registered version, and the
+  copy heals on its next run"), and the divergence stands in the
+  operator inbox (``src_issues`` — a projection, so the item leaves
+  by itself the moment any write lands the file).
+- **Run-time reconciliation.** ``_heal_drawer_src``: a node whose
+  drawer is missing its ``src/main.py`` gets the copy rewritten from
+  the registered version before the run stages files — deletion or a
+  publish-time miss HEALS instead of diverging, audited as
+  ``node.src_healed``. A drawer copy that differs from the version is
+  deliberately not an issue: the file is the node, and editing it is
+  the design.
+- **Pinned** by ``tests/test_src_transaction.py``: a publish lands
+  the drawer copy byte-equal to the version; a forced write failure
+  keeps the publish, names the miss in the receipt, lands the event,
+  and stands in the operator inbox (never a member's); a deleted copy
+  heals on the next run, audited, and its inbox item leaves by
+  itself.
+
 Conversational building B1 — plain-word asks, forms as strict checks:
 
 - **Labels and examples at birth.** ``Slot`` and ``ValueInput`` gain

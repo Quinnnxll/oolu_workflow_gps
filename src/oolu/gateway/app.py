@@ -3678,40 +3678,13 @@ class GatewayApp:
         # the write is scope-checked, attested, and audited like every
         # seated model act. The drawer copy is the function's HOME from
         # here on: runs read it first, so editing the file edits the node.
-        if self._files is not None:
-            desk_files = DeskFiles(
-                self._files,
-                tenant=session.tenant_id,
-                node_id=new_id,
-                seat=SEATS["node.build"],
-                # Consent was the door that let this builder run at all —
-                # the settings switch, the growth-offer "yes", or the
-                # user's explicit "build me a node"; the caller attests.
-                consented=True,
-            )
-            desk_files.write("src/main.py", script)
-            transaction.append("published")
-            self._durable.audit.append(
-                "model.seat",
-                {
-                    "purpose": "node.build",
-                    "tenant": session.tenant_id,
-                    "by": session.principal_id,
-                    "node_id": new_id,
-                    "written": desk_files.written,
-                    # The birth transaction, on the record: proposed →
-                    # generated → (repairs) → validated → published.
-                    "transaction": list(transaction),
-                },
-            )
-            # The birth commit: the authored function is the chain's root.
-            self._file_node_commit(
-                session.tenant_id,
-                new_id,
-                kind="build",
-                instruction=goal,
-                by=session.principal_id,
-            )
+        # B2 law: this write is part of the publish — a miss is LOUD
+        # (node.src_unlanded on the audit chain, the operator inbox, and
+        # the receipt), never a silent divergence, and the run-time heal
+        # rewrites the copy from the version.
+        src_note = self._land_src(
+            session, new_id, script, goal=goal, transaction=transaction
+        )
         placing = (
             "under this Supernode — it starts UNCLAIMED: share its node "
             "id only with the person who should onboard it"
@@ -3753,6 +3726,7 @@ class GatewayApp:
                 "becomes a callable, routable step as its runs verify; once "
                 "proven, the two can be merged into one throughout solution."
                 + decided_note
+                + src_note
                 + web_note
                 + cost_note
             )
@@ -3760,8 +3734,168 @@ class GatewayApp:
             f"Built a NEW node “{name}” ({new_id[:8]}) WITH its own "
             f"execution function ({interface}), {placing}. It starts "
             "needs-verification and becomes a callable, routable step as "
-            "its runs verify." + decided_note + web_note + cost_note
+            "its runs verify." + decided_note + src_note + web_note + cost_note
         )
+
+    def _land_src(
+        self,
+        session,
+        node_id: str,
+        script: str,
+        *,
+        goal: str,
+        transaction: list | None = None,
+        revision: bool = False,
+        instruction: str | None = None,
+    ) -> str:
+        """Land a function in its drawer home (``src/main.py``) as part
+        of the publish/revise transaction — B2's law: the write either
+        succeeds (seat-walled, audited, committed on the file chain) or
+        misses LOUDLY (``node.src_unlanded`` on the audit chain, echoed
+        in the receipt, standing in the operator inbox until the
+        run-time heal closes it). Returns the receipt's note: empty on
+        success, the warning sentence on a miss."""
+        problem = None
+        if self._files is None:
+            problem = "this host keeps no file store"
+        else:
+            try:
+                desk_files = DeskFiles(
+                    self._files,
+                    tenant=session.tenant_id,
+                    node_id=node_id,
+                    seat=SEATS["node.build"],
+                    # Consent was the door that let this builder run at
+                    # all — the settings switch, the growth-offer "yes",
+                    # or the user's explicit ask; the caller attests.
+                    consented=True,
+                )
+                desk_files.write("src/main.py", script)
+                if transaction is not None:
+                    transaction.append("published")
+                self._durable.audit.append(
+                    "model.seat",
+                    {
+                        "purpose": "node.build",
+                        "tenant": session.tenant_id,
+                        "by": session.principal_id,
+                        "node_id": node_id,
+                        "written": desk_files.written,
+                        **({"revision": True} if revision else {}),
+                        **(
+                            {"transaction": list(transaction)}
+                            if transaction is not None
+                            else {}
+                        ),
+                    },
+                )
+                self._file_node_commit(
+                    session.tenant_id,
+                    node_id,
+                    kind="revise" if revision else "build",
+                    instruction=instruction or goal,
+                    by=session.principal_id,
+                )
+                return ""
+            except Exception as exc:  # noqa: BLE001 - the miss must be LOUD
+                problem = str(exc)
+        if transaction is not None:
+            transaction.append("src-unlanded")
+        try:
+            self._durable.audit.append(
+                "node.src_unlanded",
+                {
+                    "tenant": session.tenant_id,
+                    "node_id": node_id,
+                    "goal": str(goal)[:200],
+                    "problem": str(problem)[:400],
+                },
+            )
+        except Exception:  # noqa: BLE001 - the audit chain outranks nothing here
+            pass
+        return (
+            " One thing to know: the function's drawer copy (src/main.py) "
+            f"did not land — {problem}. The node still runs from its "
+            "registered version, and the copy heals on its next run."
+        )
+
+    def _heal_drawer_src(self, session, node_id: str, script: str) -> None:
+        """The run-time reconciliation (B2): a node whose drawer is
+        missing its ``src/main.py`` gets the copy rewritten FROM the
+        registered version before the run stages files — deletion (or a
+        publish-time miss) heals instead of diverging, and the heal is
+        on the audit chain. Advisory: a broken file store never blocks
+        the run the version can already serve."""
+        if self._files is None or not script:
+            return
+        try:
+            for file in self._files.list(
+                tenant=session.tenant_id, node_id=node_id
+            ):
+                if file.folder == "src" and file.name == "main.py":
+                    return
+            desk_files = DeskFiles(
+                self._files,
+                tenant=session.tenant_id,
+                node_id=node_id,
+                seat=SEATS["node.build"],
+                consented=True,
+            )
+            desk_files.write("src/main.py", script)
+            self._durable.audit.append(
+                "node.src_healed",
+                {
+                    "tenant": session.tenant_id,
+                    "node_id": node_id,
+                    "healed": "src/main.py",
+                    "from": "version",
+                },
+            )
+        except Exception:  # noqa: BLE001 - healing is advisory
+            pass
+
+    def _src_issues(self, session) -> list[dict]:
+        """Nodes whose function has no drawer copy — the standing
+        divergences the operator inbox shows. A projection, so an item
+        leaves the moment the heal (or any write) lands the file; a
+        drawer copy that DIFFERS from the version is deliberately not
+        an issue — the file is the node, and editing it is the design."""
+        if self._files is None or self._nodeplace is None:
+            return []
+        issues: list[dict] = []
+        for node in self._nodeplace.all_nodes():
+            if node.tenant_id != session.tenant_id or node.revoked_at is not None:
+                continue
+            version = self._nodeplace.latest_version(node.node_id)
+            if version is None:
+                continue
+            try:
+                skill = ReusableSkill.model_validate_json(
+                    version.sanitized_skill_json
+                )
+            except Exception:  # noqa: BLE001
+                continue
+            script = self._skill_script(skill)
+            if not script:
+                continue
+            if any(
+                f.folder == "src" and f.name == "main.py"
+                for f in self._files.list(
+                    tenant=session.tenant_id, node_id=node.node_id
+                )
+            ):
+                continue
+            issues.append(
+                {
+                    "node_id": node.node_id,
+                    "title": skill.name,
+                    "problem": (
+                        "the function's drawer copy (src/main.py) is "
+                        "missing — it heals on the node's next run"
+                    ),
+                }
+            )
+        return issues
 
     def _revise_node_function(self, session, node_id: str, entry, change: str) -> str:
         """Rewrite THIS node's own execution function on the user's ask —
@@ -3903,35 +4037,17 @@ class GatewayApp:
                 f" The registry followed: version {contributed.version.semver} "
                 "now carries the revised function and interface."
             )
-        desk_files = DeskFiles(
-            self._files,
-            tenant=session.tenant_id,
-            node_id=node_id,
-            seat=SEATS["node.build"],
-            # The reviser closure held the consent door; the seat records
-            # the attestation, the audit line below records the act.
-            consented=True,
-        )
-        desk_files.write("src/main.py", script)
-        self._durable.audit.append(
-            "model.seat",
-            {
-                "purpose": "node.build",
-                "tenant": session.tenant_id,
-                "by": session.principal_id,
-                "node_id": node_id,
-                "revision": True,
-                "written": desk_files.written,
-            },
-        )
-        # A revision is a new commit on the chain — the user's ask rides
-        # as its instruction; the replaced code stays in the parent.
-        self._file_node_commit(
-            session.tenant_id,
+        # The same transactional landing as build (B2): the drawer write
+        # succeeds through the seat or misses LOUDLY — and on a host
+        # without a file store the revision still lands in the registry
+        # (the version_note above) instead of crashing on the write.
+        src_note = self._land_src(
+            session,
             node_id,
-            kind="revise",
+            script,
+            goal=entry.title,
+            revision=True,
             instruction=change,
-            by=session.principal_id,
         )
         web_note = (
             (
@@ -3942,12 +4058,18 @@ class GatewayApp:
             if "http_request" in script
             else ""
         )
+        landed = (
+            "its execution function (src/main.py) was rewritten with the "
+            "change applied, through the node.build seat, and the act is "
+            "audited"
+            if not src_note
+            else "the revision is registered"
+        )
         return (
-            f"Revised “{entry.title}” — its execution function "
-            "(src/main.py) was rewritten with the change applied, through "
-            "the node.build seat, and the act is audited. The node's next "
+            f"Revised “{entry.title}” — {landed}. The node's next "
             "run executes the updated code."
             + version_note
+            + src_note
             + web_note
             + cost_note
         )
@@ -4078,6 +4200,10 @@ class GatewayApp:
         script = (action.parameters or {}).get("script") if action else None
         if not script:
             return None
+        # B2 reconciliation: a drawer missing its src/main.py heals from
+        # the version BEFORE this run stages files — deletion or a
+        # publish-time miss closes here, audited, instead of diverging.
+        self._heal_drawer_src(session, node.node_id, str(script))
         return self._finalize_function(
             {
                 "node_id": node.node_id,
@@ -9448,6 +9574,9 @@ class GatewayApp:
                 "holds": self._hold_items(session),
                 "failed_runs": failed_runs[:25],
                 "failed_builds": failed_builds,
+                # B2: functions whose drawer copy is missing — standing
+                # until the run-time heal (or any write) closes them.
+                "src_issues": self._src_issues(session) if oversee else [],
                 "scope": "tenant" if oversee else "mine",
             },
         )
