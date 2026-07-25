@@ -86,7 +86,12 @@ INTAKE_SYSTEM_PROMPT = (
     '"description": str, "validator": str, "severity": "hard"|"soft"}]}\n'
     "Do NOT select values. Put any value you would guess into suggested_values "
     "only, and phrase a question for it. Ask a question for every parameter the "
-    "user has not already pinned down. Omit fields you are unsure of."
+    "user has not already pinned down. Omit fields you are unsure of.\n"
+    "Never phrase a question about MECHANISMS — file formats, APIs, endpoints, "
+    "schemas, encodings, protocols, credentials. Those are the system's own "
+    "decisions: put your best default into suggested_values and leave the "
+    "question for it empty. Questions are only for values in the user's world "
+    "— which folder, which account, what date range, what to call the result."
 )
 
 
@@ -206,7 +211,22 @@ class ModelBackedIntaker:
         brief = _parse_brief(contract.intent, text)
         if brief is None:
             return self._fallback.intake(contract)
-        return _bind_stated_values(brief)
+        brief = _bind_stated_values(brief)
+        # The plain-language wall (conversational-building plan, B0):
+        # a mechanism-shaped ask never reaches a human. It is DECIDED
+        # here — the model's own first suggestion, else the first
+        # option, bound with DERIVED provenance — or demoted to
+        # optional, so the run proceeds instead of interrogating.
+        from ..plainlanguage import default_mechanism_parameters
+
+        brief, decided = default_mechanism_parameters(brief)
+        if decided:
+            logger.info(
+                "intake decided %d mechanism parameter(s) instead of asking: %s",
+                len(decided),
+                ", ".join(d["parameter"] for d in decided),
+            )
+        return brief
 
 
 def _bind_stated_values(brief: RequirementBrief) -> RequirementBrief:

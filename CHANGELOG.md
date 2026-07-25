@@ -4,6 +4,37 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Conversational building B0 — the interrogation budget:
+
+- **`src/oolu/plainlanguage.py`.** Mechanisms are the builder's
+  problem; values are the user's. The mechanism lexicon (formats,
+  APIs, endpoints, schemas, encodings, auth, …) with word-boundary
+  readers — ``mechanism_terms``, and ``mechanism_questions`` which
+  budgets QUESTION sentences only: a receipt is free to state "I'll
+  read it as CSV", and a plain question following a technical
+  statement is never charged for the statement's vocabulary.
+- **The wall RESOLVES instead of hiding.** Suppressing a mechanism
+  question would hang the run on a value nobody will ever be asked
+  for. ``default_mechanism_parameters`` DECIDES at intake: the
+  model's own first suggestion (its prompt now tells it to park its
+  guess there and leave the question empty), else the domain's first
+  option, bound with ``DERIVED`` provenance and the question retired;
+  with nothing to bind the parameter demotes to optional. The build
+  proceeds; the decision is on the record.
+- **The prompt law, on every conversational surface.** Chat, intake,
+  and the interact window all state it: never ask technical
+  questions; decide, default, and name it afterward in one plain
+  sentence; ask only for values in the user's world.
+- **The receipt names its decisions.** Every build reply now carries
+  "every technical choice inside was decided for you — say revise to
+  change any of it in plain words."
+- **Pinned** by ``tests/test_plain_language.py``: the lexicon's trips
+  and passes ("auth" never fires inside "author"), question-only
+  budgeting, intake deciding mechanisms while value-asks stand, the
+  unanswerable mechanism demoting instead of blocking, options
+  serving when nothing was suggested, the acceptance build spending
+  zero mechanism questions, and the law present on every surface.
+
 The conversational-building plan (proposed):
 
 - **`docs/conversational-building-plan.md`.** Five phases for the

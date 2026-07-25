@@ -3037,7 +3037,13 @@ class GatewayApp:
             "the same walls and audit as the Access desk's own controls. "
             "Never decide or sign a held request the user did not ask you "
             "to. When automation fails, give the user the error code so "
-            "they can fix it later."
+            "they can fix it later. Never ask the user TECHNICAL "
+            "questions — file formats, APIs, endpoints, schemas, "
+            "encodings, credentials-shape: those are the builder's "
+            "decisions to make and default (named afterward in one plain "
+            "sentence, revisable in words). Ask only for values in the "
+            "user's world — which folder, which account, what date range, "
+            "what to call the result."
         )
         tools = NodeChatTools(
             self._files,
@@ -3715,6 +3721,13 @@ class GatewayApp:
             + " → produces "
             + ", ".join(f"{p.name}:{p.value_type}" for p in produces)
         )
+        # The B0 receipt line: every mechanism inside was DECIDED, never
+        # asked — and the decision stays revisable in plain words.
+        decided_note = (
+            " Every technical choice inside — how it reads, what it "
+            "calls, what it writes — was decided for you; say "
+            "“revise …” to change any of it in plain words."
+        )
         if under_entry is not None:
             return (
                 f"Built a NEW node “{name}” ({new_id[:8]}) WITH its own "
@@ -3724,6 +3737,7 @@ class GatewayApp:
                 "that expands the path. It starts needs-verification and "
                 "becomes a callable, routable step as its runs verify; once "
                 "proven, the two can be merged into one throughout solution."
+                + decided_note
                 + web_note
                 + cost_note
             )
@@ -3731,7 +3745,7 @@ class GatewayApp:
             f"Built a NEW node “{name}” ({new_id[:8]}) WITH its own "
             f"execution function ({interface}), {placing}. It starts "
             "needs-verification and becomes a callable, routable step as "
-            "its runs verify." + web_note + cost_note
+            "its runs verify." + decided_note + web_note + cost_note
         )
 
     def _revise_node_function(self, session, node_id: str, entry, change: str) -> str:

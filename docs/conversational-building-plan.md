@@ -61,6 +61,20 @@ gate, and review seat this plan hardens), `docs/memory-stack-plan.md`
 
 ### Phase B0 — the interrogation budget: questions become value-asks
 
+**Status: LANDED** — `src/oolu/plainlanguage.py`: the mechanism lexicon
+with its readers (`mechanism_terms`, `mechanism_questions` — only
+QUESTION sentences spend the budget; a receipt states its decisions
+freely) and the wall that RESOLVES instead of hiding
+(`default_mechanism_parameters`: first suggestion, else first option,
+bound `DERIVED` with the question retired; nothing to bind → demoted to
+optional — a mechanism nobody can ask about must never block a run).
+Wired at intake (`ModelBackedIntaker`), stated as prompt law on all
+three conversational surfaces (chat, intake, the interact window), and
+the build receipt now names its decisions as revisable in plain words
+(`tests/test_plain_language.py` — the acceptance build spends zero
+mechanism questions). Remaining: none for B0; B1 relabels the asks that
+survive.
+
 *No mechanism ever reaches a human as a question.*
 
 - A **plain-language gate** on every question surface (intake
