@@ -360,6 +360,60 @@ METRIC_CATALOG: tuple[MetricSpec, ...] = (
         section="moat_and_compounding_advantage",
         formula="count of audit-chain entries",
     ),
+    # ---- conversational building quality (the building plan's §5) ----- #
+    MetricSpec(
+        "build.mechanism_questions_open", "Mechanism questions standing",
+        "building", "count",
+        description="Clarification questions currently before a human "
+        "that trip the mechanism lexicon (formats, APIs, schemas) — the "
+        "B0 wall's target is zero, always.",
+        section="ai_performance",
+        formula="standing clarification questions matching the mechanism "
+        "lexicon",
+        direction="down", target=0.0, warning=1.0, critical=3.0,
+        update_frequency="realtime",
+    ),
+    MetricSpec(
+        "build.value_asks_open", "Value asks standing", "building", "count",
+        description="Clarification questions currently before a human "
+        "that name a value in their world — visible, expected small: the "
+        "honest cost of conversation-first.",
+        section="ai_performance",
+        formula="standing clarification questions NOT matching the "
+        "mechanism lexicon",
+        update_frequency="realtime",
+    ),
+    MetricSpec(
+        "build.src_divergence_pct", "Src divergence rate", "building", "%",
+        description="Live function nodes whose drawer copy (src/main.py) "
+        "is missing — every miss heals audited on the node's next run; "
+        "the B2 target is zero.",
+        section="ai_performance",
+        formula="nodes missing their drawer copy / live function nodes "
+        "* 100",
+        direction="down", target=0.0, warning=5.0, critical=20.0,
+    ),
+    MetricSpec(
+        "build.runs_with_stored_io_pct", "Runs with stored io", "building",
+        "%",
+        description="Completed node-function runs (30 days) whose drawer "
+        "holds both io records (runs/<id>/inputs.json + outputs.json) — "
+        "the B3 target is 100%.",
+        section="ai_performance",
+        formula="completed runs with both io files / completed "
+        "node-function runs * 100",
+        target=100.0, warning=90.0, critical=50.0,
+    ),
+    MetricSpec(
+        "build.handoff_citation_pct", "Hand-off inspectability", "building",
+        "%",
+        description="Values moved between nodes (30 days) whose movement "
+        "carries a run-cited handoff edge on the graph — the B4 target "
+        "is 100%.",
+        section="ai_performance",
+        formula="run-cited hand-offs / hand-offs moved * 100",
+        target=100.0, warning=90.0, critical=50.0,
+    ),
     MetricSpec(
         "code.commits", "GitHub commits", "code", "count", source="manual",
         description="Recorded by the release pipeline or the operator.",

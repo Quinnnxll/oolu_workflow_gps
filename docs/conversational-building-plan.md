@@ -287,13 +287,31 @@ asked, a form that checks, a file that heals, a default that offers).
 
 ## 5. Metrics (into the standing audition/metrics surfaces)
 
+**Status: WIRED** — all five ride the investor catalog (group
+``building``, section ``ai_performance``) as auto readers over the
+real stores, collected on the standing hourly pass and charted at
+every scale by the panel with no HTML change
+(`tests/test_building_metrics.py` — the full hand-off circle reads
+100/100/0/0/0; a deleted drawer copy and a standing clarification
+move the needles). The per-build transcript framings became honest
+live projections: the question metrics count what is STANDING before
+a human right now (a durable per-build ask ledger would be invented
+bookkeeping; the standing pause store is the truth).
+
 - `mechanism_questions_per_build` — target 0, by the B0 lexicon, over
-  the growth-rig transcripts.
+  the growth-rig transcripts. *Wired as
+  ``build.mechanism_questions_open`` (standing clarification
+  questions tripping the lexicon; direction down, target 0).*
 - `value_asks_per_build` — visible, expected small; the honest cost of
-  conversation-first.
+  conversation-first. *Wired as ``build.value_asks_open``.*
 - `src_divergence_rate` — drawer fingerprint ≠ version at run time;
-  target 0 after B2, every heal audited.
+  target 0 after B2, every heal audited. *Wired as
+  ``build.src_divergence_pct`` (nodes missing their drawer copy over
+  live function nodes).*
 - `runs_with_stored_io` — share of verified runs whose node drawer
-  holds both files; target 100% after B3.
+  holds both files; target 100% after B3. *Wired as
+  ``build.runs_with_stored_io_pct`` (30-day window).*
 - `handoff_inspectability` — share of route hand-offs answerable with
-  run-cited provenance; trends to 100% after B4.
+  run-cited provenance; trends to 100% after B4. *Wired as
+  ``build.handoff_citation_pct`` (moved values with a run-cited edge,
+  30-day window).*

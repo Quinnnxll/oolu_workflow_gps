@@ -4,6 +4,29 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Conversational building §5 — the quality metrics, live on the
+investor surface:
+
+- **Five auto metrics over the real stores** (group ``building``,
+  charted by the panel at every scale with no HTML change):
+  ``build.mechanism_questions_open`` (standing clarification
+  questions tripping the B0 mechanism lexicon — target 0, always),
+  ``build.value_asks_open`` (standing plain value asks — the honest
+  cost of conversation-first), ``build.src_divergence_pct`` (live
+  function nodes missing their drawer copy — B2 target 0),
+  ``build.runs_with_stored_io_pct`` (completed node-function runs
+  whose drawer holds both io records, 30 days — B3 target 100%), and
+  ``build.handoff_citation_pct`` (values moved between nodes whose
+  movement carries a run-cited graph edge, 30 days — B4 target 100%).
+  The plan's per-build transcript framings became honest live
+  projections over the standing pause store, the drawers, the runs,
+  and the graph — never a parallel bookkeeping.
+- **Pinned** by ``tests/test_building_metrics.py``: the full hand-off
+  circle collects 100/100/0/0/0; a deleted drawer copy reads 50%
+  divergence; a standing clarification splits into one mechanism
+  question and one value ask; every key is a cataloged spec with its
+  formula and thresholds.
+
 Conversational building B4 — the durable hand-off: outputs flow to
 the next node:
 

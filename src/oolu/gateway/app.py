@@ -10439,6 +10439,141 @@ class GatewayApp:
                 raise LookupError("no provenance ledger on this host")
             return float(self._provenance.count_releases())
 
+        # ---- the conversational-building quality metrics (plan §5) ------ #
+        def _standing_questions() -> list[str]:
+            """Every question currently standing before a human on a
+            clarification pause — the texts the B0 budget is judged on."""
+            texts: list[str] = []
+            for s in _runs():
+                pause = s.pause
+                if pause is None or pause.kind.value != "clarification":
+                    continue
+                for q in (pause.payload or {}).get("questions") or []:
+                    text = str((q or {}).get("question") or "")
+                    if text:
+                        texts.append(text)
+            return texts
+
+        def _mechanism_questions_open() -> float:
+            from ..plainlanguage import is_mechanism_ask
+
+            return float(
+                len([t for t in _standing_questions() if is_mechanism_ask(t)])
+            )
+
+        def _value_asks_open() -> float:
+            from ..plainlanguage import is_mechanism_ask
+
+            return float(
+                len(
+                    [
+                        t
+                        for t in _standing_questions()
+                        if not is_mechanism_ask(t)
+                    ]
+                )
+            )
+
+        def _src_divergence() -> float:
+            if self._files is None or self._nodeplace is None:
+                raise LookupError("no drawers on this host")
+            total = missing = 0
+            for node in self._nodeplace.all_nodes():
+                if node.revoked_at is not None:
+                    continue
+                version = self._nodeplace.latest_version(node.node_id)
+                if version is None:
+                    continue
+                try:
+                    skill = ReusableSkill.model_validate_json(
+                        version.sanitized_skill_json
+                    )
+                except Exception:  # noqa: BLE001
+                    continue
+                if not self._skill_script(skill):
+                    continue
+                total += 1
+                if not any(
+                    f.folder == "src" and f.name == "main.py"
+                    for f in self._files.list(
+                        tenant=node.tenant_id, node_id=node.node_id
+                    )
+                ):
+                    missing += 1
+            if not total:
+                raise LookupError("no function nodes yet — no basis")
+            return missing / total * 100
+
+        def _runs_with_stored_io() -> float:
+            if self._files is None:
+                raise LookupError("no drawers on this host")
+            done = [
+                s
+                for s in _ai_terminal_30d()
+                if s.phase.value == "completed"
+                and isinstance(
+                    s.contract.metadata.get("node_function"), dict
+                )
+                and (s.contract.metadata.get("node_function") or {}).get(
+                    "node_id"
+                )
+            ]
+            if not done:
+                raise LookupError("no completed node-function runs in 30 days")
+            stored = 0
+            for s in done:
+                node_id = str(s.contract.metadata["node_function"]["node_id"])
+                tenant = str(s.contract.metadata.get("tenant_id", ""))
+                names = {
+                    f.name
+                    for f in self._files.list(tenant=tenant, node_id=node_id)
+                    if f.folder == f"runs/{s.run_id}"
+                }
+                if {"inputs.json", "outputs.json"} <= names:
+                    stored += 1
+            return stored / len(done) * 100
+
+        def _handoff_inspectability() -> float:
+            from ..values import parse_output_ref
+
+            graph = self._temporal_graph()
+            total = cited = 0
+            for s in _ai_terminal_30d():
+                if s.phase.value != "completed" or s.execution is None:
+                    continue
+                function = s.contract.metadata.get("node_function")
+                consumer = (
+                    str(function["node_id"])
+                    if isinstance(function, dict) and function.get("node_id")
+                    else None
+                )
+                edges = (
+                    graph.neighbors(consumer, edge_types=("handoff",))
+                    if graph is not None and consumer
+                    else []
+                )
+                for outcome in s.execution.action_outcomes:
+                    if outcome.status is not ExecutionStatus.SUCCEEDED:
+                        continue
+                    lines = (outcome.evidence or {}).get("value_provenance")
+                    for line in lines or []:
+                        source = parse_output_ref(line.get("port_source"))
+                        if source is None:
+                            continue
+                        total += 1
+                        if any(
+                            e["source_id"] == source[0]
+                            and (e.get("attributes") or {}).get("run_id")
+                            == s.run_id
+                            and (e.get("attributes") or {}).get("port")
+                            == source[1]
+                            for e in edges
+                        ):
+                            cited += 1
+            if not total:
+                raise LookupError("no hand-offs have moved yet")
+            return cited / total * 100
+
         today = datetime.now(UTC).date()
         readers = {
             "users.daily_active": lambda: len(_active_since(1)),
@@ -10485,6 +10620,12 @@ class GatewayApp:
             "moat.proprietary_events_total": lambda: float(
                 self._durable.audit.count()
             ),
+            # ---- conversational building (plan §5) ------------------ #
+            "build.mechanism_questions_open": _mechanism_questions_open,
+            "build.value_asks_open": _value_asks_open,
+            "build.src_divergence_pct": _src_divergence,
+            "build.runs_with_stored_io_pct": _runs_with_stored_io,
+            "build.handoff_citation_pct": _handoff_inspectability,
         }
         if self._nodeplace is not None:
             readers["nodes.total"] = lambda: len(self._nodeplace.all_nodes())
