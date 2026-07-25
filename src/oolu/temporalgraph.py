@@ -40,6 +40,16 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _attributes(raw) -> dict:
+    """An edge's attributes column, parsed — a broken row reads as empty
+    rather than breaking every neighbor listing it appears in."""
+    try:
+        parsed = json.loads(raw or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 class TemporalGraph:
     """Typed, time-scoped edges over every entity the platform names."""
 
@@ -114,7 +124,8 @@ class TemporalGraph:
         moment = at or _now()
         with self._conn.transaction() as db:
             rows = db.execute(
-                f"""SELECT id, edge_type, source_id, target_id, confidence
+                f"""SELECT id, edge_type, source_id, target_id, confidence,
+                           attributes
                     FROM graph_edges
                     WHERE (source_id = ? OR target_id = ?) AND {_VALID}
                     ORDER BY id DESC LIMIT 500""",
@@ -127,6 +138,9 @@ class TemporalGraph:
                 "source_id": str(r[2]),
                 "target_id": str(r[3]),
                 "confidence": float(r[4]),
+                # The edge's citation payload (e.g. a hand-off's run id,
+                # port, and value reference) — readable, never required.
+                "attributes": _attributes(r[5]),
             }
             for r in rows
         ]

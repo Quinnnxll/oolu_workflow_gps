@@ -380,6 +380,27 @@ class ValueStore:
             row["port"]: f"value://{tenant}/{row['value_id']}" for row in rows
         }
 
+    def producers_of(self, tenant: str, port: str) -> list[dict]:
+        """Every producer whose index holds a standing value on ``port``,
+        newest first — the hand-off question (B4): "who on this desk
+        already answers this input". Walled to the tenant; an empty
+        answer is honest, never invented."""
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                "SELECT producer, value_id, updated_at FROM value_ports"
+                " WHERE tenant_id = ? AND port = ?"
+                " ORDER BY updated_at DESC",
+                (tenant, port),
+            ).fetchall()
+        return [
+            {
+                "producer": row["producer"],
+                "ref": f"value://{tenant}/{row['value_id']}",
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
+
     # -- lineage ------------------------------------------------------------ #
     def record_lineage(
         self,

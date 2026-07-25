@@ -24,12 +24,16 @@ GOAL = "normalize invoice csv files"
 # A script hand that fails the stored function once, heals it, then holds.     #
 # --------------------------------------------------------------------------- #
 def _ok(payload=None):
+    # The payload honors the node's declared output port ("result", the
+    # default IO): since B4 armed the run-time contract check on chat
+    # runs, a payload that skips its declared port is a FAILURE — which
+    # is the check working, not what these tests are about.
     return lambda request: ExecutionResult(
         phase=Phase.EXECUTE,
         exit_code=0,
         stdout="",
         contract_ok=True,
-        contract_payload=payload or {"answer": "tidy"},
+        contract_payload=payload or {"result": "tidy"},
     )
 
 
@@ -118,7 +122,7 @@ def test_a_healed_function_is_written_home_and_audited(tmp_path):
 def test_the_promoted_code_is_what_the_next_run_executes(tmp_path):
     # boom+ok heals the build run; the NEXT run must execute the healed
     # drawer copy straight from cache — no second failure, no repair.
-    runner = _healing_runner(tmp_path, [_boom, _ok(), _ok({"answer": "again"})])
+    runner = _healing_runner(tmp_path, [_boom, _ok(), _ok({"result": "again"})])
     app, conn, ident, desk, script_exec = _rig(tmp_path, script_exec=runner)
     try:
         _speak_work(

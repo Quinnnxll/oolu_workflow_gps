@@ -224,6 +224,32 @@ for B3; B4 rides these stored outputs.
 
 ### Phase B4 — hand-off: outputs flow to the next node
 
+**Status: LANDED** — the movement is run-cited on the M1 graph:
+every value a COMPLETED run resolved through an ``output://`` edge
+lands one ``handoff`` edge (`_land_handoffs`, riding the same
+terminal-run hook as B3's filing) — producer → consumer, the port,
+the exact value reference, and the RUN ID in the edge's attributes
+(readable now that `TemporalGraph.neighbors` returns them) — so
+"which value moved along which edge, when" is one time-scoped query
+answered with run ids. Standing outputs are OFFERED, never bound
+silently: running a node alone whose declared input another node's
+port index answers pauses on one plain question (`_offer_handoff`,
+the newest standing value named with the input's B1 label and the
+producer's name, standing for exactly one message like every offer);
+yes binds the ``output://producer/port`` edge so the exact-value
+binder resolves the newest filed value verbatim, no runs the node
+exactly as it would have before the question. And the chain is
+visible: the interact window's standing-result answer names what the
+node received, from whom, in which run. En route the dormant
+run-time stamp defect closed: `_resolve_node_function` stamped
+``_output_ports`` from the bare Node row (which carries no io), so
+the declared-contract check never armed on chat runs — both resolve
+paths now read the LISTING's slot vocabulary
+(`tests/test_handoff.py` — the full circle: the offer in words, yes
+binds the exact value into the sandbox, the graph answers with run
+ids, the drawer record agrees, no leaves nothing bound, any other
+message withdraws the question). Remaining: none for B4.
+
 *The route's data movement is durable, inspectable, and reusable.*
 
 - **Run-level provenance on the M1 edges**: when a route moves a value

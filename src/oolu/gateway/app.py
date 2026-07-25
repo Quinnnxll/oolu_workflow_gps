@@ -1627,7 +1627,14 @@ class GatewayApp:
             if offer is not None:
                 kind, offered_goal, original_goal = offer
                 answer = consent_answer(message)
-                if answer == "yes" and kind == "reuse":
+                if answer is not None and kind == "handoff":
+                    # The offered standing output (B4): yes binds it onto
+                    # the declared input, no runs the node plain — either
+                    # way the run the question paused now fires.
+                    turn, run = self._run_with_handoff(
+                        session, offered_goal, bind=answer == "yes"
+                    )
+                elif answer == "yes" and kind == "reuse":
                     turn, run = self._reuse_node_and_run(session, offered_goal)
                 elif answer == "yes":
                     turn, run = self._grow_node_and_run(
@@ -1741,28 +1748,43 @@ class GatewayApp:
                 actions = [*actions, {"tool": "build_node"}]
         elif turn.task:
             try:
-                # With standing consent, the missing node is built BEFORE
-                # the run — function written, node on the desk, the route
-                # through it — instead of firing a doomed run first and
-                # offering afterwards. No consent, no silent build: the
-                # growth offer below still asks.
-                built = None
-                if not in_node:
-                    built = self._autobuild_before_run(session, turn.task)
-                if built:
-                    say = f"{say} {built}".strip()
-                run = self._start_intent_run(session, turn.task)
-                self._metrics["chat_runs"] += 1
-                # The run may have already failed DURING execution (submit
-                # runs synchronously to the first pause or terminal phase).
-                # The growth check must fire here too — not only on the
-                # planning-time refusal below — so a failed execution names
-                # the failing node and offers to grow what's missing.
-                say = self._describe_run_failure(
-                    say, run, autobuild_hint=in_node
+                # A declared input another node's standing output answers
+                # (B4): the run PAUSES on one question — use that newest
+                # output as the default? — and fires on the answer, the
+                # value bound only on a yes, never silently.
+                handoff = (
+                    self._offer_handoff(session, turn.task)
+                    if not in_node
+                    else None
                 )
-                if not in_node:
-                    say = self._offer_growth(say, session, turn.task, run=run)
+                if handoff is not None:
+                    say = f"{say} {handoff}".strip()
+                else:
+                    # With standing consent, the missing node is built
+                    # BEFORE the run — function written, node on the desk,
+                    # the route through it — instead of firing a doomed
+                    # run first and offering afterwards. No consent, no
+                    # silent build: the growth offer below still asks.
+                    built = None
+                    if not in_node:
+                        built = self._autobuild_before_run(session, turn.task)
+                    if built:
+                        say = f"{say} {built}".strip()
+                    run = self._start_intent_run(session, turn.task)
+                    self._metrics["chat_runs"] += 1
+                    # The run may have already failed DURING execution
+                    # (submit runs synchronously to the first pause or
+                    # terminal phase). The growth check must fire here too
+                    # — not only on the planning-time refusal below — so a
+                    # failed execution names the failing node and offers
+                    # to grow what's missing.
+                    say = self._describe_run_failure(
+                        say, run, autobuild_hint=in_node
+                    )
+                    if not in_node:
+                        say = self._offer_growth(
+                            say, session, turn.task, run=run
+                        )
             except GatewayError as exc:
                 if exc.code not in ("cannot_execute", "release_revoked"):
                     raise
@@ -3006,6 +3028,32 @@ class GatewayApp:
                     say += f", {when}"
                 say += ")"
             say += " — the full record is in this node's drawer under runs/."
+            # B4: the chain is visible — what this node received, from
+            # whom, and what it passed on, cited with run ids from the
+            # graph's handoff edges.
+            graph = self._temporal_graph()
+            if graph is not None:
+                try:
+                    edges = graph.neighbors(node_id, edge_types=("handoff",))
+                except Exception:  # noqa: BLE001 - the chain is decoration
+                    edges = []
+                for edge in edges[:4]:
+                    attrs = edge.get("attributes") or {}
+                    cited = str(attrs.get("run_id") or "")[:8]
+                    if edge["target_id"] == node_id:
+                        say += (
+                            f" It received “{attrs.get('port')}” from node "
+                            f"“{self._node_title(edge['source_id'])}”"
+                            + (f" in run {cited}" if cited else "")
+                            + "."
+                        )
+                    elif edge["source_id"] == node_id:
+                        say += (
+                            f" Its “{attrs.get('port')}” fed node "
+                            f"“{self._node_title(edge['target_id'])}”"
+                            + (f" in run {cited}" if cited else "")
+                            + "."
+                        )
             return say
 
         health = entry.health
@@ -3348,6 +3396,148 @@ class GatewayApp:
                 "can publish it to the nodeplace whenever you're ready."
             )
         return ChatTurn(say=say, source="tool", actions=actions), run
+
+    # ------------------------------------------------------------------ #
+    # B4 — the hand-off: standing outputs offered as defaults.            #
+    # ------------------------------------------------------------------ #
+    def _node_title(self, node_id: str) -> str:
+        """A node's spoken name, best-effort — the id's first eight
+        characters when the registry cannot answer."""
+        try:
+            version = self._nodeplace.latest_version(node_id)
+            if version is not None:
+                skill = ReusableSkill.model_validate_json(
+                    version.sanitized_skill_json
+                )
+                if skill.name:
+                    return skill.name
+        except Exception:  # noqa: BLE001 - a name is decoration
+            pass
+        return node_id[:8]
+
+    def _handoff_bindings(self, session, function) -> list[dict]:
+        """The offerable hand-offs (B4): declared inputs of THIS node
+        that another node's standing output already answers — the port
+        index's newest value per input name, never the node's own
+        output, never an input the function already binds. Each entry
+        carries the words the offer speaks: the input's plain label,
+        the producer's name, and a short preview of the exact value."""
+        if self._values is None or not isinstance(function, dict):
+            return []
+        node_id = str(function.get("node_id") or "")
+        bound = set((function.get("bindings") or {}).keys())
+        offers: list[dict] = []
+        for spec in function.get("_input_ports") or []:
+            name = str(spec.get("name") or "")
+            if not name or name in bound:
+                continue
+            try:
+                producers = self._values.producers_of(
+                    session.tenant_id, name
+                )
+                pick = next(
+                    (p for p in producers if p["producer"] != node_id), None
+                )
+                if pick is None:
+                    continue
+                record = self._values.get(
+                    pick["ref"], tenant=session.tenant_id
+                )
+                value = record.value
+                preview = (
+                    value
+                    if isinstance(value, str)
+                    else json.dumps(value, ensure_ascii=False, default=str)
+                )
+            except Exception:  # noqa: BLE001 - an offer is advisory
+                continue
+            if len(preview) > 78:
+                preview = preview[:77] + "…"
+            offers.append(
+                {
+                    "name": name,
+                    "label": str(spec.get("label") or ""),
+                    "producer": str(pick["producer"]),
+                    "ref": pick["ref"],
+                    "title": self._node_title(str(pick["producer"])),
+                    "preview": preview,
+                }
+            )
+        return offers
+
+    def _offer_handoff(self, session, goal: str) -> str | None:
+        """B4 — running a node alone whose declared input another node's
+        standing output answers OFFERS that newest output as the
+        default: in words, in the conversation, bound only on the
+        user's yes — never silently. The offer stands for exactly one
+        message, like every standing question."""
+        goal = (goal or "").strip()
+        if not goal or self._values is None or self._nodeplace is None:
+            return None
+        function = self._resolve_node_function(session, goal)
+        if function is None:
+            return None
+        offers = self._handoff_bindings(session, function)
+        if not offers:
+            return None
+        self._growth_offers.put(
+            session.tenant_id,
+            session.principal_id,
+            kind="handoff",
+            goal=goal,
+            original_goal=goal,
+        )
+        named = "; ".join(
+            f"your node “{o['title']}” last produced "
+            f"“{o['label'] or o['name']}” — {o['preview']}"
+            for o in offers
+        )
+        return (
+            f"Before I run “{function['title']}”: {named}. Use that for "
+            "this run? (yes / no — “no” runs it without)"
+        )
+
+    def _run_with_handoff(
+        self, session, goal: str, *, bind: bool
+    ) -> tuple[ChatTurn, dict | None]:
+        """The answered offer: yes binds the standing output onto the
+        declared input (an ``output://`` edge the exact-value binder
+        resolves at execution — the newest filed value, verbatim); no
+        runs the node exactly as it would have run before the question
+        was asked."""
+        function = self._resolve_node_function(session, goal)
+        title = function["title"] if function is not None else concise_name(goal)
+        offers = (
+            self._handoff_bindings(session, function)
+            if bind and function is not None
+            else []
+        )
+        extra = {
+            o["name"]: f"output://{o['producer']}/{o['name']}" for o in offers
+        }
+        try:
+            run = self._start_intent_run(session, goal, extra_bindings=extra)
+        except GatewayError as exc:
+            if exc.code not in ("cannot_execute", "release_revoked"):
+                raise
+            return (
+                ChatTurn(
+                    say=f"I couldn't run “{title}” — {exc.message}.",
+                    source="tool",
+                ),
+                None,
+            )
+        self._metrics["chat_runs"] += 1
+        if offers:
+            named = "; ".join(
+                f"“{o['label'] or o['name']}” from “{o['title']}”"
+                for o in offers
+            )
+            say = f"Bound {named} and ran “{title}”."
+        else:
+            say = f"Okay — ran “{title}” without it."
+        say = self._describe_run_failure(say, run, autobuild_hint=False)
+        return ChatTurn(say=say, source="tool"), run
 
     def _build_function_node(
         self,
@@ -4236,6 +4426,12 @@ class GatewayApp:
         # the version BEFORE this run stages files — deletion or a
         # publish-time miss closes here, audited, instead of diverging.
         self._heal_drawer_src(session, node.node_id, str(script))
+        # The declared slot vocabulary lives on the LISTING (a bare Node
+        # row carries no io) — the run-time stamps read it from there.
+        try:
+            listing = self._nodeplace.listing_for_version(version.version_id)
+        except Exception:  # noqa: BLE001 - stamps are best-effort
+            listing = None
         return self._finalize_function(
             {
                 "node_id": node.node_id,
@@ -4251,7 +4447,8 @@ class GatewayApp:
                 # ride the function into the run — the same regimes the
                 # contract path stamps, applied to the node-function route.
                 **self._node_function_extras(session, node.node_id),
-                **self._declared_ports(node),
+                **self._declared_ports(listing),
+                **self._declared_inputs(listing),
             },
             tenant=session.tenant_id,
         )
@@ -4417,6 +4614,10 @@ class GatewayApp:
         script = (action.parameters or {}).get("script") if action else None
         if not script:
             return None
+        try:
+            listing = self._nodeplace.listing_for_version(version.version_id)
+        except Exception:  # noqa: BLE001 - stamps are best-effort
+            listing = None
         return self._finalize_function(
             {
                 "node_id": node.node_id,
@@ -4429,7 +4630,7 @@ class GatewayApp:
                     or f"node:{node.skill_id}"
                 ),
                 **self._node_function_extras(session, node.node_id),
-                **self._declared_ports(node),
+                **self._declared_ports(listing),
             },
             tenant=session.tenant_id,
         )
@@ -4446,6 +4647,22 @@ class GatewayApp:
             for s in (getattr(node, "produces", None) or ())
         ]
         return {"_output_ports": ports} if ports else {}
+
+    @staticmethod
+    def _declared_inputs(node) -> dict:
+        """The node's declared inputs, riding the resolved function with
+        their plain-word labels (B4) — what the hand-off offer matches
+        against the desk's standing outputs. Gateway-side only; the
+        engine never reads this key."""
+        inputs = [
+            {
+                "name": s.name,
+                "type": s.value_type,
+                "label": getattr(s, "label", "") or "",
+            }
+            for s in (getattr(node, "consumes", None) or ())
+        ]
+        return {"_input_ports": inputs} if inputs else {}
 
     # ------------------------------------------------------------------ #
     # Node provenance: immutable commits, sealed releases, revocation.    #
@@ -4629,7 +4846,14 @@ class GatewayApp:
                 return state, "retry"
         return None
 
-    def _start_intent_run(self, session, intent: str, *, max_recovery: int = 1) -> dict:
+    def _start_intent_run(
+        self,
+        session,
+        intent: str,
+        *,
+        max_recovery: int = 1,
+        extra_bindings: dict | None = None,
+    ) -> dict:
         """Submit a plain intent as a run: the non-marketplace core of
         ``_submit_run``, shared with the chat surface.
 
@@ -4637,12 +4861,25 @@ class GatewayApp:
         same run_id, the same Noder thread — instead of minting a fresh
         one: the retry lands where the failure lives, the thread rises
         (its moment moves), and the list stops filling with dead
-        siblings of one goal."""
+        siblings of one goal.
+
+        ``extra_bindings`` (B4) are values the CONVERSATION bound onto
+        the node's declared inputs — the user's yes to an offered
+        standing output — merged over the function's own bindings so the
+        binder resolves them at execution."""
         metadata: dict = {"tenant_id": session.tenant_id}
         # A goal the user already built a node for runs THAT node's own
         # function — the route is the stored code, not a fresh plan.
         function = self._resolve_node_function(session, intent)
         self._refuse_revoked(function)
+        if function is not None and extra_bindings:
+            function = {
+                **function,
+                "bindings": {
+                    **(function.get("bindings") or {}),
+                    **extra_bindings,
+                },
+            }
         if function is not None:
             metadata["node_function"] = function
         revivable = self._revivable_run_for(session, intent)
@@ -11581,6 +11818,9 @@ class GatewayApp:
         # B3: the node keeps its OWN record — the run's resolved inputs
         # and emitted outputs land in the node's drawer, scrubbed.
         self._land_run_io(state)
+        # B4: every value this run moved along an output:// edge lands a
+        # run-cited handoff edge on the temporal graph.
+        self._land_handoffs(state)
         if self._metering is None or self._nodeplace is None:
             return
         if state.phase is Phase.COMPLETED:
@@ -11732,6 +11972,68 @@ class GatewayApp:
         except Exception:  # noqa: BLE001 - the answer stands either way
             logging.getLogger("oolu.gateway").warning(
                 "run io filing failed for run %s", state.run_id, exc_info=True
+            )
+
+    def _land_handoffs(self, state: RunState) -> None:
+        """B4 — run-cited provenance on the M1 graph: every value a
+        COMPLETED run moved along an ``output://`` edge lands one
+        ``handoff`` edge, producer → consumer, cited with the run id,
+        the port, and the exact value reference — so "which value moved
+        along which edge, when" is one time-scoped query answered with
+        run ids. Idempotent per (producer, run, port); advisory, never
+        fatal."""
+        if state.phase is not Phase.COMPLETED:
+            return
+        function = (state.contract.metadata or {}).get("node_function")
+        if not isinstance(function, dict) or not function.get("node_id"):
+            return
+        execution = state.execution
+        if execution is None:
+            return
+        graph = self._temporal_graph()
+        if graph is None:
+            return
+        consumer = str(function["node_id"])
+        try:
+            from ..values import parse_output_ref
+
+            seen = {
+                (
+                    e["source_id"],
+                    (e.get("attributes") or {}).get("run_id"),
+                    (e.get("attributes") or {}).get("port"),
+                )
+                for e in graph.neighbors(consumer, edge_types=("handoff",))
+            }
+            stamp = state.updated_at.isoformat()
+            for outcome in execution.action_outcomes:
+                if outcome.status is not ExecutionStatus.SUCCEEDED:
+                    continue
+                evidence = outcome.evidence or {}
+                for line in evidence.get("value_provenance") or []:
+                    source = parse_output_ref(line.get("port_source"))
+                    if source is None:
+                        continue
+                    producer, port = source
+                    if (producer, state.run_id, port) in seen:
+                        continue
+                    graph.connect(
+                        "handoff",
+                        producer,
+                        consumer,
+                        attributes={
+                            "port": port,
+                            "value_ref": str(line.get("value_ref") or ""),
+                            "run_id": state.run_id,
+                            "at": stamp,
+                        },
+                        provenance=(f"run:{state.run_id}",),
+                        confidence=1.0,
+                    )
+                    seen.add((producer, state.run_id, port))
+        except Exception:  # noqa: BLE001 - the run's answer stands either way
+            logging.getLogger("oolu.gateway").warning(
+                "handoff filing failed for run %s", state.run_id, exc_info=True
             )
 
     def _node_last_result(self, tenant: str, node_id: str) -> dict | None:

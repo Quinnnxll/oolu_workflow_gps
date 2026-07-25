@@ -300,6 +300,12 @@ class NodeplaceService:
     def discover(self, query: str = "") -> list[Listing]:
         return self._store.discover(query)
 
+    def listing_for_version(self, version_id: str) -> Listing | None:
+        """The version's marketplace listing — the declared slot
+        vocabulary (consumes/produces, with their plain-word labels)
+        the run-time stamps read."""
+        return self._store.listing_for_version(version_id)
+
     def list_own_nodes(self, *, noder_principal: str, tenant_id: str) -> list[Node]:
         return self._store.list_nodes(tenant_id, noder_principal)
 

@@ -4,6 +4,39 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Conversational building B4 — the durable hand-off: outputs flow to
+the next node:
+
+- **Run-cited provenance on the M1 graph.** Every value a COMPLETED
+  run resolved through an ``output://`` edge lands one ``handoff``
+  edge — producer → consumer, with the port, the exact value
+  reference, and the run id in the edge's attributes (which
+  ``TemporalGraph.neighbors`` now returns) — so "which value moved
+  along which edge, when" is one time-scoped query answered with run
+  ids. Idempotent per (producer, run, port); advisory, never fatal.
+- **Standing outputs offered as defaults, never bound silently.**
+  Running a node alone whose declared input another node's standing
+  output answers (``ValueStore.producers_of`` — the port index asked
+  "who already answers this input") pauses on one plain question:
+  the newest value, named with the input's plain-word label and the
+  producer's name. Yes binds the ``output://producer/port`` edge —
+  the exact-value binder resolves the newest filed value verbatim
+  into the sandbox; no runs the node exactly as before the question;
+  any other message withdraws it, like every standing offer.
+- **The chain is visible.** The interact window's standing-result
+  answer now names what the node received, from whom, in which run —
+  read from the graph's handoff citations, no model consulted.
+- **A dormant run-time stamp defect closed en route:** the resolve
+  paths stamped ``_output_ports`` from the bare Node row, which
+  carries no io — the declared-contract check never armed on chat
+  runs. Both paths now read the LISTING's slot vocabulary, so
+  declared inputs and outputs actually ride the run.
+- **Pinned** by ``tests/test_handoff.py``: the offer in words (label,
+  producer, exact value; no run fired); yes binds the value into the
+  sandbox verbatim, the graph answers with the run id, and the
+  drawer's ``inputs.json`` agrees; no runs plain and lands no edge;
+  a changed subject withdraws the question.
+
 Conversational building B3 — the self-contained node: its data lives
 with it:
 
