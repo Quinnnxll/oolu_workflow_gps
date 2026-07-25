@@ -497,10 +497,31 @@ async function assembleScreen() {
 
   function previewCard(p) {
     const confirmOut = h("div", {});
+    // The form IS the manifest (B1): the declared inputs, rendered
+    // with the plain-word labels the builder authored — typed fields,
+    // examples as placeholders, choices as choices. Nothing else is
+    // ever asked; the server refuses invalid values in words.
+    const fields = (p.inputs || []).map((input) => {
+      const field = input.choices && input.choices.length
+        ? h("select", { id: "in-" + input.name },
+            input.choices.map((c) => h("option", { value: c }, c)))
+        : h("input", {
+            id: "in-" + input.name,
+            type: input.value_type === "number" ? "number" : "text",
+            placeholder: input.example
+              || (input.default != null ? String(input.default) : ""),
+          });
+      return { input, field };
+    });
     async function run() {
       confirmOut.replaceChildren(h("p", { class: "muted" }, "running…"));
+      const values = {};
+      for (const { input, field } of fields) {
+        if (field.value !== "") values[input.name] = field.value;
+      }
       try {
-        const result = await api("POST", "/v1/runs/contract", { contract: p.contract });
+        const result = await api("POST", "/v1/runs/contract",
+          { contract: p.contract, inputs: values });
         confirmOut.replaceChildren(
           result.status === "awaiting_approval"
             ? h("div", {}, badge("held for approval"),
@@ -538,6 +559,15 @@ async function assembleScreen() {
           h("td", {}, node.payout_previews
             .map((x) => x.noder_principal + " " + money(x.amount))
             .join(", "))))),
+      fields.length
+        ? h("div", {},
+            h("h2", {}, "values this route needs"),
+            fields.map(({ input, field }) => [
+              h("label", { for: "in-" + input.name },
+                (input.label || "What should “" + input.name + "” be?")
+                + (input.required && input.default == null ? "" : " (optional)")),
+              field]))
+        : null,
       p.complete && p.contract
         ? h("button", { onclick: run }, "Drive this route") : null,
       confirmOut);

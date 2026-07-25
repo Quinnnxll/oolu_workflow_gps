@@ -168,7 +168,7 @@ from ..skills.contract import (
     SubgraphBody,
     derive_data_edges,
 )
-from ..skills.inputs import bind_inputs, inputs_manifest
+from ..skills.inputs import bind_inputs, inputs_manifest, validate_user_inputs
 from ..skills.models import ActionEvent, ExecutionStatus, ReusableSkill
 from ..skills.ports import ActionExecutor
 from ..social import MAX_MESSAGE_CHARS
@@ -3613,11 +3613,26 @@ class GatewayApp:
             }
         )
         consumes = [
-            Slot(name=item["name"], value_type=item["type"], role="input")
+            Slot(
+                name=item["name"],
+                value_type=item["type"],
+                role="input",
+                # The plain-word ask, declared once at birth (B1): every
+                # form and conversation from here on asks with THESE
+                # words, never its own invention.
+                label=str(item.get("label", "")),
+                example=str(item.get("example", "")),
+            )
             for item in io.get("inputs", [])
         ]
         produces = [
-            Slot(name=item["name"], value_type=item["type"], role="result")
+            Slot(
+                name=item["name"],
+                value_type=item["type"],
+                role="result",
+                label=str(item.get("label", "")),
+                example=str(item.get("example", "")),
+            )
             for item in io.get("outputs", [])
         ]
         under = under_entry is not None and under_entry.account.is_supernode
@@ -8775,7 +8790,12 @@ class GatewayApp:
                     "name": contract.name,
                     "summary": contract.description,
                     "consumes": [
-                        {"name": s.name, "type": s.value_type}
+                        {
+                            "name": s.name,
+                            "type": s.value_type,
+                            "label": s.label,
+                            "example": s.example,
+                        }
                         for s in contract.consumes
                     ],
                     "produces": [
@@ -9093,11 +9113,16 @@ class GatewayApp:
         try:
             manifest = inputs_manifest(contract)
             if manifest:
+                # The strict value check (B1): user-offered values pass
+                # the ONE door every surface shares — unknown keys and
+                # type-invalid values refuse in words, with the input's
+                # own plain label — before anything binds.
+                checked = validate_user_inputs(manifest, user_inputs)
                 filled = patch_or_defaults(
                     self._value_patcher, goal=contract.name, manifest=manifest
                 )
                 patch_cost = filled.cost
-                contract = bind_inputs(contract, {**filled.values, **user_inputs})
+                contract = bind_inputs(contract, {**filled.values, **checked})
         except ValueError as exc:
             raise GatewayError(400, "invalid_request", str(exc)) from exc
         if self._desk is not None:

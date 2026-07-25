@@ -101,6 +101,26 @@ survive.
 
 ### Phase B1 — values through conversation; forms as strict checks
 
+**Status: LANDED (core)** — `Slot` and `ValueInput` carry ``label`` +
+``example``; the `IO:` declaration authors them at birth (a
+mechanism-flavored input label REFUSES at the gate naming the words
+that tripped; a missing label is DECIDED from the humanized name —
+the B0 law applied to this gate itself, defaulting over refusing —
+`plain_label`). The labels ride the listing's consumes, the market
+library, and the assembly preview's ``inputs`` (with type, bounds,
+choices, required, example), so every surface asks with the builder's
+words. `validate_user_inputs` is the ONE strict check every surface
+shares — unknown keys refuse (nothing smuggles an undeclared ask),
+type-invalid values refuse in words using the plain label, choices
+name their set — wired at the contract-run door (which previously let
+user values bypass validation entirely), and the operator console's
+route preview renders the manifest verbatim as a typed form
+(`tests/test_plain_language.py`, `tests/test_market_assemble.py`).
+Remaining: the chat loop asking a node's missing input values one at
+a time with these labels (today conversation fills the orchestrator's
+clarification asks, which B0 keeps plain; the node-run value chat
+rides B3's stored-io seam).
+
 *One ask surface — the declared inputs — fillable by words, checkable
 by form.*
 

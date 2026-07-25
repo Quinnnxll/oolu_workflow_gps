@@ -86,7 +86,12 @@ def test_rebuilding_the_same_goal_reuses_the_node(tmp_path):
 def test_the_io_declaration_parses_and_degrades_honestly():
     io = parse_node_io(IO_ANSWER)
     assert io == {
-        "inputs": [{"name": "invoice_csv", "type": "path"}],
+        # The B1 gate decides a plain-word label for every input the
+        # declaration left unlabeled — the ask every surface reuses.
+        "inputs": [{
+            "name": "invoice_csv", "type": "path",
+            "label": "Which file or folder is “invoice csv”?",
+        }],
         "outputs": [{"name": "normalized_csv", "type": "path"}],
     }
     # No declaration: no inputs, one string result — never a crash.
@@ -96,7 +101,9 @@ def test_the_io_declaration_parses_and_degrades_honestly():
     }
     # Junk types collapse to str; nameless entries vanish.
     weird = parse_node_io('IO: {"inputs": [{"name": "x", "type": "blob"}, {}]}')
-    assert weird["inputs"] == [{"name": "x", "type": "str"}]
+    assert weird["inputs"] == [
+        {"name": "x", "type": "str", "label": "What should “x” be?"}
+    ]
 
 
 def test_the_built_node_carries_its_interface_on_the_listing(tmp_path):

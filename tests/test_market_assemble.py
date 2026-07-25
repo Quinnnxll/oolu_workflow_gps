@@ -237,3 +237,38 @@ def test_the_library_enumerates_every_contract_and_slot(tmp_path):
     assert slots["tidy"]["producers"] == ["invoice cleaner"]
     assert slots["raw"]["producers"] == ["raw exporter"]
     assert slots["tidy"]["type"] == "path"
+
+
+def test_the_preview_carries_the_plain_word_asks(tmp_path):
+    """B1: the form IS the manifest — the assembly preview hands every
+    surface the declared inputs WITH the builder's plain-word label and
+    example, so no form or conversation invents its own phrasing."""
+    app, conn, ident, registry, *_rest = _build(tmp_path)
+    _contribute_and_publish(
+        app,
+        ident,
+        registry,
+        name="report maker",
+        noder="noder-report",
+        price=0.15,
+        produces=[TIDY],
+        consumes=[],
+        inputs=[
+            {
+                "name": "day_count",
+                "value_type": "number",
+                "default": 30,
+                "label": "How many days should the report cover?",
+                "example": "30",
+            }
+        ],
+    )
+    resp = _assemble(
+        app, ident, {"goal": {"name": "make-the-report", "want": [TIDY]}}
+    )
+    assert resp.status == 200, resp.body
+    (declared,) = resp.body["inputs"]
+    assert declared["label"] == "How many days should the report cover?"
+    assert declared["example"] == "30"
+    assert declared["value_type"] == "number"
+    assert declared["required"] is True

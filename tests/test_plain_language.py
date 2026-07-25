@@ -175,3 +175,123 @@ def test_the_prompt_law_is_stated_on_every_conversational_surface():
 
     assert "Never phrase a question about MECHANISMS" in INTAKE_SYSTEM_PROMPT
     assert "Never ask the user TECHNICAL questions" in SYSTEM_PROMPT
+
+
+# ------------------------------------------------------------------ #
+# B1: plain-word labels at birth; forms as strict checks.              #
+# ------------------------------------------------------------------ #
+def test_io_labels_ride_default_or_refuse():
+    from oolu.chat import parse_node_io_checked
+
+    # A declared plain label and example ride through untouched.
+    io, problem = parse_node_io_checked(
+        'IO: {"inputs": [{"name": "source_folder", "type": "path", '
+        '"label": "Which folder are the invoices in?", '
+        '"example": "~/Invoices"}], '
+        '"outputs": [{"name": "result", "type": "str"}]}'
+    )
+    assert problem == ""
+    (source,) = io["inputs"]
+    assert source["label"] == "Which folder are the invoices in?"
+    assert source["example"] == "~/Invoices"
+
+    # A missing label is DECIDED from the humanized name, shaped by type.
+    io, problem = parse_node_io_checked(
+        'IO: {"inputs": [{"name": "day_count", "type": "number"}], '
+        '"outputs": [{"name": "result", "type": "str"}]}'
+    )
+    assert problem == ""
+    assert io["inputs"][0]["label"] == "What number should “day count” be?"
+
+    # A mechanism-flavored label refuses, naming the words that tripped.
+    _io, problem = parse_node_io_checked(
+        'IO: {"inputs": [{"name": "target", "type": "str", '
+        '"label": "What JSON schema should the payload use?"}], '
+        '"outputs": [{"name": "result", "type": "str"}]}'
+    )
+    assert "technical question" in problem
+    assert "json" in problem
+
+
+def test_plain_label_shapes_by_type():
+    assert pl.plain_label("source_folder", "path") == (
+        "Which file or folder is “source folder”?"
+    )
+    assert pl.plain_label("day_count", "number") == (
+        "What number should “day count” be?"
+    )
+    assert pl.plain_label("title", "str") == "What should “title” be?"
+
+
+def test_the_strict_check_refuses_in_words():
+    from oolu.skills.contract import ActionsBody, NodeContract, ValueInput
+    from oolu.skills.inputs import inputs_manifest, validate_user_inputs
+    from oolu.skills.models import ActionEvent
+
+    contract = NodeContract(
+        id="n1",
+        name="report maker",
+        inputs=[
+            ValueInput(
+                name="day_count", value_type="number",
+                label="How many days should the report cover?",
+            ),
+            ValueInput(
+                name="tone", value_type="choice",
+                choices=["formal", "friendly"],
+            ),
+        ],
+        body=ActionsBody(
+            actions=[ActionEvent(correlation_id="c", adapter="cli", operation="run")]
+        ),
+    )
+    manifest = inputs_manifest(contract)
+    # Valid values pass and coerce.
+    assert validate_user_inputs(manifest, {"day_count": "30"}) == {
+        "day_count": 30.0
+    }
+    # A type-invalid value refuses IN WORDS, using the plain label.
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError, match="How many days .* needs a number"):
+        validate_user_inputs(manifest, {"day_count": "a fortnight"})
+    # A choice outside its set names the set.
+    with _pytest.raises(ValueError, match="formal, friendly"):
+        validate_user_inputs(manifest, {"tone": "sarcastic"})
+    # An undeclared key can smuggle nothing in.
+    with _pytest.raises(ValueError, match="no input called 'volume'"):
+        validate_user_inputs(manifest, {"volume": "11"})
+
+
+def test_a_built_node_carries_plain_labels_to_the_library(tmp_path):
+    app, conn, ident, desk, script_exec = _rig(tmp_path)
+    try:
+        labeled = FakeAuthor(
+            "1. Read the folder.\n"
+            'IO: {"inputs": [{"name": "source_folder", "type": "path", '
+            '"label": "Which folder are the invoices in?", '
+            '"example": "~/Invoices"}, {"name": "report_name", '
+            '"type": "str"}], '
+            '"outputs": [{"name": "result", "type": "str"}]}\n'
+            "```python\nfrom _oolu_runtime import emit_result\n"
+            "emit_result(''.join(['o', 'k']))\n```"
+        )
+        app._node_function_author = lambda tenant: labeled
+        response = _chat(app, ident, "build me a node that " + GOAL)
+        assert response.status == 200, response.body
+        assert "Built a NEW node" in response.body["reply"]
+        (node,) = app._nodeplace.all_nodes()
+        version = app._nodeplace.latest_version(node.node_id)
+        listing = desk._registry.listing_for_version(version.version_id)
+        by_name = {s.name: s for s in listing.consumes}
+        # The declared label rides; the missing one was decided plain.
+        assert by_name["source_folder"].label == (
+            "Which folder are the invoices in?"
+        )
+        assert by_name["source_folder"].example == "~/Invoices"
+        assert by_name["report_name"].label == "What should “report name” be?"
+        # Acceptance: no label in the build matches the mechanism lexicon.
+        for slot in listing.consumes:
+            assert pl.mechanism_terms(slot.label) == [], slot.label
+    finally:
+        conn.close()

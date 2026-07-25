@@ -126,6 +126,20 @@ def mechanism_questions(text: str | None) -> list[str]:
     return offenders
 
 
+def plain_label(name: str, value_type: str = "str") -> str:
+    """A defaulted plain-word ask for an unlabeled input — the B0 law
+    applied to B1's own gate: a missing label is DECIDED (from the
+    humanized name, shaped by type) rather than refused, because
+    refusing every build whose model forgot a label would interrogate
+    the user by proxy. Only a mechanism-flavored label refuses."""
+    human = re.sub(r"[_\-.]+", " ", str(name)).strip() or "this value"
+    if value_type == "path":
+        return f"Which file or folder is “{human}”?"
+    if value_type == "number":
+        return f"What number should “{human}” be?"
+    return f"What should “{human}” be?"
+
+
 def default_mechanism_parameters(brief):
     """Resolve every mechanism-shaped ask in a brief; return
     ``(brief, decisions)``.

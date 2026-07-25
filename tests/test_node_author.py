@@ -157,7 +157,11 @@ def test_the_one_shot_protocol_still_lands_when_it_leaks_through():
     )
     authored = NodeAuthorAgent(ConsultModel([ToolReply(text=prose)])).author(GOAL)
     assert authored.script == SCRIPT
-    assert authored.io["inputs"] == [{"name": "invoice_rows", "type": "str"}]
+    assert authored.io["inputs"] == [{
+        "name": "invoice_rows", "type": "str",
+        # B1: an unlabeled input gets its plain-word ask decided.
+        "label": "What should “invoice rows” be?",
+    }]
 
 
 def test_no_task_text_refuses_as_conversation():

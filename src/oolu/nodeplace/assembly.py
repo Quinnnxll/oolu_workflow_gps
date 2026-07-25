@@ -332,6 +332,11 @@ def preview_assembly(
                     "minimum": entry.spec.minimum,
                     "maximum": entry.spec.maximum,
                     "choices": entry.spec.choices,
+                    "required": entry.spec.required,
+                    # The plain-word ask (B1): every surface renders THIS
+                    # question and example, never its own phrasing.
+                    "label": entry.spec.label,
+                    "example": entry.spec.example,
                 }
                 for entry in inputs_manifest(contract)
             ]

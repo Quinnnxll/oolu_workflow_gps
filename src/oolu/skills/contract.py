@@ -81,6 +81,13 @@ class Slot(BaseModel):
     role: str | None = None  # e.g. "path"
     required: bool = True
     description: str = ""
+    # The plain-word ask for this slot (conversational-building plan,
+    # B1): a question naming the value in the USER's world ("Which
+    # folder are the invoices in?") plus one honest example — what
+    # every form and every conversation asks with, so no surface ever
+    # invents its own phrasing.
+    label: str = ""
+    example: str = ""
 
     def matches(self, other: "Slot") -> bool:
         """Type-unification: a produced slot satisfies a consumed slot when
@@ -118,6 +125,11 @@ class ValueInput(BaseModel):
     # For value_type="choice": the closed set of admissible strings.
     choices: list[str] | None = None
     required: bool = True
+    # The plain-word ask (B1): the question a form or a conversation
+    # puts to the human, plus one honest example — declared once, so
+    # every surface asks the same way.
+    label: str = ""
+    example: str = ""
 
 
 class BodyKind(str, Enum):

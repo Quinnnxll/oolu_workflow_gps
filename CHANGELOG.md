@@ -4,6 +4,36 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Conversational building B1 — plain-word asks, forms as strict checks:
+
+- **Labels and examples at birth.** ``Slot`` and ``ValueInput`` gain
+  ``label`` + ``example``; the build's ``IO:`` declaration authors
+  them — a plain question naming the value in the user's world plus
+  one honest example. A mechanism-flavored input label REFUSES at the
+  gate (it would interrogate the user at every form and conversation
+  from then on), naming the words that tripped; a MISSING label is
+  decided from the humanized name, shaped by type — the B0 law
+  applied to the gate itself.
+- **One phrasing everywhere.** The labels ride the listing's
+  consumes, ``/v1/market/library``, and the assembly preview's
+  ``inputs`` (now also carrying required/example) — so no surface
+  ever invents its own ask.
+- **One strict check everywhere.** ``validate_user_inputs`` is the
+  single door a form submit and a conversation share: unknown keys
+  refuse (nothing smuggles an undeclared ask into a run),
+  type-invalid values refuse IN WORDS using the input's own label
+  ("How many days should the report cover?" needs a number…),
+  choices name their set. Wired at the contract-run door — which
+  until now let user-provided values bypass validation entirely.
+- **The console's route preview renders the manifest verbatim**:
+  typed fields, the builder's labels, examples as placeholders,
+  choices as choices; values ride the drive as ``inputs``.
+- **Pinned** by ``test_plain_language.py`` (labels ride / default /
+  refuse; the strict check's refusals in words; a built node carries
+  plain labels end to end with zero mechanism labels) and
+  ``test_market_assemble.py`` (the preview hands every surface the
+  plain-word asks).
+
 Conversational building B0 — the interrogation budget:
 
 - **`src/oolu/plainlanguage.py`.** Mechanisms are the builder's

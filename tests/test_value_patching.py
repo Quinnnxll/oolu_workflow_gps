@@ -649,7 +649,9 @@ def test_user_values_outrank_the_patcher_and_typos_get_a_400(tmp_path):
         app, ident, contract, inputs={"model parametric plate.widht": 33}
     )
     assert bad.status == 400
-    assert "unknown inputs" in bad.body["error"]["message"]
+    assert "no input called" in bad.body["error"]["message"]
+    # The refusal now names the declared inputs, in words (B1).
+    assert "model parametric plate.width" in bad.body["error"]["message"]
     conn.close()
 
 

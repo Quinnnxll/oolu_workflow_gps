@@ -79,6 +79,49 @@ def inputs_manifest(contract: NodeContract) -> list[BoundInput]:
     return manifest
 
 
+def validate_user_inputs(
+    manifest: Sequence[BoundInput], provided: Mapping[str, Any] | None
+) -> dict[str, float | str]:
+    """The strict value check every human-facing surface shares (B1):
+    a form submit and a conversation fill the SAME binder through this
+    one door, and a refusal speaks in words — using the input's own
+    plain label where the builder declared one — never a stack trace.
+
+    Unknown keys refuse (nothing can smuggle an undeclared ask into a
+    run); a type-invalid value refuses naming what the value needs to
+    be; a choice outside its set names the set. Values the user did
+    not offer are left to the patcher/defaults downstream."""
+    checked: dict[str, float | str] = {}
+    by_name = {entry.qualified: entry.spec for entry in manifest}
+    for key, value in dict(provided or {}).items():
+        spec = by_name.get(key)
+        if spec is None:
+            known = ", ".join(sorted(by_name)) or "none"
+            raise ValueError(
+                f"there is no input called {key!r} on this route — "
+                f"the declared inputs are: {known}"
+            )
+        ask = spec.label or spec.name
+        if spec.value_type == "number":
+            try:
+                checked[key] = validate_value(spec, value)
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"“{ask}” needs a number, and {value!r} isn't one"
+                ) from None
+            continue
+        if spec.value_type == "choice" and spec.choices:
+            text = str(value)
+            if text not in spec.choices:
+                raise ValueError(
+                    f"“{ask}” must be one of: {', '.join(spec.choices)}"
+                )
+            checked[key] = text
+            continue
+        checked[key] = str(value)
+    return checked
+
+
 def validate_value(spec: ValueInput, value: Any) -> float | str:
     """Coerce and box one offered value. The declaration always wins:
     numbers clamp into [minimum, maximum]; a choice outside the set falls

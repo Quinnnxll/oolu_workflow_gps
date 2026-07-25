@@ -1015,8 +1015,11 @@ Otherwise write the node's execution function:
 1. A short numbered plan (one step per line).
 2. ONE line starting with IO: declaring the node's interface as JSON —
    what it consumes and what it produces, so nodes chain reliably on a
-   route. Types are str, path, or number:
-   IO: {"inputs": [{"name": "...", "type": "str"}], "outputs": [{"name": "result", "type": "str"}]}
+   route. Types are str, path, or number. Every INPUT also carries a
+   "label" — the plain question a non-developer answers, naming the
+   value in THEIR world (never a format, API, schema, or other
+   mechanism) — and one honest "example":
+   IO: {"inputs": [{"name": "source_folder", "type": "path", "label": "Which folder are the invoices in?", "example": "~/Invoices"}], "outputs": [{"name": "result", "type": "str"}]}
 3. ONE complete, self-contained Python script in a single fenced
    ```python block that performs the whole task in one run. The script
    MUST import and call emit_result exactly once with its final answer:
@@ -1094,12 +1097,34 @@ def parse_node_io_checked(raw: str) -> tuple[dict, str]:
             if not name:
                 continue
             kind = str(item.get("type", "str")).strip().lower()
-            out.append(
-                {"name": name, "type": kind if kind in _IO_TYPES else "str"}
-            )
+            cleaned = {"name": name, "type": kind if kind in _IO_TYPES else "str"}
+            for extra in ("label", "example"):
+                value = str(item.get(extra, "")).strip()
+                if value:
+                    cleaned[extra] = value
+            out.append(cleaned)
         return out
     inputs = clean(declared.get("inputs"))
     outputs = clean(declared.get("outputs")) or default["outputs"]
+    # The B1 label gate: every input carries a plain-word ask. A
+    # mechanism-flavored label is refused (it would interrogate the
+    # user at every form and every conversation from here on); a
+    # MISSING label is decided from the humanized name — the B0 law
+    # applied to this gate itself, defaulting over refusing.
+    from .plainlanguage import mechanism_terms, plain_label
+
+    for item in inputs:
+        label = item.get("label", "")
+        if label:
+            tripped = mechanism_terms(label)
+            if tripped:
+                return default, (
+                    f"the input '{item['name']}' is labeled with a technical "
+                    f"question ({', '.join(tripped)}) — labels must name a "
+                    "value in the user's world, in plain words"
+                )
+        else:
+            item["label"] = plain_label(item["name"], item["type"])
     return {"inputs": inputs, "outputs": outputs}, ""
 
 
