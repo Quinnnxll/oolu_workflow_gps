@@ -129,33 +129,33 @@ Two doors, both real, both metered:
 ### Hosting the investor panel
 
 `deploy/investor-panel.html` is a static page with its own door in the
-production stack. Two settings in `.env`, both required — one serves
-the page, the other lets it call the API:
+production stack, and the door is fully wired: one setting in `.env`
+serves the page AND its API on the same origin — no host entry, no
+token paste, no CORS.
 
 ```bash
-# .env — the hostname Caddy serves the PANEL at (a static page, not
-# the gateway). Do NOT also list this hostname in OOLU_DOMAIN: any
-# hostname that reaches the gateway gets the user shell, so a
-# double-listed panel domain shows the app instead of the panel.
+# .env — the hostname Caddy serves the PANEL at. Caddy serves the
+# static page there and proxies its /v1/* calls to the gateway on the
+# same origin. Do NOT also list this hostname in OOLU_DOMAIN: any
+# hostname that reaches the gateway as a page request gets the user
+# shell, so a double-listed panel domain shows the app instead.
 OOLU_INVESTORS_DOMAIN=investors.largecollaborationmodel.com
-
-# The panel calls the API cross-origin, so the API must admit that
-# origin — comma-separated for more than one; scheme included, no
-# trailing slash:
-OOLU_ALLOW_ORIGIN=https://investors.largecollaborationmodel.com
 ```
 
 Point the subdomain's DNS at this box exactly like the app and admin
 domains (proxied through Cloudflare, SSL/TLS "Full (strict)"), restart
-(`docker compose -f docker-compose.prod.yml up -d`), open
-`https://investors.largecollaborationmodel.com`, and point the panel at
-`https://<your app domain>` with a token whose role carries
-`metrics:view` (plus `approve:metrics.record` if that person also
-records manual metrics or competitor observations).
+(`docker compose -f docker-compose.prod.yml up -d`), and open
+`https://investors.largecollaborationmodel.com`. The panel shows a
+sign-in; any account whose role carries `metrics:view` (plus
+`approve:metrics.record` if that person also records manual metrics or
+competitor observations) signs in and the boards are live — executive
+summary, scorecard, cohorts, competitive position, and every metric
+with its 90-day sparkline and description.
 
 The page is also self-contained — hosting it anywhere else (a static
-host, Cloudflare Pages) works the same, with `OOLU_ALLOW_ORIGIN` still
-naming wherever it lives and `OOLU_INVESTORS_DOMAIN` left unset.
+host, Cloudflare Pages) still works: its Advanced section takes an API
+host and a pasted bearer token, and THAT cross-origin setup is when
+`OOLU_ALLOW_ORIGIN=https://<wherever-it-lives>` must admit the origin.
 
 ### Mail: reset codes, e-mailed passwords, verification
 

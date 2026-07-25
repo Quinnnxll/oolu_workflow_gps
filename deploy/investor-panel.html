@@ -5,153 +5,364 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>OoLu — Investor Metrics</title>
 <style>
-  :root { color-scheme: light dark;
-    --line: #8884; --muted: #888; --accent: #46f; }
-  body { font-family: system-ui, sans-serif; max-width: 1080px;
-    margin: 1.5rem auto; padding: 0 1rem; }
-  h1 { font-size: 1.25rem; }
-  h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.6px;
-    color: var(--muted); margin: 1.6rem 0 0.6rem; }
-  .grid { display: grid; gap: 0.8rem;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
-  .tile { border: 1px solid var(--line); border-radius: 10px;
-    padding: 0.8rem 1rem; }
-  .tile .value { font-size: 1.6rem; font-weight: 650; margin: 0.2rem 0; }
-  .tile .label { font-size: 0.9rem; }
-  .muted { color: var(--muted); font-size: 0.8rem; }
-  .badge { display: inline-block; border: 1px solid var(--line);
-    border-radius: 999px; padding: 0 0.5rem; font-size: 0.7rem;
-    color: var(--muted); }
-  form { display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center;
-    border: 1px solid var(--line); border-radius: 10px; padding: 0.7rem; }
-  input { font: inherit; padding: 0.4rem; flex: 1; min-width: 200px; }
-  button { font: inherit; padding: 0.4rem 0.9rem; cursor: pointer; }
-  .error { color: #d44; margin-top: 0.6rem; }
-  .exec .tile { border-left: 4px solid var(--line); }
-  .exec .tile.ok { border-left-color: #2a7; }
-  .exec .tile.warning { border-left-color: #e90; }
-  .exec .tile.critical { border-left-color: #d44; }
-  .delta { font-size: 0.8rem; }
-  .delta.up { color: #2a7; }
-  .delta.down { color: #d44; }
+  /* Palette roles (validated, light + dark selected separately). */
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface: #fcfcfb;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --baseline: #c3c2b7;
+    --border: rgba(11, 11, 11, 0.10);
+    --series: #2a78d6;          /* sparklines, score bars */
+    --series-soft: rgba(42, 120, 214, 0.12);
+    --pole-lead: 42, 120, 214;  /* diverging: leads (blue pole) */
+    --pole-trail: 227, 73, 72;  /* diverging: trails (red pole) */
+    --mid: #f0efec;             /* diverging neutral midpoint */
+    --good: #0ca30c;
+    --warning: #fab219;
+    --critical: #d03b3b;
+    --delta-up: #006300;
+    --delta-down: #d03b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --page: #0d0d0d;
+      --surface: #1a1a19;
+      --ink: #ffffff;
+      --ink-2: #c3c2b7;
+      --muted: #898781;
+      --grid: #2c2c2a;
+      --baseline: #383835;
+      --border: rgba(255, 255, 255, 0.10);
+      --series: #3987e5;
+      --series-soft: rgba(57, 135, 229, 0.16);
+      --pole-lead: 57, 135, 229;
+      --pole-trail: 230, 103, 103;
+      --mid: #383835;
+      --delta-up: #0ca30c;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --ink: #ffffff;
+    --ink-2: #c3c2b7;
+    --muted: #898781;
+    --grid: #2c2c2a;
+    --baseline: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --series: #3987e5;
+    --series-soft: rgba(57, 135, 229, 0.16);
+    --pole-lead: 57, 135, 229;
+    --pole-trail: 230, 103, 103;
+    --mid: #383835;
+    --delta-up: #0ca30c;
+  }
+
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--page); color: var(--ink);
+    max-width: 1160px; margin: 0 auto; padding: 0 1.2rem 3rem;
+  }
+  header {
+    display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: baseline;
+    padding: 1.1rem 0 0.4rem; border-bottom: 1px solid var(--grid);
+  }
+  header h1 { font-size: 1.15rem; margin: 0; letter-spacing: 0.2px; }
+  header .face { color: var(--muted); font-size: 0.85rem; }
+  header .right {
+    margin-left: auto; display: flex; gap: 0.7rem; align-items: center;
+    font-size: 0.8rem; color: var(--ink-2);
+  }
+  .live-dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--good); margin-right: 0.35rem;
+  }
+  a.plain { color: inherit; }
+  h2 {
+    font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.7px;
+    color: var(--muted); margin: 1.9rem 0 0.7rem; font-weight: 600;
+  }
+  h2 .note { text-transform: none; letter-spacing: 0; font-weight: 400; }
+  .grid {
+    display: grid; gap: 0.8rem;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  }
+  .tile {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 0.85rem 1rem 0.75rem;
+  }
+  .tile .label { font-size: 0.86rem; color: var(--ink-2); }
+  .tile .value { font-size: 1.7rem; font-weight: 650; margin: 0.15rem 0 0.1rem; }
+  .tile .desc { font-size: 0.78rem; color: var(--ink-2); margin: 0.35rem 0 0; }
+  .tile .foot {
+    display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center;
+    color: var(--muted); font-size: 0.72rem; margin-top: 0.5rem;
+  }
+  .tile .foot code { font-size: 0.7rem; color: var(--muted); }
+  .badge {
+    display: inline-block; border: 1px solid var(--border);
+    border-radius: 999px; padding: 0 0.5rem; font-size: 0.68rem;
+    color: var(--ink-2); background: var(--page);
+  }
+  .spark { display: block; width: 100%; height: 44px; margin-top: 0.45rem; }
+  .spark polyline { fill: none; stroke: var(--series); stroke-width: 2;
+    stroke-linejoin: round; stroke-linecap: round; }
+  .spark .area { fill: var(--series-soft); stroke: none; }
+  .spark .base { stroke: var(--baseline); stroke-width: 1; }
+  .spark .dot { fill: var(--series); }
+  .exec .tile { border-left: 4px solid var(--baseline); }
+  .exec .tile.ok { border-left-color: var(--good); }
+  .exec .tile.warning { border-left-color: var(--warning); }
+  .exec .tile.critical { border-left-color: var(--critical); }
+  .status-word { font-size: 0.72rem; color: var(--ink-2); }
+  .status-word .dot { display: inline-block; width: 7px; height: 7px;
+    border-radius: 50%; margin-right: 0.3rem; background: var(--baseline); }
+  .ok .status-word .dot { background: var(--good); }
+  .warning .status-word .dot { background: var(--warning); }
+  .critical .status-word .dot { background: var(--critical); }
+  .delta { font-size: 0.8rem; margin-top: 0.1rem; }
+  .delta.up { color: var(--delta-up); }
+  .delta.down { color: var(--delta-down); }
+  .two-col { display: grid; gap: 1rem; grid-template-columns: 1fr; }
+  @media (min-width: 940px) { .two-col { grid-template-columns: 1fr 1fr; } }
+  .score-total { font-size: 2.3rem; font-weight: 700; margin-bottom: 0.4rem; }
   .score-row { display: flex; align-items: center; gap: 0.6rem;
-    margin: 0.25rem 0; font-size: 0.85rem; }
-  .score-row .name { width: 10.5rem; }
+    margin: 0.3rem 0; font-size: 0.84rem; }
+  .score-row .name { width: 11.5rem; color: var(--ink-2); }
   .score-bar { flex: 1; height: 8px; border-radius: 999px;
-    background: var(--line); overflow: hidden; }
-  .score-bar > i { display: block; height: 100%; background: var(--accent); }
-  .score-total { font-size: 2rem; font-weight: 700; }
-  table.cohort { border-collapse: collapse; font-size: 0.8rem;
-    margin-top: 0.4rem; }
-  table.cohort th, table.cohort td { border: 1px solid var(--line);
-    padding: 0.25rem 0.55rem; text-align: right; }
-  table.cohort th:first-child, table.cohort td:first-child {
-    text-align: left; }
-  table.cohort td.hot { background: rgba(68, 102, 255, 0.28); }
-  table.cohort td.warm { background: rgba(68, 102, 255, 0.14); }
+    background: var(--grid); overflow: hidden; }
+  .score-bar > i { display: block; height: 100%; background: var(--series); }
+  .score-row .num { width: 2.2rem; text-align: right;
+    font-variant-numeric: tabular-nums; }
+  table.matrix { border-collapse: collapse; font-size: 0.8rem;
+    margin-top: 0.4rem; width: 100%; }
+  table.matrix th, table.matrix td { border: 1px solid var(--grid);
+    padding: 0.3rem 0.55rem; text-align: right;
+    font-variant-numeric: tabular-nums; }
+  table.matrix th { color: var(--ink-2); font-weight: 600; }
+  table.matrix th:first-child, table.matrix td:first-child {
+    text-align: left; font-variant-numeric: normal; }
   .scroll-x { overflow-x: auto; }
+  .card { background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 1rem 1.1rem; }
+  .muted { color: var(--muted); font-size: 0.8rem; }
+  .error { color: var(--critical); margin-top: 0.8rem; font-size: 0.85rem; }
+  /* Sign-in */
+  #signin { max-width: 26rem; margin: 3.2rem auto 0; }
+  #signin h1 { font-size: 1.2rem; margin: 0 0 0.2rem; }
+  #signin label { display: block; font-size: 0.8rem; color: var(--ink-2);
+    margin: 0.7rem 0 0.2rem; }
+  #signin input { width: 100%; font: inherit; padding: 0.5rem 0.6rem;
+    border: 1px solid var(--baseline); border-radius: 8px;
+    background: var(--page); color: var(--ink); }
+  button { font: inherit; padding: 0.45rem 1rem; cursor: pointer;
+    border: 1px solid var(--baseline); border-radius: 8px;
+    background: var(--surface); color: var(--ink); }
+  button.primary { background: var(--series); border-color: var(--series);
+    color: #fff; }
+  #signin button.primary { width: 100%; margin-top: 1rem; }
+  #signin details { margin-top: 1rem; }
+  #signin summary { font-size: 0.8rem; color: var(--muted); cursor: pointer; }
+  .toolbar { display: flex; gap: 0.6rem; align-items: center; }
+  .toolbar button { font-size: 0.8rem; padding: 0.3rem 0.8rem; }
 </style>
 </head>
 <body>
-<h1>OoLu — Investor Metrics</h1>
-<p class="muted">
-  Live off the app's own books via <code>GET /v1/platform/metrics</code>
-  (a token with <code>metrics:view</code> authority). The
-  <code>/history</code> endpoint behind the same wall carries the daily
-  series for charts and analysis reports.
-</p>
-<form id="conf">
-  <input id="server" placeholder="https://api.your-oolu-host" />
-  <input id="token" placeholder="bearer token (metrics:view)" />
-  <button type="submit">Connect</button>
-  <button type="button" id="report">Download report</button>
-  <span class="muted">refreshes every 60&thinsp;s</span>
-</form>
-<div id="exec"></div>
-<div id="cohorts"></div>
-<div id="competitors"></div>
-<div id="scorecard"></div>
-<div id="board"></div>
+<header id="top" hidden>
+  <h1>OoLu</h1><span class="face">investor metrics</span>
+  <span class="right">
+    <span id="conn"><span class="live-dot"></span><span id="conn-text"></span></span>
+    <span class="toolbar">
+      <button id="report" type="button">Download report</button>
+      <a class="plain" href="#" id="signout">sign out</a>
+    </span>
+  </span>
+</header>
+
+<section id="signin" class="card" hidden>
+  <h1>OoLu — Investor Metrics</h1>
+  <p class="muted">Sign in with an account whose role carries
+    <code>metrics:view</code>. Everything on this page reads live from the
+    platform's own books.</p>
+  <form id="signin-form">
+    <label for="username">Username</label>
+    <input id="username" autocomplete="username" />
+    <label for="password">Password</label>
+    <input id="password" type="password" autocomplete="current-password" />
+    <button type="submit" class="primary">Sign in</button>
+  </form>
+  <details id="advanced">
+    <summary>Advanced — hosted elsewhere, or an IdP-fronted host</summary>
+    <label for="server">API host (empty = this origin)</label>
+    <input id="server" placeholder="https://app.your-oolu-host" />
+    <label for="token">Bearer token (metrics:view)</label>
+    <input id="token" placeholder="paste a token instead of signing in" />
+    <button type="button" id="use-token">Use token</button>
+  </details>
+  <div id="signin-err" class="error"></div>
+</section>
+
+<main id="panel" hidden>
+  <div id="exec"></div>
+  <div id="scorecard"></div>
+  <div class="two-col"><div id="cohorts"></div><div id="competitors"></div></div>
+  <div id="board"></div>
+  <p class="muted" style="margin-top:2rem">
+    Refreshes every 60 s · manual entries wear a badge · every figure reads
+    from <code>/v1/platform/metrics</code> and its sibling endpoints.
+  </p>
+</main>
 <div id="err" class="error"></div>
+
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
+
+/* ---- wiring: same-origin by default, token from sign-in ------------- */
 const conf = {
   get server() { return localStorage.getItem("oolu_metrics_server") || ""; },
   get token() { return localStorage.getItem("oolu_metrics_token") || ""; },
-  set(server, token) {
+  get who() { return localStorage.getItem("oolu_metrics_who") || ""; },
+  set(server, token, who) {
     localStorage.setItem("oolu_metrics_server", server);
     localStorage.setItem("oolu_metrics_token", token);
+    localStorage.setItem("oolu_metrics_who", who || "");
+  },
+  clearToken() {
+    localStorage.removeItem("oolu_metrics_token");
+    localStorage.removeItem("oolu_metrics_who");
   },
 };
-function fmt(item) {
-  if (item.value == null) return "—";
-  const v = item.value;
-  const n = Math.abs(v) >= 1000 ? Math.round(v).toLocaleString()
-    : Math.round(v * 100) / 100;
-  return item.unit === "USD" ? "$" + n : n + (item.unit ? " " + item.unit : "");
+
+function show(signedIn) {
+  $("top").hidden = !signedIn;
+  $("panel").hidden = !signedIn;
+  $("signin").hidden = signedIn;
+  if (signedIn) {
+    const at = conf.server ? new URL(conf.server).host : location.host;
+    $("conn-text").textContent =
+      (conf.who ? conf.who + " · " : "") + "live from " + at;
+  }
 }
-async function refresh() {
-  $("err").textContent = "";
-  if (!conf.server || !conf.token) return;
-  try {
-    const res = await fetch(conf.server + "/v1/platform/metrics", {
-      headers: { Authorization: "Bearer " + conf.token },
-    });
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    const data = await res.json();
-    await renderExec();
-    await renderScorecard();
-    await renderCohorts();
-    await renderCompetitors();
-    const groups = {};
-    for (const item of data.items) {
-      (groups[item.group] = groups[item.group] || []).push(item);
-    }
-    const board = $("board");
-    board.replaceChildren();
-    for (const [group, items] of Object.entries(groups)) {
-      const h = document.createElement("h2");
-      h.textContent = group;
-      const grid = document.createElement("div");
-      grid.className = "grid";
-      for (const item of items) {
-        const tile = document.createElement("div");
-        tile.className = "tile";
-        const label = document.createElement("div");
-        label.className = "label";
-        label.textContent = item.label;
-        const value = document.createElement("div");
-        value.className = "value";
-        value.textContent = fmt(item);
-        const foot = document.createElement("div");
-        foot.className = "muted";
-        foot.textContent = (item.as_of ? "as of " + item.as_of + " " : "");
-        if (item.source === "manual") {
-          const badge = document.createElement("span");
-          badge.className = "badge";
-          badge.textContent = "manual";
-          foot.append(badge);
-        }
-        tile.append(label, value, foot);
-        tile.title = item.description || item.key;
-        grid.append(tile);
-      }
-      board.append(h, grid);
-    }
-  } catch (e) { $("err").textContent = e.message; }
-}
+
 async function api(path) {
   const res = await fetch(conf.server + path, {
     headers: { Authorization: "Bearer " + conf.token },
   });
+  if (res.status === 401 || res.status === 403) {
+    conf.clearToken();
+    show(false);
+    $("signin-err").textContent =
+      "That session ended (HTTP " + res.status + ") — sign in again.";
+    throw new Error("signed out");
+  }
   if (!res.ok) throw new Error("HTTP " + res.status + " on " + path);
   return res.json();
 }
-/* The matrix's executive strip: actual, previous period, growth,
-   target, status — one tile per headline metric, edged by health. */
-async function renderExec() {
-  const data = await api("/v1/platform/metrics/summary");
+
+$("signin-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("signin-err").textContent = "";
+  const server = ($("server").value || "").trim().replace(/\/+$/, "");
+  try {
+    const res = await fetch(server + "/v1/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: $("username").value, password: $("password").value,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      $("signin-err").textContent = res.status === 404
+        ? "This host signs in through an identity provider — open Advanced " +
+          "and paste a bearer token instead."
+        : (data && data.error && data.error.message) || "sign-in failed";
+      if (res.status === 404) $("advanced").open = true;
+      return;
+    }
+    conf.set(server, data.token, data.principal || $("username").value);
+    show(true);
+    refresh();
+  } catch (err) { $("signin-err").textContent = err.message; }
+});
+
+$("use-token").addEventListener("click", () => {
+  const token = $("token").value.trim();
+  if (!token) return;
+  conf.set(($("server").value || "").trim().replace(/\/+$/, ""), token, "");
+  show(true);
+  refresh();
+});
+
+$("signout").addEventListener("click", (e) => {
+  e.preventDefault();
+  conf.clearToken();
+  show(false);
+});
+
+/* ---- formatting ----------------------------------------------------- */
+function fmt(value, unit) {
+  if (value == null) return "—";
+  const abs = Math.abs(value);
+  const compact = abs >= 1e6 ? (value / 1e6).toFixed(1) + "M"
+    : abs >= 10000 ? Math.round(value / 1000) + "k"
+    : abs >= 1000 ? Math.round(value).toLocaleString()
+    : Math.round(value * 100) / 100;
+  if (unit === "USD") return "$" + compact;
+  if (unit === "%") return compact + "%";
+  return unit ? compact + " " + unit : String(compact);
+}
+
+/* ---- sparkline: one 90-day series per metric, inline SVG ------------ */
+function sparkline(points) {
+  if (!points || points.length < 2) return null;
+  const w = 220, h = 44, pad = 3;
+  const values = points.map((p) => p.value);
+  const lo = Math.min(...values), hi = Math.max(...values);
+  const span = hi - lo || 1;
+  const x = (i) => pad + (i * (w - 2 * pad)) / (points.length - 1);
+  const y = (v) => h - pad - ((v - lo) * (h - 2 * pad)) / span;
+  const coords = points.map((p, i) => x(i) + "," + y(p.value));
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 " + w + " " + h);
+  svg.setAttribute("class", "spark");
+  svg.setAttribute("role", "img");
+  const first = points[0], last = points[points.length - 1];
+  const title = document.createElementNS(svg.namespaceURI, "title");
+  title.textContent =
+    points.length + " days · " + first.day + " → " + last.day +
+    " · min " + fmt(lo) + " · max " + fmt(hi) + " · latest " + fmt(last.value);
+  const area = document.createElementNS(svg.namespaceURI, "polygon");
+  area.setAttribute("class", "area");
+  area.setAttribute("points",
+    pad + "," + (h - pad) + " " + coords.join(" ") + " " +
+    x(points.length - 1) + "," + (h - pad));
+  const base = document.createElementNS(svg.namespaceURI, "line");
+  base.setAttribute("class", "base");
+  base.setAttribute("x1", pad); base.setAttribute("x2", w - pad);
+  base.setAttribute("y1", h - pad); base.setAttribute("y2", h - pad);
+  const line = document.createElementNS(svg.namespaceURI, "polyline");
+  line.setAttribute("points", coords.join(" "));
+  const dot = document.createElementNS(svg.namespaceURI, "circle");
+  dot.setAttribute("class", "dot");
+  dot.setAttribute("cx", x(points.length - 1));
+  dot.setAttribute("cy", y(last.value));
+  dot.setAttribute("r", 2.6);
+  svg.append(title, base, area, line, dot);
+  return svg;
+}
+
+/* ---- the executive strip: status-edged headline tiles --------------- */
+function renderExec(data) {
   const mount = $("exec");
   mount.replaceChildren();
   if (!data.items.length) return;
@@ -167,7 +378,7 @@ async function renderExec() {
     label.textContent = item.label;
     const value = document.createElement("div");
     value.className = "value";
-    value.textContent = fmt({ value: item.actual, unit: item.unit });
+    value.textContent = fmt(item.actual, item.unit);
     const delta = document.createElement("div");
     if (item.growth_rate_pct != null) {
       const up = item.growth_rate_pct >= 0;
@@ -179,26 +390,31 @@ async function renderExec() {
       delta.className = "muted";
       delta.textContent = "no previous period yet";
     }
+    const status = document.createElement("div");
+    status.className = "status-word";
+    const dot = document.createElement("span");
+    dot.className = "dot";
+    status.append(dot, document.createTextNode(
+      (item.status || "no target") +
+      (item.target != null ? " · target " + fmt(item.target, item.unit) : "")));
     const foot = document.createElement("div");
-    foot.className = "muted";
-    foot.textContent = (item.target != null ? "target " + item.target : "")
-      + (item.as_of ? "  ·  as of " + item.as_of : "");
-    tile.append(label, value, delta, foot);
+    foot.className = "foot";
+    foot.textContent = item.as_of ? "as of " + item.as_of : "";
+    tile.append(label, value, delta, status, foot);
     grid.append(tile);
   }
   mount.append(h, grid);
 }
-/* The weighted scorecard: pillars renormalized over what this host can
-   measure; excluded pillars are named, never averaged in as zero. */
-async function renderScorecard() {
-  const data = await api("/v1/platform/metrics/scorecard");
+
+/* ---- the weighted scorecard ----------------------------------------- */
+function renderScorecard(data) {
   const mount = $("scorecard");
   mount.replaceChildren();
   if (data.score == null) return;
   const h = document.createElement("h2");
   h.textContent = "investor scorecard";
   const wrap = document.createElement("div");
-  wrap.className = "tile";
+  wrap.className = "card";
   const total = document.createElement("div");
   total.className = "score-total";
   total.textContent = data.score + " / 100";
@@ -216,6 +432,7 @@ async function renderScorecard() {
     fill.style.width = Math.max(2, Math.min(100, pillar.score)) + "%";
     bar.append(fill);
     const num = document.createElement("span");
+    num.className = "num";
     num.textContent = Math.round(pillar.score);
     row.append(name, bar, num);
     wrap.append(row);
@@ -229,21 +446,32 @@ async function renderScorecard() {
   }
   mount.append(h, wrap);
 }
-/* Signup-month cohorts: each row a cohort, each column the share of
-   its members still active N months on — shaded by retention. */
-async function renderCohorts() {
-  const data = await api("/v1/platform/metrics/cohorts");
+
+/* ---- cohorts: sequential single-hue shading (blue, light→dark) ------ */
+const COHORT_RAMP = [
+  [0, ""], [10, "#cde2fb"], [25, "#9ec5f4"], [40, "#6da7ec"],
+  [55, "#3987e5"], [70, "#256abf"], [85, "#184f95"],
+];
+function cohortShade(pct) {
+  let hex = "";
+  for (const [floor, color] of COHORT_RAMP) if (pct >= floor) hex = color;
+  return hex;
+}
+function renderCohorts(data) {
   const mount = $("cohorts");
   mount.replaceChildren();
   if (!data.items.length) return;
   const h = document.createElement("h2");
-  h.textContent = "cohort retention (signup month)";
+  h.textContent = "cohort retention ";
+  const note = document.createElement("span");
+  note.className = "note muted";
+  note.textContent = "(share of a signup month still active N months on)";
+  h.append(note);
   const wrap = document.createElement("div");
-  wrap.className = "scroll-x";
+  wrap.className = "card scroll-x";
   const table = document.createElement("table");
-  table.className = "cohort";
-  const maxOffset = Math.max(
-    ...data.items.map((c) => c.retention.length));
+  table.className = "matrix";
+  const maxOffset = Math.max(...data.items.map((c) => c.retention.length));
   const head = document.createElement("tr");
   const corner = document.createElement("th");
   corner.textContent = "cohort (size)";
@@ -264,10 +492,11 @@ async function renderCohorts() {
       const point = cohort.retention[i];
       if (point) {
         cell.textContent = point.pct + "%";
-        cell.className = point.pct >= 60 ? "hot"
-          : point.pct >= 25 ? "warm" : "";
-      } else {
-        cell.textContent = "";
+        const shade = cohortShade(point.pct);
+        if (shade) {
+          cell.style.background = shade;
+          cell.style.color = point.pct >= 55 ? "#ffffff" : "#0b0b0b";
+        }
       }
       row.append(cell);
     }
@@ -276,19 +505,22 @@ async function renderCohorts() {
   wrap.append(table);
   mount.append(h, wrap);
 }
-/* The strategic comparison: newest observation per dimension, with
-   confidence — positive scores mean OoLu leads. */
-async function renderCompetitors() {
-  const data = await api("/v1/platform/competitors");
+
+/* ---- competitors: diverging (lead = blue pole, trail = red pole) ---- */
+function renderCompetitors(data) {
   const mount = $("competitors");
   mount.replaceChildren();
   if (!data.items.length) return;
   const h = document.createElement("h2");
-  h.textContent = "competitive position";
+  h.textContent = "competitive position ";
+  const note = document.createElement("span");
+  note.className = "note muted";
+  note.textContent = "(+ = OoLu leads, − = trails; confidence in brackets)";
+  h.append(note);
   const wrap = document.createElement("div");
-  wrap.className = "scroll-x";
+  wrap.className = "card scroll-x";
   const table = document.createElement("table");
-  table.className = "cohort";
+  table.className = "matrix";
   const head = document.createElement("tr");
   const corner = document.createElement("th");
   corner.textContent = "dimension";
@@ -299,9 +531,10 @@ async function renderCompetitors() {
     head.append(th);
   }
   table.append(head);
+  const spread = Math.max(1, ...data.items.flatMap((e) =>
+    Object.values(e.dimensions).map((o) => Math.abs(o.relative_score))));
   for (const dim of data.dimensions) {
-    const observed = data.items.some((e) => e.dimensions[dim]);
-    if (!observed) continue;
+    if (!data.items.some((e) => e.dimensions[dim])) continue;
     const row = document.createElement("tr");
     const name = document.createElement("td");
     name.textContent = dim.replace(/_/g, " ");
@@ -312,10 +545,15 @@ async function renderCompetitors() {
       if (obs) {
         const s = obs.relative_score;
         cell.textContent = (s > 0 ? "+" : "") + s + " (" + obs.confidence + ")";
-        cell.className = s > 0 ? "hot" : s < 0 ? "" : "warm";
         cell.title = obs.evidence || "";
-      } else {
-        cell.textContent = "";
+        if (s === 0) {
+          cell.style.background = "var(--mid)";
+        } else {
+          const pole = s > 0 ? "--pole-lead" : "--pole-trail";
+          const alpha = 0.14 + 0.4 * (Math.abs(s) / spread);
+          cell.style.background =
+            "rgba(var(" + pole + "), " + alpha.toFixed(2) + ")";
+        }
       }
       row.append(cell);
     }
@@ -324,6 +562,87 @@ async function renderCompetitors() {
   wrap.append(table);
   mount.append(h, wrap);
 }
+
+/* ---- the full board: EVERY metric, explicitly ----------------------- */
+function renderBoard(data, history) {
+  const groups = {};
+  for (const item of data.items) {
+    (groups[item.group] = groups[item.group] || []).push(item);
+  }
+  const board = $("board");
+  board.replaceChildren();
+  for (const [group, items] of Object.entries(groups)) {
+    const h = document.createElement("h2");
+    h.textContent = group + " ";
+    const note = document.createElement("span");
+    note.className = "note muted";
+    note.textContent = "(" + items.length + " metrics)";
+    h.append(note);
+    const grid = document.createElement("div");
+    grid.className = "grid";
+    for (const item of items) {
+      const tile = document.createElement("div");
+      tile.className = "tile";
+      const label = document.createElement("div");
+      label.className = "label";
+      label.textContent = item.label;
+      const value = document.createElement("div");
+      value.className = "value";
+      value.textContent = fmt(item.value, item.unit);
+      tile.append(label, value);
+      const spark = sparkline((history || {})[item.key]);
+      if (spark) tile.append(spark);
+      if (item.description) {
+        const desc = document.createElement("div");
+        desc.className = "desc";
+        desc.textContent = item.description;
+        tile.append(desc);
+      }
+      const foot = document.createElement("div");
+      foot.className = "foot";
+      const key = document.createElement("code");
+      key.textContent = item.key;
+      foot.append(key);
+      if (item.as_of) {
+        foot.append(document.createTextNode("as of " + item.as_of));
+      }
+      if (item.source === "manual") {
+        const badge = document.createElement("span");
+        badge.className = "badge";
+        badge.textContent = "manual";
+        foot.append(badge);
+      }
+      tile.append(foot);
+      grid.append(tile);
+    }
+    board.append(h, grid);
+  }
+}
+
+/* ---- the refresh loop ----------------------------------------------- */
+async function refresh() {
+  if (!conf.token) return;
+  $("err").textContent = "";
+  try {
+    const [board, summary, scorecard, cohorts, competitors, history] =
+      await Promise.all([
+        api("/v1/platform/metrics"),
+        api("/v1/platform/metrics/summary"),
+        api("/v1/platform/metrics/scorecard"),
+        api("/v1/platform/metrics/cohorts"),
+        api("/v1/platform/competitors"),
+        api("/v1/platform/metrics/history?days=90").catch(() => ({ series: {} })),
+      ]);
+    renderExec(summary);
+    renderScorecard(scorecard);
+    renderCohorts(cohorts);
+    renderCompetitors(competitors);
+    renderBoard(board, history.series);
+  } catch (e) {
+    if (e.message !== "signed out") $("err").textContent = e.message;
+  }
+}
+
 $("report").addEventListener("click", async () => {
   try {
     const data = await api("/v1/platform/metrics/report");
@@ -335,13 +654,11 @@ $("report").addEventListener("click", async () => {
     URL.revokeObjectURL(a.href);
   } catch (e) { $("err").textContent = e.message; }
 });
-$("conf").addEventListener("submit", (e) => {
-  e.preventDefault();
-  conf.set($("server").value.trim().replace(/\/+$/, ""), $("token").value.trim());
-  refresh();
-});
+
+/* ---- boot ----------------------------------------------------------- */
 $("server").value = conf.server;
-$("token").value = conf.token;
+if (location.protocol === "file:") $("advanced").open = true;
+show(Boolean(conf.token));
 refresh();
 setInterval(refresh, 60000);
 </script>

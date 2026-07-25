@@ -4,6 +4,31 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The investor panel: every metric explicit, wired live, no setup:
+
+- **Same-origin by construction.** The investors domain's Caddy block
+  now proxies ``/v1/*`` to the gateway beside the static page, so the
+  panel's API host is its own origin: no host entry, no CORS
+  admission, nothing to configure. ``OOLU_ALLOW_ORIGIN`` is only for a
+  panel hosted somewhere else (the Advanced section still takes a
+  host + pasted token for that case, and for IdP-fronted hosts).
+- **Sign in, not set up.** The old host-URL + token-paste form is a
+  sign-in card: any account whose role carries ``metrics:view`` signs
+  in through ``/v1/auth/login`` and the boards are live; a 401 signs
+  the panel out in words. The header names who is signed in and where
+  the numbers come from.
+- **Every metric, explicitly.** Each metric is a tile with its hero
+  figure, a 90-day sparkline from ``/metrics/history``, its
+  DESCRIPTION in plain sight (no more tooltip-only), its key, its
+  as-of date, and the manual badge where a human recorded it. The
+  executive strip keeps status edges with an icon + word (never color
+  alone); the scorecard bars, signup-cohort retention (sequential
+  single-hue shading), and the competitive matrix (diverging
+  blue↔red around a neutral midpoint) ride above the full board.
+- **Light and dark are both designed** — palette roles selected per
+  mode and validated (not an automatic flip), rendered and reviewed
+  in a real Chromium in both modes.
+
 Building a node always reaches the door that WRITES the function:
 
 - **The build-shaped task lane.** The chat prompt tells the model to
