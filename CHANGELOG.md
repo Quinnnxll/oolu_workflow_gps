@@ -4,6 +4,37 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Personal nodes P0 — the pulse: schedules that fire runs:
+
+- **Durable rhythms on the owner's clock.** ``PulseStore``
+  (``src/oolu/pulse.py``): daily/weekly/monthly/yearly schedules at a
+  local time (``tz_offset_minutes`` rides the row, month-length
+  clamps honestly — a day-31 rhythm lands on February 28th and
+  returns to the 31st), each naming the goal it fires.
+- **Exactly once, without a daemon.** The gateway's lazy tick (its
+  own minute gate on request traffic) elects each (schedule,
+  occurrence) by a durable INSERT-OR-IGNORE claim — one fire across
+  processes and restarts — and fires an ORDINARY run as the owner:
+  ``_start_intent_run``, the owner's walls, ``metadata["pulse"]``
+  naming the schedule, occurrence, and skips, ``pulse.fired`` on the
+  audit chain. A refusal lands ``pulse.fire_failed`` and never
+  raises into the serving request.
+- **Honest catch-up, honest pause.** The floor (set at creation,
+  reset on resume) keeps occurrences from before a schedule existed
+  — or while it was paused — from ever firing; a slept-through week
+  fires ONCE with the six skipped mornings named on the run.
+- **Spoken and doored.** "every day at 9 run …" (and weekly /
+  monthly / yearly forms) is deterministic, model or not — the row
+  is created and read back from the store, the resolved node named;
+  "schedules" / "cancel|pause|resume schedule <id>" manage it in
+  words. API: GET/POST ``/v1/pulse``, POST/DELETE
+  ``/v1/pulse/{schedule_id}``.
+- **Pinned** by ``tests/test_pulse.py``: exactly-once across
+  restarts (the claim decides), the fired run indistinguishable from
+  a hand-started one, one catch-up with skips named, pause/resume
+  floor semantics, spoken create/list/cancel read back from the
+  store, and a refused fire audited — never raised.
+
 Conversational building §5 — the quality metrics, live on the
 investor surface:
 

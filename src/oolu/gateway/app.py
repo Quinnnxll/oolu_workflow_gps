@@ -679,6 +679,12 @@ class GatewayApp:
         self._sweep_gate = 0.0
         # Retention's own gate: at most one pruning pass per hour per host.
         self._retention_gate = 0.0
+        # The pulse (personal-nodes plan P0): durable schedules that fire
+        # runs as their owners, elected by (schedule, occurrence) claims.
+        from ..pulse import PulseStore
+
+        self._pulse = PulseStore(durable.conn)
+        self._pulse_gate = 0.0
         # Competitor intelligence, constructed on first use.
         self._competitors = None
         self._settings = settings_node
@@ -1006,6 +1012,12 @@ class GatewayApp:
         # delivered exactly once.
         r.add("GET", "/v1/reminders", self._reminders_list)
         r.add("POST", "/v1/reminders", self._reminders_create)
+        # The pulse (personal-nodes plan P0): standing schedules that
+        # fire runs as their owners — daily/weekly/monthly/yearly.
+        r.add("GET", "/v1/pulse", self._pulse_view)
+        r.add("POST", "/v1/pulse", self._pulse_create)
+        r.add("POST", "/v1/pulse/{schedule_id}", self._pulse_toggle)
+        r.add("DELETE", "/v1/pulse/{schedule_id}", self._pulse_delete)
         r.add(
             "POST",
             "/v1/reminders/{reminder_id}/delivered",
@@ -1684,6 +1696,17 @@ class GatewayApp:
                     turn = ChatTurn(
                         say=built, source="tool", actions=[{"tool": "build_node"}]
                     )
+        # A spoken rhythm ("every day at 9 run …") is DETERMINISTIC,
+        # model or not — the row is created and read back from the
+        # store, never narrated (the reminder doctrine, on a schedule).
+        if turn is None and not in_node:
+            spoken = self._pulse_command(
+                session, message, body, request.now or self._clock()
+            )
+            if spoken is not None:
+                turn = ChatTurn(
+                    say=spoken, source="tool", actions=[{"tool": "pulse"}]
+                )
         if turn is None:
             cleaned = [h for h in history if isinstance(h, dict)]
             recent = cleaned[-20:]
@@ -4853,6 +4876,7 @@ class GatewayApp:
         *,
         max_recovery: int = 1,
         extra_bindings: dict | None = None,
+        pulse: dict | None = None,
     ) -> dict:
         """Submit a plain intent as a run: the non-marketplace core of
         ``_submit_run``, shared with the chat surface.
@@ -4866,8 +4890,14 @@ class GatewayApp:
         ``extra_bindings`` (B4) are values the CONVERSATION bound onto
         the node's declared inputs — the user's yes to an offered
         standing output — merged over the function's own bindings so the
-        binder resolves them at execution."""
+        binder resolves them at execution.
+
+        ``pulse`` (P0) marks a SCHEDULED fire: the schedule, the
+        occurrence, and how many occurrences the host slept through —
+        stamped on the run's metadata so the record says why it ran."""
         metadata: dict = {"tenant_id": session.tenant_id}
+        if pulse:
+            metadata["pulse"] = dict(pulse)
         # A goal the user already built a node for runs THAT node's own
         # function — the route is the stored code, not a fresh plan.
         function = self._resolve_node_function(session, intent)
@@ -8999,6 +9029,11 @@ class GatewayApp:
             # hourly gate — it must not depend on a bundle schedule
             # existing or on the sweep's minute window.
             self._maybe_retention(now_mono, request.now or self._clock())
+            # The pulse keeps its own minute gate too: user schedules
+            # must fire whether or not a bundle sweep is configured.
+            if now_mono >= self._pulse_gate:
+                self._pulse_gate = now_mono + 60.0
+                self._pulse_tick(request.now or self._clock())
             if now_mono < self._sweep_gate:
                 return
             self._sweep_gate = now_mono + 60.0
@@ -9065,6 +9100,364 @@ class GatewayApp:
                 **summary,
             },
         )
+
+    # ------------------------------------------------------------------ #
+    # The pulse (personal-nodes plan P0): schedules fire runs.            #
+    # ------------------------------------------------------------------ #
+    def _pulse_tick(self, now) -> None:
+        """Fire every schedule whose newest occurrence is due — each
+        elected by a durable (schedule, occurrence) claim, so a rhythm
+        fires exactly once across processes and restarts. A host waking
+        from sleep fires ONE catch-up per schedule, with the skipped
+        count named — never a fabricated backlog."""
+        from ..pulse import missed_between, occurrence_at
+
+        for schedule in self._pulse.all_enabled():
+            occurrence = occurrence_at(schedule, now)
+            if occurrence is None:
+                continue
+            prior = self._pulse.newest_claim(
+                schedule.schedule_id, before=occurrence
+            )
+            if not self._pulse.claim(schedule.schedule_id, occurrence):
+                continue  # another process won this occurrence
+            skipped = missed_between(
+                schedule,
+                prior["occurrence"] if prior else None,
+                occurrence,
+            )
+            self._fire_schedule(schedule, occurrence, skipped)
+
+    def _fire_schedule(self, schedule, occurrence: str, skipped: int) -> None:
+        """One scheduled fire: an ORDINARY run, submitted as the owner
+        through the standing doors — audited, metered, walled, and
+        inbox-visible on failure exactly like a hand-started run. A
+        refusal (the goal no longer resolves, the tenant is over its
+        cap) is audited, never raised into the serving request."""
+        from types import SimpleNamespace
+
+        session = SimpleNamespace(
+            tenant_id=schedule.tenant, principal_id=schedule.principal
+        )
+        stamp = {
+            "schedule_id": schedule.schedule_id,
+            "occurrence": occurrence,
+            "label": schedule.label,
+            "skipped": skipped,
+        }
+        try:
+            run = self._start_intent_run(session, schedule.goal, pulse=stamp)
+        except GatewayError as exc:
+            self._durable.audit.append(
+                "pulse.fire_failed",
+                {
+                    "schedule_id": schedule.schedule_id,
+                    "occurrence": occurrence,
+                    "tenant": schedule.tenant,
+                    "principal": schedule.principal,
+                    "goal": schedule.goal,
+                    "code": exc.code,
+                    "reason": exc.message,
+                },
+            )
+            return
+        except Exception as exc:  # noqa: BLE001 - the tick must keep serving
+            logging.getLogger("oolu.gateway").exception(
+                "pulse fire failed for schedule %s", schedule.schedule_id
+            )
+            self._durable.audit.append(
+                "pulse.fire_failed",
+                {
+                    "schedule_id": schedule.schedule_id,
+                    "occurrence": occurrence,
+                    "tenant": schedule.tenant,
+                    "principal": schedule.principal,
+                    "goal": schedule.goal,
+                    "code": "internal",
+                    "reason": str(exc),
+                },
+            )
+            return
+        self._pulse.set_claim_run(
+            schedule.schedule_id, occurrence, str(run["run_id"])
+        )
+        self._durable.audit.append(
+            "pulse.fired",
+            {
+                "schedule_id": schedule.schedule_id,
+                "occurrence": occurrence,
+                "run_id": str(run["run_id"]),
+                "skipped": skipped,
+                "tenant": schedule.tenant,
+                "principal": schedule.principal,
+                "goal": schedule.goal,
+            },
+        )
+
+    def _pulse_row(self, schedule, now) -> dict:
+        from ..pulse import next_occurrence, speak_rhythm
+
+        hh, mm = divmod(schedule.at_minute, 60)
+        return {
+            "schedule_id": schedule.schedule_id,
+            "cadence": schedule.cadence,
+            "at": f"{hh:02d}:{mm:02d}",
+            "weekday": schedule.weekday,
+            "day_of_month": schedule.day_of_month,
+            "month": schedule.month,
+            "day": schedule.day,
+            "tz_offset_minutes": schedule.tz_offset_minutes,
+            "goal": schedule.goal,
+            "label": schedule.label,
+            "enabled": schedule.enabled,
+            "rhythm": speak_rhythm(schedule),
+            "created_at": schedule.created_at.isoformat(),
+            # The next local occurrence — on the schedule's own clock.
+            "next_at_local": next_occurrence(schedule, now),
+            "last": self._pulse.newest_claim(schedule.schedule_id),
+        }
+
+    _PULSE_ACT_RE = re.compile(
+        r"^(?P<verb>cancel|delete|stop|enable|disable|pause|resume)"
+        r"\s+(?:the\s+)?schedule\s+(?P<which>\S+)$",
+        re.I,
+    )
+    _PULSE_LIST = frozenset(
+        {"schedules", "my schedules", "list schedules", "show schedules"}
+    )
+
+    def _pulse_command(self, session, message, body, now) -> str | None:
+        """The pulse's deterministic ear: create, list, cancel, pause,
+        and resume — each answered by reading the STORE back, never by
+        narration. Anything doubtful returns None and stays ordinary
+        conversation."""
+        from ..pulse import speak_rhythm, spoken_schedule
+
+        text = (message or "").strip()
+        lowered = text.casefold().rstrip(".!")
+        if lowered in self._PULSE_LIST:
+            rows = self._pulse.list_for(
+                session.tenant_id, session.principal_id
+            )
+            if not rows:
+                return (
+                    "No standing schedules. Say “every day at 9 run …” "
+                    "and I'll keep the rhythm."
+                )
+            spoken = "\n".join(
+                f"• {speak_rhythm(s)} — {s.goal}"
+                f" ({s.schedule_id[:8]}"
+                + ("" if s.enabled else ", paused")
+                + ")"
+                for s in rows
+            )
+            return (
+                f"Standing schedules:\n{spoken}\n"
+                "“cancel schedule <id>” stops one; “pause schedule <id>” "
+                "and “resume schedule <id>” hold and release it."
+            )
+        act = self._PULSE_ACT_RE.match(lowered)
+        if act:
+            which = act.group("which")
+            mine = [
+                s
+                for s in self._pulse.list_for(
+                    session.tenant_id, session.principal_id
+                )
+                if s.schedule_id.startswith(which)
+            ]
+            if len(mine) != 1:
+                return (
+                    "I don't know which schedule you mean — say "
+                    "“schedules” and use the id in the parentheses."
+                )
+            schedule = mine[0]
+            verb = act.group("verb")
+            if verb in ("cancel", "delete", "stop"):
+                self._pulse.delete(
+                    schedule.schedule_id,
+                    tenant=session.tenant_id,
+                    principal=session.principal_id,
+                )
+                self._durable.audit.append(
+                    "pulse.cancelled",
+                    {
+                        "schedule_id": schedule.schedule_id,
+                        "tenant": session.tenant_id,
+                        "principal": session.principal_id,
+                    },
+                )
+                return (
+                    f"Cancelled: {speak_rhythm(schedule)} — "
+                    f"{schedule.goal}."
+                )
+            enabled = verb in ("enable", "resume")
+            updated = self._pulse.set_enabled(
+                schedule.schedule_id,
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+                enabled=enabled,
+                now=now,
+            )
+            self._durable.audit.append(
+                "pulse.toggled",
+                {
+                    "schedule_id": schedule.schedule_id,
+                    "tenant": session.tenant_id,
+                    "principal": session.principal_id,
+                    "enabled": enabled,
+                },
+            )
+            if updated is not None and enabled:
+                from ..pulse import next_occurrence
+
+                return (
+                    f"Resumed: {speak_rhythm(updated)} — {updated.goal}. "
+                    f"Next fire {next_occurrence(updated, now)} (its own "
+                    "clock); the paused stretch stays skipped."
+                )
+            return (
+                f"Paused: {speak_rhythm(schedule)} — {schedule.goal}. "
+                "“resume schedule "
+                f"{schedule.schedule_id[:8]}” starts it again."
+            )
+        spec = spoken_schedule(text)
+        if spec is None:
+            return None
+        try:
+            schedule = self._pulse.add(
+                session.tenant_id,
+                session.principal_id,
+                tz_offset_minutes=_tz_minutes(
+                    (body or {}).get("tz_offset_minutes")
+                ),
+                label=text[: 200],
+                now=now,
+                **spec,
+            )
+        except ValueError as exc:
+            return f"I couldn't set that schedule: {exc}"
+        self._durable.audit.append(
+            "pulse.created",
+            {
+                "schedule_id": schedule.schedule_id,
+                "tenant": session.tenant_id,
+                "principal": session.principal_id,
+                "goal": schedule.goal,
+                "cadence": schedule.cadence,
+            },
+        )
+        from ..pulse import next_occurrence
+
+        say = (
+            f"Done — {speak_rhythm(schedule)} I'll run: {schedule.goal}. "
+            f"First fire {next_occurrence(schedule, now)} (your clock)."
+        )
+        function = self._resolve_node_function(session, schedule.goal)
+        if function is not None:
+            say += f" That's your node “{function['title']}”."
+        say += (
+            f" “cancel schedule {schedule.schedule_id[:8]}” stops it."
+        )
+        return say
+
+    def _pulse_view(self, request, session, params) -> Response:
+        now = request.now or self._clock()
+        return json_response(
+            200,
+            {
+                "items": [
+                    self._pulse_row(s, now)
+                    for s in self._pulse.list_for(
+                        session.tenant_id, session.principal_id
+                    )
+                ]
+            },
+        )
+
+    def _pulse_create(self, request, session, params) -> Response:
+        body = request.body or {}
+        at = str(body.get("at") or "")
+        try:
+            hh, _, mm = at.partition(":")
+            at_minute = int(hh) * 60 + int(mm or 0)
+        except (TypeError, ValueError):
+            raise GatewayError(
+                400, "bad_request", 'give the time as "HH:MM"'
+            ) from None
+        try:
+            schedule = self._pulse.add(
+                session.tenant_id,
+                session.principal_id,
+                cadence=str(body.get("cadence") or ""),
+                at_minute=at_minute,
+                goal=str(body.get("goal") or ""),
+                weekday=body.get("weekday"),
+                day_of_month=body.get("day_of_month"),
+                month=body.get("month"),
+                day=body.get("day"),
+                tz_offset_minutes=_tz_minutes(body.get("tz_offset_minutes")),
+                label=str(body.get("label") or ""),
+                enabled=bool(body.get("enabled", True)),
+                now=request.now or self._clock(),
+            )
+        except ValueError as exc:
+            raise GatewayError(400, "bad_request", str(exc)) from exc
+        self._durable.audit.append(
+            "pulse.created",
+            {
+                "schedule_id": schedule.schedule_id,
+                "tenant": session.tenant_id,
+                "principal": session.principal_id,
+                "goal": schedule.goal,
+                "cadence": schedule.cadence,
+            },
+        )
+        return json_response(
+            201, self._pulse_row(schedule, request.now or self._clock())
+        )
+
+    def _pulse_toggle(self, request, session, params) -> Response:
+        enabled = bool((request.body or {}).get("enabled", True))
+        schedule = self._pulse.set_enabled(
+            params["schedule_id"],
+            tenant=session.tenant_id,
+            principal=session.principal_id,
+            enabled=enabled,
+            now=request.now or self._clock(),
+        )
+        if schedule is None:
+            raise GatewayError(404, "not_found", "no such schedule")
+        self._durable.audit.append(
+            "pulse.toggled",
+            {
+                "schedule_id": schedule.schedule_id,
+                "tenant": session.tenant_id,
+                "principal": session.principal_id,
+                "enabled": enabled,
+            },
+        )
+        return json_response(
+            200, self._pulse_row(schedule, request.now or self._clock())
+        )
+
+    def _pulse_delete(self, request, session, params) -> Response:
+        removed = self._pulse.delete(
+            params["schedule_id"],
+            tenant=session.tenant_id,
+            principal=session.principal_id,
+        )
+        if not removed:
+            raise GatewayError(404, "not_found", "no such schedule")
+        self._durable.audit.append(
+            "pulse.cancelled",
+            {
+                "schedule_id": params["schedule_id"],
+                "tenant": session.tenant_id,
+                "principal": session.principal_id,
+            },
+        )
+        return json_response(200, {"cancelled": params["schedule_id"]})
 
     def _list_own_nodes(self, request, session, params) -> Response:
         nodeplace = self._require_nodeplace()

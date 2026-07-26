@@ -79,6 +79,28 @@ personal content).
 
 ### Phase P0 — the pulse: schedules that fire runs
 
+**Status: LANDED** — `src/oolu/pulse.py`: the durable `PulseStore`
+(rows with a rhythm — daily/weekly/monthly/yearly on the owner's own
+clock, `tz_offset_minutes` aboard, month-length clamped honestly)
+plus pure occurrence arithmetic and the deterministic ear
+(`spoken_schedule`). The gateway's lazy tick (`_pulse_tick`, its own
+minute gate inside `_maybe_scheduled_sweep`'s traffic) elects each
+(schedule, occurrence) by an INSERT-OR-IGNORE claim — exactly once
+across processes and restarts — and fires through
+`_start_intent_run` AS THE OWNER, the run stamped
+``metadata["pulse"]`` (schedule, occurrence, skipped) and
+`pulse.fired` on the audit chain; a refusal lands `pulse.fire_failed`
+and never raises into the serving request. The floor makes catch-up
+honest: creation and every resume reset it, so a slept-through week
+fires ONCE with six skips named and a paused stretch never fires at
+all. Doors: GET/POST `/v1/pulse`, POST/DELETE
+`/v1/pulse/{schedule_id}`; spoken: "every day at 9 run …", "every
+monday at 7:30pm …", "every month on the 1st at 9 …", "every year on
+june 5 at 8am …", plus schedules / cancel / pause / resume — each
+answered by reading the store back (`tests/test_pulse.py`).
+Remaining: none for P0; P4 wears this store as the Automation
+Trigger node.
+
 *OoLu runs it because the calendar says so, not because you asked
 again.*
 
