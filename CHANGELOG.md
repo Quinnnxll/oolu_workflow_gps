@@ -4,6 +4,34 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+M4 closed — the wire goes live, partners answer over HTTP, sourcing
+survives a no:
+
+- **The live peer wire** (`marketplace/peerwire.py`,
+  `/v1/commerce/announcements`, per-peer `/fetch`) — pairing is three
+  agreed strings: two identities and one shared secret. A host's
+  announcements door signs its public shelf for the asking peer;
+  `fetch_from_peer` pulls every announcement through the import door —
+  signature, jurisdiction gate, and suspension all apply, and one bad
+  announcement never poisons the batch. `HttpPeerTransport` rides the
+  providers' HTTP seam; a two-host in-process test has two real
+  gateways trading signed offers end to end.
+- **HTTP partner adapters** (`marketplace/partnerwire.py`) — financing
+  and insurance quotes over the vault/transport seam: documented wire
+  shapes, typed validation (a response that is not a quote is an
+  error, never a guess), asked-vs-quoted cross-checks, secrets minted
+  into headers at call time only.
+- **Supply orchestration** (`marketplace/orchestration.py`) —
+  `SupplyOrchestrator` ranks every eligible source, mints the intent
+  for the best one with exactly the attestation the source carries,
+  and falls back deterministically when a source fails at placement;
+  exhaustion refuses loudly and is audited.
+- **The shell sources everywhere** — one search across the local shelf
+  and every peer in the Shop pane: origin chips, substitutes named
+  with their gaps and no Buy button, the sourced offer feeding the
+  intent door unchanged. Pinned in `Market.test.tsx`; shell bundle
+  rebuilt.
+
 M4 — the open market (marketplace-build-plan): other markets' offers,
 our law, our ledger:
 

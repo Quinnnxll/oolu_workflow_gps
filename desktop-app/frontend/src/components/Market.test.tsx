@@ -652,6 +652,64 @@ describe("Market: milestones and standing obligations", () => {
   });
 });
 
+describe("Shop: sourcing the federation", () => {
+  it("compares every shelf and buys only the eligible", async () => {
+    routes["GET /v1/commerce/source"] = {
+      status: 200,
+      body: {
+        items: [
+          {
+            origin: "peer:partner-market",
+            offer: { ...offer, offer_id: "of-peer" },
+            eligible: true,
+            gaps: [],
+            seller_attested: true,
+          },
+          {
+            origin: "local:l9",
+            offer: { ...offer, offer_id: "of-local" },
+            eligible: false,
+            gaps: ["required attribute 'material' is missing"],
+            seller_attested: true,
+          },
+        ],
+      },
+    };
+    routes["POST /v1/commerce/intents"] = {
+      status: 201,
+      body: {
+        intent: { intent_id: "i-src", offer_snapshot: offer },
+        state: "approval_pending",
+        intent_digest: "d".repeat(64),
+        verdict: { decision: "require_approval", reasons: ["first purchase"] },
+      },
+    };
+    render(<Market />);
+    fireEvent.change(
+      (await screen.findByText("Category")).querySelector("input")!,
+      { target: { value: "household" } },
+    );
+    fireEvent.click(screen.getByText("Search"));
+    await screen.findByText("partner-market");
+    // The substitute names its gaps and offers no Buy.
+    screen.getByText("substitute");
+    screen.getByText(/material/);
+    const buys = screen.getAllByText("Buy");
+    expect(buys.length).toBe(1);
+    fireEvent.click(buys[0]);
+    await waitFor(() => {
+      const post = calls.find(
+        (c) => c.method === "POST" && c.path === "/v1/commerce/intents",
+      );
+      expect(post).toBeTruthy();
+      // The sourced offer itself feeds the intent door — no re-minting.
+      expect((post!.body as { offer: { offer_id: string } }).offer.offer_id).toBe(
+        "of-peer",
+      );
+    });
+  });
+});
+
 describe("SellPane: the signed boundary", () => {
   it("loads the sales policy and signs the new floors in micros", async () => {
     routes["GET /v1/commerce/seller/kyc"] = {

@@ -525,6 +525,19 @@ def build_openapi() -> dict:
                 "eligibility-marked comparison"
             ),
         },
+        "/v1/commerce/announcements": {
+            "get": op(
+                "This host's public shelf, signed for the asking peer with "
+                "the pairing secret (the A2A wire's announce side)"
+            ),
+        },
+        "/v1/commerce/peers/{peer_id}/fetch": {
+            "post": op(
+                "Pull a peer's announcements through the import door — "
+                "signature, jurisdiction gate, and suspension all apply; "
+                "one bad announcement never poisons the batch"
+            ),
+        },
         "/v1/commerce/reconciliation": {
             "get": op("Reconciliation exceptions, each with its evidence trail"),
         },

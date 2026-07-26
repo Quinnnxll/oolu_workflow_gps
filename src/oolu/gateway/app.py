@@ -637,6 +637,11 @@ class GatewayApp:
         commerce_peer_secrets=None,  # Mapping[peer_id, shared secret] for
         # the A2A protocol — injected at composition (a vault concern);
         # a peer without a secret can announce nothing this host trusts
+        commerce_peer_identity="",  # this host's agreed identity on the
+        # peer wire — the signer id its announcements carry. "" = this
+        # host does not announce
+        commerce_peer_transport=None,  # marketplace.PeerTransport: how
+        # fetches reach a peer's announcements door. None = no fetching
         commerce_extra_jurisdictions=(),  # extra billing.tax
         # JurisdictionModules beyond the host's own — the federation's
         # cross-border deployment gate reads the same registry
@@ -813,6 +818,9 @@ class GatewayApp:
             tax=self._commerce_tax,
             secrets=commerce_peer_secrets,
         )
+        self._commerce_peer_secrets = dict(commerce_peer_secrets or {})
+        self._commerce_peer_identity = str(commerce_peer_identity or "")
+        self._commerce_peer_transport = commerce_peer_transport
         # Competitor intelligence, constructed on first use.
         self._competitors = None
         self._settings = settings_node
@@ -1309,6 +1317,14 @@ class GatewayApp:
             "POST",
             "/v1/commerce/peers/{peer_id}/offers",
             self._commerce_peer_import,
+        )
+        r.add(
+            "POST",
+            "/v1/commerce/peers/{peer_id}/fetch",
+            self._commerce_peer_fetch,
+        )
+        r.add(
+            "GET", "/v1/commerce/announcements", self._commerce_announcements
         )
         r.add("GET", "/v1/commerce/source", self._commerce_source)
         r.add(
@@ -11096,6 +11112,84 @@ class GatewayApp:
         except MarketplaceError as exc:
             raise self._commerce_error(exc) from exc
         return json_response(201, record.model_dump(mode="json"))
+
+    def _commerce_announcements(self, request, session, params) -> Response:
+        """This host's public shelf, signed for the asking peer.
+
+        The offers are already public via the catalog; the signature only
+        adds provenance the peer can verify with the shared secret agreed
+        at pairing. No identity configured = this host does not announce."""
+        if not self._commerce_peer_identity:
+            raise GatewayError(
+                404, "not_found", "this host does not announce to peers"
+            )
+        caller = str(request.query.get("peer_id") or "")
+        secret = self._commerce_peer_secrets.get(caller)
+        if not secret:
+            raise GatewayError(404, "not_found", "unknown peer")
+        category = str(request.query.get("category") or "")
+        from ..marketplace import sign_offer
+
+        items = []
+        now = request.now or self._clock()
+        for listing in self._commerce_catalog.store.active():
+            if category and listing.category != category:
+                continue
+            try:
+                offer = self._commerce_catalog.offer_for(
+                    listing.listing_id, quantity=1, now=now
+                )
+            except MarketplaceError:
+                continue  # an empty shelf announces nothing
+            items.append(
+                {
+                    "offer": sign_offer(
+                        offer,
+                        peer_id=self._commerce_peer_identity,
+                        secret=secret,
+                    ).model_dump(mode="json"),
+                    "attributes": {"category": listing.category}
+                    if listing.category
+                    else {},
+                    "seller_attested": True,  # our KYC gate published it
+                }
+            )
+        from ..marketplace.protocol import PROTOCOL_VERSION
+
+        return json_response(
+            200,
+            {
+                "protocol": PROTOCOL_VERSION,
+                "peer_id": self._commerce_peer_identity,
+                "items": items,
+            },
+        )
+
+    def _commerce_peer_fetch(self, request, session, params) -> Response:
+        if self._commerce_peer_transport is None:
+            raise GatewayError(
+                409, "conflict", "no peer transport is configured on this host"
+            )
+        from ..marketplace.peerwire import fetch_from_peer
+
+        try:
+            imported, rejected = fetch_from_peer(
+                self._commerce_federation,
+                params["peer_id"],
+                transport=self._commerce_peer_transport,
+                self_identity=self._commerce_peer_identity,
+                now=request.now or self._clock(),
+                category=str((request.body or {}).get("category") or ""),
+            )
+        except MarketplaceError as exc:
+            raise self._commerce_error(exc) from exc
+        return json_response(
+            200,
+            {
+                "imported": [r.model_dump(mode="json") for r in imported],
+                "rejected": rejected,
+            },
+        )
 
     def _commerce_source(self, request, session, params) -> Response:
         try:

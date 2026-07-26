@@ -49,6 +49,7 @@ from .negotiation import (
     OutsideBounds,
     proposal_violations,
 )
+from .orchestration import SupplyOrchestrator
 from .orders import (
     DEFAULT_TAKE_RATE_BPS,
     OrderRecord,
@@ -69,6 +70,8 @@ from .partners import (
     financing_offer,
     insurance_offer,
 )
+from .partnerwire import HttpFinancingPartner, HttpInsurancePartner, PartnerError
+from .peerwire import HttpPeerTransport, PeerTransport, fetch_from_peer
 from .policy import (
     Decision,
     PolicyVerdict,
@@ -165,6 +168,12 @@ __all__ = [
     "ProtocolViolation",
     "SimpleInterestFinancing",
     "SourcedOffer",
+    "HttpFinancingPartner",
+    "HttpInsurancePartner",
+    "HttpPeerTransport",
+    "PartnerError",
+    "PeerTransport",
+    "SupplyOrchestrator",
     "Offer",
     "OrderRecord",
     "OrderService",
@@ -184,6 +193,7 @@ __all__ = [
     "WrongState",
     "approval_summary",
     "delegation_gaps",
+    "fetch_from_peer",
     "financing_offer",
     "insurance_offer",
     "node_capability",

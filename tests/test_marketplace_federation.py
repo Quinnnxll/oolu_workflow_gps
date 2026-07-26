@@ -261,6 +261,363 @@ def test_sourcing_compares_local_and_federated_shelves_with_gaps_named(
 
 
 # --------------------------------------------------------------------------- #
+# The live wire: two real hosts trade signed offers in-process.                #
+# --------------------------------------------------------------------------- #
+class _InProcessWire:
+    """A PeerTransport that walks straight into the other host's gateway."""
+
+    def __init__(self, app, token):
+        self._app = app
+        self._token = token
+
+    def fetch(self, peer, *, self_identity, category=""):
+        from test_http_gateway import _req
+
+        response = self._app.handle(
+            _req(
+                "GET",
+                "/v1/commerce/announcements",
+                token=self._token,
+                query={"peer_id": self_identity, "category": category},
+            )
+        )
+        if response.status != 200:
+            raise WrongState(f"announcements answered {response.status}")
+        return response.body
+
+
+def test_two_hosts_trade_signed_offers_over_the_wire(tmp_path):
+    from test_http_gateway import _app, _req
+
+    from oolu.gateway import GatewayApp
+
+    secret = "the-agreed-pairing-secret"
+    # Host A: the selling market. It announces as "host-a" and holds the
+    # secret it shares with host-b.
+    bare_a, conn_a, ident = _app(tmp_path, path=tmp_path / "host-a.db")
+    host_a = GatewayApp(
+        bare_a._durable,
+        validator=ident.validator,
+        resolver=ident.resolver,
+        approval_authority=ident.authority,
+        commerce_peer_identity="host-a",
+        commerce_peer_secrets={"host-b": secret},
+    )
+    seller = ident.token("user-1")
+    host_a.handle(
+        _req(
+            "POST",
+            "/v1/commerce/seller/kyc",
+            token=seller,
+            body={"legal_name": "Acme GmbH", "company_email": "kyc@acme.example"},
+        )
+    )
+    host_a.handle(
+        _req(
+            "POST",
+            "/v1/commerce/seller/kyc/decide",
+            token=ident.token("approver-1"),
+            body={"principal": "user-1", "approved": True},
+        )
+    )
+    draft = host_a.handle(
+        _req(
+            "POST",
+            "/v1/commerce/listings",
+            token=seller,
+            body={
+                "title": "Steel bottle",
+                "category": "household",
+                "unit_price_micros": 100 * M,
+                "quantity_available": 3,
+            },
+        )
+    )
+    host_a.handle(
+        _req(
+            "POST",
+            f"/v1/commerce/listings/{draft.body['listing_id']}/publish",
+            token=seller,
+        )
+    )
+
+    # Host B: the buying market. It knows host-a under that identity, the
+    # same shared secret, and reaches it through the in-process wire.
+    bare_b, conn_b, _ = _app(tmp_path, path=tmp_path / "host-b.db", ident=ident)
+    host_b = GatewayApp(
+        bare_b._durable,
+        validator=ident.validator,
+        resolver=ident.resolver,
+        approval_authority=ident.authority,
+        commerce_peer_identity="host-b",
+        commerce_peer_secrets={"host-a": secret},
+        commerce_peer_transport=_InProcessWire(host_a, seller),
+    )
+    buyer = ident.token("user-2")
+    host_b.handle(
+        _req(
+            "POST",
+            "/v1/commerce/peers",
+            token=ident.token("admin-1"),
+            body={"peer_id": "host-a", "name": "Host A", "jurisdiction": "LOCAL"},
+        )
+    )
+    fetched = host_b.handle(
+        _req("POST", "/v1/commerce/peers/host-a/fetch", token=buyer, body={})
+    )
+    assert fetched.status == 200, fetched.body
+    assert fetched.body["rejected"] == 0
+    assert len(fetched.body["imported"]) == 1
+    offer = fetched.body["imported"][0]["offer"]
+    assert offer["signature"].startswith("a2a-v1:host-a:")
+    # The fetched offer is on host B's sourcing sweep, attested.
+    sourced = host_b.handle(
+        _req(
+            "GET",
+            "/v1/commerce/source",
+            token=buyer,
+            query={"category": "household", "quantity": "1"},
+        )
+    )
+    assert [row["origin"] for row in sourced.body["items"]] == ["peer:host-a"]
+    assert sourced.body["items"][0]["seller_attested"] is True
+    conn_a.close()
+    conn_b.close()
+
+
+def test_the_wire_rejects_what_the_door_would_reject(tmp_path):
+    conn, audit, spine, orders, ledger, _ = _rig(tmp_path)
+    desk = _desk(conn, audit)
+    desk.register_peer(
+        peer_id="partner-market", name="Partner", jurisdiction="DE", now=NOW
+    )
+
+    from oolu.marketplace import fetch_from_peer
+    from oolu.marketplace.protocol import PROTOCOL_VERSION
+
+    class _LyingWire:
+        def fetch(self, peer, *, self_identity, category=""):
+            good = _signed()
+            tampered = _signed(offer_id="of-2").model_copy(
+                update={"subtotal_micros": 1}
+            )
+            return {
+                "protocol": PROTOCOL_VERSION,
+                "peer_id": "partner-market",
+                "items": [
+                    {"offer": good.model_dump(mode="json"), "seller_attested": True},
+                    {"offer": tampered.model_dump(mode="json")},
+                    {"offer": "not-an-offer"},
+                ],
+            }
+
+    imported, rejected = fetch_from_peer(
+        desk,
+        "partner-market",
+        transport=_LyingWire(),
+        self_identity="us",
+        now=NOW,
+    )
+    assert len(imported) == 1 and rejected == 2
+
+    class _WrongProtocol:
+        def fetch(self, peer, *, self_identity, category=""):
+            return {"protocol": "b2b-v9", "items": []}
+
+    with pytest.raises(ProtocolViolation, match="b2b-v9"):
+        fetch_from_peer(
+            desk,
+            "partner-market",
+            transport=_WrongProtocol(),
+            self_identity="us",
+            now=NOW,
+        )
+    conn.close()
+
+
+def test_the_http_peer_transport_speaks_the_announcements_door():
+    from test_chat_model_router import FakeTransport
+
+    from oolu.marketplace import HttpPeerTransport, PeerMarket
+
+    fake = FakeTransport()
+    fake.script("peer.example", 200, {"protocol": "a2a-v1", "items": []})
+    wire = HttpPeerTransport(fake)
+    peer = PeerMarket(
+        peer_id="partner-market",
+        name="Partner",
+        base_url="https://peer.example",
+        jurisdiction="DE",
+        registered_at=NOW,
+    )
+    payload = wire.fetch(peer, self_identity="host-b", category="household")
+    assert payload["protocol"] == "a2a-v1"
+    url = fake.requests[-1]["url"]
+    assert url.startswith("https://peer.example/v1/commerce/announcements")
+    assert "peer_id=host-b" in url and "category=household" in url
+    fake.script("peer.example", 503, {})
+    with pytest.raises(WrongState, match="503"):
+        wire.fetch(peer, self_identity="host-b")
+
+
+# --------------------------------------------------------------------------- #
+# HTTP partner adapters: real quotes over the provider seam.                   #
+# --------------------------------------------------------------------------- #
+def test_the_http_financing_partner_speaks_the_documented_wire():
+    from test_chat_model_router import FakeTransport
+
+    from oolu.marketplace import HttpFinancingPartner
+    from oolu.marketplace.partnerwire import PartnerError
+    from oolu.providers.vault import SecretVault
+
+    vault = SecretVault()
+    ref = vault.put("pk_lend_secret", kind="partner")
+    fake = FakeTransport()
+    fake.script(
+        "lend.example",
+        200,
+        {
+            "principal_micros": 1_200 * M,
+            "installments": 12,
+            "period_days": 30,
+            "installment_micros": 112 * M,
+            "total_repay_micros": 1_344 * M,
+            "currency": "USD",
+        },
+    )
+    partner = HttpFinancingPartner(
+        partner_id="lend-co",
+        vault=vault,
+        transport=fake,
+        api_key_ref=ref,
+        base_url="https://lend.example",
+    )
+    quote = partner.quote(
+        principal_micros=1_200 * M, installments=12, period_days=30
+    )
+    assert quote.partner_id == "lend-co"
+    assert quote.installment_micros == 112 * M
+    request = fake.requests[-1]
+    assert request["url"] == "https://lend.example/quotes"
+    assert request["headers"]["Authorization"] == "Bearer pk_lend_secret"
+    assert "pk_lend_secret" not in repr(vars(partner))
+    # A quote for a different principal than asked is refused.
+    fake.script(
+        "lend.example",
+        200,
+        {
+            "principal_micros": 999 * M,
+            "installments": 12,
+            "period_days": 30,
+            "installment_micros": 100 * M,
+            "total_repay_micros": 1_200 * M,
+        },
+    )
+    with pytest.raises(PartnerError, match="different principal"):
+        partner.quote(
+            principal_micros=1_200 * M, installments=12, period_days=30
+        )
+    # Nonsense is an error, never a guess; refusals surface plainly.
+    fake.script("lend.example", 200, {"hello": "world"})
+    with pytest.raises(PartnerError, match="not a financing quote"):
+        partner.quote(
+            principal_micros=1_200 * M, installments=12, period_days=30
+        )
+    fake.script("lend.example", 500, {})
+    with pytest.raises(PartnerError, match="500"):
+        partner.quote(
+            principal_micros=1_200 * M, installments=12, period_days=30
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Supply orchestration: sourcing that survives a no.                           #
+# --------------------------------------------------------------------------- #
+def test_procurement_picks_the_best_source_and_falls_back_on_failure(tmp_path):
+    from oolu.marketplace import SupplyOrchestrator
+
+    conn, audit, spine, orders, ledger, inventory = _rig(tmp_path)
+    catalog = CatalogService(
+        conn,
+        audit=audit,
+        seller_verified=lambda t, s: True,
+        inventory=inventory,
+        tax=TaxRegistry((US,)),
+        jurisdiction="US",
+    )
+    listing = catalog.create_draft(
+        tenant="t1",
+        seller_principal="seller-1",
+        seller_id="local-acme",
+        title="Steel bottle",
+        category="household",
+        unit_price_micros=100 * M,
+        quantity_available=1,  # one unit: the shelf will empty
+        now=NOW,
+    )
+    catalog.publish(listing.listing_id, tenant="t1", seller="seller-1", now=NOW)
+    desk = _desk(conn, audit)
+    desk.register_peer(
+        peer_id="partner-market", name="Partner", jurisdiction="DE", now=NOW
+    )
+    desk.import_offer(
+        "partner-market",
+        _signed(offer_id="of-backup", subtotal_micros=120 * M, tax_estimate_micros=0),
+        seller_attested=True,
+        now=NOW,
+    )
+    orchestrator = SupplyOrchestrator(
+        federation=desk, spine=spine, audit=audit, catalog=catalog
+    )
+    specification = RfqSpecification(category="household", quantity=1)
+    risk = {
+        "first_time_counterparty": False,
+        "new_delivery_destination": False,
+        "price_benchmark_micros": 100 * M,
+    }
+    first, intent_one = orchestrator.procure(
+        specification,
+        tenant="t1",
+        principal="user-1",
+        agent="oolu",
+        idempotency_key="proc-1",
+        now=NOW,
+        delivery_destination="home",
+        risk_facts=dict(risk),
+    )
+    assert first.origin == f"local:{listing.listing_id}"  # cheapest eligible
+    # The last unit vanishes (another buyer took it): the shelf empties.
+    inventory.reserve(listing.listing_id, quantity=1, holder="rival", now=NOW)
+    fallback, intent_two = orchestrator.procure(
+        specification,
+        tenant="t1",
+        principal="user-1",
+        agent="oolu",
+        idempotency_key="proc-2",
+        now=NOW,
+        delivery_destination="home",
+        risk_facts=dict(risk),
+        exclude_origins=frozenset({first.origin}),
+    )
+    assert fallback.origin == "peer:partner-market"
+    assert intent_two.intent.offer_snapshot.offer_id == "of-backup"
+    with pytest.raises(WrongState, match="no eligible source"):
+        orchestrator.procure(
+            specification,
+            tenant="t1",
+            principal="user-1",
+            agent="oolu",
+            idempotency_key="proc-3",
+            now=NOW,
+            exclude_origins=frozenset({first.origin, "peer:partner-market"}),
+        )
+    assert any(
+        r.event_type == "market.supply.exhausted" for r in audit.records()
+    )
+    conn.close()
+
+
+# --------------------------------------------------------------------------- #
 # Partners: a financing plan is a recurring offer — the ladder stands.         #
 # --------------------------------------------------------------------------- #
 def test_financing_enters_as_a_recurring_offer_and_cannot_skip_the_ladder(

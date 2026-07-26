@@ -13,6 +13,7 @@ import type {
   CommerceRecurring,
   CommerceRfq,
   CommerceSalesPolicy,
+  CommerceSourced,
   SellerKycView,
 } from "../api";
 
@@ -155,7 +156,13 @@ export function Market() {
       </nav>
       {notice && <p className="hint">{notice}</p>}
       {error && <p className="error">{error}</p>}
-      {tab === "shop" && <Shop catalog={catalog} onBuy={buy} />}
+      {tab === "shop" && (
+        <Shop
+          catalog={catalog}
+          onBuy={buy}
+          onBuyOffer={(offer, category) => act(() => buyOffer(offer, category))}
+        />
+      )}
       {tab === "requests" && (
         <RequestsPane
           onAwardBuy={(offer, category) => act(() => buyOffer(offer, category))}
@@ -190,15 +197,69 @@ export function Market() {
 function Shop({
   catalog,
   onBuy,
+  onBuyOffer,
 }: {
   catalog: CommerceListing[];
   onBuy: (listing: CommerceListing) => void;
+  onBuyOffer: (offer: CommerceOffer, category: string) => void;
 }) {
-  if (!catalog.length) {
-    return <p className="empty">Nothing is listed yet.</p>;
-  }
+  const [sourceCategory, setSourceCategory] = useState("");
+  const [sourced, setSourced] = useState<CommerceSourced[] | null>(null);
   return (
     <div className="market-grid">
+      <div className="order-card">
+        <strong>Source everywhere</strong>
+        <p className="muted">
+          One search across this market and every federated peer — one
+          normalized comparison, substitutes named for what they miss.
+        </p>
+        <label className="field">
+          Category
+          <input
+            value={sourceCategory}
+            onChange={(e) => setSourceCategory(e.target.value)}
+          />
+        </label>
+        <button
+          onClick={() =>
+            void api
+              .commerceSource(sourceCategory, 1)
+              .then(({ items }) => setSourced(items ?? []))
+              .catch(() => setSourced([]))
+          }
+        >
+          Search
+        </button>
+        {sourced !== null && !sourced.length && (
+          <p className="muted">No shelf can serve this.</p>
+        )}
+      </div>
+      {(sourced ?? []).map((row) => (
+        <div className="order-card" key={`${row.origin}:${row.offer.offer_id}`}>
+          <strong>{row.offer.item_id}</strong>{" "}
+          <span className="chip">
+            {row.origin.startsWith("peer:")
+              ? row.origin.slice(5)
+              : "this market"}
+          </span>
+          {!row.eligible && <span className="chip">substitute</span>}
+          <p>{money(offerTotal(row.offer), row.offer.currency)}</p>
+          {row.eligible ? (
+            <button onClick={() => onBuyOffer(row.offer, sourceCategory)}>
+              Buy
+            </button>
+          ) : (
+            <ul className="muted">
+              {row.gaps.map((gap) => (
+                <li key={gap}>{gap}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ))}
+      {!catalog.length && sourced === null && (
+        <p className="empty">Nothing is listed yet.</p>
+      )}
       {catalog.map((listing) => (
         <div className="order-card" key={listing.listing_id}>
           <strong>{listing.title}</strong>

@@ -1070,6 +1070,14 @@ export interface CommerceSalesPolicy {
   seller_review_limit_micros: number;
 }
 
+export interface CommerceSourced {
+  origin: string; // "local:<listing>" | "peer:<market>"
+  offer: CommerceOffer;
+  eligible: boolean;
+  gaps: string[];
+  seller_attested: boolean;
+}
+
 export interface CommerceInvoice {
   number: string;
   order_id: string;
@@ -1812,6 +1820,14 @@ export const api = {
     req<CommerceRecurring>(
       "DELETE",
       `/v1/commerce/recurring/${obligationId}`,
+    ),
+  // M4: the sourcing sweep across the local shelf and every federated
+  // import — one normalized, eligibility-marked comparison.
+  commerceSource: (category: string, quantity: number) =>
+    req<{ items: CommerceSourced[] }>(
+      "GET",
+      `/v1/commerce/source?category=${encodeURIComponent(category)}` +
+        `&quantity=${quantity}`,
     ),
 };
 

@@ -535,7 +535,7 @@ Goal Adherence:
 
 ### M4 — the open market (the spec's `phase_4`)
 
-**Status: LANDED (core)** — **The A2A wire contract**
+**Status: LANDED** — **The A2A wire contract**
 (`marketplace/protocol.py`): an external offer is the typed `Offer` the
 spine already trusts, its signature an HMAC over every material field
 under the announcing peer's shared secret; verification is arithmetic,
@@ -559,10 +559,31 @@ deterministic reference adapter), an insurance policy an offer with its
 own terms. Doors: `/v1/commerce/peers` (+state, +offers; registration
 behind operator authority), `/v1/commerce/source`. Pinned by
 `tests/test_marketplace_federation.py` and the gateway suite.
-Remaining: the live peer HTTP transport (fetch/announce over the wire —
-the import door is the seam), real financing/insurance adapters behind
-the ports, dynamic supply orchestration beyond the sourcing sweep, and
-the shell surface for federated sourcing.
+
+**Phase closed** by four follow-ups: **(1) the live peer wire**
+(`marketplace/peerwire.py` + the `/v1/commerce/announcements` and
+per-peer `/fetch` doors) — pairing is three agreed strings (two
+identities, one shared secret); a host's announcements door signs its
+public shelf for the asking peer, `fetch_from_peer` pulls every item
+through the import door (signature, jurisdiction gate, suspension all
+apply; one bad announcement never poisons the batch), and
+`HttpPeerTransport` rides the providers' HTTP seam — proven by a
+two-host in-process test where two real gateways trade signed offers.
+**(2) HTTP partner adapters** (`marketplace/partnerwire.py`) —
+financing and insurance quotes over the vault/transport seam:
+documented wire shapes, typed validation (an answer that is not a
+quote is an error, never a guess), asked-vs-quoted cross-checks, and
+the secret minted into the header at call time only. **(3) supply
+orchestration** (`marketplace/orchestration.py`) — `SupplyOrchestrator`
+ranks every eligible source, mints the intent for the best one
+(feeding the ladder exactly the attestation the source carries), and
+falls back deterministically when a source fails at placement;
+exhaustion refuses loudly and lands on the chain. **(4) the shell
+surface** — "Source everywhere" in the Shop pane: one search across
+the local shelf and every peer, origin chips, substitutes with their
+gaps and no Buy button, and the sourced offer feeding the intent door
+unchanged. Pinned across `tests/test_marketplace_federation.py` and
+`Market.test.tsx`; shell bundle rebuilt.
 
 Goal Adherence:
 - [x] An external offer with a broken or missing wire signature never
