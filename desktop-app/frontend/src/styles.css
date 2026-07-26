@@ -2659,3 +2659,20 @@ button.ghost {
   flex-wrap: wrap;
   gap: 6px;
 }
+
+/* ---- the newsroom (agents-expansion A2) --------------------------------- */
+.press-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.press-bylines {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.press-why summary {
+  cursor: pointer;
+  font-size: 0.85em;
+}

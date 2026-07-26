@@ -4,6 +4,36 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The newsroom (A2) — stories to magazine standard, pushed by preference:
+
+- **The rubric as versioned policy** (`press/standards.py`) — the three
+  magazine virtues as NAMED, deterministic scores: *inspiring* (novelty
+  + recency), *critical* (independent-author corroboration judged on
+  content-token agreement — stopwords must not make strangers agree),
+  *knowledgeable* (depth + attached evidence). Every selection records
+  its full factor breakdown and rubric version; the reasons render on
+  demand from the story detail door.
+- **Stories with recorded lineage** (`press/newsroom.py`) — a `Story`'s
+  attribution set is written at composition time into a queryable
+  lineage table (anchor 0.6, corroborators and near-duplicate credits
+  splitting the rest, summing to exactly 1.0) — the set the contributor
+  dividend (A5) will pay. Provenance is mandatory: a story with no
+  lineage cannot be stored. Composition speaks through the
+  `news.compose` seat under a hard no-invention frame with a
+  contract-checked parse; a model-less host (or a contract-breaking
+  reply) falls back to the anchor's own words, verbatim and credited.
+- **Editions under consent** (`press/editions.py`, `press.personalize`
+  setting — off by default) — neutral rubric order for everyone;
+  bounded affinity pull only for members who opted in, with the
+  serendipity slice reserving the edition's last slot for the best
+  story OUTSIDE the member's leaning. Taps (like/read/skip) answer
+  `recorded: false` honestly while personalization is off; recorded
+  signals ride account erasure.
+- **The morning edition on the pulse** — one door sets the daily
+  rhythm; the edition fires through the standing exactly-once pulse
+  claims and lands as the News agent's OWN thread message, skipped
+  windows caught up once and named, with a short reminder ping.
+
 The contribution spine (A1) — members publish, the press attributes:
 
 - **The press package** (`src/oolu/press/`) — `ContentContribution`:

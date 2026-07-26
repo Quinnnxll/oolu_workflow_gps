@@ -1148,6 +1148,18 @@ class GatewayApp:
             "/v1/press/contributions/{contribution_id}/media/{index}",
             self._press_media,
         )
+        # The newsroom (A2): stories composed from contributions only,
+        # each member's edition, and the feedback that (with consent)
+        # shapes it. The reasons render on demand from the detail door.
+        r.add("GET", "/v1/press/stories", self._press_stories)
+        r.add("GET", "/v1/press/stories/{story_id}", self._press_story_detail)
+        r.add(
+            "POST",
+            "/v1/press/stories/{story_id}/feedback",
+            self._press_story_feedback,
+        )
+        r.add("POST", "/v1/press/newsroom/run", self._press_newsroom_run)
+        r.add("POST", "/v1/press/edition/schedule", self._press_edition_schedule)
         # The byline: an account's published face and name, readable by
         # the account's own tenant — and the owner's doors to set it.
         r.add("GET", "/v1/profiles/{username}", self._profile_get)
@@ -2643,6 +2655,290 @@ class GatewayApp:
             },
         )
         return json_response(200, self._contribution_dict(record))
+
+    # -- the newsroom (A2) --------------------------------------------- #
+    def _require_newsroom(self):
+        press = self._require_press()
+        if press.stories is None:
+            raise GatewayError(
+                404, "not_found", "this host keeps no newsroom"
+            )
+        return press
+
+    @staticmethod
+    def _story_dict(story) -> dict:
+        return {
+            "story_id": story.story_id,
+            "headline": story.headline,
+            "prose": story.prose,
+            "genres": list(story.genres),
+            # Every cited contributor's byline, weights and all — the
+            # attribution set the dividend (A5) will split over.
+            "lineage": [
+                {
+                    "contribution_id": s.contribution_id,
+                    "author": s.author,
+                    "weight": s.weight,
+                }
+                for s in story.lineage
+            ],
+            "breakdown": story.breakdown,  # why it was selected
+            "rubric_version": story.rubric_version,
+            "source": story.source,
+            "created_at": story.created_at.isoformat(),
+        }
+
+    def _press_personalized(self, session) -> bool:
+        """The consent switch, read where it is enforced: personalization
+        exists only while `press.personalize` is on."""
+        if self._settings is None:
+            return False
+        effective = self._settings.effective(
+            session.tenant_id, session.principal_id
+        )
+        return effective.get("press.personalize") is True
+
+    def _edition_schedule_row(self, session):
+        from ..press import EDITION_PULSE_GOAL
+
+        for schedule in self._pulse.list_for(
+            session.tenant_id, session.principal_id
+        ):
+            if schedule.goal == EDITION_PULSE_GOAL:
+                return schedule
+        return None
+
+    def _press_stories(self, request, session, params) -> Response:
+        """The caller's edition: neutral rubric order for everyone;
+        affinity-bent (with the serendipity slice) only under the
+        member's own consent."""
+        from ..press import EDITION_SIZE, rank_edition
+
+        press = self._require_newsroom()
+        size = min(int(request.query.get("limit") or EDITION_SIZE), 20)
+        stories = press.stories.list(tenant=session.tenant_id, limit=100)
+        personalized = self._press_personalized(session)
+        affinity = None
+        if personalized and press.preferences is not None:
+            affinity = press.preferences.genre_affinity(
+                tenant=session.tenant_id, principal=session.principal_id
+            )
+        edition = rank_edition(stories, affinity=affinity or None, size=size)
+        schedule = self._edition_schedule_row(session)
+        return json_response(
+            200,
+            {
+                "items": [self._story_dict(s) for s in edition],
+                "personalized": bool(affinity),
+                "edition_schedule": (
+                    self._pulse_row(schedule, request.now or self._clock())
+                    if schedule is not None
+                    else None
+                ),
+            },
+        )
+
+    def _press_story_detail(self, request, session, params) -> Response:
+        press = self._require_newsroom()
+        story = press.stories.get(
+            params["story_id"], tenant=session.tenant_id
+        )
+        if story is None:
+            raise GatewayError(404, "not_found", "no such story")
+        return json_response(200, self._story_dict(story))
+
+    def _press_story_feedback(self, request, session, params) -> Response:
+        """One tap, honestly handled: recorded only under the member's
+        own consent — and the answer says which it was."""
+        press = self._require_newsroom()
+        story = press.stories.get(
+            params["story_id"], tenant=session.tenant_id
+        )
+        if story is None:
+            raise GatewayError(404, "not_found", "no such story")
+        signal = str((request.body or {}).get("signal") or "").strip()
+        if signal not in ("like", "read", "skip"):
+            raise GatewayError(
+                400, "invalid_request", "signal must be like, read, or skip"
+            )
+        if not self._press_personalized(session) or press.preferences is None:
+            return json_response(
+                200, {"recorded": False, "reason": "personalization is off"}
+            )
+        press.preferences.record(
+            tenant=session.tenant_id,
+            principal=session.principal_id,
+            signal=signal,
+            subject=f"story:{story.story_id}",
+            genres=story.genres,
+        )
+        return json_response(200, {"recorded": True})
+
+    def _press_newsroom_run(self, request, session, params) -> Response:
+        """The editor's crank: judge the shelf, tell the untold. The
+        composition speaks through the news.compose seat when this
+        tenant has a brain; the desk composes otherwise."""
+        from ..press import Newsroom
+
+        press = self._require_newsroom()
+        newsroom = Newsroom(press.store, press.stories)
+        model = self._seat_actor(
+            self._tenant_model(session.tenant_id, purpose="news.compose"),
+            session.principal_id,
+        )
+        composed = newsroom.run(tenant=session.tenant_id, model=model)
+        for story in composed:
+            self._durable.audit.append(
+                "press.story_composed",
+                {
+                    "story_id": story.story_id,
+                    "source": story.source,
+                    "rubric_version": story.rubric_version,
+                    "lineage": [
+                        {"contribution_id": s.contribution_id, "weight": s.weight}
+                        for s in story.lineage
+                    ],
+                },
+            )
+        return json_response(
+            200,
+            {
+                "composed": len(composed),
+                "items": [self._story_dict(s) for s in composed],
+            },
+        )
+
+    def _press_edition_schedule(self, request, session, params) -> Response:
+        """The member's morning-edition rhythm: one standing pulse
+        schedule with the edition sentinel goal — created, retimed, or
+        removed through this one door."""
+        from ..press import EDITION_LABEL, EDITION_PULSE_GOAL
+
+        self._require_newsroom()
+        body = request.body or {}
+        standing = self._edition_schedule_row(session)
+        if body.get("enabled") is False:
+            if standing is not None:
+                self._pulse.delete(
+                    standing.schedule_id,
+                    tenant=session.tenant_id,
+                    principal=session.principal_id,
+                )
+            return json_response(200, {"edition_schedule": None})
+        at_minute = int(body.get("at_minute", 8 * 60))
+        tz_offset = _tz_minutes(body.get("tz_offset_minutes"))
+        if standing is not None:
+            self._pulse.delete(
+                standing.schedule_id,
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+            )
+        try:
+            schedule = self._pulse.add(
+                session.tenant_id,
+                session.principal_id,
+                cadence="daily",
+                at_minute=at_minute,
+                goal=EDITION_PULSE_GOAL,
+                tz_offset_minutes=tz_offset,
+                label=EDITION_LABEL,
+                now=request.now or self._clock(),
+            )
+        except ValueError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(
+            200,
+            {
+                "edition_schedule": self._pulse_row(
+                    schedule, request.now or self._clock()
+                )
+            },
+        )
+
+    def _fire_edition(self, schedule, occurrence: str, skipped: int) -> None:
+        """The edition fires: compose what is untold, rank for THIS
+        member under THEIR consent, and land the edition as the News
+        agent's own thread message — with a short reminder ping so the
+        standing poll surfaces it. Failures are audited, never raised
+        into the serving request."""
+        from types import SimpleNamespace
+
+        from ..press import Newsroom, edition_message, rank_edition
+
+        press = self._press
+        if press is None or press.stories is None:
+            return
+        session = SimpleNamespace(
+            tenant_id=schedule.tenant, principal_id=schedule.principal
+        )
+        try:
+            model = self._seat_actor(
+                self._tenant_model(schedule.tenant, purpose="news.compose"),
+                schedule.principal,
+            )
+            Newsroom(press.store, press.stories).run(
+                tenant=schedule.tenant, model=model
+            )
+            stories = press.stories.list(tenant=schedule.tenant, limit=100)
+            affinity = None
+            if (
+                self._press_personalized(session)
+                and press.preferences is not None
+            ):
+                affinity = press.preferences.genre_affinity(
+                    tenant=schedule.tenant, principal=schedule.principal
+                )
+            edition = rank_edition(stories, affinity=affinity or None)
+            message = edition_message(edition, skipped=skipped)
+            if self._assistant_history is not None:
+                self._assistant_history.append(
+                    tenant=schedule.tenant,
+                    principal=schedule.principal,
+                    kind="assistant",
+                    body=message,
+                    agent="news",
+                )
+            if self._reminders is not None and edition:
+                try:
+                    self._reminders.add(
+                        tenant=schedule.tenant,
+                        principal=schedule.principal,
+                        text=(
+                            f"Your edition is ready — {len(edition)} "
+                            "stories in the News thread."
+                        )[:490],
+                        due_at=(self._clock() + timedelta(minutes=2)),
+                    )
+                except ValueError:
+                    pass  # a full reminder book is not a failed edition
+            self._durable.audit.append(
+                "pulse.fired",
+                {
+                    "schedule_id": schedule.schedule_id,
+                    "occurrence": occurrence,
+                    "run_id": "",
+                    "skipped": skipped,
+                    "tenant": schedule.tenant,
+                    "principal": schedule.principal,
+                    "goal": schedule.goal,
+                },
+            )
+        except Exception:  # noqa: BLE001 - the tick must keep serving
+            logging.getLogger("oolu.gateway").exception(
+                "edition pulse failed for %s", schedule.schedule_id
+            )
+            self._durable.audit.append(
+                "pulse.fire_failed",
+                {
+                    "schedule_id": schedule.schedule_id,
+                    "occurrence": occurrence,
+                    "tenant": schedule.tenant,
+                    "principal": schedule.principal,
+                    "goal": schedule.goal,
+                    "code": "edition_error",
+                    "reason": "the edition fire raised — the log has the story",
+                },
+            )
 
     def _press_media(self, request, session, params) -> Response:
         """A published contribution's attached file, by reference — the
@@ -6472,6 +6768,10 @@ class GatewayApp:
         if self._profile_photos is not None:
             erased["profile_photo"] = int(
                 self._profile_photos.remove(tenant=tenant, principal=principal)
+            )
+        if self._press is not None and self._press.preferences is not None:
+            erased["press_preferences"] = self._press.preferences.erase(
+                tenant=tenant, principal=principal
             )
         if self._reminders is not None:
             erased["reminders"] = self._reminders.erase(
@@ -10352,9 +10652,13 @@ class GatewayApp:
         cap) is audited, never raised into the serving request. The
         morning pulse's own goal fires its composite instead."""
         from ..nodeplace.personal_templates import MORNING_PULSE_GOAL
+        from ..press import EDITION_PULSE_GOAL
 
         if schedule.goal == MORNING_PULSE_GOAL:
             self._fire_morning(schedule, occurrence, skipped)
+            return
+        if schedule.goal == EDITION_PULSE_GOAL:
+            self._fire_edition(schedule, occurrence, skipped)
             return
         from types import SimpleNamespace
 

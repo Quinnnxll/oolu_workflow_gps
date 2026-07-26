@@ -632,6 +632,35 @@ export interface Contribution {
   superseded_at: string | null;
 }
 
+// A composed story (A2): every cited contributor in the lineage with the
+// weight recorded at composition time, and the rubric's factor breakdown
+// — why it was selected, renderable on demand.
+export interface StoryLineage {
+  contribution_id: string;
+  author: string;
+  weight: number;
+}
+
+export interface Story {
+  story_id: string;
+  headline: string;
+  prose: string;
+  genres: string[];
+  lineage: StoryLineage[];
+  breakdown: Record<string, number>;
+  rubric_version: number;
+  source: string; // "model" (the seat composed) | "desk" (verbatim, credited)
+  created_at: string;
+}
+
+export interface EditionSchedule {
+  schedule_id: string;
+  at_minute?: number;
+  goal?: string;
+  label?: string;
+  [key: string]: unknown;
+}
+
 // ---- friends wire shapes ----------------------------------------------------
 // A conversation in the peer list: who, what was said last, what waits.
 export interface FriendConversation {
@@ -1319,6 +1348,39 @@ export const api = {
     req<Contribution>(
       "POST",
       `/v1/press/contributions/${encodeURIComponent(contributionId)}/unpublish`,
+    ),
+  // The newsroom (A2): the caller's edition — neutral for everyone,
+  // affinity-bent only under their own consent; the server says which.
+  pressStories: () =>
+    req<{
+      items: Story[];
+      personalized: boolean;
+      edition_schedule: EditionSchedule | null;
+    }>("GET", "/v1/press/stories"),
+  pressStoryFeedback: (storyId: string, signal: "like" | "read" | "skip") =>
+    req<{ recorded: boolean; reason?: string }>(
+      "POST",
+      `/v1/press/stories/${encodeURIComponent(storyId)}/feedback`,
+      { signal },
+    ),
+  pressNewsroomRun: () =>
+    req<{ composed: number; items: Story[] }>(
+      "POST",
+      "/v1/press/newsroom/run",
+    ),
+  pressEditionSchedule: (payload: {
+    enabled?: boolean;
+    at_minute?: number;
+    tz_offset_minutes?: number;
+  }) =>
+    req<{ edition_schedule: EditionSchedule | null }>(
+      "POST",
+      "/v1/press/edition/schedule",
+      {
+        ...payload,
+        tz_offset_minutes:
+          payload.tz_offset_minutes ?? (-new Date().getTimezoneOffset() || 0),
+      },
     ),
   // The data-subject's rights, self-serve: everything as one JSON
   // document, and erasure that says exactly what it removed.

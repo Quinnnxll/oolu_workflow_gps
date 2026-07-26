@@ -157,6 +157,16 @@ SETTINGS_CATALOG: tuple[SettingField, ...] = (
         description="OoLu reads its replies out loud along with the message. "
         "Turn off here for silent conversations.",
     ),
+    SettingField(
+        key="press.personalize",
+        group="app",
+        label="News personalization",
+        kind=SettingKind.BOOL,
+        default=False,  # learning is opt-in, off by default — the standing law
+        description="Rank your News editions by what you read and like. "
+        "While this is off you get the neutral edition and your taps are "
+        "not recorded; turning it off again stops future use immediately.",
+    ),
     # --- account ---------------------------------------------------------
     SettingField(
         key="account.display_name",

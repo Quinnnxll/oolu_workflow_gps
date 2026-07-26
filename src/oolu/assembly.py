@@ -754,7 +754,12 @@ def build_host_runtime(
         VllmAdapterServer,
     )
     from .settings_node import SettingsNode, SettingsStore
-    from .press import ContributionStore, PressDesk
+    from .press import (
+        ContributionStore,
+        PreferenceStore,
+        PressDesk,
+        StoryStore,
+    )
     from .social import (
         AssistantHistoryStore,
         DirectMessageStore,
@@ -1278,8 +1283,13 @@ def build_host_runtime(
         friendships=FriendshipStore(conn),
         assistant_history=AssistantHistoryStore(conn),
         profile_photos=ProfilePhotoStore(conn),
-        # The press: member contributions — the closed loop's supply side.
-        press=PressDesk(ContributionStore(conn)),
+        # The press: member contributions, the newsroom's stories, and
+        # each member's own (consented) ranking signals.
+        press=PressDesk(
+            ContributionStore(conn),
+            stories=StoryStore(conn),
+            preferences=PreferenceStore(conn),
+        ),
         # Reminders: rows with a clock — the deterministic route for
         # "remind me", surfaced by the client's poll.
         reminders=ReminderStore(conn),

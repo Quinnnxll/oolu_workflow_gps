@@ -314,14 +314,28 @@ class PressDesk:
     """The publication gate, walked in order — and the unpublish door.
 
     The desk owns the RULES; the gateway owns the doors and the audit
-    appends (one audit voice, like every other surface)."""
+    appends (one audit voice, like every other surface). From A2 the
+    desk also carries the newsroom's stores (stories, preferences) —
+    optional, so a pre-A2 composition stays a working press."""
 
-    def __init__(self, store: ContributionStore) -> None:
+    def __init__(
+        self, store: ContributionStore, *, stories=None, preferences=None
+    ) -> None:
         self._store = store
+        self._stories = stories  # newsroom.StoryStore | None
+        self._preferences = preferences  # editions.PreferenceStore | None
 
     @property
     def store(self) -> ContributionStore:
         return self._store
+
+    @property
+    def stories(self):
+        return self._stories
+
+    @property
+    def preferences(self):
+        return self._preferences
 
     def publish(
         self,

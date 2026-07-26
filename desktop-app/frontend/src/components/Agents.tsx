@@ -6,6 +6,7 @@ import type {
   PressGenre,
   PressLicense,
   RosterAgent,
+  Story,
 } from "../api";
 import { identityHue } from "../avatar";
 import { loadCompose, saveCompose, tf, useT } from "../ui";
@@ -78,6 +79,13 @@ export function PressPanel() {
   const [attached, setAttached] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // The newsroom (A2): the caller's edition, and whether it is theirs.
+  const [stories, setStories] = useState<Story[]>([]);
+  const [personalized, setPersonalized] = useState(false);
+  const [editionOn, setEditionOn] = useState(false);
+  const [newsroom, setNewsroom] = useState(true); // false: pre-A2 host
+  // The last feedback verdict per story — the tap's honest echo.
+  const [noted, setNoted] = useState<Record<string, string>>({});
   const me = session.principal;
 
   const refreshShelf = () =>
@@ -86,6 +94,19 @@ export function PressPanel() {
       .then(({ items }) => setShelf(items))
       .catch(() => setShelf([]));
 
+  const refreshStories = () =>
+    api
+      .pressStories()
+      .then((edition) => {
+        setStories(edition.items ?? []);
+        setPersonalized(edition.personalized === true);
+        setEditionOn(
+          edition.edition_schedule !== null &&
+            edition.edition_schedule !== undefined,
+        );
+      })
+      .catch(() => setNewsroom(false));
+
   useEffect(() => {
     void api
       .pressGenres()
@@ -93,6 +114,7 @@ export function PressPanel() {
         setGenres(meta.items);
         setLicense(meta.licenses[0] ?? null);
         void refreshShelf();
+        void refreshStories();
       })
       .catch(() => setGenres(null)); // no press on this host: no panel
   }, []);
@@ -157,8 +179,110 @@ export function PressPanel() {
     }
   }
 
+  async function feedback(story: Story, signal: "like" | "skip") {
+    try {
+      const verdict = await api.pressStoryFeedback(story.story_id, signal);
+      setNoted((n) => ({
+        ...n,
+        [story.story_id]: verdict.recorded
+          ? tr("press.noted")
+          : tr("press.notRecorded"),
+      }));
+      if (verdict.recorded) void refreshStories();
+    } catch {
+      /* the panel's next refresh tells the truth */
+    }
+  }
+
   return (
     <div className="press-panel">
+      {newsroom && (
+        <>
+          <div className="press-head">
+            <span className="press-heading">
+              {tr("press.stories")}
+              {personalized ? ` · ${tr("press.yours")}` : ""}
+            </span>
+            <span className="press-actions">
+              <button
+                className="ghost"
+                onClick={() =>
+                  void api
+                    .pressNewsroomRun()
+                    .then(() => refreshStories())
+                    .catch(() => {})
+                }
+              >
+                {tr("press.compose")}
+              </button>
+              <button
+                className={`ghost${editionOn ? " on" : ""}`}
+                title={tr("press.editionHint")}
+                onClick={() =>
+                  void api
+                    .pressEditionSchedule({ enabled: !editionOn })
+                    .then(({ edition_schedule }) =>
+                      setEditionOn(edition_schedule !== null),
+                    )
+                    .catch(() => {})
+                }
+              >
+                {editionOn ? tr("press.editionOn") : tr("press.editionOff")}
+              </button>
+            </span>
+          </div>
+          {stories.length === 0 && (
+            <div className="muted press-empty">{tr("press.noStories")}</div>
+          )}
+          {stories.map((story) => (
+            <div key={story.story_id} className="press-card story">
+              <div className="press-title">{story.headline}</div>
+              <div className="press-body">{story.prose}</div>
+              {/* Every cited contributor's byline — the attribution the
+                  lineage recorded at composition time. */}
+              <div className="press-bylines">
+                {[
+                  ...new Set(story.lineage.map((share) => share.author)),
+                ].map((author) => (
+                  <Byline key={author} username={author} size={20} />
+                ))}
+              </div>
+              <div className="press-meta">
+                {story.genres.map((key) => (
+                  <span key={key} className="press-chip on">
+                    {genres.find((g) => g.key === key)?.label ?? key}
+                  </span>
+                ))}
+                <button
+                  className="linklike"
+                  onClick={() => void feedback(story, "like")}
+                >
+                  {tr("press.like")}
+                </button>
+                <button
+                  className="linklike"
+                  onClick={() => void feedback(story, "skip")}
+                >
+                  {tr("press.skip")}
+                </button>
+                {noted[story.story_id] && (
+                  <span className="muted">{noted[story.story_id]}</span>
+                )}
+              </div>
+              {/* The reasons, on demand: the rubric's factor breakdown. */}
+              <details className="press-why">
+                <summary>{tr("press.why")}</summary>
+                <div className="muted">
+                  {Object.entries(story.breakdown)
+                    .map(([factor, value]) => `${factor}: ${value}`)
+                    .join(" · ")}
+                </div>
+              </details>
+            </div>
+          ))}
+        </>
+      )}
+
       <div className="press-head">
         <span className="press-heading">{tr("press.contributions")}</span>
         <button

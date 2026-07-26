@@ -417,6 +417,38 @@ Goal Adherence:
 
 ### A2 — the newsroom (stories to magazine standard, pushed by preference)
 
+**Status: LANDED** — `press/standards.py`: the rubric as a versioned
+policy (RUBRIC_VERSION 1) over typed signals — novelty and recency
+(inspiring), independent-author corroboration on CONTENT-token agreement
+(critical; stopword Jaccard was tried and rejected — strangers must not
+"agree" on the word *the*), depth and attached evidence (knowledgeable) —
+with every selection recording its full factor breakdown.
+`press/newsroom.py`: `Story` with **lineage weights recorded at
+composition time** in a queryable `press_story_lineage` table (anchor
+0.6, corroborators and near-dup credits splitting the rest, summing to
+exactly 1.0 — the set A5 pays); provenance-mandatory storage (a story
+with no lineage refuses to store); composition through the
+`news.compose` seat under a hard no-invention frame, with a
+contract-checked parse and a verbatim desk fallback — degraded is
+honest, invented is a defect; idempotent runs (told pieces never
+retell). `press/editions.py`: the `PreferenceStore` (unary like/read/
+skip signals, bounded per-genre affinity, erasable), `rank_edition`
+(neutral rubric order; bounded affinity pull under consent; the
+serendipity slice holding the last slot against a strong leaning), and
+the `EDITION_PULSE_GOAL` sentinel. Consent: the `press.personalize`
+setting, **off by default** — a learning-off member gets the neutral
+edition and their taps answer `recorded: false` honestly. Doors:
+`GET /v1/press/stories` (the edition, `personalized` named),
+story detail (reasons on demand), story feedback, the newsroom crank
+(`POST /v1/press/newsroom/run`, audited per story), and the
+morning-edition schedule door riding the pulse; `_fire_edition` lands
+the edition as News's own thread message with the skipped count named,
+plus a reminder ping. Preference rows ride account erasure. Pinned by
+`tests/test_newsroom.py` (rubric independence, lineage conservation,
+provenance law, model contract + fallback, two-members-two-orderings,
+the serendipity property, the pulse fire end-to-end) and the story
+cases in `Agents.test.tsx`.
+
 Goal: News selects and composes stories from contributions only, to a
 typed editorial rubric, and delivers each member a personal edition.
 

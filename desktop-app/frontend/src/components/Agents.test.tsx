@@ -224,6 +224,88 @@ describe("PressPanel (inside the News thread)", () => {
     expect(unpublish).toBeTruthy();
   });
 
+  it("renders stories with lineage bylines, reasons on demand, honest taps", async () => {
+    routes["GET /v1/press/genres"] = GENRES;
+    routes["GET /v1/press/contributions"] = { status: 200, body: { items: [] } };
+    routes["GET /v1/press/stories"] = {
+      status: 200,
+      body: {
+        items: [
+          {
+            story_id: "st1",
+            headline: "The pier queues again",
+            prose: "Forty stalls returned this morning.",
+            genres: ["local"],
+            lineage: [
+              { contribution_id: "c1", author: "alice", weight: 0.6 },
+              { contribution_id: "c2", author: "bob", weight: 0.4 },
+            ],
+            breakdown: { selection: 0.57, inspiring: 0.7, rubric_version: 1 },
+            rubric_version: 1,
+            source: "desk",
+            created_at: "2026-07-13T08:00:00Z",
+          },
+        ],
+        personalized: false,
+        edition_schedule: null,
+      },
+    };
+    routes["POST /v1/press/stories/st1/feedback"] = {
+      status: 200,
+      body: { recorded: false, reason: "personalization is off" },
+    };
+    render(<AgentThread agent={NEWS} />);
+
+    expect(await screen.findByText("The pier queues again")).toBeTruthy();
+    // Both cited contributors' bylines render — the lineage speaks.
+    expect(await screen.findByText("alice")).toBeTruthy();
+    expect(await screen.findByText("bob")).toBeTruthy();
+    // The reasons on demand: the rubric's factor breakdown.
+    fireEvent.click(screen.getByText("Why this story"));
+    expect(screen.getByText(/selection: 0.57/)).toBeTruthy();
+    // A tap answers honestly when personalization is off.
+    fireEvent.click(screen.getByText("Like"));
+    expect(
+      await screen.findByText("not recorded — personalization is off"),
+    ).toBeTruthy();
+    const tap = calls.find(
+      (c) => c.method === "POST" && c.path === "/v1/press/stories/st1/feedback",
+    );
+    expect(tap?.body).toMatchObject({ signal: "like" });
+  });
+
+  it("cranks the newsroom and toggles the morning edition", async () => {
+    routes["GET /v1/press/genres"] = GENRES;
+    routes["GET /v1/press/contributions"] = { status: 200, body: { items: [] } };
+    routes["GET /v1/press/stories"] = {
+      status: 200,
+      body: { items: [], personalized: false, edition_schedule: null },
+    };
+    routes["POST /v1/press/newsroom/run"] = {
+      status: 200,
+      body: { composed: 1, items: [] },
+    };
+    routes["POST /v1/press/edition/schedule"] = {
+      status: 200,
+      body: { edition_schedule: { schedule_id: "sch1", at_minute: 480 } },
+    };
+    render(<AgentThread agent={NEWS} />);
+
+    fireEvent.click(await screen.findByText("Compose now"));
+    expect(
+      calls.some(
+        (c) => c.method === "POST" && c.path === "/v1/press/newsroom/run",
+      ),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByText("Morning edition"));
+    expect(await screen.findByText("Morning edition ✓")).toBeTruthy();
+    const scheduled = calls.find(
+      (c) => c.method === "POST" && c.path === "/v1/press/edition/schedule",
+    );
+    expect(scheduled?.body).toMatchObject({ enabled: true });
+  });
+
   it("stays silent on hosts from before the press", async () => {
     routes["GET /v1/press/genres"] = { status: 404, body: {} };
     render(<AgentThread agent={NEWS} />);
