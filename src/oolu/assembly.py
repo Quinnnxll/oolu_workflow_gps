@@ -1102,6 +1102,7 @@ def build_host_runtime(
     # triple-gated by the launch guard (operator switch, settled prices,
     # verified successes) and by require_production_money.
     from .billing import (
+        AdDividendService,
         BillingService,
         DisputeService,
         DisputeStore,
@@ -1111,6 +1112,7 @@ def build_host_runtime(
         StripeCardVault,
         StripeConnectAdapter,
     )
+    from .billing.doubleentry import DoubleEntryLedger
     from .providers.vault import SecretVault
 
     earnings_ledger = EarningsLedger(conn)
@@ -1342,6 +1344,16 @@ def build_host_runtime(
         payout_store=payout_store,
         payout_adapter=payout_adapter,
         disputes=dispute_service,
+        # A5: the contributor ad dividend — the same earnings ledger, the
+        # same double-entry book (one durable table under both handles),
+        # production-gated inside the service itself.
+        ad_dividend=AdDividendService(
+            ledger=earnings_ledger,
+            book=DoubleEntryLedger(conn),
+            durable=conn,
+            providers=identity_providers,
+            idempotency=durable.idempotency,
+        ),
         stripe_webhooks=stripe_webhooks,
         commerce_psp=commerce_psp,
         commerce_providers=tuple(identity_providers),

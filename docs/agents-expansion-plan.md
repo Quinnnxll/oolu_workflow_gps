@@ -631,6 +631,39 @@ Goal Adherence:
 
 ### A5 — the contributor dividend (real money, conserved)
 
+**Status: LANDED** — `billing/addividend.py`: `AdDividendService`,
+ADR-0005's first client with individual contributors as earning
+principals (pools follow once individual attribution is proven). A
+verified impression settles ONCE through the standing pipeline: the
+same `PricingEngine` (contributors in the noder seat, α in the rho
+seat — conservation structural), the same `EarningsLedger` with
+holdback `H`, so the standing settlement (`R`, `T`, `W`) and the
+standing `DisputeService` clawback (reserve-first, shortfall as debt —
+tested on an ad event end-to-end) work UNCHANGED; an ad event is just
+`ad:<placement_id>`. Fraud before money: the standing self-dealing
+exclusion hardened to the ad law (a viewer who is the ONLY contributor
+settles nothing at all — `no_arms_length_share`), replay rejection via
+the idempotency ledger, velocity already gated at delivery.
+Multipliers redistribute, never inflate: bounded engagement (a
+verified click) and injected reputation μ, clamped to `mu_max`,
+normalized in the pool. Recognition is a balanced posting on the ONE
+book: `ad_budget_liability` shrinks by the net, α lands in
+`marketplace_fee_revenue`, the pool in the new `contributor_payable`
+account — the A4 funding, the A5 recognition, and an ordinary order
+fee trial-balance to zero with no double counting (the §4 rule as a
+test). `require_production_money` guards every settle: the service
+refuses local infra, and the gateway's `POST /v1/adhouse/settle` door
+relays the refusal as a named 403, never a silent skip (proven after a
+full real A4 flow). Earnings surface: `/v1/earnings/entries` labels
+every row by source (`ads` / `nodeplace`); balances ride the standing
+holdback/threshold maths; payout stays behind the standing KYC-verified
+payout account. Wired in the production assembly over the shared
+ledger and book. Pinned by `tests/test_ad_dividend.py` (conservation
+property across random prices, replay, both self-dealing shapes,
+multiplier clamp and redistribution, the local-infra guard at service
+and door, the one-book balance, the standing clawback, and the source
+labels).
+
 Goal: verified ad events pay contributors through the standing pipeline —
 ADR-0005 lands, with content lineage as its first client.
 

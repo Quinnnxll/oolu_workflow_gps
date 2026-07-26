@@ -664,6 +664,10 @@ class GatewayApp:
         # face — published to the account's own tenant
         press=None,  # press.PressDesk: the contribution spine (A1) —
         # member-published, licensed, attributed, revocable-forward
+        ad_dividend=None,  # billing.AdDividendService: verified ad
+        # impressions → conserved contributor accruals (A5). None keeps
+        # the previews-only posture; the service itself refuses local
+        # infra either way (require_production_money).
         representative=None,  # representative.RepresentativeEngine: drafts
         # replies in the account's own voice — never sends on its own
         reminders=None,  # reminders.ReminderStore: rows with a clock,
@@ -905,6 +909,7 @@ class GatewayApp:
         self._assistant_history = assistant_history
         self._profile_photos = profile_photos
         self._press = press
+        self._ad_dividend = ad_dividend
         self._representative = representative
         self._reminders = reminders
         self._lessons = lessons
@@ -1522,6 +1527,9 @@ class GatewayApp:
             self._adhouse_click,
         )
         r.add("GET", "/v1/adhouse/preview", self._adhouse_preview)
+        # A5: verified impressions become conserved contributor money —
+        # production-gated; a local host answers with the honest refusal.
+        r.add("POST", "/v1/adhouse/settle", self._adhouse_settle)
         # The data-subject's two rights, self-serve: everything as one
         # JSON document, and erasure that says exactly what it removed.
         r.add("GET", "/v1/account/export", self._account_export)
@@ -3478,6 +3486,58 @@ class GatewayApp:
             return []
 
         return lineage
+
+    def _adhouse_settle(self, request, session, params) -> Response:
+        """The dividend crank (A5): every impressed, lineage-resolvable
+        placement settles once through the standing pipeline — fraud
+        gates, conserved split, holdback accrual, balanced recognition.
+        Idempotent end to end; local-only infra refuses honestly."""
+        if self._ad_dividend is None:
+            raise GatewayError(
+                404, "not_found", "this host keeps no ad settlement stack"
+            )
+        from ..billing import MoneyModeError
+
+        lineage = self._ad_lineage_of(session)
+        impressed = self._ad_events.impressed_placements(
+            tenant=session.tenant_id
+        )
+        settled, refused, skipped = 0, 0, 0
+        try:
+            for placement in self._ad_placements.list(tenant=session.tenant_id):
+                if placement.placement_id not in impressed:
+                    continue
+                shares = lineage(placement)
+                if not shares:
+                    skipped += 1  # content gone: nothing to attribute
+                    continue
+                outcome = self._ad_dividend.settle_impression(
+                    placement,
+                    shares=shares,
+                    engaged=self._ad_events.has(
+                        placement.placement_id, kind="click"
+                    ),
+                )
+                if outcome.get("settled"):
+                    settled += 1
+                    self._durable.audit.append(
+                        "ad.settled",
+                        {
+                            "event_id": outcome["event_id"],
+                            "campaign_id": placement.campaign_id,
+                            "net_micros": outcome["net_micros"],
+                            "platform_micros": outcome["platform_micros"],
+                        },
+                    )
+                else:
+                    refused += 1
+        except MoneyModeError as exc:
+            # The plan's invariant 11, at the door: no ad money on
+            # local-only infra — named, never silently skipped.
+            raise GatewayError(403, "forbidden", str(exc)) from exc
+        return json_response(
+            200, {"settled": settled, "refused": refused, "skipped": skipped}
+        )
 
     def _adhouse_preview(self, request, session, params) -> Response:
         """The display-only forecast — the whole tenant's split, plus
@@ -14692,11 +14752,18 @@ class GatewayApp:
         )
 
     def _earnings_entries(self, request, session, params) -> Response:
+        """Every earnings row, labeled by source: ad-dividend events key
+        on ``ad:<placement>``, everything else is the Nodeplace — one
+        ledger, honest provenance per line."""
         billing = self._require_billing()
-        entries = billing.entries(session.principal_id)
-        return json_response(
-            200, {"items": [entry.model_dump(mode="json") for entry in entries]}
-        )
+        items = []
+        for entry in billing.entries(session.principal_id):
+            item = entry.model_dump(mode="json")
+            item["source"] = (
+                "ads" if str(entry.event_id).startswith("ad:") else "nodeplace"
+            )
+            items.append(item)
+        return json_response(200, {"items": items})
 
     def _create_payout_account(self, request, session, params) -> Response:
         if self._payout_store is None or self._payout_adapter is None:

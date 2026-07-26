@@ -35,6 +35,9 @@ ACCOUNTS = (
     # is A5's posting; nothing in the adhouse package writes here.
     "advertiser_payable",
     "ad_budget_liability",
+    # A5: what verified impressions have earned the contributors —
+    # settled out through the standing earnings/settlement machinery.
+    "contributor_payable",
 )
 
 _SCHEMA = """CREATE TABLE IF NOT EXISTS marketplace_ledger (

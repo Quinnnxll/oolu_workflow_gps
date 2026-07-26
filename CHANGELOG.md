@@ -4,6 +4,32 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The contributor dividend (A5) — verified delivery pays, conserved:
+
+- **The standing pipeline, reused whole** (`billing/addividend.py`) — a
+  verified ad impression settles once: the same `PricingEngine`
+  (contributors in the noder seat, the ad α as rho — `platform + Σ
+  contributors == net` structurally), the same `EarningsLedger` with
+  the standing holdback, so settlement reserve/threshold/risk-window
+  and the `DisputeService` clawback (reserve-first, shortfall as debt)
+  work on ad earnings unchanged. An ad event is `ad:<placement_id>` —
+  nothing else had to learn anything.
+- **Fraud before money** — the standing self-dealing exclusion hardened
+  to the ad law: a contributor's own views of ads on their content
+  never meter, and a viewer who is the ONLY contributor settles no
+  event at all; replays return the first result; multipliers
+  (engagement on a verified click, injected reputation μ) are clamped
+  to `mu_max` and redistribute without inflating.
+- **One book** — recognition posts `ad_budget_liability` down by the
+  net, α into `marketplace_fee_revenue`, the pool into the new
+  `contributor_payable` account; funding + recognition + an ordinary
+  order fee trial-balance to zero with no double counting.
+- **The guard at every door** — `require_production_money` refuses the
+  settle on local-only infra, and `POST /v1/adhouse/settle` relays the
+  refusal as a named 403 after a full real ad flow — never a silent
+  skip. `/v1/earnings/entries` now labels every row by source
+  (`ads` / `nodeplace`) on the one shared ledger.
+
 The ad house (A4) — buying, matching, merging; the money stays previews:
 
 - **The legal gate, first** — privacy VERSION 2 (`legal.py`): the
