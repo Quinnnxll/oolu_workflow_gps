@@ -1,8 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import { api } from "../api";
-import type { RosterAgent } from "../api";
+import { api, session } from "../api";
+import type {
+  Contribution,
+  FileMeta,
+  PressGenre,
+  PressLicense,
+  RosterAgent,
+} from "../api";
 import { identityHue } from "../avatar";
 import { loadCompose, saveCompose, tf, useT } from "../ui";
+import { Byline } from "./Byline";
 
 // A roster agent's conversation (agents-expansion plan A0): the same
 // messenger shape as the OoLu chat, deliberately leaner — words only. No
@@ -50,6 +57,227 @@ export function AgentAvatar({
     >
       {agent.name.slice(0, 1).toUpperCase()}
     </span>
+  );
+}
+
+// The contribution spine's surface (A1): the shelf of live pieces and
+// the contribute form. Everything renders from the server's own words —
+// the taxonomy, the license terms — never hardcoded copies; a host from
+// before the press (404 on genres) renders nothing at all.
+export function PressPanel() {
+  const tr = useT();
+  const [genres, setGenres] = useState<PressGenre[] | null>(null);
+  const [license, setLicense] = useState<PressLicense | null>(null);
+  const [shelf, setShelf] = useState<Contribution[]>([]);
+  const [writing, setWriting] = useState(false);
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [picked, setPicked] = useState<string[]>([]);
+  const [consent, setConsent] = useState(false);
+  const [drawer, setDrawer] = useState<FileMeta[]>([]);
+  const [attached, setAttached] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const me = session.principal;
+
+  const refreshShelf = () =>
+    api
+      .pressContributions()
+      .then(({ items }) => setShelf(items))
+      .catch(() => setShelf([]));
+
+  useEffect(() => {
+    void api
+      .pressGenres()
+      .then((meta) => {
+        setGenres(meta.items);
+        setLicense(meta.licenses[0] ?? null);
+        void refreshShelf();
+      })
+      .catch(() => setGenres(null)); // no press on this host: no panel
+  }, []);
+
+  // The drawer list loads when the form opens — attach is refs to YOUR
+  // files, never copies; the picker shows exactly what you own.
+  useEffect(() => {
+    if (!writing) return;
+    void api
+      .files()
+      .then(({ items }) => setDrawer(items ?? []))
+      .catch(() => setDrawer([]));
+  }, [writing]);
+
+  if (genres === null || license === null) return null;
+
+  function toggleGenre(key: string) {
+    setPicked((p) =>
+      p.includes(key)
+        ? p.filter((k) => k !== key)
+        : p.length < 3
+          ? [...p, key]
+          : p,
+    );
+  }
+
+  function toggleFile(fileId: string) {
+    setAttached((a) =>
+      a.includes(fileId)
+        ? a.filter((f) => f !== fileId)
+        : a.length < 6
+          ? [...a, fileId]
+          : a,
+    );
+  }
+
+  async function publish() {
+    if (busy || license === null) return;
+    setError("");
+    setBusy(true);
+    try {
+      const record = await api.pressPublish({
+        title,
+        body,
+        genres: picked,
+        license: license.key,
+        consent,
+        ...(attached.length > 0 ? { file_ids: attached } : {}),
+      });
+      setShelf((s) => [record, ...s]);
+      setWriting(false);
+      setTitle("");
+      setBody("");
+      setPicked([]);
+      setAttached([]);
+      setConsent(false);
+    } catch (e) {
+      // The gate's refusal IS the direction — shown verbatim.
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="press-panel">
+      <div className="press-head">
+        <span className="press-heading">{tr("press.contributions")}</span>
+        <button
+          className="ghost"
+          onClick={() => {
+            setError("");
+            setWriting((w) => !w);
+          }}
+        >
+          {writing ? tr("press.close") : tr("press.write")}
+        </button>
+      </div>
+
+      {writing && (
+        <div className="press-compose">
+          <input
+            placeholder={tr("press.titlePh")}
+            value={title}
+            maxLength={120}
+            onChange={(e) => setTitle(e.target.value)}
+          />
+          <textarea
+            placeholder={tr("press.bodyPh")}
+            value={body}
+            rows={5}
+            onChange={(e) => setBody(e.target.value)}
+          />
+          <div className="press-genres">
+            {genres.map((g) => (
+              <button
+                key={g.key}
+                type="button"
+                title={g.description}
+                className={`press-chip${picked.includes(g.key) ? " on" : ""}`}
+                onClick={() => toggleGenre(g.key)}
+              >
+                {g.label}
+              </button>
+            ))}
+          </div>
+          {drawer.length > 0 && (
+            <details className="press-attach">
+              <summary>
+                {tr("press.attach")}
+                {attached.length > 0 ? ` (${attached.length})` : ""}
+              </summary>
+              {drawer.map((f) => (
+                <label key={f.file_id} className="press-file">
+                  <input
+                    type="checkbox"
+                    checked={attached.includes(f.file_id)}
+                    onChange={() => toggleFile(f.file_id)}
+                  />
+                  {f.name}
+                </label>
+              ))}
+            </details>
+          )}
+          {/* Consent renders the SERVER's license terms — the words the
+              record will actually stand under. */}
+          <details className="press-license">
+            <summary>{license.name}</summary>
+            <p className="muted">{license.terms}</p>
+          </details>
+          <label className="press-consent">
+            <input
+              type="checkbox"
+              checked={consent}
+              onChange={(e) => setConsent(e.target.checked)}
+            />
+            {tr("press.consent")}
+          </label>
+          <div className="row">
+            <button disabled={busy} onClick={() => void publish()}>
+              {busy ? "…" : tr("press.publish")}
+            </button>
+          </div>
+          {error && <div className="error">{error}</div>}
+        </div>
+      )}
+
+      {shelf.length === 0 && !writing && (
+        <div className="muted press-empty">{tr("press.empty")}</div>
+      )}
+      {shelf.map((c) => (
+        <div key={c.contribution_id} className="press-card">
+          <div className="press-byline">
+            <Byline username={c.author} size={24} />
+            {c.author === me && !c.superseded_at && (
+              <button
+                className="linklike"
+                onClick={() =>
+                  void api
+                    .pressUnpublish(c.contribution_id)
+                    .then(() => refreshShelf())
+                    .catch(() => {})
+                }
+              >
+                {tr("press.unpublish")}
+              </button>
+            )}
+          </div>
+          <div className="press-title">{c.title}</div>
+          <div className="press-body">{c.body}</div>
+          <div className="press-meta">
+            {c.genres.map((key) => (
+              <span key={key} className="press-chip on">
+                {genres.find((g) => g.key === key)?.label ?? key}
+              </span>
+            ))}
+            {c.similar_to && (
+              <span className="press-chip credit" title={c.similar_to}>
+                {tr("press.retold")}
+              </span>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -135,6 +363,10 @@ export function AgentThread({ agent }: { agent: RosterAgent }) {
         </div>
       </div>
       <div className="chat-thread">
+        {/* The press (A1) lives at the head of the News thread: the
+            contribution shelf and the contribute form — in-thread, the
+            inlineBlock pattern, never a window popping on top. */}
+        {agent.agent_id === "news" && <PressPanel />}
         {/* The card welcomes honestly: what this agent does today, and
             what phase brings the rest — the same words the server would
             answer with, shown before the first message is ever sent. */}

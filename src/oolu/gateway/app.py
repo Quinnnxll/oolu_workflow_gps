@@ -662,6 +662,8 @@ class GatewayApp:
         # signed-in device
         profile_photos=None,  # social.ProfilePhotoStore: the byline's
         # face — published to the account's own tenant
+        press=None,  # press.PressDesk: the contribution spine (A1) —
+        # member-published, licensed, attributed, revocable-forward
         representative=None,  # representative.RepresentativeEngine: drafts
         # replies in the account's own voice — never sends on its own
         reminders=None,  # reminders.ReminderStore: rows with a clock,
@@ -892,6 +894,7 @@ class GatewayApp:
         self._friendships = friendships
         self._assistant_history = assistant_history
         self._profile_photos = profile_photos
+        self._press = press
         self._representative = representative
         self._reminders = reminders
         self._lessons = lessons
@@ -1125,6 +1128,26 @@ class GatewayApp:
         # door carries a roster agent's turn (body: {"agent": ...}); this
         # door is what the sidebar renders.
         r.add("GET", "/v1/roster", self._roster)
+        # The press (A1): the contribution spine. Members publish under a
+        # stated license; every read excludes superseded records by law.
+        r.add("GET", "/v1/press/genres", self._press_genres)
+        r.add("GET", "/v1/press/contributions", self._press_list)
+        r.add("POST", "/v1/press/contributions", self._press_publish)
+        r.add(
+            "GET",
+            "/v1/press/contributions/{contribution_id}",
+            self._press_detail,
+        )
+        r.add(
+            "POST",
+            "/v1/press/contributions/{contribution_id}/unpublish",
+            self._press_unpublish,
+        )
+        r.add(
+            "GET",
+            "/v1/press/contributions/{contribution_id}/media/{index}",
+            self._press_media,
+        )
         # The byline: an account's published face and name, readable by
         # the account's own tenant — and the owner's doors to set it.
         r.add("GET", "/v1/profiles/{username}", self._profile_get)
@@ -2437,6 +2460,223 @@ class GatewayApp:
             tenant=session.tenant_id, principal=session.principal_id
         )
         return json_response(200, {"removed": bool(removed)})
+
+    # ------------------------------------------------------------------ #
+    # The press (A1): publish, attribute, weigh.                          #
+    # ------------------------------------------------------------------ #
+    def _require_press(self):
+        if self._press is None:
+            raise GatewayError(404, "not_found", "this host keeps no press")
+        return self._press
+
+    @staticmethod
+    def _press_refused(exc) -> GatewayError:
+        code = {404: "not_found", 403: "forbidden"}.get(
+            exc.status, "invalid_request"
+        )
+        return GatewayError(exc.status, code, str(exc))
+
+    @staticmethod
+    def _contribution_dict(record) -> dict:
+        return {
+            "contribution_id": record.contribution_id,
+            "author": record.author,  # the Byline resolves face + name
+            "title": record.title,
+            "body": record.body,
+            "genres": list(record.genres),
+            "license": record.license,
+            "media": [
+                {
+                    "file_id": m.file_id,
+                    "media_type": m.media_type,
+                    "name": m.name,
+                    "blob_ref": m.blob_ref,
+                }
+                for m in record.media
+            ],
+            "similar_to": record.similar_to,
+            "similarity": record.similarity,
+            "taxonomy_version": record.taxonomy_version,
+            "created_at": record.created_at.isoformat(),
+            "superseded_at": (
+                record.superseded_at.isoformat()
+                if record.superseded_at
+                else None
+            ),
+        }
+
+    def _press_genres(self, request, session, params) -> Response:
+        """The taxonomy, versioned, and the stated licenses — everything
+        the contribute picker needs to render consent honestly."""
+        self._require_press()
+        from ..press import LICENSES, TAXONOMY_VERSION, taxonomy_items
+
+        return json_response(
+            200,
+            {
+                "taxonomy_version": TAXONOMY_VERSION,
+                "items": taxonomy_items(),
+                "licenses": [
+                    {"key": lic.key, "name": lic.name, "terms": lic.terms}
+                    for lic in LICENSES.values()
+                ],
+            },
+        )
+
+    def _press_list(self, request, session, params) -> Response:
+        """Live contributions, newest first — the tenant's shelf. `mine=1`
+        narrows to the caller's own (their resting records included, so
+        an author always sees what they unpublished)."""
+        press = self._require_press()
+        mine = str(request.query.get("mine") or "") in ("1", "true")
+        genre = str(request.query.get("genre") or "") or None
+        limit = min(int(request.query.get("limit") or 50), 200)
+        items = press.store.list(
+            tenant=session.tenant_id,
+            genre=genre,
+            author=session.principal_id if mine else None,
+            limit=limit,
+            include_superseded=mine,
+        )
+        return json_response(
+            200, {"items": [self._contribution_dict(r) for r in items]}
+        )
+
+    def _press_publish(self, request, session, params) -> Response:
+        """The publication gate, walked in order — refusals are loud and
+        name the fix. Media rides as drawer REFS (never copies): each
+        named file must be the caller's own at publish time."""
+        press = self._require_press()
+        from ..press import MediaRef, PressError
+
+        body = request.body or {}
+        file_ids = body.get("file_ids") or []
+        if not isinstance(file_ids, list):
+            raise GatewayError(400, "invalid_request", "file_ids must be a list")
+        media: list[MediaRef] = []
+        for file_id in file_ids:
+            file = (
+                self._files.get(str(file_id), tenant=session.tenant_id)
+                if self._files is not None
+                else None
+            )
+            # The drawer wall holds at the door: another account's file —
+            # or a node's — is indistinguishable from a missing one.
+            if file is not None and file.node_id is None:
+                if file.owner not in ("", session.principal_id):
+                    file = None
+            elif file is not None:
+                file = None
+            if file is None:
+                raise GatewayError(
+                    404, "not_found", f"no such file: {file_id}"
+                )
+            media.append(
+                MediaRef(
+                    file_id=file.file_id,
+                    blob_ref=file.blob_ref or "",
+                    media_type=file.media_type or "",
+                    name=file.name,
+                )
+            )
+        try:
+            record = press.publish(
+                tenant=session.tenant_id,
+                author=session.principal_id,
+                title=str(body.get("title") or ""),
+                body=str(body.get("body") or ""),
+                genres=body.get("genres") or [],
+                license=str(body.get("license") or ""),
+                consent=body.get("consent") is True,
+                media=media,
+            )
+        except PressError as exc:
+            raise self._press_refused(exc) from exc
+        # The provenance row: publication is a public act and lands on
+        # the tamper-evident chain (leaving conversation privacy alone).
+        self._durable.audit.append(
+            "press.contribution_published",
+            {
+                "contribution_id": record.contribution_id,
+                "author": record.author,
+                "genres": list(record.genres),
+                "license": record.license,
+                "similar_to": record.similar_to,
+            },
+        )
+        return json_response(201, self._contribution_dict(record))
+
+    def _press_detail(self, request, session, params) -> Response:
+        """A live contribution — or the author's own resting one: the
+        author always sees their record; everyone else sees only what
+        stands."""
+        press = self._require_press()
+        record = press.store.get(
+            params["contribution_id"],
+            tenant=session.tenant_id,
+            include_superseded=True,
+        )
+        if record is None or (
+            record.superseded_at is not None
+            and record.author != session.principal_id
+        ):
+            raise GatewayError(404, "not_found", "no such contribution")
+        return json_response(200, self._contribution_dict(record))
+
+    def _press_unpublish(self, request, session, params) -> Response:
+        press = self._require_press()
+        from ..press import PressError
+
+        try:
+            record = press.unpublish(
+                params["contribution_id"],
+                tenant=session.tenant_id,
+                author=session.principal_id,
+            )
+        except PressError as exc:
+            raise self._press_refused(exc) from exc
+        self._durable.audit.append(
+            "press.contribution_unpublished",
+            {
+                "contribution_id": record.contribution_id,
+                "author": record.author,
+            },
+        )
+        return json_response(200, self._contribution_dict(record))
+
+    def _press_media(self, request, session, params) -> Response:
+        """A published contribution's attached file, by reference — the
+        publication is the consent that crosses the drawer wall. A file
+        the author has since deleted is honestly gone (refs, never
+        copies)."""
+        press = self._require_press()
+        record = press.store.get(
+            params["contribution_id"], tenant=session.tenant_id
+        )
+        if record is None:
+            raise GatewayError(404, "not_found", "no such contribution")
+        try:
+            ref = record.media[int(params["index"])]
+        except (IndexError, ValueError):
+            raise GatewayError(404, "not_found", "no such attachment") from None
+        file = (
+            self._files.get(ref.file_id, tenant=session.tenant_id)
+            if self._files is not None
+            else None
+        )
+        if file is None:
+            raise GatewayError(
+                404, "not_found", "the referenced file is gone"
+            )
+        try:
+            data = self._files.read_bytes(file)
+        except FileTooLargeError as exc:
+            raise GatewayError(404, "not_found", str(exc)) from exc
+        return Response(
+            status=200,
+            body=data,
+            content_type=file.media_type or "application/octet-stream",
+        )
 
     # ------------------------------------------------------------------ #
     # Friends: people talking to people on the same host.                 #

@@ -360,6 +360,31 @@ Goal Adherence:
 
 ### A1 — the contribution spine (publish, attribute, weigh)
 
+**Status: LANDED** — `src/oolu/press/`: the taxonomy as typed, versioned
+records (`taxonomy.py`, twelve genres including the commerce-adjacent
+`products` and `results` that seed Explorer's evidence), and
+`contributions.py` — the frozen `ContentContribution`, the stated
+license as a named, versioned record (`oolu-members-1`, terms and all),
+and `PressDesk.publish` walking the gate in order: consent + license →
+words and bounds → taxonomy → the scrub gate (refusals name each leak —
+"an email address, an API key" — and the platform never rewrites the
+author's words) → the neighbor check (`plagiarism.similarity` over the
+tenant's live pieces; a near-duplicate is FLAGGED with the original
+credited, never refused). Media rides as drawer refs (`sha256:` blob
+addresses), never copies. Unpublishing supersedes — a WHERE clause, the
+memoryspine law — and both acts land on the tamper-evident audit chain.
+Doors: `/v1/press/genres` (taxonomy + licenses, so consent renders the
+server's own terms), `GET/POST /v1/press/contributions`, detail,
+`/unpublish`, and per-attachment media streaming (the publication is the
+consent that crosses the drawer wall; a deleted file is honestly gone).
+Surface: the press panel at the head of the News thread — the shelf with
+bylines, genre chips speaking the taxonomy's labels, the retelling
+credit, the contribute form with the license terms inline, and unpublish
+on your own pieces only. Pinned by `tests/test_press.py` (every gate, the
+supersession law, the tenant wall, the audit-chain verify, and the
+import scan proving `press/` reaches no outside-content seam) and
+`Agents.test.tsx`.
+
 Goal: members can publish content into the app under a stated license;
 every contribution is scrubbed, screened, genre-keyed, author-attributed,
 durable, and revocable-forward.

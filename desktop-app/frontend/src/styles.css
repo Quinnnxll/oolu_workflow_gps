@@ -2564,3 +2564,98 @@ button.ghost {
   display: inline-flex;
   align-items: center;
 }
+
+/* ---- the press (agents-expansion A1): the contribution spine ------------ */
+.press-panel {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.press-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.press-heading {
+  font-weight: 600;
+}
+
+.press-compose {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.press-genres {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.press-chip {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 0.85em;
+  background: transparent;
+}
+
+.press-chip.on {
+  border-color: transparent;
+  background: hsl(210 45% 34%);
+  color: #fff;
+}
+
+.press-chip.credit {
+  background: hsl(38 60% 38%);
+}
+
+.press-attach summary,
+.press-license summary {
+  cursor: pointer;
+}
+
+.press-file {
+  display: block;
+  padding: 2px 0 2px 12px;
+}
+
+.press-consent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.press-card {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.press-byline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.press-title {
+  font-weight: 600;
+}
+
+.press-body {
+  white-space: pre-wrap;
+}
+
+.press-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}

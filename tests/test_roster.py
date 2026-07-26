@@ -289,7 +289,7 @@ def test_a_roster_turn_lands_in_its_own_thread(tmp_path):
     assert reply.status == 200
     assert reply.body["agent"] == "news" and reply.body["source"] == "card"
     assert reply.body["run_id"] is None
-    assert "phase A1" in reply.body["reply"]  # the honest future, named
+    assert "phase A2" in reply.body["reply"]  # the honest future, named
 
     news = gateway.handle(
         _req("GET", "/v1/chat/history", token=token, query={"agent": "news"})

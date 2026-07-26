@@ -601,6 +601,37 @@ export interface Profile {
   has_photo: boolean;
 }
 
+// ---- the press (A1): member contributions ----------------------------------
+export interface PressGenre {
+  key: string;
+  label: string;
+  description: string;
+}
+
+export interface PressLicense {
+  key: string;
+  name: string;
+  terms: string;
+}
+
+// A published contribution — author-attributed, genre-keyed, licensed.
+// `similar_to` credits the original when the neighbor check flagged a
+// retelling; `superseded_at` marks an unpublished (resting) record.
+export interface Contribution {
+  contribution_id: string;
+  author: string;
+  title: string;
+  body: string;
+  genres: string[];
+  license: string;
+  media: { file_id: string; media_type: string; name: string; blob_ref: string }[];
+  similar_to: string | null;
+  similarity: number | null;
+  taxonomy_version: number;
+  created_at: string;
+  superseded_at: string | null;
+}
+
 // ---- friends wire shapes ----------------------------------------------------
 // A conversation in the peer list: who, what was said last, what waits.
 export interface FriendConversation {
@@ -1257,6 +1288,38 @@ export const api = {
   },
   removeProfilePhoto: () =>
     req<{ removed: boolean }>("DELETE", "/v1/profile/photo"),
+  // ---- the press (A1): the contribution spine ------------------------------
+  // The taxonomy and the stated licenses — the contribute form renders
+  // consent from exactly this, never from hardcoded words.
+  pressGenres: () =>
+    req<{
+      taxonomy_version: number;
+      items: PressGenre[];
+      licenses: PressLicense[];
+    }>("GET", "/v1/press/genres"),
+  pressContributions: (opts?: { genre?: string; mine?: boolean }) => {
+    const query = new URLSearchParams();
+    if (opts?.genre) query.set("genre", opts.genre);
+    if (opts?.mine) query.set("mine", "1");
+    const qs = query.toString();
+    return req<{ items: Contribution[] }>(
+      "GET",
+      "/v1/press/contributions" + (qs ? `?${qs}` : ""),
+    );
+  },
+  pressPublish: (payload: {
+    title: string;
+    body: string;
+    genres: string[];
+    license: string;
+    consent: boolean;
+    file_ids?: string[];
+  }) => req<Contribution>("POST", "/v1/press/contributions", payload),
+  pressUnpublish: (contributionId: string) =>
+    req<Contribution>(
+      "POST",
+      `/v1/press/contributions/${encodeURIComponent(contributionId)}/unpublish`,
+    ),
   // The data-subject's rights, self-serve: everything as one JSON
   // document, and erasure that says exactly what it removed.
   exportAccount: () => req<Record<string, unknown>>("GET", "/v1/account/export"),

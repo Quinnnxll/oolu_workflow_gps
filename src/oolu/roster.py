@@ -45,13 +45,15 @@ ROSTER: tuple[AgentCard, ...] = (
         name="News",
         tagline="Stories from members, to magazine standard",
         scope=(
-            "I talk through how member-contributed news will work — "
-            "contributions, attributed stories, personal editions. I do "
-            "not collect, compose, or publish anything yet."
+            "I collect member contributions: publish your own piece in "
+            "this thread — titled, genre-keyed, under the members "
+            "license, credited to you by name and photo — and browse "
+            "what others published. I do not compose stories or "
+            "editions yet."
         ),
         ahead=(
-            "Contributions arrive in phase A1; composed stories and "
-            "personal editions in phase A2 of the agents-expansion plan."
+            "Composed stories and personal editions arrive in phase A2 "
+            "of the agents-expansion plan."
         ),
         seat="news.compose",
     ),

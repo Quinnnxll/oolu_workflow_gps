@@ -4,6 +4,36 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The contribution spine (A1) — members publish, the press attributes:
+
+- **The press package** (`src/oolu/press/`) — `ContentContribution`:
+  member-published material, titled, genre-keyed against a typed
+  VERSIONED taxonomy (twelve genres, `products` and `results` seeding
+  Explorer's later evidence), licensed under a named, versioned license
+  whose terms travel to the consent box verbatim, and attributed to its
+  author — the byline's principal.
+- **The publication gate, in order** — consent + license first; words
+  and bounds; the taxonomy by name; the scrub gate REFUSING LOUDLY with
+  each leak named ("an email address, an API key…") instead of silently
+  rewriting the author's words; and the neighbor check flagging a
+  near-duplicate with the original credited (`similar_to`) — retelling
+  is human, uncredited retelling is the defect.
+- **Supersession, never erasure** — unpublishing stamps the record and
+  excludes it from every future read in SQL; history stands word for
+  word, the author still sees their own resting records, and both acts
+  land on the tamper-evident audit chain (`press.contribution_published`
+  / `_unpublished`).
+- **Refs, never copies** — attached media are drawer-file references
+  with `sha256:` blob addresses; the published contribution is the
+  consent that crosses the drawer wall at read time, and a file the
+  author later deletes is honestly gone.
+- **Doors** — `/v1/press/genres`, `GET/POST /v1/press/contributions`
+  (+detail, +unpublish, +media). **Surface** — the press panel at the
+  head of the News thread: the shelf with bylines and genre chips, the
+  retelling credit, the contribute form, unpublish on your own pieces.
+- **Closed loop, structurally** — the import scan in `tests/test_press.py`
+  proves `press/` reaches no web-search, HTTP, or provider seam.
+
 The agent roster (A0) — named agents below OoLu, each a real thread:
 
 - **The roster** (`roster.py`, `GET /v1/roster`) — News, Poll, Explorer,
