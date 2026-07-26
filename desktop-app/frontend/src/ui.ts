@@ -165,6 +165,43 @@ const STRINGS: Record<string, Entry> = {
     es: "tu asistente",
     fr: "votre assistant",
   },
+  // The agent roster (A0): the composer and the byline controls.
+  "agent.message": {
+    en: "Message {name}…",
+    zh: "给{name}发消息…",
+    es: "Escribe a {name}…",
+    fr: "Écrire à {name}…",
+  },
+  "agent.sendFailed": {
+    en: "I couldn't reach the server — try again.",
+    zh: "无法连接服务器——请再试一次。",
+    es: "No pude conectar con el servidor: inténtalo de nuevo.",
+    fr: "Impossible de joindre le serveur — réessayez.",
+  },
+  "profile.photo": {
+    en: "Profile photo",
+    zh: "头像",
+    es: "Foto de perfil",
+    fr: "Photo de profil",
+  },
+  "profile.photoDesc": {
+    en: "Shown next to your name wherever your work is credited — messages today, contributions and stories later.",
+    zh: "显示在你名字旁边，凡署名之处都会用到——现在是消息，之后是投稿和报道。",
+    es: "Se muestra junto a tu nombre dondequiera que se te acredite: mensajes hoy, contribuciones e historias después.",
+    fr: "Affichée à côté de votre nom partout où votre travail est crédité — messages aujourd'hui, contributions et articles demain.",
+  },
+  "profile.choosePhoto": {
+    en: "Choose photo…",
+    zh: "选择照片…",
+    es: "Elegir foto…",
+    fr: "Choisir une photo…",
+  },
+  "profile.removePhoto": {
+    en: "Remove",
+    zh: "移除",
+    es: "Quitar",
+    fr: "Retirer",
+  },
   files: { en: "Files", zh: "文件", es: "Archivos", fr: "Fichiers" },
   filesSub: {
     en: "documents & sheets",
@@ -2878,6 +2915,13 @@ const ZH_HANT: Record<string, string> = {
   "life": "生活",
   "work": "工作",
   "assistantSub": "你的助手",
+  "agent.message": "給{name}發訊息…",
+  "agent.sendFailed": "無法連接伺服器——請再試一次。",
+  "profile.photo": "頭像",
+  "profile.photoDesc":
+    "顯示在你名字旁邊，凡署名之處都會用到——現在是訊息，之後是投稿和報導。",
+  "profile.choosePhoto": "選擇照片…",
+  "profile.removePhoto": "移除",
   "files": "檔案",
   "filesSub": "文件與表格",
   "settings": "設定",

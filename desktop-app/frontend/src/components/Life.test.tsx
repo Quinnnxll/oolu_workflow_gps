@@ -56,6 +56,48 @@ describe("Life", () => {
     expect(screen.getByPlaceholderText("Message OoLu…")).toBeTruthy();
   });
 
+  it("lists the agent roster below OoLu and opens an agent's own thread", async () => {
+    routes["GET /v1/roster"] = {
+      status: 200,
+      body: {
+        items: [
+          {
+            agent_id: "news",
+            name: "News",
+            tagline: "Stories from members",
+            scope: "I talk through how member news will work.",
+            ahead: "Contributions arrive in phase A1.",
+            seat: "news.compose",
+          },
+        ],
+      },
+    };
+    routes["POST /v1/chat"] = {
+      status: 200,
+      body: { reply: "Happy to explain editions.", source: "card", run_id: null },
+    };
+    render(<Life />);
+
+    // The roster renders below OoLu; opening an agent is its OWN thread —
+    // its composer, its card welcome — never the OoLu chat in a costume.
+    const entry = await screen.findByText("News");
+    fireEvent.click(entry);
+    const box = screen.getByPlaceholderText("Message News…");
+    expect(
+      screen.getByText(/I talk through how member news will work\./),
+    ).toBeTruthy();
+
+    // A sent message rides the one chat door tagged with the agent, so
+    // the server answers through the agent's seat and thread.
+    fireEvent.change(box, { target: { value: "hello" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(await screen.findByText("Happy to explain editions.")).toBeTruthy();
+    const turn = calls.find(
+      (c) => c.method === "POST" && c.path === "/v1/chat",
+    );
+    expect(turn?.body).toMatchObject({ agent: "news", message: "hello" });
+  });
+
   it("lists node interactions under Noder and opens the log thread", async () => {
     routes["GET /v1/runs"] = { status: 200, body: { items: [RUN] } };
     routes["GET /v1/runs/r1/audit"] = {

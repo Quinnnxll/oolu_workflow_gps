@@ -2523,3 +2523,44 @@ button.ghost {
   margin: 6px 0;
   padding-left: 18px;
 }
+
+/* ---- the agent roster & the byline (agents-expansion A0) ---------------- */
+/* The byline: a face and a name, rendered the same wherever work is
+   credited — messages today, contributions and stories in later phases. */
+.byline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.byline-photo {
+  border-radius: 50%;
+  object-fit: cover;
+  flex: none;
+}
+
+.byline-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 600;
+}
+
+.byline-name {
+  font-weight: 500;
+}
+
+.setting-row.profile-photo .setting-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* A label styled to sit beside buttons: the file picker's visible face. */
+.filelike {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}

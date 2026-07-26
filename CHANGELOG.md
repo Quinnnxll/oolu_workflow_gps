@@ -4,6 +4,37 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The agent roster (A0) — named agents below OoLu, each a real thread:
+
+- **The roster** (`roster.py`, `GET /v1/roster`) — News, Poll, Explorer,
+  and Travel Plan appear in the Life sidebar directly below OoLu. Each
+  card carries an honest scope: what the agent does TODAY and which
+  phase of `docs/agents-expansion-plan.md` brings the rest — and the
+  turn's system frame is built from the card, so an agent cannot claim
+  abilities its phase has not landed. A model-less (or model-down) host
+  answers from the card instead of dying.
+- **Their own seats** (`seats.py`: `news.compose`, `poll.pair`,
+  `explore.brief`, `travel.plan`) — every roster consultation is routed,
+  metered, and booked per (tenant, purpose) through the standing seat
+  discipline; no roster model call can ride under the OoLu conversation's
+  meter.
+- **Their own threads** (`social.py`) — `assistant_turns` gains an
+  `agent` column with an in-place migration (pre-roster rows stay
+  OoLu's); the messenger cap now falls per thread, so a chatty agent
+  never shortens the OoLu conversation. `/v1/chat` carries
+  `{"agent": ...}` and `/v1/chat/history?agent=` loads the right thread
+  on a fresh device. Account export reads every thread; erasure still
+  removes them all.
+- **The byline** (`social.ProfilePhotoStore`, `/v1/profiles/*`,
+  `/v1/profile/photo`) — an account can set a profile photo, published
+  to its own tenant on purpose (a byline is meant to be seen); the
+  `Byline` component renders face + display name with the generated
+  identity color standing in when no photo exists, and the Settings
+  account group previews your byline exactly as peers see it. The photo
+  rides account export and erasure.
+- Pinned by `tests/test_roster.py` and the roster case in
+  `Life.test.tsx`; the shell bundle is rebuilt.
+
 Production 502 fixed — the marketplace speaks the production dialect:
 
 - **The outage.** The marketplace stores are constructed inside

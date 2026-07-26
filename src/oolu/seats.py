@@ -176,6 +176,47 @@ SEATS: dict[str, Seat] = {
             reads=("src/",),
             audited=True,
         ),
+        # ------------------------------------------------------------- #
+        # The agent roster (agents-expansion plan A0): each named agent  #
+        # below OoLu converses through its own seat, so its model draw   #
+        # is metered and booked apart from the OoLu conversation. A0     #
+        # seats hold no hands and no drawer scopes — words only; later   #
+        # phases grant hands here, never at the call site.               #
+        # ------------------------------------------------------------- #
+        Seat(
+            purpose="news.compose",
+            charge=(
+                "select and compose member-contributed material into "
+                "attributed stories; nothing publishes without resolvable "
+                "contribution lineage"
+            ),
+            audited=False,  # the conversation is private, like chat.turn
+        ),
+        Seat(
+            purpose="poll.pair",
+            charge=(
+                "offer comparable pairs and honest aggregates; results "
+                "are real counts, revealed only after the member votes"
+            ),
+            audited=False,
+        ),
+        Seat(
+            purpose="explore.brief",
+            charge=(
+                "compare products on verified evidence — price, discount, "
+                "feedback, trust, lab results — every ranking factor named"
+            ),
+            audited=False,
+        ),
+        Seat(
+            purpose="travel.plan",
+            charge=(
+                "plan trips under real constraints — time, group "
+                "availability, schedule, budget; infeasible plans are "
+                "named, bookings ride the approval path"
+            ),
+            audited=False,
+        ),
     )
 }
 

@@ -758,6 +758,7 @@ def build_host_runtime(
         AssistantHistoryStore,
         DirectMessageStore,
         FriendshipStore,
+        ProfilePhotoStore,
     )
 
     if database_url:
@@ -1269,11 +1270,13 @@ def build_host_runtime(
         totp=_totp,
         payment_authorizations=_payment_auth,
         local_files_root=Path(local_files_root) if local_files_root else None,
-        # People talking to people, and one OoLu thread per account that
-        # every signed-in device shares.
+        # People talking to people, and one thread per account per agent
+        # (OoLu + the roster) that every signed-in device shares — plus
+        # the byline's face.
         direct_messages=DirectMessageStore(conn),
         friendships=FriendshipStore(conn),
         assistant_history=AssistantHistoryStore(conn),
+        profile_photos=ProfilePhotoStore(conn),
         # Reminders: rows with a clock — the deterministic route for
         # "remind me", surfaced by the client's poll.
         reminders=ReminderStore(conn),

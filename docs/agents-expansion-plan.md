@@ -301,6 +301,28 @@ adapter + JWKS OIDC) — the standing Nodeplace P0 prerequisite.
 
 ### A0 — the roster and the byline (no content, no money)
 
+**Status: LANDED** — `roster.py`: the four `AgentCard`s and the lean
+roster turn (the card IS the boundary — a model-less or model-down host
+answers from the card, never dies). `seats.py`: the `news.compose`,
+`poll.pair`, `explore.brief`, `travel.plan` seats, so every roster model
+call is metered per (tenant, purpose) through the standing
+`_tenant_model` discipline. `social.py`: the `agent` column on
+`assistant_turns` (in-place migration, old rows stay OoLu's; the
+messenger cap falls per thread), and `ProfilePhotoStore` — the byline's
+face, published to the account's own tenant, erased with the account.
+Doors: `GET /v1/roster`, `/v1/chat` carrying `{"agent": ...}` into the
+agent's own thread, `/v1/chat/history?agent=`, and the profile trio
+(`GET /v1/profiles/{username}`, `GET .../photo`, `POST|DELETE
+/v1/profile/photo`). Surface: the roster renders below OoLu in the Life
+sidebar; each agent opens its own `AgentThread` (words only — no runs,
+no tools); the `Byline` component and the Settings photo picker preview
+the byline exactly as peers see it; the shell bundle is rebuilt and
+committed. Pinned by `tests/test_roster.py` (registry/seat coverage,
+per-thread isolation and caps, pre-roster migration, photo flow
+end-to-end, model-less roster turns) and the roster case in
+`Life.test.tsx`. Account export gained the all-threads read
+(`agent=None`) and the photo; erasure removes both.
+
 Goal: four agents listed below OoLu, each a real, separately-threaded,
 seat-metered conversation; contributor identity renderable everywhere as
 photo + name.

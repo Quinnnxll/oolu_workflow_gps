@@ -204,7 +204,8 @@ from ..skills.contract import (
 from ..skills.inputs import bind_inputs, inputs_manifest, validate_user_inputs
 from ..skills.models import ActionEvent, ExecutionStatus, ReusableSkill
 from ..skills.ports import ActionExecutor
-from ..social import MAX_MESSAGE_CHARS
+from ..roster import agent_card, agent_turn, roster_items
+from ..social import MAX_MESSAGE_CHARS, MAX_PHOTO_BYTES
 from .errors import GatewayError, WebhookError
 from .http import (
     Request,
@@ -656,8 +657,11 @@ class GatewayApp:
         direct_messages=None,  # social.DirectMessageStore: friends talking
         friendships=None,  # social.FriendshipStore: requests, blocks, and
         # the stranger-message preference
-        assistant_history=None,  # social.AssistantHistoryStore: one OoLu
-        # thread per account, shared by every signed-in device
+        assistant_history=None,  # social.AssistantHistoryStore: one thread
+        # per account per agent (OoLu + the roster), shared by every
+        # signed-in device
+        profile_photos=None,  # social.ProfilePhotoStore: the byline's
+        # face — published to the account's own tenant
         representative=None,  # representative.RepresentativeEngine: drafts
         # replies in the account's own voice — never sends on its own
         reminders=None,  # reminders.ReminderStore: rows with a clock,
@@ -887,6 +891,7 @@ class GatewayApp:
         self._direct_messages = direct_messages
         self._friendships = friendships
         self._assistant_history = assistant_history
+        self._profile_photos = profile_photos
         self._representative = representative
         self._reminders = reminders
         self._lessons = lessons
@@ -1116,6 +1121,16 @@ class GatewayApp:
         r.add("POST", "/v1/chat", self._chat_turn)
         # The account's own OoLu thread — what a fresh device loads.
         r.add("GET", "/v1/chat/history", self._chat_history)
+        # The agent roster (A0): who is listed below OoLu. The same /v1/chat
+        # door carries a roster agent's turn (body: {"agent": ...}); this
+        # door is what the sidebar renders.
+        r.add("GET", "/v1/roster", self._roster)
+        # The byline: an account's published face and name, readable by
+        # the account's own tenant — and the owner's doors to set it.
+        r.add("GET", "/v1/profiles/{username}", self._profile_get)
+        r.add("GET", "/v1/profiles/{username}/photo", self._profile_photo_get)
+        r.add("POST", "/v1/profile/photo", self._profile_photo_put)
+        r.add("DELETE", "/v1/profile/photo", self._profile_photo_delete)
         # Friends: person-to-person messages between accounts on this
         # host. Lookup is exact (username or e-mail) — never a directory.
         r.add("GET", "/v1/friends", self._friends_list)
@@ -1836,6 +1851,14 @@ class GatewayApp:
         history = body.get("history") or []
         if not isinstance(history, list):
             raise GatewayError(400, "invalid_request", "history must be a list")
+        # A roster agent's turn (A0): same door, its own lean path — its
+        # own seat, its own thread, no tools, no task lane. OoLu's full
+        # surface continues below.
+        roster_agent = str(body.get("agent") or "").strip()
+        if roster_agent and roster_agent != "oolu":
+            return self._roster_turn(
+                request, session, body, roster_agent, message, history
+            )
         # The assistant's hands: the caller's own files, tenant-bound —
         # and, inside a node's interact window, that node's own desk.
         tools = None
@@ -2227,18 +2250,193 @@ class GatewayApp:
         )
 
     def _chat_history(self, request, session, params) -> Response:
-        """The account's OoLu thread, oldest first — what a fresh device
-        loads so every client shows the same conversation."""
+        """One agent's thread, oldest first — OoLu's by default, a roster
+        agent's with ``?agent=`` — what a fresh device loads so every
+        client shows the same conversation."""
         if self._assistant_history is None:
             raise GatewayError(404, "not_found", "chat history is not kept here")
+        agent = str(request.query.get("agent") or "oolu").strip()
+        if agent != "oolu" and agent_card(agent) is None:
+            raise GatewayError(400, "invalid_request", f"unknown agent: {agent}")
         return json_response(
             200,
             {
                 "items": self._assistant_history.history(
-                    tenant=session.tenant_id, principal=session.principal_id
+                    tenant=session.tenant_id,
+                    principal=session.principal_id,
+                    agent=agent,
                 )
             },
         )
+
+    # ------------------------------------------------------------------ #
+    # The agent roster (A0): the list below OoLu, and a roster turn.      #
+    # ------------------------------------------------------------------ #
+    def _roster(self, request, session, params) -> Response:
+        """Who is listed below OoLu — the sidebar renders exactly this."""
+        return json_response(200, {"items": roster_items()})
+
+    def _roster_turn(
+        self, request, session, body, agent_id, message, history
+    ) -> Response:
+        """One turn with a roster agent: the card's honest scope, spoken
+        through the agent's OWN seat — metered and booked apart from the
+        OoLu conversation — and landed in the agent's OWN thread."""
+        card = agent_card(agent_id)
+        if card is None:
+            raise GatewayError(
+                400, "invalid_request", f"unknown agent: {agent_id}"
+            )
+        # The seat is the office: the router is cached and metered per
+        # (tenant, purpose), and the actor stamp keeps a shared tenant's
+        # gauges per person — exactly the chat.turn discipline.
+        router = self._seat_actor(
+            self._tenant_model(session.tenant_id, purpose=card.seat),
+            session.principal_id,
+        )
+        turn_now = request.now or self._clock()
+        local_now = turn_now + timedelta(
+            minutes=_tz_minutes(body.get("tz_offset_minutes"))
+        )
+        time_note = (
+            f"Current time: {turn_now:%Y-%m-%d %H:%M} UTC; the user's "
+            f"local time is {local_now:%Y-%m-%d %H:%M}."
+        )
+        recent = [h for h in history if isinstance(h, dict)][-20:]
+        say, reasoning, source = agent_turn(
+            card, message, history=recent, model=router, context=time_note
+        )
+        # The conversation survives the device, exactly like OoLu's —
+        # tagged with the agent, so each thread stays its own.
+        if self._assistant_history is not None:
+            self._assistant_history.append(
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+                kind="user",
+                body=message,
+                agent=card.agent_id,
+            )
+            self._assistant_history.append(
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+                kind="assistant",
+                body=say,
+                agent=card.agent_id,
+            )
+        return json_response(
+            200,
+            {
+                "reply": say,
+                "source": source,
+                "actions": [],
+                "reasoning": reasoning,
+                "device": None,
+                "copy": None,
+                "run_id": None,
+                "run": None,
+                "agent": card.agent_id,
+            },
+        )
+
+    # ------------------------------------------------------------------ #
+    # The byline: a published face and name, tenant-scoped.               #
+    # ------------------------------------------------------------------ #
+    def _profile_principal(self, session, username: str) -> str:
+        """The named account must exist, enabled, in the caller's own
+        tenant — your own name included (a byline preview is yourself)."""
+        username = str(username or "").strip()
+        if username == session.principal_id:
+            return username
+        account = (
+            self._accounts.user(username) if self._accounts is not None else None
+        )
+        if (
+            account is None
+            or account.tenant_id != session.tenant_id
+            or account.disabled
+        ):
+            raise GatewayError(404, "not_found", "no one by that name here")
+        return username
+
+    def _profile_get(self, request, session, params) -> Response:
+        """The byline's words: display name (the account's own setting)
+        and whether a photo exists — enough to render an attribution."""
+        username = self._profile_principal(session, params["username"])
+        display_name = ""
+        if self._settings is not None:
+            effective = self._settings.effective(session.tenant_id, username)
+            display_name = str(effective.get("account.display_name", "") or "")
+        has_photo = bool(
+            self._profile_photos is not None
+            and self._profile_photos.get(
+                tenant=session.tenant_id, principal=username
+            )
+        )
+        return json_response(
+            200,
+            {
+                "username": username,
+                "display_name": display_name,
+                "has_photo": has_photo,
+            },
+        )
+
+    def _profile_photo_get(self, request, session, params) -> Response:
+        """The photo's true bytes, typed honestly — any signed-in member
+        of the same tenant may look, because that is what a byline is."""
+        username = self._profile_principal(session, params["username"])
+        if self._profile_photos is None:
+            raise GatewayError(404, "not_found", "this host keeps no photos")
+        found = self._profile_photos.get(
+            tenant=session.tenant_id, principal=username
+        )
+        if found is None:
+            raise GatewayError(404, "not_found", "no photo on this account")
+        media_type, data = found
+        return Response(status=200, body=data, content_type=media_type)
+
+    def _profile_photo_put(self, request, session, params) -> Response:
+        """Set YOUR photo: the body is the image, exactly as picked (the
+        files-upload discipline — no base64 inflation on the wire)."""
+        if self._profile_photos is None:
+            raise GatewayError(404, "not_found", "this host keeps no photos")
+        data = request.raw
+        if not data:
+            raise GatewayError(
+                400, "invalid_request", "the body is the photo — it is empty"
+            )
+        if len(data) > MAX_PHOTO_BYTES:
+            raise GatewayError(
+                413,
+                "too_large",
+                f"a profile photo is at most {MAX_PHOTO_BYTES} bytes",
+            )
+        media_type = str(request.header("content-type") or "")
+        try:
+            self._profile_photos.save(
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+                media_type=media_type,
+                data=data,
+            )
+        except ValueError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(
+            201,
+            {
+                "username": session.principal_id,
+                "media_type": media_type.split(";")[0].strip().lower(),
+                "size": len(data),
+            },
+        )
+
+    def _profile_photo_delete(self, request, session, params) -> Response:
+        if self._profile_photos is None:
+            raise GatewayError(404, "not_found", "this host keeps no photos")
+        removed = self._profile_photos.remove(
+            tenant=session.tenant_id, principal=session.principal_id
+        )
+        return json_response(200, {"removed": bool(removed)})
 
     # ------------------------------------------------------------------ #
     # Friends: people talking to people on the same host.                 #
@@ -5912,9 +6110,20 @@ class GatewayApp:
         if self._settings is not None:
             export["settings"] = self._settings.effective(tenant, principal)
         if self._assistant_history is not None:
+            # Every agent's thread, each row naming whose it is — the
+            # export is the account's WHOLE conversation record.
             export["chat"] = self._assistant_history.history(
-                tenant=tenant, principal=principal, limit=10_000
+                tenant=tenant, principal=principal, limit=10_000, agent=None
             )
+        if self._profile_photos is not None:
+            photo = self._profile_photos.get(tenant=tenant, principal=principal)
+            if photo is not None:
+                from base64 import b64encode
+
+                export["profile_photo"] = {
+                    "media_type": photo[0],
+                    "body_b64": b64encode(photo[1]).decode("ascii"),
+                }
         if self._reminders is not None:
             export["reminders"] = [
                 r.model_dump(mode="json")
@@ -6019,6 +6228,10 @@ class GatewayApp:
         if self._assistant_history is not None:
             erased["chat_turns"] = self._assistant_history.erase(
                 tenant=tenant, principal=principal
+            )
+        if self._profile_photos is not None:
+            erased["profile_photo"] = int(
+                self._profile_photos.remove(tenant=tenant, principal=principal)
             )
         if self._reminders is not None:
             erased["reminders"] = self._reminders.erase(

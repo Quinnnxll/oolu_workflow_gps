@@ -6,11 +6,18 @@ Two durable stores, both over the host's one durable connection:
   on the same host, with delivery order and read state. A conversation is
   not a table row; it is the set of messages between two principals,
   folded into a peer list with unread counts on read.
-- :class:`AssistantHistoryStore` — the OoLu conversation itself, per
-  account. The chat used to live only in one browser's localStorage;
-  moving it here is what lets a desktop, a browser, and a phone see the
-  SAME thread. Ephemeral nudges (idle reminders) stay client-side by
-  design — this store holds the conversation, not the presence.
+- :class:`AssistantHistoryStore` — the assistant conversations, per
+  account: the OoLu thread and, since the agent roster (A0), one thread
+  per named agent, told apart by an ``agent`` tag. The chat used to live
+  only in one browser's localStorage; moving it here is what lets a
+  desktop, a browser, and a phone see the SAME thread. Ephemeral nudges
+  (idle reminders) stay client-side by design — this store holds the
+  conversation, not the presence.
+
+And the face on the byline: :class:`ProfilePhotoStore` — one small photo
+per account, published to the account's own tenant so contributions,
+messages, and (from A1 on) every attributed content unit can carry the
+member's photo next to their display name.
 """
 
 from __future__ import annotations
@@ -207,26 +214,60 @@ _TURNS_SCHEMA = """CREATE TABLE IF NOT EXISTS assistant_turns (
     kind TEXT NOT NULL,
     body TEXT NOT NULL,
     at TEXT NOT NULL,
+    agent TEXT NOT NULL DEFAULT 'oolu',
     PRIMARY KEY (tenant_id, principal, seq)
 )"""
 
+# The default thread. Roster agents (roster.py) tag their turns with their
+# own agent_id, so one table holds every conversation and each agent still
+# reads only its own.
+DEFAULT_AGENT = "oolu"
+
 
 class AssistantHistoryStore:
-    """The OoLu conversation per account: user turns, assistant turns, and
-    run markers (kind="run", body=run_id), in strict order. Explicit seq —
-    portable across SQLite and Postgres, no autoincrement dialects."""
+    """The assistant conversations per account: user turns, assistant
+    turns, and run markers (kind="run", body=run_id), in strict order.
+    Explicit seq — portable across SQLite and Postgres, no autoincrement
+    dialects. One sequence per account spans every agent's thread; the
+    ``agent`` column is what keeps OoLu's words and News's words apart."""
 
     def __init__(self, conn, *, clock: Callable[[], datetime] | None = None) -> None:
         self._conn = conn
         self._clock = clock or (lambda: datetime.now(UTC))
         with self._conn.transaction() as db:
             db.execute(_TURNS_SCHEMA)
+        self._migrate_agent_column()
+
+    def _migrate_agent_column(self) -> None:
+        # Tables born before the roster lack the agent column. The probe
+        # runs in its own transaction so a failed SELECT cannot poison the
+        # ALTER's; existing rows keep the default — history stays OoLu's.
+        try:
+            with self._conn.transaction() as db:
+                db.execute("SELECT agent FROM assistant_turns LIMIT 1")
+            return
+        except Exception:
+            pass
+        with self._conn.transaction() as db:
+            db.execute(
+                "ALTER TABLE assistant_turns"
+                " ADD COLUMN agent TEXT NOT NULL DEFAULT 'oolu'"
+            )
 
     def append(
-        self, *, tenant: str, principal: str, kind: str, body: str
+        self,
+        *,
+        tenant: str,
+        principal: str,
+        kind: str,
+        body: str,
+        agent: str = DEFAULT_AGENT,
     ) -> int:
         if kind not in ("user", "assistant", "run"):
             raise ValueError(f"unknown turn kind: {kind}")
+        agent = str(agent or "").strip()
+        if not agent:
+            raise ValueError("a turn belongs to an agent's thread")
         with self._conn.transaction() as db:
             row = db.execute(
                 "SELECT COALESCE(MAX(seq), 0) AS top FROM assistant_turns"
@@ -236,8 +277,8 @@ class AssistantHistoryStore:
             seq = int(row["top"]) + 1
             db.execute(
                 """INSERT INTO assistant_turns
-                     (tenant_id, principal, seq, kind, body, at)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                     (tenant_id, principal, seq, kind, body, at, agent)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (
                     tenant,
                     principal,
@@ -245,13 +286,30 @@ class AssistantHistoryStore:
                     kind,
                     str(body),
                     self._clock().isoformat(),
+                    agent,
                 ),
             )
-            # The messenger cap: old turns fall off the back.
+            # The messenger cap, per thread: each agent's old turns fall
+            # off ITS back — a chatty News never shortens the OoLu thread.
             db.execute(
-                "DELETE FROM assistant_turns"
-                " WHERE tenant_id = ? AND principal = ? AND seq <= ?",
-                (tenant, principal, seq - ASSISTANT_HISTORY_KEEP),
+                """DELETE FROM assistant_turns
+                    WHERE tenant_id = ? AND principal = ? AND agent = ?
+                      AND seq NOT IN (
+                        SELECT seq FROM (
+                          SELECT seq FROM assistant_turns
+                           WHERE tenant_id = ? AND principal = ? AND agent = ?
+                           ORDER BY seq DESC LIMIT ?
+                        ) AS keep
+                      )""",
+                (
+                    tenant,
+                    principal,
+                    agent,
+                    tenant,
+                    principal,
+                    agent,
+                    ASSISTANT_HISTORY_KEEP,
+                ),
             )
         return seq
 
@@ -266,15 +324,27 @@ class AssistantHistoryStore:
         return int(getattr(cursor, "rowcount", 0) or 0)
 
     def history(
-        self, *, tenant: str, principal: str, limit: int = 200
+        self,
+        *,
+        tenant: str,
+        principal: str,
+        limit: int = 200,
+        agent: str | None = DEFAULT_AGENT,
     ) -> list[dict]:
-        """The last `limit` turns, oldest first."""
+        """The last `limit` turns, oldest first — one agent's thread by
+        default; ``agent=None`` reads every thread (the export door's
+        completeness read), each row naming whose it is."""
+        where = "tenant_id = ? AND principal = ?"
+        args: list = [tenant, principal]
+        if agent is not None:
+            where += " AND agent = ?"
+            args.append(str(agent))
         with self._conn.lock:
             rows = self._conn.db.execute(
-                """SELECT seq, kind, body, at FROM assistant_turns
-                   WHERE tenant_id = ? AND principal = ?
+                f"""SELECT seq, kind, body, at, agent FROM assistant_turns
+                   WHERE {where}
                    ORDER BY seq DESC LIMIT ?""",
-                (tenant, principal, int(limit)),
+                (*args, int(limit)),
             ).fetchall()
         return [
             {
@@ -282,9 +352,104 @@ class AssistantHistoryStore:
                 "kind": row["kind"],
                 "body": row["body"],
                 "at": row["at"],
+                "agent": row["agent"],
             }
             for row in reversed(rows)
         ]
+
+
+# --------------------------------------------------------------------------- #
+# The byline's face: one small photo per account.                              #
+# --------------------------------------------------------------------------- #
+# Stored as base64 text, not a BLOB column — the durable connection speaks
+# SQLite and PostgreSQL through one dialect, and text is the type they agree
+# on. Photos are small by contract (the cap below), so the ~33% base64
+# overhead buys portability cheaply. A content-addressed rebase onto the
+# artifact store is open to a later phase; the doors would not change.
+MAX_PHOTO_BYTES = 512_000  # a face, not a gallery
+
+_PHOTO_SCHEMA = """CREATE TABLE IF NOT EXISTS profile_photos (
+    tenant_id TEXT NOT NULL,
+    principal TEXT NOT NULL,
+    media_type TEXT NOT NULL,
+    body_b64 TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, principal)
+)"""
+
+
+class ProfilePhotoStore:
+    """One photo per (tenant, account) — deliberately published identity.
+
+    Unlike the file drawer, which is owner-walled, a stored photo is meant
+    to be SEEN: any signed-in member of the same tenant may read it, because
+    that is what a byline is. Setting a photo is the publication consent;
+    removing it takes effect on the next read. Erasure rides account
+    deletion like every other personal store.
+    """
+
+    def __init__(self, conn, *, clock: Callable[[], datetime] | None = None) -> None:
+        self._conn = conn
+        self._clock = clock or (lambda: datetime.now(UTC))
+        with self._conn.transaction() as db:
+            db.execute(_PHOTO_SCHEMA)
+
+    def save(
+        self, *, tenant: str, principal: str, media_type: str, data: bytes
+    ) -> None:
+        if not data:
+            raise ValueError("the body is the photo — it is empty")
+        if len(data) > MAX_PHOTO_BYTES:
+            raise ValueError(
+                f"photo too large: {len(data)} bytes"
+                f" (the cap is {MAX_PHOTO_BYTES})"
+            )
+        media_type = str(media_type or "").split(";")[0].strip().lower()
+        if not media_type.startswith("image/"):
+            raise ValueError("a profile photo is an image")
+        from base64 import b64encode
+
+        with self._conn.transaction() as db:
+            db.execute(
+                "DELETE FROM profile_photos"
+                " WHERE tenant_id = ? AND principal = ?",
+                (tenant, principal),
+            )
+            db.execute(
+                """INSERT INTO profile_photos
+                     (tenant_id, principal, media_type, body_b64, updated_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (
+                    tenant,
+                    principal,
+                    media_type,
+                    b64encode(data).decode("ascii"),
+                    self._clock().isoformat(),
+                ),
+            )
+
+    def get(self, *, tenant: str, principal: str) -> tuple[str, bytes] | None:
+        """``(media_type, bytes)`` — or None when the account keeps none."""
+        with self._conn.lock:
+            row = self._conn.db.execute(
+                "SELECT media_type, body_b64 FROM profile_photos"
+                " WHERE tenant_id = ? AND principal = ?",
+                (tenant, principal),
+            ).fetchone()
+        if row is None:
+            return None
+        from base64 import b64decode
+
+        return str(row["media_type"]), b64decode(row["body_b64"])
+
+    def remove(self, *, tenant: str, principal: str) -> bool:
+        with self._conn.transaction() as db:
+            cursor = db.execute(
+                "DELETE FROM profile_photos"
+                " WHERE tenant_id = ? AND principal = ?",
+                (tenant, principal),
+            )
+        return bool(getattr(cursor, "rowcount", 0) or 0)
 
 
 # --------------------------------------------------------------------------- #

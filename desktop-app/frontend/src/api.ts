@@ -570,13 +570,35 @@ export interface ChatTurnReply {
   run_id: string | null;
 }
 
-// A turn of the account's own OoLu thread, as the server remembers it —
-// what a fresh device loads so every client shows the same conversation.
+// A turn of the account's own assistant thread, as the server remembers
+// it — what a fresh device loads so every client shows the same
+// conversation. `agent` names whose thread the turn belongs to (absent on
+// hosts from before the roster).
 export interface ChatHistoryTurn {
   seq: number;
   kind: "user" | "assistant" | "run";
   body: string;
   at: string;
+  agent?: string;
+}
+
+// ---- the agent roster (A0) --------------------------------------------------
+// Who is listed below OoLu. The card is the agent's honest boundary: what
+// it does today (scope) and what a later phase brings (ahead).
+export interface RosterAgent {
+  agent_id: string;
+  name: string;
+  tagline: string;
+  scope: string;
+  ahead: string;
+  seat: string;
+}
+
+// The byline: an account's published name and whether a face exists.
+export interface Profile {
+  username: string;
+  display_name: string;
+  has_photo: boolean;
 }
 
 // ---- friends wire shapes ----------------------------------------------------
@@ -1098,6 +1120,7 @@ export const api = {
     history: { role: "user" | "assistant"; content: string }[],
     nodeId?: string,
     mood?: string,
+    agent?: string,
   ) =>
     req<ChatTurnReply>("POST", "/v1/chat", {
       message,
@@ -1107,6 +1130,9 @@ export const api = {
       tz_offset_minutes: -new Date().getTimezoneOffset() || 0,
       ...(nodeId ? { node_id: nodeId } : {}),
       ...(mood ? { mood } : {}),
+      // A roster agent's turn rides the same door with its own tag; the
+      // server answers through that agent's seat and thread.
+      ...(agent ? { agent } : {}),
     }),
   // The streaming twin: the model's reasoning arrives live via onReasoning as
   // it thinks, and the finished turn is returned. Falls back to the blocking
@@ -1177,10 +1203,60 @@ export const api = {
     if (!done) throw new Error("the stream ended without a reply");
     return done;
   },
-  // The server-side OoLu thread: what a fresh device loads. Hosts that
-  // don't keep history answer 404 — callers fall back to local storage.
-  chatHistory: () =>
-    req<{ items: ChatHistoryTurn[] }>("GET", "/v1/chat/history"),
+  // The server-side thread: what a fresh device loads. OoLu's by default,
+  // a roster agent's by tag. Hosts that don't keep history answer 404 —
+  // callers fall back to local storage.
+  chatHistory: (agent?: string) =>
+    req<{ items: ChatHistoryTurn[] }>(
+      "GET",
+      "/v1/chat/history" +
+        (agent ? `?agent=${encodeURIComponent(agent)}` : ""),
+    ),
+  // The agent roster (A0): who is listed below OoLu — the sidebar renders
+  // exactly this. Hosts from before the roster answer 404: no group.
+  roster: () => req<{ items: RosterAgent[] }>("GET", "/v1/roster"),
+  // ---- the byline: a published face and name, tenant-scoped ----------------
+  profile: (username: string) =>
+    req<Profile>("GET", `/v1/profiles/${encodeURIComponent(username)}`),
+  // The photo's bytes as an object URL the <img> can show (fetch carries
+  // the bearer token — a plain <img src> cannot). Null when there is none.
+  profilePhotoUrl: async (username: string): Promise<string | null> => {
+    const headers: Record<string, string> = {};
+    const token = apiToken();
+    if (token) headers["Authorization"] = "Bearer " + token;
+    let res: Response;
+    try {
+      res = await fetch(
+        BASE() + `/v1/profiles/${encodeURIComponent(username)}/photo`,
+        { headers },
+      );
+    } catch {
+      return null;
+    }
+    if (!res.ok) return null;
+    return URL.createObjectURL(await res.blob());
+  },
+  // Set YOUR photo: the body is the image, exactly as picked.
+  setProfilePhoto: async (photo: Blob) => {
+    const headers: Record<string, string> = {
+      "Content-Type": photo.type || "image/png",
+    };
+    const token = apiToken();
+    if (token) headers["Authorization"] = "Bearer " + token;
+    const res = await fetch(BASE() + "/v1/profile/photo", {
+      method: "POST",
+      headers,
+      body: photo,
+    });
+    if (!res.ok) {
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: { message?: string };
+      };
+      throw new Error(data.error?.message ?? `${res.status}`);
+    }
+  },
+  removeProfilePhoto: () =>
+    req<{ removed: boolean }>("DELETE", "/v1/profile/photo"),
   // The data-subject's rights, self-serve: everything as one JSON
   // document, and erasure that says exactly what it removed.
   exportAccount: () => req<Record<string, unknown>>("GET", "/v1/account/export"),

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { accountConsoleUrl, api, signOut } from "../api";
+import { accountConsoleUrl, api, session, signOut } from "../api";
+import { Byline } from "./Byline";
 import {
   applyLanguage,
   applyTheme,
@@ -106,6 +107,7 @@ export function SettingsPane() {
             </div>
           )}
           {group === "model" && <ModelKeysSection />}
+          {group === "account" && <ProfilePhotoSection />}
         </section>
       ))}
       <RepresentativeSection />
@@ -113,6 +115,69 @@ export function SettingsPane() {
       <SecuritySection />
       <PaymentSection />
       <PrivacySection />
+    </div>
+  );
+}
+
+// The byline's face (agents-expansion A0): pick a photo, see the byline
+// exactly as tenant peers will see it next to your contributions. The
+// photo is deliberately published identity — setting it is the consent.
+export function ProfilePhotoSection() {
+  const tr = useT();
+  // A bump re-mounts the Byline preview so it refetches the fresh face.
+  const [version, setVersion] = useState(0);
+  const [error, setError] = useState("");
+  const [absent, setAbsent] = useState(false);
+  const me = session.principal;
+
+  useEffect(() => {
+    // A host from before the byline has no profile door: no section.
+    if (me) api.profile(me).catch(() => setAbsent(true));
+  }, [me]);
+
+  if (!me || absent) return null;
+
+  async function pick(file: File | null) {
+    if (!file) return;
+    setError("");
+    try {
+      await api.setProfilePhoto(file);
+      setVersion((v) => v + 1);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  return (
+    <div className="setting-row profile-photo">
+      <div className="setting-label">
+        <span>{tr("profile.photo")}</span>
+        <span className="setting-desc">{tr("profile.photoDesc")}</span>
+      </div>
+      <div className="setting-control">
+        <Byline key={version} username={me} size={36} />
+        <label className="ghost filelike">
+          {tr("profile.choosePhoto")}
+          <input
+            type="file"
+            accept="image/*"
+            style={{ display: "none" }}
+            onChange={(e) => void pick(e.target.files?.[0] ?? null)}
+          />
+        </label>
+        <button
+          className="linklike"
+          onClick={() =>
+            void api
+              .removeProfilePhoto()
+              .then(() => setVersion((v) => v + 1))
+              .catch(() => {})
+          }
+        >
+          {tr("profile.removePhoto")}
+        </button>
+        {error && <div className="error">{error}</div>}
+      </div>
     </div>
   );
 }

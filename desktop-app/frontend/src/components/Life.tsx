@@ -7,7 +7,9 @@ import type {
   FriendMessage,
   RepresentativeDraft,
   RepresentativeStatus,
+  RosterAgent,
 } from "../api";
+import { AgentAvatar, AgentThread } from "./Agents";
 import { identityHue, updateAvatarSignals } from "../avatar";
 import {
   loadCompose,
@@ -27,13 +29,15 @@ import { SettingsPane } from "./SettingsPane";
 import { Work } from "./Work";
 
 // The Life environment: a messenger. The left pane lists who you can talk
-// to — OoLu (the assistant, full function access), Friends (people and
-// legal entities), and Noder (one log thread per node interaction) — and
-// the right pane is the open conversation. Work is the same architecture
-// over a separate environment; it ships in the next build.
+// to — OoLu (the assistant, full function access), the agent roster
+// (News, Poll, Explorer, Travel — each its own thread, its own seat),
+// Friends (people and legal entities), and Noder (one log thread per node
+// interaction) — and the right pane is the open conversation. Work is the
+// same architecture over a separate environment.
 
 type Selection =
   | { kind: "oolu" }
+  | { kind: "agent"; agent: RosterAgent } // a roster agent's own thread
   | { kind: "files" }
   | { kind: "settings" }
   | { kind: "drafts" } // the representative's inbox
@@ -62,6 +66,9 @@ export function Life() {
   const [friends, setFriends] = useState<FriendConversation[] | null>(null);
   // null = no representative door (or it's off); the Drafts entry follows.
   const [rep, setRep] = useState<RepresentativeStatus | null>(null);
+  // The agent roster below OoLu — the server's list, rendered as-is.
+  // [] = a host from before the roster (404): no group, nothing missing.
+  const [roster, setRoster] = useState<RosterAgent[]>([]);
   // Long lists fold away for a clear view; the choice survives restarts.
   const [groups, setGroups] = useState(loadGroups);
   // The whole list folds away too — a wide, clear conversation window on
@@ -142,6 +149,15 @@ export function Life() {
     return () => clearInterval(t);
   }, [refreshRuns]);
 
+  // The roster is standing chrome, not presence: fetched once. A host
+  // from before the roster 404s and the group simply does not render.
+  useEffect(() => {
+    void api
+      .roster()
+      .then(({ items }) => setRoster(items ?? []))
+      .catch(() => setRoster([]));
+  }, []);
+
   if (mode === "work") {
     return <Work onLife={() => setMode("life")} />;
   }
@@ -182,6 +198,28 @@ export function Life() {
             <span className="convo-sub">{tr("assistantSub")}</span>
           </span>
         </button>
+
+        {/* The agent roster, directly below OoLu: each entry is a real
+            conversation with its own thread and its own seat. */}
+        {roster.map((a) => (
+          <button
+            key={a.agent_id}
+            className={`convo ${
+              selected.kind === "agent" &&
+              selected.agent.agent_id === a.agent_id
+                ? "on"
+                : ""
+            }`}
+            title={a.scope}
+            onClick={() => open({ kind: "agent", agent: a })}
+          >
+            <AgentAvatar agent={a} />
+            <span className="convo-body">
+              <span className="convo-name">{a.name}</span>
+              <span className="convo-sub">{a.tagline}</span>
+            </span>
+          </button>
+        ))}
 
         <button
           className={`convo ${selected.kind === "files" ? "on" : ""}`}
@@ -414,6 +452,9 @@ export function Life() {
               )
             }
           />
+        )}
+        {selected.kind === "agent" && (
+          <AgentThread key={selected.agent.agent_id} agent={selected.agent} />
         )}
         {selected.kind === "friends" &&
           (friends === null ? (
