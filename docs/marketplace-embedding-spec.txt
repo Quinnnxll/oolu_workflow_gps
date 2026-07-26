@@ -1,0 +1,924 @@
+flowchart TD
+    U["Human principal"] --> O["OoLu agent runtime"]
+    O --> C["Commerce tool API"]
+    C --> P["Policy and approval engine"]
+    P -->|Auto-execute| M["Marketplace core"]
+    P -->|Human review| R["Review inbox"]
+    R -->|Approved intent digest| M
+    R -->|Rejected or edited| O
+    P -->|Denied| O
+
+    M --> CAT["Catalog, RFQ and offers"]
+    M --> ORD["Order state machine"]
+    M --> INV["Inventory and reservations"]
+    M --> FUL["Fulfillment orchestration"]
+
+    ORD --> PAY["Payment orchestration"]
+    PAY --> PSP["Licensed payment provider"]
+    PAY --> LED["Double-entry ledger"]
+    PAY --> ESC["Escrow or delayed capture"]
+
+    FUL --> S["Seller or seller agent"]
+    FUL --> X["Shipping and service nodes"]
+    X --> V["Delivery verification"]
+    V --> ESC
+
+    M --> ID["Identity and trust"]
+    M --> TAX["Tax and invoice service"]
+    M --> DIS["Refund and dispute service"]
+    M --> EVT["Immutable event log"]
+
+    ID --> KYC["KYC, KYB and sanctions providers"]
+    EVT --> AUD["Audit, analytics and fraud detection"]
+
+system:
+  name: OoLu Embedded Agent Marketplace
+  objective: >
+    Allow OoLu to discover, negotiate, buy, sell, fulfill, and reconcile
+    products or services while keeping consequential decisions within
+    user-defined human review thresholds.
+
+  governing_rule: >
+    OoLu may create typed commercial intents, but money movement and contractual
+    commitment occur only after deterministic policy evaluation.
+
+principles:
+  - Store user values directly as typed records.
+  - Keep language-model reasoning outside payment authorization.
+  - Bind every approval to an immutable intent digest.
+  - Invalidate approval whenever price, quantity, counterparty, terms, or destination changes.
+  - Use a double-entry ledger as the financial source of truth.
+  - Use idempotency keys for every commercial mutation.
+  - Separate marketplace order state from payment-provider state.
+  - Prefer reversible authorization and escrow before irreversible settlement.
+  - Preserve complete provenance for agent recommendations and actions.
+  - Treat buyer and seller agents as delegates of verified human or business principals.
+
+actors:
+  human_principal:
+    roles:
+      - buyer
+      - seller
+      - business_owner
+      - approver
+      - auditor
+
+  oolu_agent:
+    permissions:
+      - search
+      - compare
+      - request_quote
+      - negotiate_within_bounds
+      - prepare_purchase
+      - prepare_listing
+      - reserve_inventory
+      - monitor_fulfillment
+      - request_refund
+    prohibited_without_policy_authorization:
+      - capture_payment
+      - release_escrow
+      - accept_irreversible_terms
+      - change_payout_destination
+      - expose_sensitive_information
+      - sell_below_price_floor
+      - create_unapproved_recurring_obligation
+
+  seller_agent:
+    permissions:
+      - maintain_catalog
+      - answer_product_questions
+      - issue_quotes
+      - negotiate_within_margin_policy
+      - accept_eligible_orders
+      - schedule_fulfillment
+    authority_source:
+      - seller_policy
+      - inventory_state
+      - pricing_rules
+      - fulfillment_capacity
+
+  marketplace_operator:
+    responsibilities:
+      - identity
+      - trust
+      - order integrity
+      - payment orchestration
+      - marketplace rules
+      - disputes
+      - auditability
+
+architecture:
+  client_layer:
+    components:
+      conversation_surface:
+        functions:
+          - Natural-language commerce requests
+          - Product comparison
+          - Order and listing status
+          - Seller communications
+      commerce_cards:
+        functions:
+          - Structured product display
+          - Quote comparison
+          - Approval preview
+          - Order tracking
+      review_inbox:
+        functions:
+          - Approve
+          - Reject
+          - Edit constraints
+          - Require alternative
+          - Delegate approval
+      seller_console:
+        functions:
+          - Listings
+          - Inventory
+          - Pricing bounds
+          - Orders
+          - Payouts
+          - Returns
+
+  agent_layer:
+    components:
+      intent_extractor:
+        output:
+          - objective
+          - product_or_service_specification
+          - required_constraints
+          - preferences
+          - budget
+          - deadline
+          - delivery_location_reference
+          - approval_expectation
+
+      commerce_planner:
+        functions:
+          - Convert objectives into procurement or sales plans
+          - Identify missing required fields
+          - Select marketplace tools
+          - Compare offers
+          - Generate recommendation records
+
+      negotiation_agent:
+        operates_on:
+          - price
+          - quantity
+          - delivery
+          - warranty
+          - service_level
+          - cancellation_terms
+        limits:
+          - maximum_purchase_price
+          - minimum_sale_price
+          - maximum_discount
+          - maximum_negotiation_rounds
+          - allowed_term_variations
+
+      fulfillment_agent:
+        functions:
+          - Track physical or digital delivery
+          - Schedule appointments
+          - Collect verification evidence
+          - Escalate delay or mismatch
+
+      reconciliation_agent:
+        functions:
+          - Match order, invoice, payment, shipment, and receipt
+          - Detect duplicates
+          - Detect incorrect charges
+          - Prepare refund or dispute requests
+
+  commerce_api:
+    tools:
+      - search_offers
+      - get_offer
+      - compare_offers
+      - request_quote
+      - submit_counteroffer
+      - create_purchase_intent
+      - request_purchase_approval
+      - execute_approved_purchase
+      - create_listing_draft
+      - request_listing_approval
+      - publish_approved_listing
+      - reserve_inventory
+      - accept_order
+      - update_fulfillment
+      - confirm_delivery
+      - request_refund
+      - open_dispute
+      - get_order
+      - get_ledger_entries
+
+    enforcement:
+      - JSON schema validation
+      - Authentication
+      - Authorization
+      - Policy evaluation
+      - Idempotency
+      - Rate limits
+      - Audit logging
+
+  marketplace_core:
+    services:
+      catalog_service:
+        entities:
+          - product
+          - service
+          - variant
+          - bundle
+          - subscription
+        capabilities:
+          - Structured attributes
+          - Semantic search
+          - Exact filtering
+          - Availability
+          - Versioned descriptions
+
+      rfq_service:
+        capabilities:
+          - Request for quotation
+          - Multi-seller bidding
+          - Quote expiration
+          - Private commercial terms
+          - Comparable normalized outputs
+
+      offer_service:
+        capabilities:
+          - Fixed-price offers
+          - Negotiated offers
+          - Volume pricing
+          - Shipping terms
+          - Warranty terms
+          - Cancellation terms
+
+      listing_service:
+        capabilities:
+          - Draft
+          - Validation
+          - Approval
+          - Publication
+          - Suspension
+          - Versioning
+
+      pricing_service:
+        sources:
+          - Seller base price
+          - Inventory level
+          - Demand
+          - Fulfillment cost
+          - Promotion
+          - Tax
+        safeguards:
+          - Seller price floor
+          - Maximum automated discount
+          - Maximum price-change velocity
+          - Human review for anomalous changes
+
+      inventory_service:
+        states:
+          - available
+          - reserved
+          - committed
+          - fulfilled
+          - returned
+          - damaged
+        requirements:
+          - Atomic reservation
+          - Reservation expiration
+          - Oversell prevention
+
+      order_service:
+        state_machine:
+          - draft
+          - policy_pending
+          - approval_pending
+          - approved
+          - payment_authorizing
+          - confirmed
+          - fulfilling
+          - delivered
+          - accepted
+          - completed
+          - cancellation_pending
+          - cancelled
+          - refund_pending
+          - refunded
+          - disputed
+          - resolved
+
+      fulfillment_service:
+        methods:
+          - physical_shipping
+          - local_delivery
+          - pickup
+          - digital_delivery
+          - scheduled_service
+          - API_execution
+          - robot_execution
+
+      review_service:
+        functions:
+          - Generate human-readable summaries
+          - Display changed terms
+          - Collect authenticated approval
+          - Store signed intent digest
+          - Enforce approval expiration
+
+      dispute_service:
+        functions:
+          - Evidence collection
+          - Seller response
+          - Partial refund
+          - Full refund
+          - Replacement
+          - Marketplace adjudication
+          - Provider escalation
+
+  trust_layer:
+    identity_service:
+      entities:
+        - user
+        - organization
+        - agent
+        - seller
+        - approver
+        - beneficiary
+      controls:
+        - Authentication
+        - Agent delegation
+        - KYC
+        - KYB
+        - Sanctions screening
+        - Beneficial-owner verification
+        - Payout-account verification
+
+    reputation_service:
+      signals:
+        - Completed orders
+        - Refund rate
+        - Dispute rate
+        - Delivery accuracy
+        - Product conformity
+        - Account age
+        - Identity verification
+        - Fraud signals
+      rule: >
+        Reputation modifies review requirements but never overrides explicit
+        spending, category, privacy, or legal constraints.
+
+    fraud_service:
+      checks:
+        - Account takeover
+        - Payment anomaly
+        - Counterparty collusion
+        - Price anomaly
+        - Duplicate order
+        - Synthetic identity
+        - Shipping mismatch
+        - Refund abuse
+        - Seller inventory fraud
+
+  financial_layer:
+    payment_orchestrator:
+      provider_policy:
+        - Use licensed payment providers.
+        - Tokenize payment methods.
+        - Never expose payment credentials to models.
+        - Prefer authorization before capture.
+        - Support delayed capture and split payouts.
+        - Reconcile provider webhooks idempotently.
+
+    ledger:
+      model: double_entry
+      accounts:
+        - buyer_payable
+        - marketplace_cash
+        - seller_payable
+        - escrow_liability
+        - marketplace_fee_revenue
+        - tax_payable
+        - refund_payable
+        - dispute_reserve
+      rule: Ledger entries are append-only and balanced per transaction.
+
+    escrow:
+      release_conditions:
+        - Verified delivery
+        - User acceptance
+        - Automatic acceptance timeout
+        - Milestone completion
+        - Dispute resolution
+      exceptions:
+        - Immediate digital delivery
+        - Low-value trusted transactions
+        - Legally restricted escrow structures
+
+    billing:
+      supports:
+        - one_time
+        - milestone
+        - usage_based
+        - subscription
+        - deposit_and_balance
+      recurring_rule: >
+        First subscription, price increase, term extension, or materially changed
+        renewal requires renewed policy evaluation.
+
+  compliance_layer:
+    responsibilities:
+      - Marketplace terms
+      - Seller disclosures
+      - Consumer cancellation rights
+      - Tax calculation
+      - Invoice generation
+      - Data protection
+      - Restricted-goods controls
+      - Record retention
+    deployment_rule: >
+      Country-specific legal and tax modules must be configured before enabling
+      transactions in a jurisdiction.
+
+policy_engine:
+  implementation: Deterministic rules plus risk scoring
+  input:
+    - principal_id
+    - agent_id
+    - action_type
+    - amount
+    - currency
+    - category
+    - counterparty
+    - item_specification
+    - price_benchmark
+    - recurring_terms
+    - refundability
+    - delivery_destination
+    - requested_data
+    - policy_scope
+    - risk_signals
+
+  output:
+    decisions:
+      - auto_execute
+      - execute_and_notify
+      - require_approval
+      - require_strong_approval
+      - require_multiple_approvers
+      - deny
+    fields:
+      - decision
+      - reasons
+      - required_approvers
+      - approval_expiration
+      - permitted_variance
+      - policy_version
+      - intent_digest
+
+  default_purchase_policy:
+    auto_execute:
+      requirements:
+        - amount_lte: user_auto_purchase_limit
+        - daily_total_lte: user_daily_limit
+        - monthly_total_lte: user_monthly_limit
+        - trusted_category: true
+        - trusted_counterparty: true
+        - refundable: true
+        - recurring: false
+        - sensitive_data_required: false
+        - price_within_benchmark_percent: 10
+        - destination_preapproved: true
+
+    execute_and_notify:
+      requirements:
+        - amount_lte: user_notify_limit
+        - first_time_counterparty: false
+        - anomaly_score_lt: 0.25
+
+    require_approval:
+      triggers:
+        - amount_gt: user_auto_purchase_limit
+        - first_time_counterparty: true
+        - non_refundable: true
+        - recurring: true
+        - price_outside_benchmark: true
+        - new_delivery_destination: true
+        - sensitive_data_required: true
+        - material_term_change: true
+
+    require_strong_approval:
+      triggers:
+        - amount_gt: user_strong_approval_limit
+        - regulated_category: true
+        - irreversible_delivery: true
+        - international_payment: true
+        - elevated_fraud_score: true
+
+    require_multiple_approvers:
+      triggers:
+        - organization_amount_gt: organization_dual_control_limit
+        - procurement_policy_requires_dual_control: true
+        - payout_destination_change: true
+
+    deny:
+      triggers:
+        - prohibited_category: true
+        - sanctions_match: true
+        - agent_permission_missing: true
+        - budget_exceeded: true
+        - seller_identity_unverified_when_required: true
+        - fraud_score_gte: 0.85
+
+  default_sales_policy:
+    auto_publish:
+      requirements:
+        - approved_catalog_template: true
+        - price_gte: seller_price_floor
+        - inventory_verified: true
+        - prohibited_claims: false
+
+    auto_accept_order:
+      requirements:
+        - final_price_gte: seller_price_floor
+        - quantity_lte: automated_quantity_limit
+        - fulfillment_capacity_available: true
+        - buyer_risk_acceptable: true
+        - custom_terms: false
+
+    require_approval:
+      triggers:
+        - price_lt: seller_auto_accept_price
+        - discount_gt: maximum_automated_discount
+        - custom_product: true
+        - custom_warranty: true
+        - accelerated_delivery: true
+        - buyer_requested_exclusivity: true
+        - order_value_gt: seller_review_limit
+
+    deny:
+      triggers:
+        - price_lt: absolute_price_floor
+        - inventory_unavailable: true
+        - restricted_destination: true
+        - fraudulent_buyer: true
+
+approval:
+  intent_digest_fields:
+    - principal_id
+    - agent_id
+    - action
+    - offer_version
+    - counterparty_id
+    - product_or_service_id
+    - quantity
+    - total_amount
+    - currency
+    - taxes
+    - fees
+    - delivery_terms
+    - refund_terms
+    - recurring_terms
+    - data_permissions
+    - expiration
+    - policy_version
+
+  lifecycle:
+    - OoLu creates immutable commercial intent.
+    - Policy engine evaluates intent.
+    - Review service creates approval request when required.
+    - Human reviews exact terms and material risks.
+    - Human authenticates approval.
+    - Review service signs the intent digest.
+    - Marketplace verifies digest and expiration.
+    - Order service executes the exact approved intent.
+    - Any material change creates a new intent and approval cycle.
+
+  authentication:
+    normal:
+      - authenticated_session
+    strong:
+      - passkey
+      - device_confirmation
+      - transaction_signing
+    organization:
+      - role_based_approval
+      - optional_dual_control
+
+contracts:
+  product_specification:
+    required:
+      - specification_id
+      - category
+      - required_attributes
+      - acceptable_ranges
+      - quantity
+      - destination_reference
+      - deadline
+    optional:
+      - preferred_brands
+      - excluded_brands
+      - sustainability_constraints
+      - warranty_minimum
+      - substitution_policy
+
+  offer:
+    required:
+      - offer_id
+      - seller_id
+      - offer_version
+      - item_id
+      - quantity
+      - subtotal
+      - currency
+      - tax_estimate
+      - fees
+      - fulfillment_terms
+      - refund_terms
+      - expires_at
+      - signature
+
+  commercial_intent:
+    required:
+      - intent_id
+      - principal_id
+      - agent_id
+      - action
+      - offer_id
+      - offer_version
+      - maximum_total
+      - approval_policy_id
+      - idempotency_key
+      - expires_at
+
+  approval_record:
+    required:
+      - approval_id
+      - intent_id
+      - intent_digest
+      - approver_id
+      - authentication_strength
+      - decision
+      - created_at
+      - expires_at
+
+  order:
+    required:
+      - order_id
+      - buyer_id
+      - seller_id
+      - intent_id
+      - offer_snapshot
+      - state
+      - payment_state
+      - fulfillment_state
+      - ledger_transaction_ids
+
+workflows:
+  agent_purchase:
+    - OoLu extracts a typed product specification.
+    - Missing consequential requirements are requested from the user.
+    - Catalog and RFQ services retrieve eligible offers.
+    - OoLu compares total cost, fit, trust, delivery, and reversibility.
+    - OoLu creates a recommendation with evidence.
+    - Commerce API creates an immutable purchase intent.
+    - Policy engine evaluates the intent.
+    - Approved intents proceed to payment authorization.
+    - Review-required intents enter the human review inbox.
+    - Payment is captured according to fulfillment policy.
+    - Delivery evidence controls escrow release.
+    - Reconciliation closes the order or opens an exception.
+
+  agent_sale:
+    - Seller provides inventory, cost, price floor, and fulfillment constraints.
+    - OoLu prepares a structured listing.
+    - Policy engine evaluates publication authority.
+    - Approved listing version is published.
+    - Buyer or buyer agent submits an offer or order.
+    - Seller agent negotiates only within signed boundaries.
+    - Eligible orders are accepted automatically.
+    - Exceptions enter seller review.
+    - Inventory is reserved atomically.
+    - Fulfillment evidence is collected.
+    - Payout is released after acceptance or timeout.
+
+  physical_world_execution:
+    - Order reaches confirmed state.
+    - Fulfillment service selects an approved execution node.
+    - Node receives typed job parameters.
+    - Node acknowledges capability, price, location, and schedule.
+    - Policy engine evaluates any changed terms.
+    - Human review occurs when thresholds are exceeded.
+    - Execution evidence is uploaded.
+    - Buyer confirms outcome or opens an exception.
+    - Escrow is released or dispute workflow starts.
+
+data:
+  primary_store: PostgreSQL
+  tables:
+    - principals
+    - organizations
+    - agents
+    - delegations
+    - policies
+    - policy_versions
+    - products
+    - variants
+    - listings
+    - listing_versions
+    - inventories
+    - reservations
+    - rfqs
+    - offers
+    - offer_versions
+    - commercial_intents
+    - approval_requests
+    - approval_records
+    - orders
+    - order_events
+    - fulfillments
+    - delivery_evidence
+    - payment_attempts
+    - ledger_accounts
+    - ledger_transactions
+    - ledger_entries
+    - refunds
+    - disputes
+    - invoices
+    - reputation_events
+    - risk_assessments
+    - audit_events
+
+  auxiliary_storage:
+    object_store:
+      - images
+      - invoices
+      - contracts
+      - delivery_evidence
+      - dispute_evidence
+    search_index:
+      - catalog
+      - sellers
+      - normalized attributes
+    vector_index:
+      - semantic product discovery
+      - specification matching
+    message_bus:
+      - order_events
+      - payment_events
+      - fulfillment_events
+      - approval_events
+    cache:
+      - catalog reads
+      - short-lived reservations
+      - policy compilations
+
+security:
+  controls:
+    - OAuth or passkey authentication
+    - Short-lived agent delegation tokens
+    - Least-privilege service authorization
+    - Payment-method tokenization
+    - Encryption at rest and in transit
+    - Secrets isolation
+    - Signed webhooks
+    - Replay prevention
+    - Idempotent mutation endpoints
+    - Immutable audit events
+    - Sensitive-data redaction from model context
+    - Tenant isolation
+    - Payout destination change delay
+    - Account recovery protection
+
+  agent_delegation:
+    fields:
+      - principal_id
+      - agent_id
+      - allowed_actions
+      - category_scope
+      - maximum_single_amount
+      - daily_limit
+      - monthly_limit
+      - allowed_counterparties
+      - allowed_destinations
+      - valid_from
+      - expires_at
+      - revocation_state
+
+observability:
+  business_metrics:
+    - gross_merchandise_value
+    - completed_order_rate
+    - average_order_value
+    - marketplace_take_rate
+    - refund_rate
+    - dispute_rate
+    - fulfillment_time
+    - seller_conversion
+  agent_metrics:
+    - recommendation_acceptance
+    - autonomous_completion_rate
+    - human_override_rate
+    - incorrect_context_rate
+    - policy_denial_rate
+    - savings_against_benchmark
+  safety_metrics:
+    - unauthorized_execution_attempts
+    - approval_digest_mismatches
+    - duplicate_payment_attempts
+    - fraud_loss
+    - false_positive_review_rate
+    - policy_bypass_attempts
+
+implementation_plan:
+  phase_1:
+    scope:
+      - Fixed-price catalog
+      - Verified buyer and seller accounts
+      - Purchase intents
+      - Human approval inbox
+      - Single payment provider
+      - Payment authorization and capture
+      - Basic shipping
+      - Refunds
+      - Double-entry ledger
+      - Immutable audit trail
+
+  phase_2:
+    scope:
+      - User-defined autonomy budgets
+      - Seller automation policies
+      - RFQ and structured quotes
+      - Negotiation within bounds
+      - Escrow or delayed settlement
+      - Reputation
+      - Fraud scoring
+      - Tax and invoice integrations
+
+  phase_3:
+    scope:
+      - Multi-agent procurement
+      - Service marketplace
+      - Milestone payments
+      - Subscription management
+      - Organization approvals
+      - Physical execution nodes
+      - Automated reconciliation
+      - Dispute evidence automation
+
+  phase_4:
+    scope:
+      - Cross-marketplace sourcing
+      - Agent-to-agent commercial protocol
+      - Dynamic supply orchestration
+      - Financing and insurance integrations
+      - Jurisdiction-specific market deployment
+
+mvp_boundaries:
+  include:
+    - One currency
+    - One jurisdiction
+    - Low-risk physical products
+    - Fixed-price offers
+    - Human approval above configured limits
+    - Refundable card payments
+    - Manual dispute review
+  exclude:
+    - Lending
+    - Securities
+    - Cryptocurrency custody
+    - High-risk regulated goods
+    - Autonomous recurring subscriptions
+    - Unverified sellers
+    - Irreversible payment methods
+    - Fully autonomous dispute adjudication
+
+acceptance_tests:
+  - scenario: Purchase below all configured thresholds
+    expected: OoLu executes and sends a notification.
+
+  - scenario: Purchase exceeds the single-order threshold
+    expected: No payment is authorized until human approval is recorded.
+
+  - scenario: Seller changes price after approval
+    expected: Intent digest fails and a new approval is required.
+
+  - scenario: Duplicate execution request
+    expected: The same idempotency key returns the existing order.
+
+  - scenario: First purchase from an unknown seller
+    expected: Human review is required regardless of amount.
+
+  - scenario: Seller agent receives an offer below the absolute price floor
+    expected: Offer is denied without model discretion.
+
+  - scenario: Delivery evidence is missing
+    expected: Escrow remains unreleased and an exception is created.
+
+  - scenario: Payment provider sends duplicate webhooks
+    expected: One financial transition and one balanced ledger transaction occur.
+
+  - scenario: OoLu recommends a substitute outside required specifications
+    expected: The offer is marked ineligible before policy evaluation.
+
+  - scenario: User revokes agent delegation
+    expected: All unexecuted intents are blocked immediately.

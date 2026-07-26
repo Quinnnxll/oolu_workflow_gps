@@ -1,0 +1,512 @@
+# The embedded marketplace — build-phase plan
+
+Status: Proposed. Scope: making OoLu a venue where **real business happens** —
+goods and services discovered, negotiated, bought, sold, fulfilled, and
+reconciled by agents acting for verified principals — with the **platform
+taking a share of every completed transaction**.
+
+Source of truth for *what* we are building:
+[`docs/marketplace-embedding-spec.txt`](marketplace-embedding-spec.txt)
+(the "OoLu Embedded Agent Marketplace" system spec: flow diagram, actors,
+policy ladder, contracts, data model, acceptance tests). This document is the
+**build order** for that spec on top of the machinery this repository already
+has. Where the two disagree, the spec's invariants win and this plan is
+corrected.
+
+Companion reading: `docs/NODEPLACE_ROADMAP.md` (the workflow-node market and
+its reward formula), `docs/REWARD_PRICING_DESIGN.md`, `docs/THREAT_MODEL.md`,
+`docs/adr/0002-unified-run-state.md` (the pause/resume pattern the order state
+machine inherits).
+
+---
+
+## 0. Two markets, one set of rails
+
+OoLu already runs one market: the **Nodeplace**, where contributed *workflow
+nodes* are discovered and run, and noders earn on verified success. The
+embedded marketplace is the second market: the venue where those agents (and
+their humans) **do business in the world** — buy a product, sell a service,
+fill an order, get paid.
+
+They are different products but they must share one set of rails, because the
+rails are where trust lives:
+
+- **One identity.** `identity/` sessions, tenants, and stored grants;
+  `nodeplace/kyc.py` verified legal entities. A buyer agent and a seller agent
+  are both delegates of a verified principal — never free-floating actors.
+- **One approval seam.** Budget verdicts, the holds inbox, and
+  `IdentityApprovalAuthority` already gate consequential runs. Commercial
+  intents ride the same inbox, hardened with a signed intent digest.
+- **One accounting spine.** The durable audit chain, the idempotency ledger,
+  and append-only money ledgers. The marketplace adds a **double-entry**
+  ledger as the financial source of truth; the Nodeplace earnings ledger
+  becomes one client of it.
+- **Two revenue streams, one book.** Nodeplace commission (`ρ` on net node
+  value) and the marketplace **take rate** on transactions are both just
+  postings to `marketplace_fee_revenue`. The platform's share is a ledger
+  fact, not a report.
+
+The governing rule, verbatim from the spec, is the whole design in one
+sentence:
+
+> OoLu may create typed commercial intents, but money movement and
+> contractual commitment occur only after deterministic policy evaluation.
+
+---
+
+## 1. Non-negotiable invariants (hold in every phase)
+
+A change that violates one of these is a release blocker.
+
+1. **Typed intents, deterministic gates.** Language-model reasoning never sits
+   inside payment authorization. Models propose; the policy engine — pure,
+   deterministic rules plus risk scores — disposes.
+2. **Approval binds to an immutable intent digest.** Any change to price,
+   quantity, counterparty, terms, or destination invalidates the approval and
+   mints a new intent. Executing anything but the exact approved digest is a
+   defect, not a variance.
+3. **The double-entry ledger is the financial source of truth.** Entries are
+   append-only and balanced per transaction. Payment-provider state is
+   reconciled *to* the ledger, never authoritative over it. Corrections are
+   compensating entries, never edits.
+4. **Every commercial mutation carries an idempotency key.** Replays, retries,
+   and duplicate webhooks produce exactly one financial transition
+   (`durable/idempotency.py` is the standing precedent).
+5. **Marketplace order state is separate from payment-provider state.** The
+   order state machine and the PSP's lifecycle are reconciled, not conflated.
+6. **Reversible before irreversible.** Authorization before capture; escrow or
+   delayed capture before settlement wherever the jurisdiction allows it.
+7. **Only verified principals transact.** Buyer and seller agents are
+   delegates with typed, expiring, revocable delegation records — bounded by
+   amount, category, counterparty, and destination. Revocation blocks every
+   unexecuted intent immediately.
+8. **Complete provenance.** Every recommendation and action an agent takes is
+   reconstructable from the hash-linked audit chain (`durable/audit.py`).
+9. **Reputation modifies review requirements; it never overrides explicit
+   spending, category, privacy, or legal constraints.**
+10. **No real money on local-only infra.** Production charges and payouts
+    require the PostgreSQL durable adapter and real OIDC identity — the
+    existing `assert_production_identity` guard extends to every marketplace
+    money path.
+11. **Payment credentials never reach model context.** Tokenized methods only
+    (`billing/cards.py`); sensitive-data redaction stays mandatory.
+12. **Jurisdiction modules before transactions.** No transacting in a
+    jurisdiction whose legal/tax module is not configured (spec
+    `compliance_layer.deployment_rule`).
+
+---
+
+## 2. What already exists (the seams are cut)
+
+The spec reads like a green-field system; it is not. Most of its boxes have a
+landed ancestor in this repository. The build phases below are mostly
+*generalizations*, not inventions.
+
+| Spec component | Standing machinery | Gap to close |
+|---|---|---|
+| Commerce tool API (typed tools, idempotency, authz, audit) | `gateway/` `/v1` surface: OIDC + RBAC, request idempotency, verified replay-protected webhooks, SSE | The ~18 commerce tools as typed routes; per-tool policy evaluation |
+| Typed purchase intents | `skills/commerce_intent.py` — `OrderIntent` parsed deterministically, **never invents an amount**; consent reconciled by `PaymentAuthorizationResolver` | Full `CommercialIntent` contract (offer version, digest, expiry, idempotency key); sell-side intents |
+| Policy & approval engine | `nodeplace/budget.py` verdicts; `values.py` typed user values; `billing/policy.py`, `billing/guard.py` | The six-decision ladder (`auto_execute` → `deny`), benchmark checks, digest minting, approval expiration |
+| Review inbox | `nodeplace/holds.py` durable pending contracts with replies; desktop/gateway inboxes; `identity/` step-up approvals | Approval preview rendered *from the digest fields*; strong/dual-control approval paths |
+| Order state machine | `orchestrator/` versioned `RunState` pause/resume pattern | New `marketplace/orders.py` — the 16-state machine as durable records + outbox events |
+| Catalog, listings | `nodeplace/market.py`, `store.py`, listing conventions, search/retrieval | Product/service/variant catalog with structured attributes, availability, versioned descriptions |
+| RFQ & quotes | `nodeplace/quotes.py` | Multi-seller bidding, expiration, normalized comparison |
+| Inventory & reservations | — (reservation *pattern* exists in durable claims, e.g. `pulse.py` INSERT-OR-IGNORE election) | New `marketplace/inventory.py`: atomic reservation, expiry, oversell prevention |
+| Fulfillment & delivery evidence | `worker/` signed single-use leases; durable content-addressed object store; `pulse.py` scheduling | New `marketplace/fulfillment.py`: methods, verification evidence, escalation |
+| Payment orchestration | `billing/authorization.py` (`OrderRequest`), `cards.py` (tokenized), `charging.py`, `launch.py` | PSP port with authorize/capture split, delayed capture, split payouts, idempotent webhook reconcile |
+| Double-entry ledger | `billing/ledger.py` (append-only, single-entry earnings) | New balanced `ledger_transactions`/`ledger_entries` with the eight spec accounts; earnings ledger re-based onto it |
+| Escrow | `billing/settlement.py` holdback `H` + reserve `R` (the accounting cousin) | Explicit `escrow_liability` postings with the spec's release conditions |
+| Identity & trust | `identity/` (OIDC, tenants, grants), `nodeplace/kyc.py` (Supernode KYC), `screening.py` | KYB/sanctions provider port; payout-account verification tied to payout adapter; beneficial-owner records |
+| Reputation | `nodeplace/reputation.py`, `ratings.py` (verified-run-gated) | Wire as review-requirement modifier only (invariant 9) |
+| Fraud | `billing/fraud.py`, `nodeplace/plagiarism.py`, self-dealing exclusion | Commerce checks: price anomaly, duplicate order, shipping mismatch, refund abuse, collusion |
+| Refunds & disputes | `billing/disputes.py`, clawback flow, `tests/test_dispute_flow.py` | Evidence collection in the object store; partial refund / replacement outcomes; adjudication states |
+| Tax & invoice | The reading seat (deterministic invoice parse + human seat for the rest); `legal.py` | Tax-calculation port; invoice *generation*; per-jurisdiction module registry |
+| Audit & event log | `durable/audit.py` hash-linked chain; transactional outbox | `order_events` topics; intent/approval/ledger events on the chain |
+| Idempotency | `durable/idempotency.py` | Applied to every commerce tool and PSP webhook |
+| Metering & the platform's share | `metering/`, `nodeplace/economics.py`, `rewards.py`, `billing/settlement.py`, `payout.py` | Take-rate fee postings; GMV/take-rate metrics |
+| Currency | `currency.py` (micros discipline) | One currency at MVP; multi-currency deferred |
+
+---
+
+## 3. Architecture additions
+
+New package `src/oolu/marketplace/`, plus targeted extensions to `billing/`.
+Everything behind ports (SQLite local / PostgreSQL production), matching the
+durable runtime's contract style.
+
+```
+src/oolu/marketplace/
+├── models.py        # Offer, ProductSpecification, CommercialIntent,
+│                    # ApprovalRecord, Order — the spec's `contracts`, frozen
+├── digest.py        # canonical serialization of the digest fields → SHA-256;
+│                    # verify(digest, offer, policy_version) — pure
+├── policy.py        # the six-decision ladder; deterministic rules + risk
+│                    # scores; purchase + sales policies as typed records
+├── delegation.py    # agent delegation records: scopes, limits, expiry,
+│                    # revocation (blocks unexecuted intents immediately)
+├── catalog.py       # products, services, variants, bundles; versioned
+│                    # descriptions; availability
+├── offers.py        # fixed-price + negotiated offers, versioned, signed
+├── rfq.py           # request-for-quote, multi-seller bids, expiry
+├── inventory.py     # atomic reserve/commit/release; reservation expiry
+├── orders.py        # the 16-state order machine; durable + outbox events
+├── fulfillment.py   # methods, delivery evidence, verification, escalation
+└── review.py        # approval requests from digests; expiration;
+                     # normal / strong / dual-control authentication
+
+src/oolu/billing/    (extensions)
+├── doubleentry.py   # accounts, balanced transactions, append-only entries:
+│                    # buyer_payable, marketplace_cash, seller_payable,
+│                    # escrow_liability, marketplace_fee_revenue, tax_payable,
+│                    # refund_payable, dispute_reserve
+├── psp.py           # PSP port: tokenize, authorize, capture, refund, split
+│                    # payout; idempotent webhook reconciliation (Stripe first)
+├── escrow.py        # release conditions over delivery evidence / acceptance /
+│                    # timeout / milestones / dispute resolution
+└── tax.py           # tax-calculation + invoice-generation ports; the
+                     # jurisdiction module registry (deployment gate)
+```
+
+Gateway grows a versioned commerce surface mirroring the spec's tool list —
+`/v1/market/offers`, `/v1/market/rfqs`, `/v1/market/intents`,
+`/v1/market/intents/{id}/approval`, `/v1/market/orders`,
+`/v1/market/orders/{id}/fulfillment`, `/v1/market/refunds`,
+`/v1/market/disputes`, `/v1/market/ledger` — every mutation schema-validated,
+policy-evaluated, idempotent, rate-limited, audited (the gateway already
+enforces the last four for runs; commerce reuses those seams).
+
+The flow, end to end:
+
+```
+agent ask ──► typed intent (skills/commerce_intent → marketplace/models)
+         ──► policy.py evaluates (deterministic; risk signals as inputs)
+               ├─ auto_execute / execute_and_notify ─► orders.py
+               ├─ require_* ─► review.py ─► holds inbox ─► signed digest ─► orders.py
+               └─ deny ─► back to the agent with reasons
+orders.py ──► billing/psp.py authorize ─► doubleentry postings ─► confirmed
+         ──► fulfillment.py ─► delivery evidence ─► billing/escrow.py release
+         ──► settlement: seller_payable paid out, marketplace_fee_revenue kept
+```
+
+---
+
+## 4. The platform's share
+
+The take is a **ledger fact**: every completed order posts one balanced
+transaction that splits the buyer's payment between the seller, the platform,
+and the tax authority. No report computes revenue; the book *is* revenue.
+
+Per completed order (single currency, MVP shape):
+
+```
+G      = buyer total (subtotal + tax + fees)
+fee    = takerate × subtotal   (+ optional fixed per-order component)
+postings (balanced):
+    marketplace_cash        +G
+    buyer_payable           −G
+    seller_payable          +(subtotal − fee)
+    marketplace_fee_revenue +fee
+    tax_payable             +tax
+    escrow_liability        (transit account while capture is held)
+```
+
+Refunds and disputes post compensating transactions (`refund_payable`,
+`dispute_reserve`); nothing is ever edited. When a *node* performs the
+commerce (an agent workflow bought on the Nodeplace executes a purchase), the
+Nodeplace reward formula applies to the **node fee** and the marketplace take
+applies to the **transaction** — two separate postings, one book, no double
+counting. Conservation checks are property tests, exactly as
+`NODEPLACE_ROADMAP.md` §7 does for `ρ`/`σ`.
+
+`takerate`, fee sides (buyer/seller/both), category schedules, and floors are
+decision-log items (§9) — the *mechanism* is fixed here, the *number* is not.
+
+---
+
+## 5. Build phases
+
+Each phase is a tagged milestone with an exit gate and a binary Goal
+Adherence checklist. Do not advance a phase until every box in its checklist
+is true. Nodeplace prerequisite: real money anywhere requires the production
+substrate (PostgreSQL durable adapter + JWKS OIDC) from Nodeplace P0.
+
+### M0 — the commercial spine (intents, digests, policy — no catalog, no money)
+
+Goal: the governing rule as running code. Typed commercial intents, the
+deterministic policy ladder, digest-bound approvals, and revocable agent
+delegation — proven with fake offers and zero payment paths.
+
+Deliverables:
+- `marketplace/models.py` — the spec's `contracts` block as frozen records
+  (`ProductSpecification`, `Offer`, `CommercialIntent`, `ApprovalRecord`).
+- `marketplace/digest.py` — canonical digest over the spec's
+  `intent_digest_fields`; pure verify.
+- `marketplace/policy.py` — the six decisions with the spec's default
+  purchase and sales policies as typed, versioned policy records; user
+  limits stored via the existing typed-values store.
+- `marketplace/delegation.py` — delegation records with the spec's fields;
+  revocation blocks unexecuted intents.
+- `marketplace/review.py` riding `nodeplace/holds.py`: approval requests
+  rendered from digest fields; approval expiration; step-up (strong)
+  authentication via the existing identity seam.
+- Gateway routes for intents and approvals (no order execution yet).
+
+Goal Adherence:
+- [ ] An intent's digest changes iff a material field changes (property test
+      over the digest field set).
+- [ ] Approval of digest A can never execute digest B — including
+      offer-version bumps (the spec's "seller changes price after approval"
+      acceptance test).
+- [ ] Expired approvals are refused; approval reuse is refused.
+- [ ] Policy evaluation is a pure function of typed inputs: same inputs,
+      same decision, with reasons and `policy_version` recorded.
+- [ ] Every decision (including `deny`) lands on the audit chain.
+- [ ] Revoking a delegation blocks all unexecuted intents immediately.
+- [ ] No code path in M0 can move money (no PSP port exists yet).
+
+### M1 — the fixed-price market (first real dollar, first fee)
+
+Goal: the spec's `phase_1` inside its `mvp_boundaries` — a working
+fixed-price marketplace for low-risk physical goods: one currency, one
+jurisdiction, verified accounts, human approval above limits, refundable
+card payments — and the platform's first take-rate posting.
+
+Deliverables:
+- `marketplace/catalog.py` + `offers.py` (fixed-price only), listing flow
+  reusing Nodeplace listing/review conventions; seller onboarding gated by
+  the existing KYC seam.
+- `marketplace/orders.py` — the full 16-state machine, durable, outbox
+  events, idempotent transitions.
+- `billing/psp.py` (Stripe first): tokenize, authorize → capture on
+  fulfillment policy, refund; idempotent, signature-verified webhooks
+  (reusing `gateway/webhooks.py` discipline).
+- `billing/doubleentry.py` with the eight accounts; take-rate fee postings;
+  refunds as compensating transactions.
+- Basic shipping fulfillment + delivery confirmation; refund flow through
+  the existing disputes seam (manual review per MVP).
+- Buyer surfaces: commerce cards in chat (offer, approval preview, order
+  tracking); seller console screens (listings, orders, payouts) on the
+  existing shell.
+
+Goal Adherence (the spec's acceptance tests, distributed):
+- [ ] Purchase below all thresholds auto-executes and notifies; above the
+      single-order threshold, **no authorization occurs** before a recorded
+      approval.
+- [ ] First purchase from an unknown seller requires review regardless of
+      amount.
+- [ ] Duplicate execution request with the same idempotency key returns the
+      existing order.
+- [ ] Duplicate PSP webhooks produce one financial transition and one
+      balanced ledger transaction.
+- [ ] Every ledger transaction balances; account balances are pure
+      projections of entries (property test).
+- [ ] A completed order posts the take-rate fee to
+      `marketplace_fee_revenue`; GMV and take-rate metrics read from the
+      ledger alone.
+- [ ] Refund posts a compensating transaction; the order and payment state
+      machines reconcile.
+- [ ] Unverified sellers cannot list; card data never touches OoLu servers
+      (tokenization only); model context contains no payment credentials.
+- [ ] Money paths are refused on local-only infra.
+
+### M2 — negotiation, escrow, and trust (the spec's `phase_2`)
+
+Goal: autonomy grows on both sides — within signed bounds. RFQ and
+structured quotes, negotiation limits, escrow/delayed settlement gated on
+delivery evidence, reputation and fraud scoring, tax/invoice integration.
+
+Deliverables:
+- `marketplace/rfq.py`: multi-seller bidding, quote expiry, normalized
+  comparison; `offers.py` grows negotiated offers with signed bounds
+  (max price / min price / max discount / max rounds / allowed terms).
+- User autonomy budgets (auto-purchase, daily, monthly limits) and seller
+  automation policies (auto-publish, auto-accept, floors) as typed policy
+  records feeding M0's ladder.
+- `marketplace/inventory.py`: atomic reservation with expiry; oversell
+  prevention under concurrency.
+- `billing/escrow.py`: `escrow_liability` postings; release on verified
+  delivery / acceptance / timeout / dispute resolution; the spec's
+  exceptions (immediate digital delivery, low-value trusted).
+- Delivery-evidence capture into the object store; fulfillment escalation.
+- Reputation wired as a review-requirement modifier; commerce fraud checks
+  (price anomaly, duplicate order, shipping mismatch, refund abuse,
+  collusion) extending `billing/fraud.py`.
+- `billing/tax.py`: tax calculation + invoice generation for the launch
+  jurisdiction; the jurisdiction registry as a deployment gate.
+
+Goal Adherence:
+- [ ] A negotiation agent cannot accept terms outside its signed bounds;
+      an offer below the seller's absolute floor is denied **without model
+      discretion**.
+- [ ] Two concurrent orders for the last unit: exactly one reservation
+      wins; the other is refused; expired reservations release stock.
+- [ ] Missing delivery evidence keeps escrow unreleased and opens an
+      exception; verified evidence (or acceptance timeout) releases it with
+      balanced postings.
+- [ ] Reputation never relaxes an explicit spending/category/legal
+      constraint (property test over policy inputs).
+- [ ] Elevated fraud score forces the strong-approval path; score ≥ deny
+      threshold refuses deterministically.
+- [ ] Every completed order has a generated invoice and a tax posting;
+      transacting in an unconfigured jurisdiction is refused.
+- [ ] OoLu recommending a substitute outside required specifications marks
+      the offer ineligible *before* policy evaluation.
+
+### M3 — services, organizations, reconciliation (the spec's `phase_3`)
+
+Goal: beyond parcels — services with milestones, subscriptions under the
+recurring rule, organization approvals with dual control, physical execution
+nodes, and books that close themselves.
+
+Deliverables:
+- Service marketplace: scheduled services, milestone payments (escrow per
+  milestone), acceptance per milestone.
+- Subscription management: first subscription, price increase, term
+  extension, or materially changed renewal re-enters policy evaluation
+  (`billing/subscription.py` grows the recurring rule).
+- Organization approvals: role-based approval and dual control above the
+  org limit; payout-destination changes always multi-approver + delay.
+- Physical execution nodes: typed job dispatch over the existing worker
+  lease seam; changed terms re-enter policy; execution evidence uploads.
+- Reconciliation: match order ↔ invoice ↔ payment ↔ shipment ↔ receipt;
+  duplicates and incorrect charges detected; exceptions filed to the inbox;
+  dispute evidence assembled automatically from the audit chain and object
+  store.
+
+Goal Adherence:
+- [ ] A milestone releases only its own escrow tranche; a failed milestone
+      freezes the remainder.
+- [ ] No recurring obligation is created or materially changed without a
+      fresh policy pass; renewals inside approved terms proceed.
+- [ ] Above the dual-control limit, one approver is never enough;
+      self-approval is refused (existing identity rule).
+- [ ] Payout-destination change requires the multi-approver path and a
+      delay window.
+- [ ] A physical job's changed terms (price, schedule, scope) invalidate
+      the prior approval — same digest law as purchases.
+- [ ] Reconciliation closes matched orders and files unmatched ones as
+      exceptions; duplicate charges surface as disputes with evidence
+      attached.
+
+### M4 — the open market (the spec's `phase_4`)
+
+Goal: OoLu's market meets other markets. Cross-marketplace sourcing,
+an agent-to-agent commercial protocol (typed offers/intents/approvals as the
+wire contract), dynamic supply orchestration, financing and insurance
+partners, and per-jurisdiction deployments of the compliance modules.
+
+Scope is deliberately sketched, not committed: M4 planning happens after M2
+ships and real usage data exists. Its one standing law is already fixed —
+external marketplaces and partner protocols integrate **behind the same
+policy engine and ledger**; a cross-market purchase is still a typed intent
+with a digest, and the platform's share is still a posting.
+
+---
+
+## 6. Contract test suites (the gates, as code)
+
+Mirroring the per-phase "exit gate as tests" practice:
+
+- **Digest contract:** material-change ↔ digest-change equivalence; approval
+  binds exactly one digest; expiry; reuse refusal.
+- **Policy contract:** determinism; the six decisions; reasons +
+  `policy_version` always recorded; reputation-never-overrides property.
+- **Ledger invariants:** every transaction balances; append-only; balances
+  are replay projections; compensating entries reverse exactly.
+- **Idempotency:** every commerce mutation and every PSP webhook replays to
+  the same single effect.
+- **Order/PSP separation:** order machine and payment machine reconcile from
+  independent state; forced webhook disorder converges.
+- **Escrow:** release only on the spec's conditions; missing evidence holds.
+- **Isolation & abuse:** cross-tenant refusal; self-dealing exclusion;
+  delegation revocation; fraud-threshold denial.
+- **MVP boundary:** prohibited categories, unverified sellers, irreversible
+  payment methods, and autonomous recurring subscriptions are refused at the
+  policy layer, with tests naming each exclusion.
+
+---
+
+## 7. Risks & compliance
+
+- **Money movement is regulated.** Stay merchant-of-record-adjacent, never a
+  money transmitter: licensed PSP (Stripe Connect or equivalent) behind
+  `billing/psp.py`; raw card data never touches OoLu; KYC/KYB/sanctions via
+  provider ports. Legal review before M1 flips on real charges.
+- **Agent-committed contracts.** The digest + policy design exists precisely
+  so a model can never commit a principal to terms no human (or no signed
+  policy) authorized. Keep the prohibited-actions list
+  (`capture_payment`, `release_escrow`, `change_payout_destination`, …)
+  enforced at the tool layer, not by prompt.
+- **Marketplace liability.** Restricted-goods controls, seller disclosures,
+  consumer cancellation rights, and takedown process are compliance-layer
+  deliverables in M1/M2, not afterthoughts; the jurisdiction registry is a
+  hard deployment gate.
+- **Fraud economics.** Take-rate revenue attracts refund abuse, collusion,
+  and synthetic sellers; the reserve/holdback cushion and the M2 fraud
+  checks are the containment. Fraud loss is a first-class metric from day
+  one.
+- **Two-market confusion.** Nodeplace earnings and marketplace settlements
+  must never share accounts loosely — one double-entry book, distinct
+  accounts, conservation tests on both formulas.
+
+---
+
+## 8. Observability
+
+The spec's three metric families land in `telemetry/` (and the investor
+panel's series idiom) as ledger- and audit-derived projections:
+
+- **Business:** GMV, completed-order rate, AOV, take rate, refund rate,
+  dispute rate, fulfillment time, seller conversion — all computed from the
+  ledger and order events, never from side counters.
+- **Agent:** recommendation acceptance, autonomous completion rate, human
+  override rate, policy denial rate, savings against benchmark.
+- **Safety:** unauthorized execution attempts, digest mismatches, duplicate
+  payment attempts, fraud loss, false-positive review rate, policy bypass
+  attempts — each one alarmed, because each one is an invariant with a
+  counter.
+
+---
+
+## 9. Decision log (settle before the phase that needs them)
+
+Before M1:
+- Take-rate number and shape (flat vs category schedule; buyer/seller/both;
+  fixed component). Interim: seller-side flat rate, single number.
+- Launch jurisdiction + currency; PSP (Stripe Connect assumed).
+- Default user limits (auto-purchase, notify, strong-approval) and their
+  onboarding defaults.
+- Merchant-of-record posture (platform vs seller of record) — legal input.
+
+Before M2:
+- Price benchmark source for `price_within_benchmark_percent`.
+- Escrow defaults per category; acceptance-timeout length.
+- Negotiation bounds vocabulary (which term variations are ever delegable).
+- Tax provider (build vs integrate).
+
+Before M3:
+- Organization dual-control limit defaults; payout-change delay window.
+- Milestone/escrow structures allowed per jurisdiction.
+- Physical execution node certification bar.
+
+---
+
+## 10. Sequencing summary
+
+1. **M0 — the commercial spine.** Intents, digests, the policy ladder,
+   delegation, digest-bound approvals. *No catalog, no money; the law first.*
+2. **M1 — the fixed-price market.** Catalog, orders, PSP auth/capture,
+   double-entry ledger, refunds — inside the MVP boundaries. *First real
+   dollar, first take-rate posting.*
+3. **M2 — negotiation, escrow, trust.** RFQ, bounds, inventory, escrow on
+   evidence, reputation/fraud, tax/invoice. *Autonomy grows only inside
+   signed bounds.*
+4. **M3 — services, organizations, reconciliation.** Milestones,
+   subscriptions, dual control, execution nodes, self-closing books.
+5. **M4 — the open market.** Other marketplaces, agent-to-agent protocol,
+   financing — planned on real data, behind the same policy engine and
+   ledger.
+
+Money turns on last where trust turns on first: every phase ships its
+deterministic gates and its ledger proofs before the next phase widens what
+agents may do with them.
