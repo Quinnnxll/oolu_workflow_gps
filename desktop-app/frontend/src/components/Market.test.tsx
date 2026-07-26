@@ -6,7 +6,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { Market, SellPane, money } from "./Market";
+import { Market, RequestsPane, SellPane, money, parseAttributes } from "./Market";
 import type { CommerceListing } from "../api";
 
 // The market surface never shortcuts the spine: buying walks offer →
@@ -205,7 +205,10 @@ describe("Market: buying walks offer → intent → approval", () => {
 });
 
 describe("Market: orders offer the next lawful step", () => {
-  function orderIn(state: string) {
+  function orderIn(
+    state: string,
+    extra: { escrow_held?: boolean; charge_ref?: string | null } = {},
+  ) {
     return {
       order: {
         order_id: "o1",
@@ -215,6 +218,8 @@ describe("Market: orders offer the next lawful step", () => {
         offer,
         tracking: "",
         delivery_evidence: "",
+        escrow_held: extra.escrow_held ?? false,
+        charge_ref: extra.charge_ref ?? null,
         created_at: "2026-07-01T12:00:00+00:00",
       },
       state,
@@ -250,6 +255,273 @@ describe("Market: orders offer the next lawful step", () => {
     render(<Market />);
     fireEvent.click(await screen.findByText(/Orders/));
     await screen.findByText("Accept — capture payment");
+  });
+
+  it("delivers with the evidence typed on the card", async () => {
+    routes["GET /v1/commerce/orders"] = {
+      status: 200,
+      body: { items: [orderIn("fulfilling")] },
+    };
+    routes["POST /v1/commerce/orders/o1/deliver"] = {
+      status: 200,
+      body: orderIn("delivered", { escrow_held: true, charge_ref: "ch_1" }),
+    };
+    render(<Market />);
+    fireEvent.click(await screen.findByText(/Orders/));
+    fireEvent.change(
+      (await screen.findByText("Delivery evidence")).querySelector("input")!,
+      { target: { value: "signed-photo" } },
+    );
+    fireEvent.click(screen.getByText("Mark delivered"));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) =>
+            c.method === "POST" &&
+            c.path === "/v1/commerce/orders/o1/deliver" &&
+            (c.body as { evidence: string }).evidence === "signed-photo",
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it("names the escrow exception and heals it through the evidence door", async () => {
+    routes["GET /v1/commerce/orders"] = {
+      status: 200,
+      body: {
+        items: [orderIn("delivered", { escrow_held: true, charge_ref: null })],
+      },
+    };
+    routes["POST /v1/commerce/orders/o1/evidence"] = {
+      status: 200,
+      body: orderIn("delivered", { escrow_held: true, charge_ref: "ch_1" }),
+    };
+    render(<Market />);
+    fireEvent.click(await screen.findByText(/Orders/));
+    await screen.findByText(/Escrow stays held/);
+    // No acceptance offered while the exception stands.
+    expect(screen.queryByText(/Accept —/)).toBeNull();
+    fireEvent.change(
+      screen.getByText("Delivery evidence").querySelector("input")!,
+      { target: { value: "late-photo" } },
+    );
+    fireEvent.click(screen.getByText("Attach evidence"));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) =>
+            c.method === "POST" &&
+            c.path === "/v1/commerce/orders/o1/evidence" &&
+            (c.body as { evidence: string }).evidence === "late-photo",
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it("names release for escrow-held acceptance and shows the invoice", async () => {
+    routes["GET /v1/commerce/orders"] = {
+      status: 200,
+      body: {
+        items: [orderIn("delivered", { escrow_held: true, charge_ref: "ch_1" })],
+      },
+    };
+    render(<Market />);
+    fireEvent.click(await screen.findByText(/Orders/));
+    await screen.findByText("Accept — release escrow");
+    await screen.findByText("held in escrow");
+
+    cleanup();
+    routes["GET /v1/commerce/orders"] = {
+      status: 200,
+      body: {
+        items: [orderIn("completed", { escrow_held: true, charge_ref: "ch_1" })],
+      },
+    };
+    routes["GET /v1/commerce/orders/o1/invoice"] = {
+      status: 200,
+      body: {
+        number: "US-000001",
+        order_id: "o1",
+        subtotal_micros: 100_000_000,
+        fees_micros: 0,
+        tax_micros: 8_000_000,
+        total_micros: 108_000_000,
+        currency: "USD",
+        issued_at: "2026-07-01T12:00:00+00:00",
+      },
+    };
+    render(<Market />);
+    fireEvent.click(await screen.findByText(/Orders/));
+    fireEvent.click(await screen.findByText("Invoice"));
+    await screen.findByText(/US-000001/);
+  });
+});
+
+describe("RequestsPane: RFQ discovery never bypasses the law", () => {
+  it("parses attribute lines", () => {
+    expect(parseAttributes("material=steel\nvolume = 1l\nnoise")).toEqual({
+      material: "steel",
+      volume: "1l",
+    });
+  });
+
+  it("opens a typed request through the door", async () => {
+    routes["GET /v1/commerce/rfqs"] = { status: 200, body: { items: [] } };
+    routes["POST /v1/commerce/rfqs"] = {
+      status: 201,
+      body: {
+        rfq_id: "r1",
+        buyer_principal: "user-1",
+        specification: {
+          category: "household",
+          required_attributes: [["material", "steel"]],
+          quantity: 2,
+          destination_reference: "",
+        },
+        state: "open",
+        expires_at: "2026-07-08T12:00:00+00:00",
+      },
+    };
+    render(<RequestsPane onAwardBuy={() => {}} />);
+    fireEvent.change(
+      (await screen.findByText("Category")).querySelector("input")!,
+      { target: { value: "household" } },
+    );
+    fireEvent.change(screen.getByText("Quantity").querySelector("input")!, {
+      target: { value: "2" },
+    });
+    fireEvent.change(
+      screen
+        .getByText("Required attributes (key=value per line)")
+        .querySelector("textarea")!,
+      { target: { value: "material=steel" } },
+    );
+    fireEvent.click(screen.getByText("Open request"));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) =>
+            c.method === "POST" &&
+            c.path === "/v1/commerce/rfqs" &&
+            (c.body as { required_attributes: Record<string, string> })
+              .required_attributes.material === "steel",
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it("marks substitutes and awards only the eligible into the buy path", async () => {
+    routes["GET /v1/commerce/rfqs"] = {
+      status: 200,
+      body: {
+        items: [
+          {
+            rfq_id: "r1",
+            buyer_principal: "user-1",
+            specification: {
+              category: "household",
+              required_attributes: [["material", "steel"]],
+              quantity: 1,
+              destination_reference: "",
+            },
+            state: "open",
+            expires_at: "2026-07-08T12:00:00+00:00",
+          },
+        ],
+      },
+    };
+    routes["GET /v1/commerce/rfqs/r1/quotes"] = {
+      status: 200,
+      body: {
+        items: [
+          {
+            quote_id: "q1",
+            rfq_id: "r1",
+            seller_principal: "seller-1",
+            attributes: [["material", "steel"]],
+            offer,
+            eligible: true,
+            ineligible_reasons: [],
+          },
+          {
+            quote_id: "q2",
+            rfq_id: "r1",
+            seller_principal: "seller-2",
+            attributes: [["material", "plastic"]],
+            offer: { ...offer, offer_id: "of-2", seller_id: "planet-plastics" },
+            eligible: false,
+            ineligible_reasons: [
+              "attribute 'material' is 'plastic', not the required 'steel'",
+            ],
+          },
+        ],
+      },
+    };
+    routes["POST /v1/commerce/rfqs/r1/award"] = { status: 200, body: offer };
+    const awarded: string[] = [];
+    render(
+      <RequestsPane
+        onAwardBuy={(won, category) => awarded.push(`${won.offer_id}:${category}`)}
+      />,
+    );
+    fireEvent.click(await screen.findByText("Quotes"));
+    await screen.findByText("substitute");
+    screen.getByText(/not the required 'steel'/);
+    // Exactly one Award button: the substitute never offers one.
+    const buttons = screen.getAllByText("Award & buy");
+    expect(buttons.length).toBe(1);
+    fireEvent.click(buttons[0]);
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) =>
+            c.method === "POST" && c.path === "/v1/commerce/rfqs/r1/award",
+        ),
+      ).toBe(true),
+    );
+    await waitFor(() => expect(awarded).toEqual(["l1:v1:household"]));
+  });
+});
+
+describe("SellPane: the signed boundary", () => {
+  it("loads the sales policy and signs the new floors in micros", async () => {
+    routes["GET /v1/commerce/seller/kyc"] = {
+      status: 200,
+      body: { status: "verified", legal_name: "Acme GmbH" },
+    };
+    routes["GET /v1/commerce/listings"] = { status: 200, body: { items: [] } };
+    routes["GET /v1/commerce/sales-policy"] = {
+      status: 200,
+      body: {
+        policy_id: "default-sales",
+        policy_version: "sales-v1",
+        price_floor_micros: 0,
+        absolute_floor_micros: 50_000_000,
+        auto_accept_price_micros: 90_000_000,
+        maximum_discount_percent: 20,
+        automated_quantity_limit: 10,
+        seller_review_limit_micros: 1_000_000_000,
+      },
+    };
+    routes["PUT /v1/commerce/sales-policy"] = { status: 200, body: {} };
+    render(<SellPane onChanged={() => {}} />);
+    const floor = (
+      await screen.findByText("Absolute floor (USD/unit)")
+    ).querySelector("input")!;
+    await waitFor(() => expect(floor.value).toBe("50"));
+    fireEvent.change(floor, { target: { value: "60" } });
+    fireEvent.click(screen.getByText("Sign boundary"));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) =>
+            c.method === "PUT" &&
+            c.path === "/v1/commerce/sales-policy" &&
+            (c.body as { absolute_floor_micros: number })
+              .absolute_floor_micros === 60_000_000,
+        ),
+      ).toBe(true),
+    );
   });
 });
 

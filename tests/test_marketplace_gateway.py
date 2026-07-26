@@ -459,6 +459,64 @@ def test_listings_publish_is_gated_on_seller_verification(tmp_path):
     conn.close()
 
 
+def test_evidence_content_lands_content_addressed(tmp_path):
+    """Delivery evidence supplied as CONTENT is preserved in the object
+    store and the ref that rides the order (and the audit chain) is its
+    sha256 — tamper-evident, not just a claim. A host without evidence
+    storage refuses content and says what to pass instead."""
+
+    from oolu.durable.artifacts import FilesystemArtifactStore
+    from oolu.gateway import GatewayApp
+
+    bare, conn, ident = _app(tmp_path)
+    token = ident.token("user-1")
+    _grant_delegation(bare, token)
+    intent_id = _approved_intent_id(bare, token)
+    placed = bare.handle(
+        _req(
+            "POST", "/v1/commerce/orders", token=token, body={"intent_id": intent_id}
+        )
+    )
+    order_id = placed.body["order"]["order_id"]
+    bare.handle(
+        _req("POST", f"/v1/commerce/orders/{order_id}/ship", token=token)
+    )
+    # No evidence store on this host: content is refused with directions.
+    refused = bare.handle(
+        _req(
+            "POST",
+            f"/v1/commerce/orders/{order_id}/deliver",
+            token=token,
+            body={"evidence_content": "photo bytes"},
+        )
+    )
+    assert refused.status == 400
+    assert "storage" in refused.body["error"]["message"]
+
+    # The same doors on a host WITH storage: content lands addressed.
+    store = FilesystemArtifactStore(tmp_path / "evidence")
+    stocked = GatewayApp(
+        bare._durable,
+        validator=ident.validator,
+        resolver=ident.resolver,
+        approval_authority=ident.authority,
+        commerce_evidence=store,
+    )
+    delivered = stocked.handle(
+        _req(
+            "POST",
+            f"/v1/commerce/orders/{order_id}/deliver",
+            token=token,
+            body={"evidence_content": "photo bytes"},
+        )
+    )
+    assert delivered.status == 200
+    ref = delivered.body["order"]["delivery_evidence"]
+    assert ref.startswith("sha256:")
+    assert store.get(ref) == b"photo bytes"
+    conn.close()
+
+
 def test_policy_roundtrip_and_no_execution_door(tmp_path):
     app, conn, ident = _app(tmp_path)
     token = ident.token("user-1")

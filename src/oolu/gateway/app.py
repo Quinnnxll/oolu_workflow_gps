@@ -621,6 +621,9 @@ class GatewayApp:
         # gate: a live commerce PSP demands require_production_money
         commerce_jurisdiction=None,  # billing.tax.JurisdictionModule: the
         # host's operating jurisdiction; None = a zero-rate LOCAL module
+        commerce_evidence=None,  # artifact store for delivery evidence:
+        # content lands content-addressed (sha256:<digest>), so the ref
+        # on the audit chain is tamper-evident. None = refs only
         google_signin: GoogleSignIn | None = None,  # "Continue with Google"
         identity_links: IdentityLinkStore | None = None,  # email/IdP -> account
         mail=None,  # mail.MailSender: verification + reset codes go out here
@@ -765,6 +768,7 @@ class GatewayApp:
         )
         self._commerce_rfq = RfqService(durable.conn, audit=durable.audit)
         self._commerce_sales_policies = SalesPolicyStore(durable.conn)
+        self._commerce_evidence = commerce_evidence
         # Competitor intelligence, constructed on first use.
         self._competitors = None
         self._settings = settings_node
@@ -10580,12 +10584,13 @@ class GatewayApp:
         return json_response(200, policy.model_dump(mode="json"))
 
     def _commerce_order_evidence(self, request, session, params) -> Response:
+        body = request.body or {}
         return self._commerce_order_transition(
             request,
             session,
             params,
             self._commerce_orders.attach_evidence,
-            evidence=str((request.body or {}).get("evidence") or ""),
+            evidence=self._commerce_evidence_ref(params, body),
         )
 
     def _commerce_order_invoice(self, request, session, params) -> Response:
@@ -10692,13 +10697,34 @@ class GatewayApp:
             tracking=str((request.body or {}).get("tracking") or ""),
         )
 
+    def _commerce_evidence_ref(self, params, body) -> str:
+        """The evidence ref a transition records. Content, when supplied,
+        lands in the artifact store content-addressed — the ref that rides
+        the audit chain is then tamper-evident, not just a claim."""
+        content = str(body.get("evidence_content") or "")
+        if content:
+            if self._commerce_evidence is None:
+                raise GatewayError(
+                    400,
+                    "invalid_request",
+                    "evidence storage is not configured on this host; "
+                    "pass an evidence reference instead",
+                )
+            return self._commerce_evidence.put(
+                f"order-evidence:{params['order_id']}",
+                content.encode("utf-8"),
+                media_type="text/plain",
+            )
+        return str(body.get("evidence") or "")
+
     def _commerce_order_deliver(self, request, session, params) -> Response:
+        body = request.body or {}
         return self._commerce_order_transition(
             request,
             session,
             params,
             self._commerce_orders.mark_delivered,
-            evidence=str((request.body or {}).get("evidence") or ""),
+            evidence=self._commerce_evidence_ref(params, body),
         )
 
     def _commerce_order_accept(self, request, session, params) -> Response:

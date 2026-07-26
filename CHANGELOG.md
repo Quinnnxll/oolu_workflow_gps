@@ -4,6 +4,25 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+M2 closed — the market surface learns escrow, RFQ, and the signed
+boundary:
+
+- **The shell Market surface (M2)** — a Requests pane: open a typed
+  RFQ, compare normalized quotes (substitutes marked with their gaps
+  offer no award button), award the eligible into the same intent door
+  as shelf purchases; escrow-aware order cards: delivery evidence
+  typed on the card, the "escrow stays held" exception named with its
+  Attach-evidence way out, "Accept — release escrow" vs direct
+  capture, and the invoice (number, total, tax) on completed orders;
+  the seller's signed-boundary editor — the absolute floor no model
+  crosses, signed in micros. Pinned by `Market.test.tsx`; shell bundle
+  rebuilt.
+- **Evidence blobs** — delivery evidence supplied as content is
+  preserved content-addressed in the object store (filesystem locally,
+  R2/S3 when configured): the `sha256:` ref riding the order and the
+  audit chain is tamper-evident. A host without evidence storage
+  refuses content with directions instead of storing a claim.
+
 M2 — negotiation, escrow, and trust (marketplace-build-plan):
 
 - **RFQ and quotes** (`marketplace/rfq.py`) — typed specifications;

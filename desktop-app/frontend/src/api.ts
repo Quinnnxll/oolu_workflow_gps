@@ -992,6 +992,10 @@ export interface CommerceOrder {
     offer: CommerceOffer;
     tracking: string;
     delivery_evidence: string;
+    // M2: whether captured money waits in escrow, and the capture ref
+    // whose absence marks the missing-evidence exception.
+    escrow_held: boolean;
+    charge_ref: string | null;
     created_at: string;
   };
   state: string;
@@ -1010,6 +1014,51 @@ export interface SellerKycView {
   company_email?: string;
   screen_note?: string;
   decision_note?: string;
+}
+
+export interface CommerceRfq {
+  rfq_id: string;
+  buyer_principal: string;
+  specification: {
+    category: string;
+    required_attributes: [string, string][];
+    quantity: number;
+    destination_reference: string;
+  };
+  state: string;
+  expires_at: string;
+}
+
+export interface CommerceQuote {
+  quote_id: string;
+  rfq_id: string;
+  seller_principal: string;
+  attributes: [string, string][];
+  offer: CommerceOffer;
+  eligible: boolean;
+  ineligible_reasons: string[];
+}
+
+export interface CommerceSalesPolicy {
+  policy_id: string;
+  policy_version: string;
+  price_floor_micros: number;
+  absolute_floor_micros: number;
+  auto_accept_price_micros: number;
+  maximum_discount_percent: number;
+  automated_quantity_limit: number;
+  seller_review_limit_micros: number;
+}
+
+export interface CommerceInvoice {
+  number: string;
+  order_id: string;
+  subtotal_micros: number;
+  fees_micros: number;
+  tax_micros: number;
+  total_micros: number;
+  currency: string;
+  issued_at: string;
 }
 
 export const api = {
@@ -1673,6 +1722,42 @@ export const api = {
     company_email: string;
     registration_no?: string;
   }) => req<SellerKycView>("POST", "/v1/commerce/seller/kyc", body),
+  // M2: RFQ and quotes, the escrow doors, sales policy, invoices.
+  commerceRfqs: () =>
+    req<{ items: CommerceRfq[] }>("GET", "/v1/commerce/rfqs"),
+  commerceRfqOpen: (body: {
+    category: string;
+    quantity: number;
+    required_attributes: Record<string, string>;
+  }) => req<CommerceRfq>("POST", "/v1/commerce/rfqs", body),
+  commerceRfqQuotes: (rfqId: string) =>
+    req<{ items: CommerceQuote[] }>("GET", `/v1/commerce/rfqs/${rfqId}/quotes`),
+  commerceQuoteSubmit: (
+    rfqId: string,
+    offer: CommerceOffer,
+    attributes: Record<string, string>,
+  ) =>
+    req<CommerceQuote>("POST", `/v1/commerce/rfqs/${rfqId}/quotes`, {
+      offer,
+      attributes,
+    }),
+  commerceRfqAward: (rfqId: string, quoteId: string) =>
+    req<CommerceOffer>("POST", `/v1/commerce/rfqs/${rfqId}/award`, {
+      quote_id: quoteId,
+    }),
+  commerceSalesPolicy: () =>
+    req<CommerceSalesPolicy>("GET", "/v1/commerce/sales-policy"),
+  commerceSalesPolicyPut: (policy: CommerceSalesPolicy) =>
+    req<CommerceSalesPolicy>("PUT", "/v1/commerce/sales-policy", policy),
+  // The escrow exception's way out: late evidence for a delivered order.
+  // (Hosts with evidence storage also accept evidence_content, preserved
+  // content-addressed so the audited ref is tamper-evident.)
+  commerceOrderEvidence: (orderId: string, evidence: string) =>
+    req<CommerceOrder>(`POST`, `/v1/commerce/orders/${orderId}/evidence`, {
+      evidence,
+    }),
+  commerceOrderInvoice: (orderId: string) =>
+    req<CommerceInvoice>("GET", `/v1/commerce/orders/${orderId}/invoice`),
 };
 
 export function timelineSocket(

@@ -1325,6 +1325,9 @@ def build_host_runtime(
         stripe_webhooks=stripe_webhooks,
         commerce_psp=commerce_psp,
         commerce_providers=tuple(identity_providers),
+        # Delivery evidence lands content-addressed beside the file
+        # drawer's blobs (filesystem locally, R2/S3 when configured).
+        commerce_evidence=blob_store_from_env(data),
         # The public execution API: machine keys + signed run webhooks.
         api_keys=ApiKeyService(conn),
         webhook_endpoints=(endpoints := WebhookEndpointStore(conn)),

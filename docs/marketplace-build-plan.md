@@ -361,7 +361,7 @@ Goal Adherence (the spec's acceptance tests, distributed):
 
 ### M2 — negotiation, escrow, and trust (the spec's `phase_2`)
 
-**Status: LANDED (core)** — `marketplace/rfq.py`: typed specifications,
+**Status: LANDED** — `marketplace/rfq.py`: typed specifications,
 multi-seller quotes judged for eligibility BEFORE policy (substitutes
 marked with their gaps, never awardable), normalized comparison, awards
 returning the exact offer for the intent door; the seller's signed
@@ -388,9 +388,22 @@ Doors: `/v1/commerce/rfqs` (+quotes, +award), `/v1/commerce/
 sales-policy`, per-order `/evidence` and `/invoice`; the acceptance-
 timeout sweep rides order-list traffic. Pinned by
 `tests/test_marketplace_{rfq,inventory,escrow,trust}.py` and the
-updated gateway suite. Remaining before the phase closes: the shell
-surfaces for RFQ/quotes and the escrow states, and delivery-evidence
-blobs in the object store (refs ride the audit chain today).
+updated gateway suite.
+
+**Phase closed** by two follow-ups: **(1) the shell surface** — the
+Market screen grows a Requests pane (open a typed RFQ, compare
+normalized quotes with substitutes marked by their gaps, award only
+the eligible into the same intent door), escrow-aware order cards
+(evidence typed on the card at delivery, the "escrow stays held"
+exception named with its Attach-evidence way out, "Accept — release
+escrow" vs direct capture, the invoice on completed orders), and the
+seller's signed-boundary editor (the absolute floor, signed in
+micros) — pinned by the vitest suite in `Market.test.tsx`.
+**(2) evidence blobs** — delivery evidence supplied as content lands
+in the object store content-addressed (filesystem locally, R2/S3 when
+configured), so the `sha256:` ref on the order and the audit chain is
+tamper-evident; a host without storage refuses content with
+directions rather than storing a claim.
 
 Goal: autonomy grows on both sides — within signed bounds. RFQ and
 structured quotes, negotiation limits, escrow/delayed settlement gated on
