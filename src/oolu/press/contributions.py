@@ -319,11 +319,17 @@ class PressDesk:
     optional, so a pre-A2 composition stays a working press."""
 
     def __init__(
-        self, store: ContributionStore, *, stories=None, preferences=None
+        self,
+        store: ContributionStore,
+        *,
+        stories=None,
+        preferences=None,
+        polls=None,
     ) -> None:
         self._store = store
         self._stories = stories  # newsroom.StoryStore | None
         self._preferences = preferences  # editions.PreferenceStore | None
+        self._polls = polls  # polls.PollDesk | None
 
     @property
     def store(self) -> ContributionStore:
@@ -336,6 +342,10 @@ class PressDesk:
     @property
     def preferences(self):
         return self._preferences
+
+    @property
+    def polls(self):
+        return self._polls
 
     def publish(
         self,

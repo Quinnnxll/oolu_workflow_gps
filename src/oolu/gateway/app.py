@@ -1160,6 +1160,16 @@ class GatewayApp:
         )
         r.add("POST", "/v1/press/newsroom/run", self._press_newsroom_run)
         r.add("POST", "/v1/press/edition/schedule", self._press_edition_schedule)
+        # The poll floor (A3): vote first, see second; the floor holds.
+        r.add("GET", "/v1/press/polls/next", self._press_poll_next)
+        r.add("POST", "/v1/press/polls/{pair_id}/vote", self._press_poll_vote)
+        r.add("GET", "/v1/press/polls/{pair_id}/stats", self._press_poll_stats)
+        # The member's own pairwise preferences, DPO-shaped (consented).
+        r.add(
+            "GET",
+            "/v1/press/preferences/export",
+            self._press_preferences_export,
+        )
         # The byline: an account's published face and name, readable by
         # the account's own tenant — and the owner's doors to set it.
         r.add("GET", "/v1/profiles/{username}", self._profile_get)
@@ -2939,6 +2949,114 @@ class GatewayApp:
                     "reason": "the edition fire raised — the log has the story",
                 },
             )
+
+    # -- the poll floor (A3) ------------------------------------------- #
+    def _require_polls(self):
+        press = self._require_press()
+        if press.polls is None:
+            raise GatewayError(404, "not_found", "this host keeps no polls")
+        return press
+
+    @staticmethod
+    def _pair_dict(pair) -> dict:
+        return {
+            "pair_id": pair.pair_id,
+            "genre": pair.genre,
+            "left": pair.left.model_dump(),
+            "right": pair.right.model_dump(),
+            "created_at": pair.created_at.isoformat(),
+        }
+
+    def _press_poll_next(self, request, session, params) -> Response:
+        """A pair this member has not voted on — in their named genre,
+        or the Thompson draw's pick when they name none. The switch is
+        immediate: the genre parameter IS the stream."""
+        press = self._require_polls()
+        from ..press import GENRES, PressError
+
+        genre = str(request.query.get("genre") or "") or None
+        if genre is not None and genre not in GENRES:
+            raise GatewayError(400, "invalid_request", f"unknown genre: {genre}")
+        corpus = press.store.list(tenant=session.tenant_id, limit=500)
+        try:
+            pair = press.polls.next_pair(
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+                corpus=corpus,
+                genre=genre,
+            )
+        except PressError as exc:
+            raise self._press_refused(exc) from exc
+        return json_response(200, self._pair_dict(pair))
+
+    def _press_poll_vote(self, request, session, params) -> Response:
+        """One idempotent vote. The aggregate always counts it; the
+        preference event is written only under the member's own
+        consent — and their edition feels it (the engagement signal)."""
+        press = self._require_polls()
+        from ..press import PressError
+
+        choice = str((request.body or {}).get("choice") or "").strip()
+        learning = self._press_personalized(session)
+        try:
+            verdict = press.polls.vote(
+                params["pair_id"],
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+                choice=choice,
+                learning=learning,
+            )
+        except PressError as exc:
+            raise self._press_refused(exc) from exc
+        # The consented vote also feeds the member's OWN edition ranking
+        # — a vote is engagement with the genre, recorded as such.
+        if learning and press.preferences is not None:
+            pair = press.polls.store.get_pair(
+                params["pair_id"], tenant=session.tenant_id
+            )
+            if pair is not None:
+                press.preferences.record(
+                    tenant=session.tenant_id,
+                    principal=session.principal_id,
+                    signal="read",
+                    subject=f"poll:{pair.pair_id}",
+                    genres=(pair.genre,),
+                )
+        verdict["learning"] = bool(learning)
+        return json_response(200, verdict)
+
+    def _press_poll_stats(self, request, session, params) -> Response:
+        press = self._require_polls()
+        from ..press import PressError
+
+        try:
+            verdict = press.polls.reveal(
+                params["pair_id"],
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+            )
+        except PressError as exc:
+            raise self._press_refused(exc) from exc
+        return json_response(200, verdict)
+
+    def _press_preferences_export(self, request, session, params) -> Response:
+        """The member's own pairwise preferences in the DPO dataset
+        shape — consent-gated, per-member, scrubbed on the way out."""
+        press = self._require_polls()
+        if press.polls.pairwise is None:
+            raise GatewayError(
+                404, "not_found", "this host keeps no preference pairs"
+            )
+        if not self._press_personalized(session):
+            raise GatewayError(
+                403,
+                "forbidden",
+                "personalization is off — there is nothing consented to export",
+            )
+        pairs = press.polls.pairwise.export(
+            tenant=session.tenant_id, principal=session.principal_id
+        )
+        return json_response(200, {"items": pairs, "count": len(pairs)})
 
     def _press_media(self, request, session, params) -> Response:
         """A published contribution's attached file, by reference — the
@@ -6773,6 +6891,14 @@ class GatewayApp:
             erased["press_preferences"] = self._press.preferences.erase(
                 tenant=tenant, principal=principal
             )
+        if self._press is not None and self._press.polls is not None:
+            erased["poll_votes"] = self._press.polls.store.erase_votes(
+                tenant=tenant, principal=principal
+            )
+            if self._press.polls.pairwise is not None:
+                erased["preference_pairs"] = self._press.polls.pairwise.erase(
+                    tenant=tenant, principal=principal
+                )
         if self._reminders is not None:
             erased["reminders"] = self._reminders.erase(
                 tenant=tenant, principal=principal

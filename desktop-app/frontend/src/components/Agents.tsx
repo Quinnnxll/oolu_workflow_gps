@@ -3,6 +3,8 @@ import { api, session } from "../api";
 import type {
   Contribution,
   FileMeta,
+  PollPair,
+  PollVerdict,
   PressGenre,
   PressLicense,
   RosterAgent,
@@ -58,6 +60,142 @@ export function AgentAvatar({
     >
       {agent.name.slice(0, 1).toUpperCase()}
     </span>
+  );
+}
+
+// The poll floor's surface (A3): one pair at a time — two member pieces
+// side by side, each with its byline; tap to vote; the reveal follows
+// the server's honesty laws verbatim (vote first, floor second). The
+// genre chips ARE the stream switch; no chip = the server's exploration
+// pick.
+export function PollPanel() {
+  const tr = useT();
+  const [genres, setGenres] = useState<PressGenre[] | null>(null);
+  const [genre, setGenre] = useState<string | null>(null);
+  const [pair, setPair] = useState<PollPair | null>(null);
+  const [verdict, setVerdict] = useState<PollVerdict | null>(null);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function nextPair(chosen: string | null) {
+    setBusy(true);
+    setVerdict(null);
+    setNote("");
+    try {
+      setPair(await api.pressPollNext(chosen ?? undefined));
+    } catch (e) {
+      setPair(null);
+      setNote(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    void api
+      .pressGenres()
+      .then((meta) => {
+        setGenres(meta.items);
+        void nextPair(null);
+      })
+      .catch(() => setGenres(null)); // no press on this host: no panel
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (genres === null) return null;
+
+  async function vote(choice: "left" | "right") {
+    if (!pair || busy) return;
+    setBusy(true);
+    try {
+      setVerdict(await api.pressPollVote(pair.pair_id, choice));
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function switchGenre(key: string) {
+    const next = genre === key ? null : key;
+    setGenre(next);
+    void nextPair(next);
+  }
+
+  return (
+    <div className="press-panel poll">
+      <div className="press-head">
+        <span className="press-heading">{tr("poll.heading")}</span>
+      </div>
+      <div className="press-genres">
+        {genres.map((g) => (
+          <button
+            key={g.key}
+            type="button"
+            title={g.description}
+            className={`press-chip${genre === g.key ? " on" : ""}`}
+            onClick={() => switchGenre(g.key)}
+          >
+            {g.label}
+          </button>
+        ))}
+      </div>
+      {pair && (
+        <div className="poll-pair">
+          {(["left", "right"] as const).map((side) => (
+            <button
+              key={side}
+              type="button"
+              className={`poll-side${
+                verdict?.choice === side ? " chosen" : ""
+              }`}
+              disabled={busy || verdict?.voted === true}
+              onClick={() => void vote(side)}
+            >
+              <span className="press-title">{pair[side].title}</span>
+              <span className="press-body">{pair[side].excerpt}</span>
+              <Byline username={pair[side].author} size={20} />
+            </button>
+          ))}
+        </div>
+      )}
+      {verdict && (
+        <div className="poll-verdict">
+          {verdict.revealed && verdict.counts && verdict.total ? (
+            <>
+              <span>
+                {tf("poll.result", {
+                  left: Math.round(
+                    (100 * verdict.counts.left) / verdict.total,
+                  ),
+                  right: Math.round(
+                    (100 * verdict.counts.right) / verdict.total,
+                  ),
+                  n: verdict.total,
+                })}
+              </span>
+            </>
+          ) : (
+            // The server's honesty law, verbatim — "not enough votes
+            // yet" and nothing noisier.
+            <span className="muted">{verdict.reason}</span>
+          )}
+          {verdict.learning === false && (
+            <span className="muted"> · {tr("press.notRecorded")}</span>
+          )}
+        </div>
+      )}
+      {note && <div className="muted press-empty">{note}</div>}
+      <div className="row">
+        <button
+          className="ghost"
+          disabled={busy}
+          onClick={() => void nextPair(genre)}
+        >
+          {tr("poll.next")}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -491,6 +629,8 @@ export function AgentThread({ agent }: { agent: RosterAgent }) {
             contribution shelf and the contribute form — in-thread, the
             inlineBlock pattern, never a window popping on top. */}
         {agent.agent_id === "news" && <PressPanel />}
+        {/* The poll floor (A3) heads the Poll thread the same way. */}
+        {agent.agent_id === "poll" && <PollPanel />}
         {/* The card welcomes honestly: what this agent does today, and
             what phase brings the rest — the same words the server would
             answer with, shown before the first message is ever sent. */}

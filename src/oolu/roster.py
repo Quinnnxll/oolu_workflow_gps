@@ -45,15 +45,15 @@ ROSTER: tuple[AgentCard, ...] = (
         name="News",
         tagline="Stories from members, to magazine standard",
         scope=(
-            "I collect member contributions: publish your own piece in "
-            "this thread — titled, genre-keyed, under the members "
-            "license, credited to you by name and photo — and browse "
-            "what others published. I do not compose stories or "
-            "editions yet."
+            "I collect member contributions and compose them into "
+            "attributed stories — every piece credited by name and "
+            "photo, every selection explained. Publish in this thread, "
+            "read your edition here, and set a morning delivery."
         ),
         ahead=(
-            "Composed stories and personal editions arrive in phase A2 "
-            "of the agents-expansion plan."
+            "Affiliate advertising with revenue shared back to "
+            "contributors arrives in phases A4–A5 of the "
+            "agents-expansion plan."
         ),
         seat="news.compose",
     ),
@@ -62,13 +62,15 @@ ROSTER: tuple[AgentCard, ...] = (
         name="Poll",
         tagline="Two things, compared — for fun, and for real",
         scope=(
-            "I talk through how pairwise polls will work — comparable "
-            "pairs, honest aggregate results after you vote, switching "
-            "genres. I do not run polls or show statistics yet."
+            "I offer pairs of member pieces to compare — vote first, "
+            "then see the real numbers (once enough members voted). "
+            "Switch genres any time; with personalization on, your "
+            "votes also shape your News edition."
         ),
         ahead=(
-            "Live pairs, votes, and k-anonymous statistics arrive in "
-            "phase A3 of the agents-expansion plan."
+            "Affiliate advertising with revenue shared back to "
+            "contributors arrives in phases A4–A5 of the "
+            "agents-expansion plan."
         ),
         seat="poll.pair",
     ),

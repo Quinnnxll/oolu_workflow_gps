@@ -661,6 +661,35 @@ export interface EditionSchedule {
   [key: string]: unknown;
 }
 
+// A poll pair (A3): two comparable member pieces, each with its byline.
+export interface PollSide {
+  contribution_id: string;
+  author: string;
+  title: string;
+  excerpt: string;
+}
+
+export interface PollPair {
+  pair_id: string;
+  genre: string;
+  left: PollSide;
+  right: PollSide;
+  created_at: string;
+}
+
+// The reveal's honest shapes: nothing before your vote, no counts below
+// the k-anonymity floor.
+export interface PollVerdict {
+  pair_id: string;
+  voted: boolean;
+  choice?: "left" | "right";
+  revealed: boolean;
+  reason?: string;
+  counts?: { left: number; right: number };
+  total?: number;
+  learning?: boolean;
+}
+
 // ---- friends wire shapes ----------------------------------------------------
 // A conversation in the peer list: who, what was said last, what waits.
 export interface FriendConversation {
@@ -1381,6 +1410,25 @@ export const api = {
         tz_offset_minutes:
           payload.tz_offset_minutes ?? (-new Date().getTimezoneOffset() || 0),
       },
+    ),
+  // The poll floor (A3): a pair you haven't voted on — your named genre,
+  // or the server's exploration pick when you name none.
+  pressPollNext: (genre?: string) =>
+    req<PollPair>(
+      "GET",
+      "/v1/press/polls/next" +
+        (genre ? `?genre=${encodeURIComponent(genre)}` : ""),
+    ),
+  pressPollVote: (pairId: string, choice: "left" | "right") =>
+    req<PollVerdict>(
+      "POST",
+      `/v1/press/polls/${encodeURIComponent(pairId)}/vote`,
+      { choice },
+    ),
+  pressPollStats: (pairId: string) =>
+    req<PollVerdict>(
+      "GET",
+      `/v1/press/polls/${encodeURIComponent(pairId)}/stats`,
     ),
   // The data-subject's rights, self-serve: everything as one JSON
   // document, and erasure that says exactly what it removed.

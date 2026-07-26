@@ -756,6 +756,9 @@ def build_host_runtime(
     from .settings_node import SettingsNode, SettingsStore
     from .press import (
         ContributionStore,
+        PairwiseStore,
+        PollDesk,
+        PollStore,
         PreferenceStore,
         PressDesk,
         StoryStore,
@@ -1283,12 +1286,13 @@ def build_host_runtime(
         friendships=FriendshipStore(conn),
         assistant_history=AssistantHistoryStore(conn),
         profile_photos=ProfilePhotoStore(conn),
-        # The press: member contributions, the newsroom's stories, and
-        # each member's own (consented) ranking signals.
+        # The press: member contributions, the newsroom's stories, each
+        # member's own (consented) ranking signals, and the poll floor.
         press=PressDesk(
             ContributionStore(conn),
             stories=StoryStore(conn),
             preferences=PreferenceStore(conn),
+            polls=PollDesk(PollStore(conn), PairwiseStore(conn)),
         ),
         # Reminders: rows with a clock — the deterministic route for
         # "remind me", surfaced by the client's poll.

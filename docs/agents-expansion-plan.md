@@ -489,6 +489,30 @@ Goal Adherence:
 
 ### A3 — the poll floor (fun on the surface, instruments underneath)
 
+**Status: LANDED** — `press/polls.py`: comparable-pair mining on the
+content-token band (same genre, distinct authors, agreement in the
+comparable band, near-duplicates excluded — one piece twice is no
+comparison), never re-minting a standing pair; `PollPair` with both
+contributors' bylines; one durable idempotent vote per member per pair
+(a replay changes nothing; a change of heart is a 409 — the first vote
+is the vote). The honesty laws in `PollDesk`: nothing reveals before
+your own vote, and below `K_FLOOR` the answer is "not enough votes yet"
+with no counts — not even a total — property-tested at the exact
+boundary. Genre switch is the query parameter; no genre = a seedable
+Thompson draw over per-genre served/voted engagement. The **generic
+pairwise preference store** (`press_pairwise`) landed: consented votes
+write `{prompt, chosen, rejected}` in the DPO trainer's exact shape,
+exported per-member (scrubbed once more on the way out, degenerate rows
+dropped) at `GET /v1/press/preferences/export`; the same consented vote
+records the engagement signal that measurably reorders that member's
+OWN edition (end-to-end test through the preference store). The
+aggregate always counts the vote; only the learning is consent-gated,
+and votes + pairs ride account erasure. Doors: `/v1/press/polls/next`,
+`/{id}/vote`, `/{id}/stats`, the export. Surface: the poll panel
+heading the Poll thread — genre chips as the stream switch, two
+byline-carrying sides, tap to vote, the server's reveal words verbatim.
+Pinned by `tests/test_polls.py` and the poll cases in `Agents.test.tsx`.
+
 Goal: pairwise polls mined from the same corpus; vote → real aggregate;
 manual genre switch; every vote a typed, consented preference event that
 teaches both the editions and the models.

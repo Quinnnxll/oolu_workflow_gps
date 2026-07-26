@@ -2676,3 +2676,40 @@ button.ghost {
   cursor: pointer;
   font-size: 0.85em;
 }
+
+/* ---- the poll floor (agents-expansion A3) ------------------------------- */
+.poll-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.poll-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.poll-side:hover:not(:disabled) {
+  border-color: hsl(210 45% 44%);
+}
+
+.poll-side.chosen {
+  border-color: hsl(210 45% 44%);
+  box-shadow: 0 0 0 1px hsl(210 45% 44%);
+}
+
+.poll-side .press-body {
+  font-size: 0.9em;
+}
+
+.poll-verdict {
+  padding: 4px 0;
+}

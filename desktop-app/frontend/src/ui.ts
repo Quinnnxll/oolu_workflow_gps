@@ -342,6 +342,25 @@ const STRINGS: Record<string, Entry> = {
     es: "Por qué esta historia",
     fr: "Pourquoi cet article",
   },
+  // The poll floor (A3).
+  "poll.heading": {
+    en: "Which one? Tap to vote",
+    zh: "哪一个？点一下投票",
+    es: "¿Cuál? Toca para votar",
+    fr: "Lequel ? Touchez pour voter",
+  },
+  "poll.next": {
+    en: "Next pair",
+    zh: "下一对",
+    es: "Siguiente par",
+    fr: "Paire suivante",
+  },
+  "poll.result": {
+    en: "{left}% vs {right}% · {n} votes",
+    zh: "{left}% 对 {right}% · {n} 票",
+    es: "{left}% frente a {right}% · {n} votos",
+    fr: "{left}% contre {right}% · {n} votes",
+  },
   files: { en: "Files", zh: "文件", es: "Archivos", fr: "Fichiers" },
   filesSub: {
     en: "documents & sheets",
@@ -3085,6 +3104,9 @@ const ZH_HANT: Record<string, string> = {
   "press.noted": "已記錄",
   "press.notRecorded": "未記錄——個人化未開啟",
   "press.why": "為什麼選它",
+  "poll.heading": "哪一個？點一下投票",
+  "poll.next": "下一對",
+  "poll.result": "{left}% 對 {right}% · {n} 票",
   "files": "檔案",
   "filesSub": "文件與表格",
   "settings": "設定",

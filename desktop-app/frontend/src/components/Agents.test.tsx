@@ -306,6 +306,95 @@ describe("PressPanel (inside the News thread)", () => {
     expect(scheduled?.body).toMatchObject({ enabled: true });
   });
 
+  it("runs a poll: both bylines, vote once, the floor's honest reveal", async () => {
+    const POLL: RosterAgent = { ...NEWS, agent_id: "poll", name: "Poll" };
+    routes["GET /v1/press/genres"] = GENRES;
+    routes["GET /v1/press/polls/next"] = {
+      status: 200,
+      body: {
+        pair_id: "p1",
+        genre: "food",
+        left: {
+          contribution_id: "c1",
+          author: "alice",
+          title: "The steel kettle, tested",
+          excerpt: "Four minutes to a litre.",
+        },
+        right: {
+          contribution_id: "c2",
+          author: "bob",
+          title: "A week with the glass kettle",
+          excerpt: "Six minutes, but the lid feels solid.",
+        },
+        created_at: "2026-07-14T09:00:00Z",
+      },
+    };
+    routes["POST /v1/press/polls/p1/vote"] = {
+      status: 200,
+      body: {
+        pair_id: "p1",
+        voted: true,
+        choice: "left",
+        revealed: false,
+        reason: "not enough votes yet",
+        learning: false,
+      },
+    };
+    render(<AgentThread agent={POLL} />);
+
+    // Both sides render with their bylines.
+    expect(await screen.findByText("The steel kettle, tested")).toBeTruthy();
+    expect(screen.getByText("A week with the glass kettle")).toBeTruthy();
+    expect(await screen.findByText("alice")).toBeTruthy();
+    expect(screen.getByText("bob")).toBeTruthy();
+
+    // Tap left: the vote posts; the floor answers honestly; the pair
+    // locks (no second vote from this surface).
+    fireEvent.click(screen.getByText("The steel kettle, tested"));
+    expect(await screen.findByText("not enough votes yet")).toBeTruthy();
+    const voted = calls.find(
+      (c) => c.method === "POST" && c.path === "/v1/press/polls/p1/vote",
+    );
+    expect(voted?.body).toMatchObject({ choice: "left" });
+    // And the learning-off echo rides along.
+    expect(
+      screen.getByText(/not recorded — personalization is off/),
+    ).toBeTruthy();
+  });
+
+  it("switches the poll stream by genre chip", async () => {
+    const POLL: RosterAgent = { ...NEWS, agent_id: "poll", name: "Poll" };
+    routes["GET /v1/press/genres"] = GENRES;
+    routes["GET /v1/press/polls/next"] = {
+      status: 200,
+      body: {
+        pair_id: "p2",
+        genre: "local",
+        left: {
+          contribution_id: "c1",
+          author: "alice",
+          title: "L",
+          excerpt: "l",
+        },
+        right: {
+          contribution_id: "c2",
+          author: "bob",
+          title: "R",
+          excerpt: "r",
+        },
+        created_at: "2026-07-14T09:00:00Z",
+      },
+    };
+    render(<AgentThread agent={POLL} />);
+    await screen.findByText("L");
+    fireEvent.click(screen.getByRole("button", { name: "Food" }));
+    // The chip IS the stream: the next fetch names the genre.
+    const named = calls.filter(
+      (c) => c.method === "GET" && c.path === "/v1/press/polls/next",
+    );
+    expect(named.length).toBeGreaterThanOrEqual(2);
+  });
+
   it("stays silent on hosts from before the press", async () => {
     routes["GET /v1/press/genres"] = { status: 404, body: {} };
     render(<AgentThread agent={NEWS} />);

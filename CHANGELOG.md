@@ -4,6 +4,32 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The poll floor (A3) — fun on the surface, instruments underneath:
+
+- **Comparable pairs** (`press/polls.py`) — two member pieces from the
+  same genre, distinct authors, content-token agreement in the
+  comparable band (near-duplicates excluded: one piece twice is no
+  comparison), each side carrying its contributor's byline. Standing
+  pairs are served before new ones mint; the same comparison is never
+  minted twice.
+- **The honesty laws** — vote first, see second: aggregates render only
+  to members who voted, and below the k-anonymity floor the answer is
+  "not enough votes yet" with NO counts (not even a total), property-
+  tested at the exact boundary. One durable idempotent vote per member
+  per pair; a replay changes nothing; a change of heart is refused.
+- **The instruments** — the generic pairwise preference store the plan
+  promised: every CONSENTED vote lands as `{prompt, chosen, rejected}`
+  in the exact shape the standing DPO trainer consumes, exported
+  per-member (scrubbed once more on the way out) at
+  `/v1/press/preferences/export`; the same consented vote records the
+  engagement signal that reorders the member's own News edition. The
+  aggregate always counts the vote; only the learning is consented —
+  and votes + pairs ride account erasure.
+- **Exploration** — no genre named = a seedable Thompson draw over
+  per-genre served/voted engagement, so fun genres surface and stale
+  ones retire on evidence. The genre chip in the Poll thread IS the
+  stream switch.
+
 The newsroom (A2) — stories to magazine standard, pushed by preference:
 
 - **The rubric as versioned policy** (`press/standards.py`) — the three
