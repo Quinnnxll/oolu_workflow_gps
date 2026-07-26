@@ -312,6 +312,61 @@ def build_openapi() -> dict:
                 "single-use and expire)"
             ),
         },
+        "/v1/commerce/catalog": {
+            "get": op("Browse active fixed-price listings"),
+        },
+        "/v1/commerce/listings": {
+            "get": op("The caller's own listings"),
+            "post": op("Draft a fixed-price listing"),
+        },
+        "/v1/commerce/listings/{listing_id}/publish": {
+            "post": op(
+                "Publish a listing (verified sellers only — an MVP "
+                "boundary, refused otherwise)"
+            ),
+        },
+        "/v1/commerce/listings/{listing_id}/offer": {
+            "post": op(
+                "Mint the exact versioned offer for a quantity — what a "
+                "purchase intent binds to"
+            ),
+        },
+        "/v1/commerce/orders": {
+            "get": op("The caller's orders, as buyer or hosted seller"),
+            "post": op(
+                "Place the order for an authorized intent (exactly once "
+                "per intent; the digest law re-runs against the live "
+                "offer; payment authorizes now and captures only on "
+                "acceptance)"
+            ),
+        },
+        "/v1/commerce/orders/{order_id}": {
+            "get": op("One order: terms, state, and payment references"),
+        },
+        "/v1/commerce/orders/{order_id}/ship": {
+            "post": op("Mark the order shipped (tracking optional)"),
+        },
+        "/v1/commerce/orders/{order_id}/deliver": {
+            "post": op("Record delivery (evidence reference optional)"),
+        },
+        "/v1/commerce/orders/{order_id}/accept": {
+            "post": op(
+                "Buyer acceptance: capture happens here — the take-rate "
+                "fee split posts to the double-entry ledger"
+            ),
+        },
+        "/v1/commerce/orders/{order_id}/cancel": {
+            "post": op("Cancel before fulfillment; the authorization voids"),
+        },
+        "/v1/commerce/orders/{order_id}/refund": {
+            "post": op(
+                "Full refund: the provider reverses the charge and the "
+                "ledger posts the capture's exact negation"
+            ),
+        },
+        "/v1/commerce/orders/{order_id}/ledger": {
+            "get": op("The order's balanced ledger transactions"),
+        },
         "/v1/earnings": {"get": op("The caller's own earnings balance")},
         "/v1/earnings/entries": {"get": op("The caller's own earnings ledger entries")},
         "/v1/payout-accounts": {

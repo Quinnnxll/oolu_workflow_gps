@@ -54,3 +54,11 @@ class DuplicateApprover(MarketplaceError):
 class DelegationBlocked(MarketplaceError):
     """The agent's delegation is revoked, expired, or absent — every
     unexecuted intent it minted is blocked immediately."""
+
+
+class SellerUnverified(MarketplaceError):
+    """Only verified sellers list. An MVP boundary, not a preference."""
+
+
+class ListingUnavailable(MarketplaceError):
+    """The listing is not active, or cannot cover the asked quantity."""

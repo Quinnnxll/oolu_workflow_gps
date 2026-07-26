@@ -36,7 +36,9 @@ from ..billing import (
     PayoutStatus,
     PayoutStore,
 )
+from ..billing.doubleentry import DoubleEntryLedger
 from ..billing.launch import LaunchGuard
+from ..billing.psp import FakePsp
 from ..billing.subscription import SubscriptionError, SubscriptionService
 from ..chat import (
     BUILDER_OFFER_NOTE,
@@ -89,10 +91,13 @@ from ..knowledge.traces import TraceStore
 from ..mail import SendThrottle
 from ..marketplace import (
     AgentDelegation,
+    CatalogService,
     MarketNotFound,
     MarketplaceError,
     MarketplaceSpine,
+    OrderService,
     PurchasePolicy,
+    SellerUnverified,
     StrongAuthenticationRequired,
 )
 from ..marketplace import (
@@ -697,9 +702,25 @@ class GatewayApp:
         self._pulse = PulseStore(durable.conn)
         self._pulse_gate = 0.0
         # The commercial spine (marketplace-build-plan M0): typed intents,
-        # the deterministic policy ladder, digest-bound approvals. No order
-        # execution and no payment path exists behind these doors yet.
+        # the deterministic policy ladder, digest-bound approvals.
         self._commerce = MarketplaceSpine(durable.conn, audit=durable.audit)
+        # The fixed-price market (M1): catalog, orders, and the
+        # double-entry ledger. The payment provider is the pre-launch
+        # fake — live Stripe swaps in behind the same port, gated by
+        # require_production_money.
+        self._commerce_catalog = CatalogService(
+            durable.conn,
+            audit=durable.audit,
+            seller_verified=self._commerce_seller_verified,
+        )
+        self._commerce_ledger = DoubleEntryLedger(durable.conn)
+        self._commerce_orders = OrderService(
+            durable.conn,
+            audit=durable.audit,
+            spine=self._commerce,
+            psp=FakePsp(),
+            ledger=self._commerce_ledger,
+        )
         # Competitor intelligence, constructed on first use.
         self._competitors = None
         self._settings = settings_node
@@ -1052,6 +1073,51 @@ class GatewayApp:
             "POST",
             "/v1/commerce/intents/{intent_id}/approval",
             self._commerce_intent_approve,
+        )
+        # The fixed-price market (M1): the catalog and the order machine.
+        r.add("GET", "/v1/commerce/catalog", self._commerce_catalog_browse)
+        r.add("GET", "/v1/commerce/listings", self._commerce_listings_list)
+        r.add("POST", "/v1/commerce/listings", self._commerce_listing_create)
+        r.add(
+            "POST",
+            "/v1/commerce/listings/{listing_id}/publish",
+            self._commerce_listing_publish,
+        )
+        r.add(
+            "POST",
+            "/v1/commerce/listings/{listing_id}/offer",
+            self._commerce_listing_offer,
+        )
+        r.add("GET", "/v1/commerce/orders", self._commerce_orders_list)
+        r.add("POST", "/v1/commerce/orders", self._commerce_order_place)
+        r.add("GET", "/v1/commerce/orders/{order_id}", self._commerce_order_get)
+        r.add(
+            "POST", "/v1/commerce/orders/{order_id}/ship", self._commerce_order_ship
+        )
+        r.add(
+            "POST",
+            "/v1/commerce/orders/{order_id}/deliver",
+            self._commerce_order_deliver,
+        )
+        r.add(
+            "POST",
+            "/v1/commerce/orders/{order_id}/accept",
+            self._commerce_order_accept,
+        )
+        r.add(
+            "POST",
+            "/v1/commerce/orders/{order_id}/cancel",
+            self._commerce_order_cancel,
+        )
+        r.add(
+            "POST",
+            "/v1/commerce/orders/{order_id}/refund",
+            self._commerce_order_refund,
+        )
+        r.add(
+            "GET",
+            "/v1/commerce/orders/{order_id}/ledger",
+            self._commerce_order_ledger,
         )
         r.add(
             "POST",
@@ -9983,7 +10049,19 @@ class GatewayApp:
             return GatewayError(404, "not_found", str(exc))
         if isinstance(exc, StrongAuthenticationRequired):
             return GatewayError(403, "step_up_required", str(exc))
+        if isinstance(exc, SellerUnverified):
+            return GatewayError(403, "seller_unverified", str(exc))
         return GatewayError(409, "conflict", str(exc))
+
+    def _commerce_seller_verified(self, tenant: str, principal: str) -> bool:
+        """The M1 seller gate over the standing KYC seam: a seller is
+        verified when a VERIFIED KYC record exists under the
+        ``seller:{tenant}:{principal}`` key. No KYC service = nobody
+        publishes; refusal is the default, not trust."""
+        if self._kyc is None:
+            return False
+        record = self._kyc.status_for(f"seller:{tenant}:{principal}")
+        return record is not None and record.status.value == "verified"
 
     @staticmethod
     def _commerce_intent_view(stored) -> dict:
@@ -10152,6 +10230,214 @@ class GatewayApp:
                 "approval": record.model_dump(mode="json"),
                 "state": stored.state,
             },
+        )
+
+    # ------------------------------------------------------------------ #
+    # The fixed-price market (M1): catalog, orders, and the order's book. #
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _commerce_order_view(stored) -> dict:
+        return {
+            "order": stored.record.model_dump(mode="json"),
+            "state": stored.state,
+        }
+
+    def _commerce_catalog_browse(self, request, session, params) -> Response:
+        return json_response(
+            200,
+            {
+                "items": [
+                    listing.model_dump(mode="json")
+                    for listing in self._commerce_catalog.store.active()
+                ]
+            },
+        )
+
+    def _commerce_listings_list(self, request, session, params) -> Response:
+        listings = self._commerce_catalog.store.for_seller(
+            tenant=session.tenant_id, seller=session.principal_id
+        )
+        return json_response(
+            200, {"items": [x.model_dump(mode="json") for x in listings]}
+        )
+
+    def _commerce_listing_create(self, request, session, params) -> Response:
+        body = request.body or {}
+        try:
+            listing = self._commerce_catalog.create_draft(
+                tenant=session.tenant_id,
+                seller_principal=session.principal_id,
+                title=str(body.get("title") or ""),
+                unit_price_micros=int(body.get("unit_price_micros") or 0),
+                now=request.now or self._clock(),
+                category=str(body.get("category") or ""),
+                description=str(body.get("description") or ""),
+                currency=str(body.get("currency") or "USD"),
+                quantity_available=int(body.get("quantity_available") or 0),
+                refund_terms=str(body.get("refund_terms") or "30-day returns"),
+                fulfillment_terms=str(
+                    body.get("fulfillment_terms") or "standard shipping"
+                ),
+                refundable=bool(body.get("refundable", True)),
+            )
+        except (ValidationError, ValueError, TypeError) as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(201, listing.model_dump(mode="json"))
+
+    def _commerce_listing_publish(self, request, session, params) -> Response:
+        try:
+            listing = self._commerce_catalog.publish(
+                params["listing_id"],
+                tenant=session.tenant_id,
+                seller=session.principal_id,
+                now=request.now or self._clock(),
+            )
+        except MarketplaceError as exc:
+            raise self._commerce_error(exc) from exc
+        return json_response(200, listing.model_dump(mode="json"))
+
+    def _commerce_listing_offer(self, request, session, params) -> Response:
+        body = request.body or {}
+        try:
+            offer = self._commerce_catalog.offer_for(
+                params["listing_id"],
+                quantity=int(body.get("quantity") or 1),
+                now=request.now or self._clock(),
+            )
+        except MarketplaceError as exc:
+            raise self._commerce_error(exc) from exc
+        except (ValueError, TypeError) as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(200, offer.model_dump(mode="json"))
+
+    def _commerce_orders_list(self, request, session, params) -> Response:
+        orders = self._commerce_orders.orders.list_for(
+            tenant=session.tenant_id, principal=session.principal_id
+        )
+        return json_response(
+            200, {"items": [self._commerce_order_view(o) for o in orders]}
+        )
+
+    def _commerce_order_place(self, request, session, params) -> Response:
+        body = request.body or {}
+        intent_id = str(body.get("intent_id") or "")
+        if not intent_id:
+            raise GatewayError(400, "invalid_request", "intent_id is required")
+        current_offer = None
+        if body.get("current_offer") is not None:
+            try:
+                current_offer = CommerceOffer.model_validate(body["current_offer"])
+            except ValidationError as exc:
+                raise GatewayError(400, "invalid_request", str(exc)) from exc
+        pm_ref = str(body.get("payment_method_ref") or "")
+        customer_ref = ""
+        if self._payments is not None:
+            profile = self._payments.profile(session.principal_id)
+            customer_ref = profile.customer_ref
+            pm_ref = pm_ref or (profile.default_pm or "")
+        if not pm_ref or not customer_ref:
+            if self._commerce_orders.psp_mode == "live":
+                raise GatewayError(
+                    402, "payment_required", "no payment method on file"
+                )
+            # Pre-launch: the fake provider accepts placeholder refs and
+            # moves nothing.
+            customer_ref = customer_ref or f"cus_local_{session.principal_id}"
+            pm_ref = pm_ref or "pm_test_default"
+        try:
+            order, created = self._commerce_orders.place_order(
+                intent_id=intent_id,
+                tenant=session.tenant_id,
+                now=request.now or self._clock(),
+                customer_ref=customer_ref,
+                payment_method_ref=pm_ref,
+                current_offer=current_offer,
+                seller_principal=str(body.get("seller_principal") or ""),
+            )
+        except MarketplaceError as exc:
+            raise self._commerce_error(exc) from exc
+        except PaymentError as exc:
+            raise GatewayError(402, "payment_declined", str(exc)) from exc
+        return json_response(
+            201 if created else 200, self._commerce_order_view(order)
+        )
+
+    def _commerce_party_order(self, session, order_id: str):
+        """The order, only for its parties — a stranger sees nothing."""
+        stored = self._commerce_orders.orders.get(
+            order_id, tenant=session.tenant_id
+        )
+        if stored is None or session.principal_id not in (
+            stored.record.buyer_principal,
+            stored.record.seller_principal,
+        ):
+            raise GatewayError(404, "not_found", "no such order")
+        return stored
+
+    def _commerce_order_get(self, request, session, params) -> Response:
+        stored = self._commerce_party_order(session, params["order_id"])
+        return json_response(200, self._commerce_order_view(stored))
+
+    def _commerce_order_transition(self, request, session, params, method, **kwargs):
+        try:
+            stored = method(
+                params["order_id"],
+                tenant=session.tenant_id,
+                actor=session.principal_id,
+                now=request.now or self._clock(),
+                **kwargs,
+            )
+        except MarketplaceError as exc:
+            raise self._commerce_error(exc) from exc
+        except PaymentError as exc:
+            raise GatewayError(402, "payment_declined", str(exc)) from exc
+        return json_response(200, self._commerce_order_view(stored))
+
+    def _commerce_order_ship(self, request, session, params) -> Response:
+        return self._commerce_order_transition(
+            request,
+            session,
+            params,
+            self._commerce_orders.mark_shipped,
+            tracking=str((request.body or {}).get("tracking") or ""),
+        )
+
+    def _commerce_order_deliver(self, request, session, params) -> Response:
+        return self._commerce_order_transition(
+            request,
+            session,
+            params,
+            self._commerce_orders.mark_delivered,
+            evidence=str((request.body or {}).get("evidence") or ""),
+        )
+
+    def _commerce_order_accept(self, request, session, params) -> Response:
+        return self._commerce_order_transition(
+            request, session, params, self._commerce_orders.accept
+        )
+
+    def _commerce_order_cancel(self, request, session, params) -> Response:
+        return self._commerce_order_transition(
+            request, session, params, self._commerce_orders.cancel
+        )
+
+    def _commerce_order_refund(self, request, session, params) -> Response:
+        return self._commerce_order_transition(
+            request,
+            session,
+            params,
+            self._commerce_orders.refund,
+            reason=str((request.body or {}).get("reason") or ""),
+        )
+
+    def _commerce_order_ledger(self, request, session, params) -> Response:
+        stored = self._commerce_party_order(session, params["order_id"])
+        transactions = self._commerce_ledger.transactions(
+            order_id=stored.record.order_id
+        )
+        return json_response(
+            200,
+            {"items": [txn.model_dump(mode="json") for txn in transactions]},
         )
 
     def _list_own_nodes(self, request, session, params) -> Response:

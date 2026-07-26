@@ -643,12 +643,26 @@ def test_the_inbox_shows_exact_terms_and_sweeps_expiry(tmp_path):
     conn.close()
 
 
-def test_the_marketplace_package_imports_no_money_path():
-    """M0's exit gate: no marketplace module imports billing, providers,
-    or any payment machinery. The absence is structural, not promised."""
+def test_the_commercial_spine_imports_no_money_path():
+    """M0's standing gate: the SPINE — intents, digest, policy, delegation,
+    approvals — imports no billing, provider, or payment machinery. Money
+    enters only through the M1 order machine (`orders.py`), which consumes
+    the spine's authorization; the law stays structurally separate from
+    the market."""
     package = Path(__file__).resolve().parents[1] / "src" / "oolu" / "marketplace"
+    spine = (
+        "errors.py",
+        "models.py",
+        "digest.py",
+        "policy.py",
+        "delegation.py",
+        "store.py",
+        "review.py",
+        "service.py",
+    )
     forbidden = ("billing", "providers", "stripe", "psp", "payment")
-    for source in sorted(package.glob("*.py")):
+    for name in spine:
+        source = package / name
         for line_number, line in enumerate(
             source.read_text().splitlines(), start=1
         ):
@@ -657,5 +671,5 @@ def test_the_marketplace_package_imports_no_money_path():
                 continue
             for word in forbidden:
                 assert word not in stripped, (
-                    f"{source.name}:{line_number} imports a money path: {stripped}"
+                    f"{name}:{line_number} imports a money path: {stripped}"
                 )

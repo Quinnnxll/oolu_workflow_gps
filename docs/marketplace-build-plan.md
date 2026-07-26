@@ -283,6 +283,25 @@ Goal Adherence:
 
 ### M1 — the fixed-price market (first real dollar, first fee)
 
+**Status: LANDED (core)** — `billing/doubleentry.py`: the eight-account
+balanced append-only ledger with replay projections (balances, GMV, the
+take). `billing/psp.py`: the authorize/capture/refund/void provider port
+— `StripePaymentIntents` (manual capture, vault/transport discipline)
+and the pre-launch `FakePsp`. `marketplace/catalog.py`: versioned
+listings, KYC-gated publication, offers minted at the listing's version
+so the digest law reaches the shelf. `marketplace/orders.py`: the state
+machine — authorize at confirmation, capture ONLY at acceptance with
+the take-rate fee split posted once (`DEFAULT_TAKE_RATE_BPS = 500`,
+interim), refunds as exact compensating transactions, provider webhooks
+replaying into idempotent transitions, and `require_production_money`
+in front of any live provider call. Doors: `/v1/commerce/{catalog,
+listings, orders}` and per-order ship/deliver/accept/cancel/refund/
+ledger. Pinned by `tests/test_marketplace_{ledger,orders,gateway}.py`.
+Remaining before the phase closes: the shell surfaces (commerce cards,
+seller console), the live-Stripe contract suite over the injected
+transport, and the seller-KYC application flow behind the
+`seller:{tenant}:{principal}` convention.
+
 Goal: the spec's `phase_1` inside its `mvp_boundaries` — a working
 fixed-price marketplace for low-risk physical goods: one currency, one
 jurisdiction, verified accounts, human approval above limits, refundable
@@ -306,25 +325,25 @@ Deliverables:
   existing shell.
 
 Goal Adherence (the spec's acceptance tests, distributed):
-- [ ] Purchase below all thresholds auto-executes and notifies; above the
+- [x] Purchase below all thresholds auto-executes and notifies; above the
       single-order threshold, **no authorization occurs** before a recorded
       approval.
-- [ ] First purchase from an unknown seller requires review regardless of
+- [x] First purchase from an unknown seller requires review regardless of
       amount.
-- [ ] Duplicate execution request with the same idempotency key returns the
+- [x] Duplicate execution request with the same idempotency key returns the
       existing order.
-- [ ] Duplicate PSP webhooks produce one financial transition and one
+- [x] Duplicate PSP webhooks produce one financial transition and one
       balanced ledger transaction.
-- [ ] Every ledger transaction balances; account balances are pure
+- [x] Every ledger transaction balances; account balances are pure
       projections of entries (property test).
-- [ ] A completed order posts the take-rate fee to
+- [x] A completed order posts the take-rate fee to
       `marketplace_fee_revenue`; GMV and take-rate metrics read from the
       ledger alone.
-- [ ] Refund posts a compensating transaction; the order and payment state
+- [x] Refund posts a compensating transaction; the order and payment state
       machines reconcile.
-- [ ] Unverified sellers cannot list; card data never touches OoLu servers
+- [x] Unverified sellers cannot list; card data never touches OoLu servers
       (tokenization only); model context contains no payment credentials.
-- [ ] Money paths are refused on local-only infra.
+- [x] Money paths are refused on local-only infra.
 
 ### M2 — negotiation, escrow, and trust (the spec's `phase_2`)
 

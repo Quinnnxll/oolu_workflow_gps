@@ -207,6 +207,125 @@ def test_commerce_is_tenant_scoped(tmp_path):
     conn.close()
 
 
+def _approved_intent_id(app, token):
+    created = app.handle(
+        _req("POST", "/v1/commerce/intents", token=token, body=_intent_body())
+    )
+    intent_id = created.body["intent"]["intent_id"]
+    app.handle(
+        _req(
+            "POST",
+            f"/v1/commerce/intents/{intent_id}/approval",
+            token=token,
+            body={"decision": "approve"},
+        )
+    )
+    return intent_id
+
+
+def test_orders_flow_from_intent_to_completed_with_ledger(tmp_path):
+    app, conn, ident = _app(tmp_path)
+    token = ident.token("user-1")
+    _grant_delegation(app, token)
+    intent_id = _approved_intent_id(app, token)
+    placed = app.handle(
+        _req(
+            "POST", "/v1/commerce/orders", token=token, body={"intent_id": intent_id}
+        )
+    )
+    assert placed.status == 201
+    assert placed.body["state"] == "confirmed"
+    order_id = placed.body["order"]["order_id"]
+    duplicate = app.handle(
+        _req(
+            "POST", "/v1/commerce/orders", token=token, body={"intent_id": intent_id}
+        )
+    )
+    assert duplicate.status == 200
+    assert duplicate.body["order"]["order_id"] == order_id
+
+    for step, body in (("ship", {"tracking": "TRK1"}), ("deliver", {}), ("accept", {})):
+        response = app.handle(
+            _req(
+                "POST",
+                f"/v1/commerce/orders/{order_id}/{step}",
+                token=token,
+                body=body,
+            )
+        )
+        assert response.status == 200, step
+    assert response.body["state"] == "completed"
+
+    book = app.handle(
+        _req("GET", f"/v1/commerce/orders/{order_id}/ledger", token=token)
+    )
+    assert book.status == 200
+    assert [txn["kind"] for txn in book.body["items"]] == ["capture"]
+    assert sum(
+        entry["amount_micros"]
+        for txn in book.body["items"]
+        for entry in txn["entries"]
+    ) == 0
+
+    refunded = app.handle(
+        _req(
+            "POST",
+            f"/v1/commerce/orders/{order_id}/refund",
+            token=token,
+            body={"reason": "damaged"},
+        )
+    )
+    assert refunded.status == 200
+    assert refunded.body["state"] == "refunded"
+    book = app.handle(
+        _req("GET", f"/v1/commerce/orders/{order_id}/ledger", token=token)
+    )
+    assert [txn["kind"] for txn in book.body["items"]] == ["capture", "refund"]
+
+    # A stranger from another tenant sees no order and no book.
+    other = ident.token("user-2", tenant="t2")
+    assert (
+        app.handle(
+            _req("GET", f"/v1/commerce/orders/{order_id}", token=other)
+        ).status
+        == 404
+    )
+    conn.close()
+
+
+def test_listings_publish_is_gated_on_seller_verification(tmp_path):
+    app, conn, ident = _app(tmp_path)
+    token = ident.token("user-1")
+    draft = app.handle(
+        _req(
+            "POST",
+            "/v1/commerce/listings",
+            token=token,
+            body={
+                "title": "Steel bottle",
+                "unit_price_micros": 100 * M,
+                "quantity_available": 3,
+            },
+        )
+    )
+    assert draft.status == 201
+    listing_id = draft.body["listing_id"]
+    # No KYC service is wired in this rig: publication refuses, it never
+    # trusts — the MVP boundary at the door.
+    refused = app.handle(
+        _req(
+            "POST", f"/v1/commerce/listings/{listing_id}/publish", token=token
+        )
+    )
+    assert refused.status == 403
+    assert refused.body["error"]["code"] == "seller_unverified"
+    assert (
+        app.handle(_req("GET", "/v1/commerce/catalog", token=token)).body["items"]
+        == []
+    )
+    conn.close()
+
+
 def test_policy_roundtrip_and_no_execution_door(tmp_path):
     app, conn, ident = _app(tmp_path)
     token = ident.token("user-1")
@@ -221,13 +340,15 @@ def test_policy_roundtrip_and_no_execution_door(tmp_path):
     assert put.status == 200
     read_back = app.handle(_req("GET", "/v1/commerce/policy", token=token))
     assert read_back.body["auto_purchase_limit_micros"] == 10 * M
-    # M0's boundary, pinned at the router: no execution door exists.
+    # The standing boundary, pinned at the router: intents never execute
+    # directly — money enters only through the order machine, and there is
+    # no raw execute door to bypass it.
     openapi = app.handle(_req("GET", "/v1/openapi.json"))
     commerce_paths = [
         p for p in openapi.body["paths"] if p.startswith("/v1/commerce")
     ]
     assert commerce_paths
-    assert not any("execute" in p or "order" in p for p in commerce_paths)
+    assert not any("execute" in p for p in commerce_paths)
     executed = app.handle(
         _req("POST", "/v1/commerce/intents/any/execute", token=token)
     )

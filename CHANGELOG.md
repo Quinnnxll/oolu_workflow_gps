@@ -4,6 +4,35 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The fixed-price market (marketplace-build-plan M1) — the first fee is a
+ledger fact:
+
+- **`billing/doubleentry.py`** — the eight-account double-entry ledger:
+  every transaction balances or is refused, posts are idempotent on
+  their key (a replayed capture or duplicate provider webhook returns
+  the existing transaction), refunds are exact compensating negations,
+  and balances / GMV / the platform's take are pure replay projections.
+- **`billing/psp.py`** — the authorize-first payment-provider port:
+  `StripePaymentIntents` (manual capture, credential-vault + injected
+  transport discipline) and the pre-launch `FakePsp`, which mints test
+  refs, replays idempotently, and can move nothing.
+- **`marketplace/catalog.py`** — versioned fixed-price listings;
+  publication is KYC-gated (unverified sellers cannot list); offers
+  mint at the listing's version, so a repriced shelf kills stale
+  approvals by the digest law, end to end.
+- **`marketplace/orders.py`** — the spec's order state machine:
+  authorize at confirmation, capture ONLY at buyer acceptance with the
+  take-rate split (`DEFAULT_TAKE_RATE_BPS = 500`, interim) posted once;
+  cancel voids, refund reverses exactly; provider webhooks reconcile
+  into the same idempotent transitions; `require_production_money`
+  fronts every live-provider call — a live PSP on the local adapter is
+  refused before anything moves.
+- **Doors:** `/v1/commerce/catalog`, `/v1/commerce/listings` (+publish,
+  +offer), `/v1/commerce/orders` (+ship/deliver/accept/cancel/refund/
+  ledger) — placement is exactly-once per intent and party-scoped.
+- Pinned by `tests/test_marketplace_ledger.py`,
+  `tests/test_marketplace_orders.py`, and the gateway suite.
+
 The commercial spine (marketplace-build-plan M0) — the embedded
 marketplace's law, before its market:
 

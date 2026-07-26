@@ -1,11 +1,17 @@
-"""The embedded marketplace's commercial spine (docs/marketplace-build-plan.md, M0).
+"""The embedded marketplace (docs/marketplace-build-plan.md).
 
-Typed commercial intents, an immutable intent digest, the six-decision
-deterministic policy ladder, revocable agent delegation, and digest-bound
-approvals. No catalog, no orders, no money — the law ships before the
-market does.
+M0 — the commercial spine: typed commercial intents, an immutable intent
+digest, the six-decision deterministic policy ladder, revocable agent
+delegation, and digest-bound approvals. The spine modules import no money
+path — the law stands apart from the market.
+
+M1 — the fixed-price market: the catalog (verified sellers, versioned
+listings), the order state machine (authorize on confirmation, capture on
+acceptance, refunds as compensating transactions), and the double-entry
+ledger postings that make the platform's take a ledger fact.
 """
 
+from .catalog import CatalogService, CatalogStore, Listing
 from .delegation import AgentDelegation, DelegationStore, delegation_gaps
 from .digest import DIGEST_FIELDS, intent_digest
 from .errors import (
@@ -15,8 +21,10 @@ from .errors import (
     DigestMismatch,
     DuplicateApprover,
     IntentExpired,
+    ListingUnavailable,
     MarketNotFound,
     MarketplaceError,
+    SellerUnverified,
     StrongAuthenticationRequired,
     WrongState,
 )
@@ -26,6 +34,13 @@ from .models import (
     ExecutionAuthorization,
     IntentAction,
     Offer,
+)
+from .orders import (
+    DEFAULT_TAKE_RATE_BPS,
+    OrderRecord,
+    OrderService,
+    OrderStore,
+    StoredOrder,
 )
 from .policy import (
     Decision,
@@ -47,8 +62,11 @@ __all__ = [
     "ApprovalExpired",
     "ApprovalRecord",
     "ApprovalStore",
+    "CatalogService",
+    "CatalogStore",
     "CommercialIntent",
     "Decision",
+    "DEFAULT_TAKE_RATE_BPS",
     "DelegationBlocked",
     "DelegationStore",
     "DigestMismatch",
@@ -58,17 +76,24 @@ __all__ = [
     "IntentAction",
     "IntentExpired",
     "IntentStore",
+    "Listing",
+    "ListingUnavailable",
     "MarketNotFound",
     "MarketplaceError",
     "MarketplaceSpine",
     "Offer",
+    "OrderRecord",
+    "OrderService",
+    "OrderStore",
     "PolicyStore",
     "PolicyVerdict",
     "PurchaseFacts",
     "PurchasePolicy",
     "SaleFacts",
     "SalesPolicy",
+    "SellerUnverified",
     "StoredIntent",
+    "StoredOrder",
     "StrongAuthenticationRequired",
     "WrongState",
     "approval_summary",
