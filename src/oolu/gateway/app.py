@@ -748,6 +748,16 @@ class GatewayApp:
 
         self._pulse = PulseStore(durable.conn)
         self._pulse_gate = 0.0
+        # The ad house (agents-expansion A4): campaigns, computed
+        # placements, gated delivery events — and the versioned-consent
+        # record the whole surface stands behind (invariant 13).
+        from ..adhouse import AdEventStore, CampaignStore, PlacementStore
+        from ..legal import LegalAcceptanceStore
+
+        self._legal_acceptances = LegalAcceptanceStore(durable.conn)
+        self._ad_campaigns = CampaignStore(durable.conn)
+        self._ad_placements = PlacementStore(durable.conn)
+        self._ad_events = AdEventStore(durable.conn)
         # The commercial spine (marketplace-build-plan M0): typed intents,
         # the deterministic policy ladder, digest-bound approvals. M2
         # wires the history port, so risk facts derive from the order
@@ -1486,6 +1496,32 @@ class GatewayApp:
         r.add("GET", "/v1/legal/terms", self._legal_terms, public=True)
         r.add("GET", "/v1/legal/privacy", self._legal_privacy, public=True)
         r.add("GET", "/v1/legal/node-policy", self._legal_node_policy, public=True)
+        # Versioned consent (A4, invariant 13): what the caller has
+        # accepted, and the door to accept the current version.
+        r.add("GET", "/v1/legal/consent", self._legal_consent_get)
+        r.add("POST", "/v1/legal/consent", self._legal_consent_post)
+        # The ad house (A4): campaigns for verified sellers; placements
+        # merged at render on the News/Poll surfaces only; delivery
+        # events behind gates; earnings previews, never balances.
+        r.add("GET", "/v1/adhouse/campaigns", self._adhouse_campaigns_list)
+        r.add("POST", "/v1/adhouse/campaigns", self._adhouse_campaign_create)
+        r.add(
+            "POST",
+            "/v1/adhouse/campaigns/{campaign_id}/status",
+            self._adhouse_campaign_status,
+        )
+        r.add("GET", "/v1/press/ads", self._press_ads)
+        r.add(
+            "POST",
+            "/v1/adhouse/placements/{placement_id}/impression",
+            self._adhouse_impression,
+        )
+        r.add(
+            "POST",
+            "/v1/adhouse/placements/{placement_id}/click",
+            self._adhouse_click,
+        )
+        r.add("GET", "/v1/adhouse/preview", self._adhouse_preview)
         # The data-subject's two rights, self-serve: everything as one
         # JSON document, and erasure that says exactly what it removed.
         r.add("GET", "/v1/account/export", self._account_export)
@@ -3057,6 +3093,409 @@ class GatewayApp:
             tenant=session.tenant_id, principal=session.principal_id
         )
         return json_response(200, {"items": pairs, "count": len(pairs)})
+
+    # -- the ad house (A4) --------------------------------------------- #
+    @staticmethod
+    def _adhouse_refused(exc) -> GatewayError:
+        code = {404: "not_found", 403: "forbidden", 429: "rate_limited"}.get(
+            exc.status, "invalid_request"
+        )
+        return GatewayError(exc.status, code, str(exc))
+
+    def _legal_consent_get(self, request, session, params) -> Response:
+        from ..legal import LEGAL_VERSIONS
+
+        accepted = self._legal_acceptances.accepted_version(
+            tenant=session.tenant_id,
+            principal=session.principal_id,
+            document="privacy",
+        )
+        return json_response(
+            200,
+            {
+                "privacy_version": LEGAL_VERSIONS["privacy"],
+                "accepted_version": accepted,
+                # Ads stand behind the CURRENT version — the conservative
+                # default for pre-amendment accounts (decision-log item 2
+                # resolved as default-off until explicit acceptance).
+                "ads_enabled": self._ads_consented(session),
+            },
+        )
+
+    def _legal_consent_post(self, request, session, params) -> Response:
+        """Accept the CURRENT version, named explicitly — accepting a
+        version you have not read is not a flow this door offers."""
+        from ..legal import LEGAL_VERSIONS
+
+        body = request.body or {}
+        document = str(body.get("document") or "privacy")
+        if document not in LEGAL_VERSIONS:
+            raise GatewayError(400, "invalid_request", "unknown document")
+        version = body.get("version")
+        if version != LEGAL_VERSIONS[document]:
+            raise GatewayError(
+                409,
+                "conflict",
+                f"the current {document} version is "
+                f"{LEGAL_VERSIONS[document]} — read it and accept that one",
+            )
+        standing = self._legal_acceptances.accept(
+            tenant=session.tenant_id,
+            principal=session.principal_id,
+            document=document,
+            version=int(version),
+        )
+        self._durable.audit.append(
+            "legal.accepted",
+            {
+                "principal": session.principal_id,
+                "document": document,
+                "version": int(version),
+            },
+        )
+        return json_response(
+            200, {"document": document, "accepted_version": standing}
+        )
+
+    def _ads_consented(self, session) -> bool:
+        return self._legal_acceptances.is_current(
+            tenant=session.tenant_id,
+            principal=session.principal_id,
+            document="privacy",
+        )
+
+    def _require_advertiser(self, session) -> None:
+        """WHO may buy attention: a seller-KYC-verified principal — the
+        marketplace's standing trust gate, reused whole."""
+        if not self._commerce_seller_kyc.is_verified(
+            tenant=session.tenant_id, principal=session.principal_id
+        ):
+            raise GatewayError(
+                403,
+                "forbidden",
+                "advertising needs a verified seller identity — apply at "
+                "/v1/commerce/seller/kyc",
+            )
+
+    @staticmethod
+    def _campaign_dict(campaign) -> dict:
+        return {
+            "campaign_id": campaign.campaign_id,
+            "advertiser": campaign.advertiser,
+            "name": campaign.name,
+            "creative": campaign.creative,
+            "offer_ref": campaign.offer_ref,
+            "genres": list(campaign.genres),
+            "bid_micros": campaign.bid_micros,
+            "funded_micros": campaign.funded_micros,
+            # Display-only recognition — the ledger holds the liability.
+            "charged_micros_preview": campaign.charged_micros,
+            "remaining_micros_preview": campaign.remaining_micros,
+            "status": campaign.status,
+            "flight_start": campaign.flight_start.isoformat(),
+            "flight_end": campaign.flight_end.isoformat(),
+        }
+
+    def _adhouse_campaign_create(self, request, session, params) -> Response:
+        """Fund a campaign: the whole gate in one door — verified seller,
+        taxonomy targeting, scrub-gated creative, and the funding posted
+        on the double-entry book as cash against standing liability."""
+        from ..adhouse import MAX_CREATIVE_CHARS, MIN_BID_MICROS
+        from ..press import GENRES, leak_report
+
+        self._require_advertiser(session)
+        body = request.body or {}
+        name = str(body.get("name") or "").strip()
+        creative = str(body.get("creative") or "").strip()
+        offer_ref = str(body.get("offer_ref") or "").strip()
+        genres = tuple(
+            str(g).strip() for g in (body.get("genres") or []) if str(g).strip()
+        )
+        bid = int(body.get("bid_micros") or 0)
+        budget = int(body.get("budget_micros") or 0)
+        days = int(body.get("flight_days") or 30)
+        if not name:
+            raise GatewayError(400, "invalid_request", "a campaign needs a name")
+        if not creative:
+            raise GatewayError(400, "invalid_request", "a campaign needs its words")
+        if len(creative) > MAX_CREATIVE_CHARS:
+            raise GatewayError(
+                400,
+                "invalid_request",
+                f"the creative is an ad, not an article (cap "
+                f"{MAX_CREATIVE_CHARS} chars)",
+            )
+        leaks = leak_report(f"{name}\n{creative}")
+        if leaks:
+            raise GatewayError(
+                400,
+                "invalid_request",
+                "the creative would leak " + ", ".join(leaks),
+            )
+        if not offer_ref:
+            raise GatewayError(
+                400,
+                "invalid_request",
+                "a campaign points at a marketplace offer (offer_ref)",
+            )
+        if not genres:
+            raise GatewayError(400, "invalid_request", "pick target genres")
+        for key in genres:
+            if key not in GENRES:
+                raise GatewayError(
+                    400, "invalid_request", f"unknown genre: {key}"
+                )
+        if bid < MIN_BID_MICROS:
+            raise GatewayError(
+                400,
+                "invalid_request",
+                f"the bid floor is {MIN_BID_MICROS} micros per impression",
+            )
+        if budget < bid:
+            raise GatewayError(
+                400, "invalid_request", "the budget must cover at least one bid"
+            )
+        if not 1 <= days <= 365:
+            raise GatewayError(
+                400, "invalid_request", "the flight is 1 to 365 days"
+            )
+        now = request.now or self._clock()
+        campaign = self._ad_campaigns.create(
+            tenant=session.tenant_id,
+            advertiser=session.principal_id,
+            name=name,
+            creative=creative,
+            offer_ref=offer_ref,
+            genres=genres,
+            bid_micros=bid,
+            funded_micros=budget,
+            flight_start=now,
+            flight_end=now + timedelta(days=days),
+        )
+        # The funding is a ledger fact: cash in, liability standing —
+        # unspent budget is OWED, not earned. Recognition is A5's post.
+        from ..billing.doubleentry import LedgerEntry, LedgerTransaction
+
+        self._commerce_ledger.post(
+            LedgerTransaction(
+                txn_id=f"adfund-{campaign.campaign_id}",
+                idempotency_key=f"ad-fund:{campaign.campaign_id}",
+                kind="ad.campaign_funded",
+                order_id=campaign.campaign_id,
+                entries=(
+                    LedgerEntry(
+                        account="marketplace_cash", amount_micros=budget
+                    ),
+                    LedgerEntry(
+                        account="ad_budget_liability", amount_micros=-budget
+                    ),
+                ),
+                memo=f"campaign {name!r} funded by {session.principal_id}",
+                created_at=now,
+            )
+        )
+        self._durable.audit.append(
+            "ad.campaign_funded",
+            {
+                "campaign_id": campaign.campaign_id,
+                "advertiser": session.principal_id,
+                "budget_micros": budget,
+                "genres": list(genres),
+            },
+        )
+        return json_response(201, self._campaign_dict(campaign))
+
+    def _adhouse_campaigns_list(self, request, session, params) -> Response:
+        """The advertiser's own campaigns, spend previews included."""
+        items = self._ad_campaigns.list(
+            tenant=session.tenant_id, advertiser=session.principal_id
+        )
+        return json_response(
+            200, {"items": [self._campaign_dict(c) for c in items]}
+        )
+
+    def _adhouse_campaign_status(self, request, session, params) -> Response:
+        from ..adhouse import AdError
+
+        campaign = self._ad_campaigns.get(
+            params["campaign_id"], tenant=session.tenant_id
+        )
+        if campaign is None or campaign.advertiser != session.principal_id:
+            raise GatewayError(404, "not_found", "no such campaign")
+        try:
+            updated = self._ad_campaigns.set_status(
+                campaign.campaign_id,
+                tenant=session.tenant_id,
+                status=str((request.body or {}).get("status") or ""),
+            )
+        except AdError as exc:
+            raise self._adhouse_refused(exc) from exc
+        return json_response(200, self._campaign_dict(updated))
+
+    def _ad_content_genres(self, session, surface: str, content_ref: str):
+        """The content's genres — the ONLY editorial fact the matcher
+        ever sees (invariant 5: no rubric scores cross this line)."""
+        press = self._press
+        if surface == "edition" and press is not None and press.stories:
+            story = press.stories.get(content_ref, tenant=session.tenant_id)
+            return tuple(story.genres) if story is not None else None
+        if surface == "poll" and press is not None and press.polls:
+            pair = press.polls.store.get_pair(
+                content_ref, tenant=session.tenant_id
+            )
+            return (pair.genre,) if pair is not None else None
+        return None
+
+    def _press_ads(self, request, session, params) -> Response:
+        """The render-time merge: one placement for one content view —
+        or an honest nothing, with the reason named. The consent gate
+        comes first; nothing sponsored exists for a member who has not
+        accepted the current privacy version."""
+        from ..adhouse import MAX_PER_VIEWER_PER_DAY, match, placement_view
+
+        surface = str(request.query.get("surface") or "")
+        content_ref = str(request.query.get("content") or "")
+        if surface not in ("edition", "poll"):
+            raise GatewayError(
+                400, "invalid_request", "surface must be edition or poll"
+            )
+        if not content_ref:
+            raise GatewayError(400, "invalid_request", "content is required")
+        if not self._ads_consented(session):
+            return json_response(
+                200, {"placement": None, "reason": "consent"}
+            )
+        genres = self._ad_content_genres(session, surface, content_ref)
+        if genres is None:
+            raise GatewayError(404, "not_found", "no such content")
+        now = request.now or self._clock()
+        window = self._ad_placements.day_window(now)
+        if (
+            self._ad_placements.viewer_count_since(
+                tenant=session.tenant_id,
+                viewer=session.principal_id,
+                since=window,
+            )
+            >= MAX_PER_VIEWER_PER_DAY
+        ):
+            return json_response(200, {"placement": None, "reason": "capped"})
+        affinity = None
+        if (
+            self._press_personalized(session)
+            and self._press is not None
+            and self._press.preferences is not None
+        ):
+            affinity = self._press.preferences.genre_affinity(
+                tenant=session.tenant_id, principal=session.principal_id
+            )
+        result = match(
+            self._ad_campaigns.list(tenant=session.tenant_id),
+            content_genres=genres,
+            now=now,
+            affinity=affinity or None,
+            exclude=self._ad_placements.campaigns_seen_since(
+                tenant=session.tenant_id,
+                viewer=session.principal_id,
+                since=window,
+            ),
+        )
+        if result is None:
+            return json_response(
+                200, {"placement": None, "reason": "no_match"}
+            )
+        placement = self._ad_placements.create(
+            tenant=session.tenant_id,
+            campaign_id=result.campaign.campaign_id,
+            surface=surface,
+            content_ref=content_ref,
+            viewer=session.principal_id,
+            price_micros=result.price_micros,
+            breakdown=result.breakdown,
+        )
+        return json_response(
+            200, {"placement": placement_view(placement, result.campaign)}
+        )
+
+    def _ad_deliver(self, request, session, params, *, kind: str) -> Response:
+        from ..adhouse import AdError
+
+        placement = self._ad_placements.get(
+            params["placement_id"], tenant=session.tenant_id
+        )
+        if placement is None:
+            raise GatewayError(404, "not_found", "no such placement")
+        try:
+            recorded = self._ad_events.record(
+                placement, kind=kind, viewer=session.principal_id
+            )
+        except AdError as exc:
+            raise self._adhouse_refused(exc) from exc
+        if recorded and kind == "impression":
+            # Display-only spend recognition: the budget depletes so the
+            # matcher stops over-serving. The ledger waits for A5.
+            self._ad_campaigns.add_charge(
+                placement.campaign_id,
+                tenant=session.tenant_id,
+                amount_micros=placement.price_micros,
+            )
+        return json_response(200, {"recorded": bool(recorded), "kind": kind})
+
+    def _adhouse_impression(self, request, session, params) -> Response:
+        return self._ad_deliver(request, session, params, kind="impression")
+
+    def _adhouse_click(self, request, session, params) -> Response:
+        return self._ad_deliver(request, session, params, kind="click")
+
+    def _ad_lineage_of(self, session):
+        """How a placement resolves to the contributors it ran against:
+        edition → the story's recorded lineage weights; poll → the two
+        sides, evenly. The same set A5's real split will pay."""
+        press = self._press
+
+        def lineage(placement) -> list[tuple[str, float]]:
+            if (
+                placement.surface == "edition"
+                and press is not None
+                and press.stories is not None
+            ):
+                story = press.stories.get(
+                    placement.content_ref, tenant=placement.tenant_id
+                )
+                if story is None:
+                    return []
+                return [(s.author, s.weight) for s in story.lineage]
+            if (
+                placement.surface == "poll"
+                and press is not None
+                and press.polls is not None
+            ):
+                pair = press.polls.store.get_pair(
+                    placement.content_ref, tenant=placement.tenant_id
+                )
+                if pair is None:
+                    return []
+                return [(pair.left.author, 0.5), (pair.right.author, 0.5)]
+            return []
+
+        return lineage
+
+    def _adhouse_preview(self, request, session, params) -> Response:
+        """The display-only forecast — the whole tenant's split, plus
+        the caller's own line pulled out. Labeled a forecast; nothing
+        here is a balance and no ledger was consulted to make it."""
+        from ..adhouse import preview_earnings
+
+        preview = preview_earnings(
+            self._ad_placements.list(tenant=session.tenant_id),
+            impressed=self._ad_events.impressed_placements(
+                tenant=session.tenant_id
+            ),
+            lineage_of=self._ad_lineage_of(session),
+        )
+        preview["mine_micros"] = preview["contributors"].get(
+            session.principal_id, 0
+        )
+        return json_response(200, preview)
 
     def _press_media(self, request, session, params) -> Response:
         """A published contribution's attached file, by reference — the

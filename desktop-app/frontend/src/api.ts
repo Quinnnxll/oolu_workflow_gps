@@ -677,6 +677,20 @@ export interface PollPair {
   created_at: string;
 }
 
+// A sponsored placement (A4): always labeled; the placement_id is the
+// provenance token delivery events bind to.
+export interface AdPlacement {
+  placement_id: string;
+  label: string;
+  campaign_name: string;
+  creative: string;
+  offer_ref: string;
+  advertiser: string;
+  surface: string;
+  content_ref: string;
+  breakdown: Record<string, unknown>;
+}
+
 // The reveal's honest shapes: nothing before your vote, no counts below
 // the k-anonymity floor.
 export interface PollVerdict {
@@ -1429,6 +1443,37 @@ export const api = {
     req<PollVerdict>(
       "GET",
       `/v1/press/polls/${encodeURIComponent(pairId)}/stats`,
+    ),
+  // The versioned legal consent (A4): what you accepted, and the door
+  // to accept the CURRENT version by number — never by vibe.
+  legalConsent: () =>
+    req<{
+      privacy_version: number;
+      accepted_version: number | null;
+      ads_enabled: boolean;
+    }>("GET", "/v1/legal/consent"),
+  legalAccept: (version: number) =>
+    req<{ document: string; accepted_version: number }>(
+      "POST",
+      "/v1/legal/consent",
+      { document: "privacy", version },
+    ),
+  // The render-time ad merge: one labeled placement for one content
+  // view, or an honest nothing with the reason named.
+  pressAd: (surface: "edition" | "poll", content: string) =>
+    req<{ placement: AdPlacement | null; reason?: string }>(
+      "GET",
+      `/v1/press/ads?surface=${surface}&content=${encodeURIComponent(content)}`,
+    ),
+  adImpression: (placementId: string) =>
+    req<{ recorded: boolean; kind: string }>(
+      "POST",
+      `/v1/adhouse/placements/${encodeURIComponent(placementId)}/impression`,
+    ),
+  adClick: (placementId: string) =>
+    req<{ recorded: boolean; kind: string }>(
+      "POST",
+      `/v1/adhouse/placements/${encodeURIComponent(placementId)}/click`,
     ),
   // The data-subject's rights, self-serve: everything as one JSON
   // document, and erasure that says exactly what it removed.

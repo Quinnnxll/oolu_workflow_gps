@@ -4,6 +4,39 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The ad house (A4) — buying, matching, merging; the money stays previews:
+
+- **The legal gate, first** — privacy VERSION 2 (`legal.py`): the
+  public "No advertising" promise renegotiated in the open — §7 permits
+  clearly labeled sponsored placements on the News and Poll surfaces
+  only, matched inside the platform, revenue shared with contributors;
+  "no sale of personal data" stands untouched. Acceptance is explicit
+  and version-named (`LegalAcceptanceStore`, `/v1/legal/consent`), the
+  pinning test updated deliberately in the same commit, and ads are
+  DEFAULT-OFF for every account until it accepts v2 — declining costs
+  nothing but the ads.
+- **Buying** (`adhouse/campaigns.py`) — only seller-KYC-verified
+  principals fund campaigns; the creative walks the scrub gate;
+  targeting joins the contribution taxonomy. Funding posts on the
+  double-entry book as cash against the new `ad_budget_liability`
+  account (unspent budget is OWED, not earned) — trial-balanced in the
+  end-to-end test; recognition postings wait for A5.
+- **Matching** (`adhouse/matching.py`) — a pure deterministic
+  second-price pick with the full factor breakdown recorded per
+  placement; bounded consented-affinity pull; nothing editorial flows
+  in and nothing flows back (press/ imports no adhouse —
+  import-scan-proven, as is adhouse importing no money path).
+- **Merging** (`adhouse/placement.py`) — placements are computed served
+  occurrences merged at render, never baked into content: pausing a
+  campaign removes every placement on the next render. The label is
+  structural; the placement_id is the provenance token; a per-viewer
+  day cap and a per-campaign frequency memory hold the magazine rule.
+- **Delivery** (`adhouse/delivery.py`) — impression/click behind
+  dedupe, click-needs-impression, viewer-binding, and velocity gates;
+  the conserved forecast split (platform + Σ contributors == price, to
+  the micro — the A5 dry run) and `/v1/adhouse/preview`, labeled
+  `forecast: true`, never a balance.
+
 The poll floor (A3) — fun on the surface, instruments underneath:
 
 - **Comparable pairs** (`press/polls.py`) — two member pieces from the

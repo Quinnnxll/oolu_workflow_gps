@@ -2713,3 +2713,30 @@ button.ghost {
 .poll-verdict {
   padding: 4px 0;
 }
+
+/* ---- the ad house (agents-expansion A4) --------------------------------- */
+/* The label law: a sponsored card is visually its own thing, and the
+   label sits first — never a story in a costume. */
+.ad-card {
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.ad-label {
+  font-size: 0.75em;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 8px;
+  opacity: 0.8;
+}
+
+.ad-card.consent {
+  border-style: solid;
+}

@@ -8,11 +8,28 @@ headed by an unmissable notice that it is a template, not legal advice,
 so no host accidentally ships placeholder text as if counsel wrote it.
 The Node Policy is code-owned (it is enforced by the hygiene machinery)
 and always served from :mod:`oolu.nodeplace`.
+
+**The privacy promise is renegotiated in the open** (agents-expansion
+plan, invariant 13). Privacy VERSION 2 amends the original "No
+advertising" promise for the ad house (A4): sponsored placements on the
+News and Poll surfaces only, always labeled, matched inside the
+platform, revenue shared with contributors — and "no sale of personal
+data" stands untouched. The change is versioned, and
+:class:`LegalAcceptanceStore` records each member's explicit acceptance;
+nothing sponsored renders to a member who has not accepted the current
+version. The old promise was never silently rewritten — this docstring,
+the version number, and the acceptance flow ARE the renegotiation.
 """
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Callable
+
+# Versioned templates: acceptance binds to a number, never a vibe.
+# Bump a version only with a deliberate amendment beside it.
+LEGAL_VERSIONS = {"terms": 1, "privacy": 2}
 
 TEMPLATE_NOTICE = (
     "> **TEMPLATE — NOT LEGAL ADVICE.** This is placeholder text shipped\n"
@@ -61,8 +78,10 @@ PRIVACY_TEMPLATE = (
    and earnings records.
 2. **What it is used for.** Providing the service: running your tasks,
    syncing your conversation across devices, delivering messages,
-   metering plan allowances, and paying noders. No advertising, no sale
-   of personal data.
+   metering plan allowances, and paying noders and contributors.
+   Advertising exists only as the clearly labeled sponsored placements
+   described in section 7 — nowhere else. No sale of personal data:
+   advertisers never receive it.
 3. **Who sees it.** Model providers receive the content of turns your
    plan or keys route to them. The payment processor sees what payment
    processing requires. Nobody else.
@@ -76,6 +95,16 @@ PRIVACY_TEMPLATE = (
 6. **Retention.** Execution logs follow your retention setting
    (account.log_retention_days). Backups age out on the operator's
    schedule (see the operations runbook).
+7. **Advertising (privacy version 2).** Sponsored placements may appear
+   on the News and Poll surfaces only, and are always labeled as
+   sponsored. Matching happens inside the platform: with your
+   personalization consent it may use your own reading and voting
+   signals; without it, matching is contextual only (the content's
+   genre). Advertisers receive aggregate campaign statistics — never
+   your identity or personal data. Advertising revenue is shared with
+   the members whose contributions the placements ran against. No
+   sponsored placement is shown to you until you accept this version
+   of the policy; declining costs you nothing but the ads.
 """
 )
 
@@ -96,3 +125,80 @@ def legal_document(kind: str, *, legal_dir: str | Path | None = None) -> str:
         except OSError:
             pass  # unreadable operator file: the template still answers
     return _TEMPLATES[kind]
+
+
+_ACCEPT_SCHEMA = """CREATE TABLE IF NOT EXISTS legal_acceptances (
+    tenant_id TEXT NOT NULL,
+    principal TEXT NOT NULL,
+    document TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    at TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, principal, document)
+)"""
+
+
+class LegalAcceptanceStore:
+    """Who accepted which version of which document, when.
+
+    A legal-basis record: it is retained like the audit chain (privacy
+    §5's "legally required records"), not erased with the account —
+    the fact that consent was given is exactly what a dispute needs.
+    Acceptance is monotone per document: the newest accepted version
+    stands; accepting an old version after a new one is a no-op.
+    """
+
+    def __init__(self, conn, *, clock: Callable[[], datetime] | None = None) -> None:
+        self._conn = conn
+        self._clock = clock or (lambda: datetime.now(UTC))
+        with self._conn.transaction() as db:
+            db.execute(_ACCEPT_SCHEMA)
+
+    def accept(
+        self, *, tenant: str, principal: str, document: str, version: int
+    ) -> int:
+        """Record the acceptance; return the standing accepted version."""
+        if document not in LEGAL_VERSIONS:
+            raise KeyError(f"unknown legal document: {document}")
+        standing = self.accepted_version(
+            tenant=tenant, principal=principal, document=document
+        )
+        if standing is not None and standing >= int(version):
+            return standing
+        with self._conn.transaction() as db:
+            db.execute(
+                "DELETE FROM legal_acceptances WHERE tenant_id = ?"
+                " AND principal = ? AND document = ?",
+                (tenant, principal, document),
+            )
+            db.execute(
+                """INSERT INTO legal_acceptances
+                     (tenant_id, principal, document, version, at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (
+                    tenant,
+                    principal,
+                    document,
+                    int(version),
+                    self._clock().isoformat(),
+                ),
+            )
+        return int(version)
+
+    def accepted_version(
+        self, *, tenant: str, principal: str, document: str
+    ) -> int | None:
+        with self._conn.lock:
+            row = self._conn.db.execute(
+                """SELECT version FROM legal_acceptances
+                   WHERE tenant_id = ? AND principal = ? AND document = ?""",
+                (tenant, principal, document),
+            ).fetchone()
+        return int(row["version"]) if row is not None else None
+
+    def is_current(
+        self, *, tenant: str, principal: str, document: str
+    ) -> bool:
+        accepted = self.accepted_version(
+            tenant=tenant, principal=principal, document=document
+        )
+        return accepted is not None and accepted >= LEGAL_VERSIONS[document]

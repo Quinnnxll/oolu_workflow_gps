@@ -395,6 +395,99 @@ describe("PressPanel (inside the News thread)", () => {
     expect(named.length).toBeGreaterThanOrEqual(2);
   });
 
+  it("holds the ad slot behind the versioned consent, then labels it", async () => {
+    routes["GET /v1/press/genres"] = GENRES;
+    routes["GET /v1/press/contributions"] = { status: 200, body: { items: [] } };
+    routes["GET /v1/press/stories"] = {
+      status: 200,
+      body: {
+        items: [
+          {
+            story_id: "st1",
+            headline: "The pier queues again",
+            prose: "Forty stalls returned.",
+            genres: ["local"],
+            lineage: [{ contribution_id: "c1", author: "alice", weight: 1 }],
+            breakdown: { selection: 0.5 },
+            rubric_version: 1,
+            source: "desk",
+            created_at: "2026-07-15T08:00:00Z",
+          },
+        ],
+        personalized: false,
+        edition_schedule: null,
+      },
+    };
+    // Before acceptance: the slot renders the consent card, no ad.
+    routes["GET /v1/press/ads"] = {
+      status: 200,
+      body: { placement: null, reason: "consent" },
+    };
+    routes["GET /v1/legal/consent"] = {
+      status: 200,
+      body: { privacy_version: 2, accepted_version: null, ads_enabled: false },
+    };
+    routes["POST /v1/legal/consent"] = {
+      status: 200,
+      body: { document: "privacy", accepted_version: 2 },
+    };
+    render(<AgentThread agent={NEWS} />);
+    expect(
+      await screen.findByText("Sponsored placements — with your say"),
+    ).toBeTruthy();
+    expect(screen.queryByText("Sponsored")).toBeNull();
+
+    // Accepting names the CURRENT version and reloads the slot — which
+    // now serves a placement, label first, and posts its impression.
+    routes["GET /v1/press/ads"] = {
+      status: 200,
+      body: {
+        placement: {
+          placement_id: "pl1",
+          label: "Sponsored",
+          campaign_name: "Kettle week",
+          creative: "Kettles for every kitchen.",
+          offer_ref: "listing-42",
+          advertiser: "shop",
+          surface: "edition",
+          content_ref: "st1",
+          breakdown: {},
+        },
+      },
+    };
+    routes["POST /v1/adhouse/placements/pl1/impression"] = {
+      status: 200,
+      body: { recorded: true, kind: "impression" },
+    };
+    fireEvent.click(screen.getByText("Accept version 2"));
+    expect(await screen.findByText("Sponsored")).toBeTruthy();
+    expect(screen.getByText("Kettle week")).toBeTruthy();
+    const accepted = calls.find(
+      (c) => c.method === "POST" && c.path === "/v1/legal/consent",
+    );
+    expect(accepted?.body).toMatchObject({ document: "privacy", version: 2 });
+    const impression = calls.find(
+      (c) =>
+        c.method === "POST" &&
+        c.path === "/v1/adhouse/placements/pl1/impression",
+    );
+    expect(impression).toBeTruthy();
+
+    // The affiliate tap delivers the click on the provenance token.
+    routes["POST /v1/adhouse/placements/pl1/click"] = {
+      status: 200,
+      body: { recorded: true, kind: "click" },
+    };
+    fireEvent.click(screen.getByText("View the offer"));
+    expect(
+      calls.some(
+        (c) =>
+          c.method === "POST" &&
+          c.path === "/v1/adhouse/placements/pl1/click",
+      ),
+    ).toBeTruthy();
+  });
+
   it("stays silent on hosts from before the press", async () => {
     routes["GET /v1/press/genres"] = { status: 404, body: {} };
     render(<AgentThread agent={NEWS} />);

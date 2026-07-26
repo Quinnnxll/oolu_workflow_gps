@@ -29,6 +29,12 @@ ACCOUNTS = (
     "tax_payable",
     "refund_payable",
     "dispute_reserve",
+    # The ad house (agents-expansion A4): campaign funding arrives as
+    # cash against a standing liability — unspent budget is owed, not
+    # earned. Recognition (liability → revenue + contributor payable)
+    # is A5's posting; nothing in the adhouse package writes here.
+    "advertiser_payable",
+    "ad_budget_liability",
 )
 
 _SCHEMA = """CREATE TABLE IF NOT EXISTS marketplace_ledger (

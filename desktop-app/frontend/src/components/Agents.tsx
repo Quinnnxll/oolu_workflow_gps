@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, session } from "../api";
 import type {
+  AdPlacement,
   Contribution,
   FileMeta,
   PollPair,
@@ -60,6 +61,95 @@ export function AgentAvatar({
     >
       {agent.name.slice(0, 1).toUpperCase()}
     </span>
+  );
+}
+
+// The ad slot (A4): one sponsored placement between the content — or a
+// consent card, or nothing. The label is structural (the server sends
+// it; the slot renders it); the impression posts once per placement;
+// nothing sponsored exists for a member who has not accepted the
+// current privacy version, and the accept flow names the version it
+// accepts.
+export function AdSlot({
+  surface,
+  content,
+}: {
+  surface: "edition" | "poll";
+  content: string;
+}) {
+  const tr = useT();
+  const [placement, setPlacement] = useState<AdPlacement | null>(null);
+  const [needsConsent, setNeedsConsent] = useState(false);
+  const impressed = useRef<string | null>(null);
+
+  async function load() {
+    try {
+      const served = await api.pressAd(surface, content);
+      setNeedsConsent(served.reason === "consent");
+      setPlacement(served.placement);
+    } catch {
+      setPlacement(null); // no ad house on this host: an empty slot
+      setNeedsConsent(false);
+    }
+  }
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [surface, content]);
+
+  // The impression: once per placement, from the member it was served to.
+  useEffect(() => {
+    if (placement && impressed.current !== placement.placement_id) {
+      impressed.current = placement.placement_id;
+      void api.adImpression(placement.placement_id).catch(() => {});
+    }
+  }, [placement]);
+
+  async function accept() {
+    try {
+      const consent = await api.legalConsent();
+      await api.legalAccept(consent.privacy_version);
+      await load();
+    } catch {
+      /* the next load tells the truth */
+    }
+  }
+
+  if (needsConsent) {
+    return (
+      <div className="ad-card consent">
+        <div className="press-title">{tr("ads.consentTitle")}</div>
+        <div className="press-body">{tr("ads.consentBody")}</div>
+        <div className="row">
+          <a
+            href="/v1/legal/privacy"
+            target="_blank"
+            rel="noreferrer"
+            className="linklike"
+          >
+            {tr("ads.readPolicy")}
+          </a>
+          <button onClick={() => void accept()}>{tr("ads.accept")}</button>
+        </div>
+      </div>
+    );
+  }
+  if (!placement) return null;
+  return (
+    <div className="ad-card">
+      {/* The label law: every placement renders its label, always. */}
+      <span className="ad-label">{placement.label}</span>
+      <div className="press-title">{placement.campaign_name}</div>
+      <div className="press-body">{placement.creative}</div>
+      <button
+        className="linklike"
+        title={placement.offer_ref}
+        onClick={() => void api.adClick(placement.placement_id).catch(() => {})}
+      >
+        {tr("ads.offer")}
+      </button>
+    </div>
   );
 }
 
@@ -186,6 +276,8 @@ export function PollPanel() {
         </div>
       )}
       {note && <div className="muted press-empty">{note}</div>}
+      {/* The magazine rule: the ad lives BETWEEN the content, labeled. */}
+      {pair && <AdSlot surface="poll" content={pair.pair_id} />}
       <div className="row">
         <button
           className="ghost"
@@ -418,6 +510,10 @@ export function PressPanel() {
               </details>
             </div>
           ))}
+          {/* The ad between the stories — never inside the prose. */}
+          {stories.length > 0 && (
+            <AdSlot surface="edition" content={stories[0].story_id} />
+          )}
         </>
       )}
 

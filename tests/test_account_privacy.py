@@ -184,6 +184,17 @@ def test_legal_urls_are_public_and_templates_are_unmissable(tmp_path):
     assert "TEMPLATE — NOT LEGAL ADVICE" in terms.body
     assert "TEMPLATE — NOT LEGAL ADVICE" in privacy.body
     assert terms.content_type.startswith("text/markdown")
+    # Privacy VERSION 2 (agents-expansion A4): the advertising promise
+    # was renegotiated in the open, deliberately, in the same commit
+    # that built the ad house. The new promise is pinned here exactly
+    # as the old one's absence is: ads only as labeled sponsored
+    # placements on News/Poll, matched inside the platform, and the
+    # part that never moved — no sale of personal data.
+    flat_privacy = " ".join(privacy.body.split())  # wrap-safe pinning
+    assert "always labeled as sponsored" in flat_privacy
+    assert "News and Poll surfaces only" in flat_privacy
+    assert "No sale of personal data" in flat_privacy
+    assert "advertisers never receive it" in flat_privacy
 
     policy = gateway.handle(_req("GET", "/v1/legal/node-policy"))
     assert policy.status == 200

@@ -361,6 +361,37 @@ const STRINGS: Record<string, Entry> = {
     es: "{left}% frente a {right}% · {n} votos",
     fr: "{left}% contre {right}% · {n} votes",
   },
+  // The ad house (A4): the consent card and the sponsored slot.
+  "ads.consentTitle": {
+    en: "Sponsored placements — with your say",
+    zh: "赞助内容——由你决定",
+    es: "Contenido patrocinado, con tu consentimiento",
+    fr: "Contenus sponsorisés — avec votre accord",
+  },
+  "ads.consentBody": {
+    en: "The privacy policy changed (version 2): clearly labeled sponsored placements may appear on News and Poll, matched inside the platform, with revenue shared back to contributors. Personal data is never sold or given to advertisers. Nothing shows until you accept — declining costs you nothing but the ads.",
+    zh: "隐私政策已更新（第 2 版）：News 和 Poll 可能出现明确标注的赞助内容，匹配在平台内部完成，收入与投稿者分享。个人数据绝不出售或提供给广告主。你接受之前不会显示任何广告——拒绝也不会失去任何功能。",
+    es: "La política de privacidad cambió (versión 2): pueden aparecer contenidos patrocinados claramente etiquetados en News y Poll, emparejados dentro de la plataforma, con ingresos compartidos con quienes contribuyen. Los datos personales nunca se venden ni se entregan a los anunciantes. No se muestra nada hasta que aceptes; rechazar solo te cuesta los anuncios.",
+    fr: "La politique de confidentialité a changé (version 2) : des contenus sponsorisés clairement étiquetés peuvent apparaître sur News et Poll, appariés au sein de la plateforme, avec des revenus partagés avec les contributeurs. Les données personnelles ne sont jamais vendues ni transmises aux annonceurs. Rien ne s'affiche avant votre accord — refuser ne vous coûte que les publicités.",
+  },
+  "ads.readPolicy": {
+    en: "Read the policy",
+    zh: "阅读政策",
+    es: "Leer la política",
+    fr: "Lire la politique",
+  },
+  "ads.accept": {
+    en: "Accept version 2",
+    zh: "接受第 2 版",
+    es: "Aceptar la versión 2",
+    fr: "Accepter la version 2",
+  },
+  "ads.offer": {
+    en: "View the offer",
+    zh: "查看优惠",
+    es: "Ver la oferta",
+    fr: "Voir l'offre",
+  },
   files: { en: "Files", zh: "文件", es: "Archivos", fr: "Fichiers" },
   filesSub: {
     en: "documents & sheets",
@@ -3107,6 +3138,12 @@ const ZH_HANT: Record<string, string> = {
   "poll.heading": "哪一個？點一下投票",
   "poll.next": "下一對",
   "poll.result": "{left}% 對 {right}% · {n} 票",
+  "ads.consentTitle": "贊助內容——由你決定",
+  "ads.consentBody":
+    "隱私政策已更新（第 2 版）：News 和 Poll 可能出現明確標註的贊助內容，匹配在平台內部完成，收入與投稿者分享。個人資料絕不出售或提供給廣告主。你接受之前不會顯示任何廣告——拒絕也不會失去任何功能。",
+  "ads.readPolicy": "閱讀政策",
+  "ads.accept": "接受第 2 版",
+  "ads.offer": "查看優惠",
   "files": "檔案",
   "filesSub": "文件與表格",
   "settings": "設定",

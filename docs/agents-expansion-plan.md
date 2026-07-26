@@ -551,6 +551,41 @@ Goal Adherence:
 
 ### A4 — the ad house (buying, matching, merging — display-only money)
 
+**Status: LANDED** — **the legal gate first**: `legal.py` carries
+privacy VERSION 2 (`LEGAL_VERSIONS`), amending §2 and adding §7 —
+sponsored placements on News/Poll only, always labeled, matched inside
+the platform, revenue shared with contributors, and "no sale of
+personal data" untouched; `LegalAcceptanceStore` records explicit,
+version-named acceptance (monotone; a legal-basis record retained like
+the audit chain); the pinning test (`test_account_privacy.py`) was
+updated deliberately in the same commit, and decision-log item 2 is
+resolved conservatively: ads are DEFAULT-OFF for every account until it
+accepts v2 — declining costs nothing but the ads. `src/oolu/adhouse/`:
+`campaigns.py` (seller-KYC-gated at the door; scrub-gated creative;
+taxonomy targeting on the one genre vocabulary; display-only
+`charged_micros` recognition), `matching.py` (a pure deterministic
+second-price pick — same inputs, same placement, same factor breakdown;
+bounded consented-affinity pull; paused/spent/frequency-capped
+campaigns never place), `placement.py` (placements are computed served
+occurrences, never baked into content — deactivation removes every
+placement on the next render; `SPONSORED_LABEL` is structural; the
+placement_id is the provenance token; per-viewer day cap), and
+`delivery.py` (impression/click behind dedupe, click-needs-impression,
+viewer-binding, and velocity gates; `forecast_split` conserving
+`platform + Σ contributors == price` to the micro — the A5 dry run —
+and `preview_earnings` labeled `forecast: true`, never a balance).
+Funding is a ledger fact posted BY THE GATEWAY on the double-entry
+book: two new accounts (`advertiser_payable`, `ad_budget_liability`),
+cash against standing liability, trial-balanced in the end-to-end test;
+the adhouse package itself imports no money path and `press/` imports
+no adhouse — both walls import-scan-proven. Doors: `/v1/legal/consent`
+(GET/POST), `/v1/adhouse/campaigns` (+status), `/v1/press/ads` (the
+render-time merge with the consent gate first), placement
+impression/click, `/v1/adhouse/preview`. Surface: the `AdSlot` between
+the stories and after the poll pair — consent card until acceptance,
+then the labeled sponsored card with impression/click delivery. Pinned
+by `tests/test_adhouse.py` and the ad cases in `Agents.test.tsx`.
+
 Goal: campaigns fund, match, and render against News and Poll — behind the
 renegotiated legal seam, always labeled, with earnings previews only.
 
