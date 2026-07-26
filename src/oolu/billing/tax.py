@@ -120,7 +120,14 @@ class InvoiceBook:
                 settled = self.for_order(order_id)
                 assert settled is not None
                 return settled, False
-            seq = int(cursor.lastrowid or 0)
+            # The sequence is read back, never taken from lastrowid: the
+            # PostgreSQL dialect has no lastrowid, and an invoice number
+            # must be right on both engines.
+            row = db.execute(
+                "SELECT seq FROM marketplace_invoices WHERE invoice_id = ?",
+                (invoice_id,),
+            ).fetchone()
+            seq = int(row["seq"])
             record = InvoiceRecord(
                 invoice_id=invoice_id,
                 number=f"{jurisdiction.invoice_prefix}-{seq:06d}",

@@ -12,6 +12,28 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # The production dialect runs in CI, not just in production: every
+    # PostgreSQL-parametrized test (durable contract, marketplace boot
+    # and money flow, settlement) executes against a real server here.
+    # Without this service those tests skip silently — which is exactly
+    # how a SQLite-only schema once reached the production gateway and
+    # 502'd it at boot.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: oolu
+          POSTGRES_PASSWORD: oolu
+          POSTGRES_DB: oolu_test
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U oolu -d oolu_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      OOLU_TEST_PG_DSN: postgresql://oolu:oolu@127.0.0.1:5432/oolu_test
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6

@@ -25,7 +25,12 @@ from oolu.metering import AttributionRecord, MeteringEvent
 
 PG_DSN = os.environ.get("OOLU_TEST_PG_DSN") or os.environ.get("DATABASE_URL")
 
-CLEARED_AT = datetime(2020, 1, 1, tzinfo=UTC)
+# A FIXED service clock, with the seed past the holdback but inside the
+# 90-day chargeback window — so the reserve is truly demanded. (The old
+# 2020 seed sat outside the window; being PG-only, these tests had
+# never actually run.)
+T_NOW = datetime(2030, 2, 1, tzinfo=UTC)
+CLEARED_AT = T_NOW - timedelta(days=20)
 pytestmark = pytest.mark.needs_postgres
 
 
@@ -150,6 +155,7 @@ def test_concurrent_settlement_pays_once():
                 providers=_ASYMMETRIC,
                 idempotency=IdempotencyLedger(conn),
                 min_payout_micros=100_000,
+                clock=lambda: T_NOW,
             ).settle("noder-B", period_key="2030-01")
         finally:
             conn.close()
@@ -157,7 +163,7 @@ def test_concurrent_settlement_pays_once():
     try:
         _run_threads(worker, 6)
         assert len(payout._payouts) == 1  # paid exactly once
-        balance = BalanceProjection(EarningsLedger(main)).balance("noder-B")
+        balance = BalanceProjection(EarningsLedger(main)).balance("noder-B", now=T_NOW)
         assert balance.lifetime_paid_micros == 264600  # not double-paid
         assert balance.available_micros == 0
     finally:
@@ -192,6 +198,7 @@ def test_restart_mid_settlement_does_not_double_pay():
             providers=_ASYMMETRIC,
             idempotency=IdempotencyLedger(conn),
             min_payout_micros=100_000,
+            clock=lambda: T_NOW,
         ).settle("noder-B", period_key="2030-01")
     finally:
         conn.close()
@@ -207,11 +214,12 @@ def test_restart_mid_settlement_does_not_double_pay():
             providers=_ASYMMETRIC,
             idempotency=IdempotencyLedger(restarted),
             min_payout_micros=100_000,
+            clock=lambda: T_NOW,
         ).settle("noder-B", period_key="2030-01")
         assert len(payout._payouts) == 1  # still paid once across the restart
         assert (
             BalanceProjection(EarningsLedger(restarted))
-            .balance("noder-B")
+            .balance("noder-B", now=T_NOW)
             .lifetime_paid_micros
             == 264600
         )

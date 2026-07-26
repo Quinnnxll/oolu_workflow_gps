@@ -310,8 +310,10 @@ class PolicyStore:
     def put(self, policy: PurchasePolicy, *, tenant: str, principal: str) -> None:
         with self._conn.transaction() as db:
             db.execute(
-                "INSERT OR REPLACE INTO market_policies"
-                " (tenant, principal, payload_json) VALUES (?, ?, ?)",
+                """INSERT INTO market_policies
+                   (tenant, principal, payload_json) VALUES (?, ?, ?)
+                   ON CONFLICT(tenant, principal) DO UPDATE SET
+                     payload_json = excluded.payload_json""",
                 (tenant, principal, policy.model_dump_json()),
             )
 
@@ -340,7 +342,9 @@ class SalesPolicyStore:
     def put(self, policy: SalesPolicy, *, tenant: str, principal: str) -> None:
         with self._conn.transaction() as db:
             db.execute(
-                "INSERT OR REPLACE INTO market_sales_policies"
-                " (tenant, principal, payload_json) VALUES (?, ?, ?)",
+                """INSERT INTO market_sales_policies
+                   (tenant, principal, payload_json) VALUES (?, ?, ?)
+                   ON CONFLICT(tenant, principal) DO UPDATE SET
+                     payload_json = excluded.payload_json""",
                 (tenant, principal, policy.model_dump_json()),
             )

@@ -152,11 +152,17 @@ def test_paid_out_clawback_goes_negative_and_is_recovered():
         assert BalanceProjection(ledger).balance("noder-B").available_micros == 0
 
         service.refund(event_id="evt-1", reason="chargeback")
-        assert BalanceProjection(ledger).balance("noder-B").available_micros == -294000
+        # Reserve-first, by design: the 29400 held for exactly this event
+        # absorbs its share of the hit, and only the un-cushioned paid-out
+        # remainder stays as debt future accruals repay first.
+        after_clawback = BalanceProjection(ledger).balance("noder-B")
+        assert after_clawback.available_micros == -264600
+        assert after_clawback.reserved_micros == 0
 
-        # Future earnings recover the negative balance.
+        # Future earnings repay the debt (their own reserve is trued up at
+        # the next settlement, not at accrual).
         _accrual(ledger, event_id="evt-2")
-        assert BalanceProjection(ledger).balance("noder-B").available_micros == 0
+        assert BalanceProjection(ledger).balance("noder-B").available_micros == 29400
     finally:
         conn.close()
 

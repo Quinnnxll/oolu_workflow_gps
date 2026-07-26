@@ -4,6 +4,42 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Production 502 fixed — the marketplace speaks the production dialect:
+
+- **The outage.** The marketplace stores are constructed inside
+  ``GatewayApp.__init__`` and were written in the SQLite idiom; the
+  first deploy onto the production PostgreSQL connection crashed the
+  gateway at CREATE TABLE (``AUTOINCREMENT`` is SQLite-only syntax),
+  Caddy answered 502, Cloudflare relayed it — and the investor panel,
+  whose live wiring reads ``/v1`` on the same origin, sat in its
+  signed-out connect layout because the API was down.
+- **The fixes.** The PostgreSQL dialect translator rewrites
+  ``INTEGER PRIMARY KEY AUTOINCREMENT`` to ``BIGSERIAL PRIMARY KEY``
+  (rescuing every store on the durable connection, the lazy
+  competitor ledger and memory stores included); ``INSERT OR
+  REPLACE`` now supports composite keys, knows every table that uses
+  it, and REFUSES loudly with directions instead of a bare KeyError;
+  inserts into serial-keyed tables carry ``RETURNING`` so
+  ``lastrowid`` readers work on both engines; the marketplace policy
+  stores upsert portably; and invoice numbering reads its sequence
+  back instead of trusting a ``lastrowid`` PostgreSQL never returns.
+- **The proof.** ``tests/test_marketplace_postgres.py`` builds THE
+  GATEWAY ITSELF over ``PostgresDurableConnection`` — the exact boot
+  that failed — twice over the same schema, then walks an escrow
+  order to a balanced book and a correctly numbered invoice on a real
+  server. CI now runs a PostgreSQL 16 service, so every
+  PG-parametrized test executes instead of skipping silently — which
+  is how this drift landed unseen.
+- **Also surfaced by the new CI teeth:** the PG-only money tests
+  (`test_settlement`, `test_money_safety`, the paid-out clawback in
+  `test_disputes`) had never actually run anywhere. Their seeds sat
+  outside the chargeback risk window (whose whole point is releasing
+  the reserve) on real clocks, and the clawback test predated the
+  reserve-first uphold design. The rigs now run on fixed clocks with
+  in-window seeds and expectations matching the documented behavior —
+  all pass against the real server; the money code itself was correct
+  throughout.
+
 M4 closed — the wire goes live, partners answer over HTTP, sourcing
 survives a no:
 

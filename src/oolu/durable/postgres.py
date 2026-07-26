@@ -18,7 +18,20 @@ except ModuleNotFoundError as exc:  # pragma: no cover
         "pip install 'oolu[postgres]'"
     ) from exc
 
-_REPLACE_PK = {"routes": "route_id", "semantic_evidence": "evidence_id"}
+# Every table any store upserts with SQLite's INSERT OR REPLACE, with its
+# primary key (tuples for composite keys). The translation needs the
+# conflict target PostgreSQL demands; a table missing here fails LOUDLY
+# below with directions, never with a bare KeyError in production.
+_REPLACE_PK: dict[str, tuple[str, ...]] = {
+    "routes": ("route_id",),
+    "semantic_evidence": ("evidence_id",),
+    "skill_registry": ("skill_id", "semver"),
+    "trace_node_stats": ("node_key", "context"),
+    "graph_proposals": ("proposal_id",),
+    "market_reference_prices": ("class_key",),
+    "market_policies": ("tenant", "principal"),
+    "market_sales_policies": ("tenant", "principal"),
+}
 
 
 def _translate(sql: str) -> str:
@@ -29,24 +42,61 @@ def _translate(sql: str) -> str:
     if replace:
         table = replace.group(1)
         columns = [c.strip() for c in replace.group(2).split(",")]
-        pk = _REPLACE_PK[table]
-        assignments = ", ".join(f"{c} = EXCLUDED.{c}" for c in columns if c != pk)
+        pk = _REPLACE_PK.get(table)
+        if pk is None:
+            raise NotImplementedError(
+                f"INSERT OR REPLACE INTO {table} has no PostgreSQL "
+                "translation: add the table's primary key to _REPLACE_PK, "
+                "or write the statement as a portable ON CONFLICT upsert"
+            )
+        assignments = ", ".join(
+            f"{c} = EXCLUDED.{c}" for c in columns if c not in pk
+        )
         s = re.sub(
             r"\s*INSERT\s+OR\s+REPLACE\s+INTO", "INSERT INTO", s, count=1, flags=re.I
         )
-        s = f"{s.rstrip().rstrip(';')} ON CONFLICT ({pk}) DO UPDATE SET {assignments}"
+        s = (
+            f"{s.rstrip().rstrip(';')} ON CONFLICT ({', '.join(pk)}) "
+            f"DO UPDATE SET {assignments}"
+        )
     elif re.match(r"\s*INSERT\s+OR\s+IGNORE\s+INTO", s, re.I):
         s = re.sub(
             r"\s*INSERT\s+OR\s+IGNORE\s+INTO", "INSERT INTO", s, count=1, flags=re.I
         )
         s = f"{s.rstrip().rstrip(';')} ON CONFLICT DO NOTHING"
+    # SQLite's rowid-alias autoincrement is a syntax error on PostgreSQL;
+    # BIGSERIAL is the same contract (monotonic per-table sequence). This
+    # runs at CREATE TABLE time — exactly where a marketplace store on the
+    # production connection would otherwise crash the gateway at boot.
+    s = re.sub(
+        r"INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT",
+        "BIGSERIAL PRIMARY KEY",
+        s,
+        flags=re.I,
+    )
     s = s.replace("?", "%s")
     s = re.sub(r"ON CONFLICT\(", "ON CONFLICT (", s, flags=re.I)
     return s
 
 
-def _returns_seq(sql: str) -> bool:
-    return re.match(r"\s*INSERT\s+INTO\s+audit_log", sql, re.I) is not None
+# Tables whose stores read cursor.lastrowid after an INSERT (SQLite's
+# rowid). PostgreSQL has no lastrowid, so the wrapper appends
+# RETURNING <serial column> for exactly these inserts and carries the
+# value — same contract, both engines.
+_SERIAL_COLUMN = {
+    "audit_log": "seq",
+    "build_attempts": "id",
+    "build_lessons": "id",
+    "graph_edges": "id",
+    "memory_spine": "id",
+}
+
+
+def _serial_return(sql: str) -> str | None:
+    insert = re.match(r"\s*INSERT\s+INTO\s+(\w+)", sql, re.I)
+    if insert is None:
+        return None
+    return _SERIAL_COLUMN.get(insert.group(1))
 
 
 class _CursorWrapper:
@@ -71,11 +121,14 @@ class _DialectConnection:
 
     def execute(self, sql: str, params: tuple = ()) -> _CursorWrapper:
         translated = _translate(sql)
-        if _returns_seq(translated):
-            translated = f"{translated} RETURNING seq"
+        serial = _serial_return(translated)
+        if serial is not None:
+            translated = f"{translated} RETURNING {serial}"
             cursor = self._pg.execute(translated, params)
             row = cursor.fetchone()
-            return _CursorWrapper(cursor, int(row["seq"]) if row else None)
+            return _CursorWrapper(
+                cursor, int(row[serial]) if row else None
+            )
         return _CursorWrapper(self._pg.execute(translated, params))
 
 

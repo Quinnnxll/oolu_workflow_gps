@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -25,7 +25,14 @@ from oolu.identity import ProviderConfig
 
 PG_DSN = os.environ.get("OOLU_TEST_PG_DSN") or os.environ.get("DATABASE_URL")
 
-CLEARED_AT = datetime(2020, 1, 1, tzinfo=UTC)  # long past -> already cleared holdback
+# The service runs on a FIXED clock, and the seeded accrual sits 20 days
+# behind it: past the holdback (so it is available), but inside the 90-day
+# chargeback window (so the 10% reserve is still demanded). The original
+# seed sat six years back — outside the risk window, whose whole point is
+# that such earnings RELEASE their reserve — so the expected numbers could
+# never happen, and being PG-only, these tests had never actually run.
+T_NOW = datetime(2030, 2, 1, tzinfo=UTC)
+CLEARED_AT = T_NOW - timedelta(days=20)
 
 
 class _AsymmetricVerifier:
@@ -106,6 +113,7 @@ def _service(conn, payout, **overrides):
         durable=conn,
         providers=_ASYMMETRIC,
         idempotency=IdempotencyLedger(conn),
+        clock=lambda: T_NOW,
     )
     kwargs.update(overrides)
     return kwargs["ledger"], kwargs["payout_store"], SettlementService(**kwargs)
@@ -126,7 +134,7 @@ def test_below_threshold_rolls_forward_and_holds_reserve():
         assert result["available_micros"] == 264600
         assert payout._payouts == {}
         assert store.batches_by_status(PayoutStatus.PAID) == []
-        assert BalanceProjection(ledger).balance("noder-B").reserved_micros == 29400
+        assert BalanceProjection(ledger).balance("noder-B", now=T_NOW).reserved_micros == 29400
     finally:
         conn.close()
 
@@ -145,7 +153,7 @@ def test_above_threshold_pays_out_to_verified_account():
         assert len(payout._payouts) == 1
         batch = store.get_batch(result["batch_id"])
         assert batch.status == PayoutStatus.PAID
-        balance = BalanceProjection(ledger).balance("noder-B")
+        balance = BalanceProjection(ledger).balance("noder-B", now=T_NOW)
         assert balance.available_micros == 0
         assert balance.lifetime_paid_micros == 264600
         assert balance.reserved_micros == 29400
@@ -187,7 +195,7 @@ def test_settlement_is_idempotent_per_period():
         second = service.settle("noder-B", period_key="2030-01")
         assert first == second
         assert len(payout._payouts) == 1  # paid once
-        balance = BalanceProjection(ledger).balance("noder-B")
+        balance = BalanceProjection(ledger).balance("noder-B", now=T_NOW)
         assert balance.available_micros == 0
         assert balance.lifetime_paid_micros == 264600  # not double-paid
     finally:
