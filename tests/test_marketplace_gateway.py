@@ -517,6 +517,82 @@ def test_evidence_content_lands_content_addressed(tmp_path):
     conn.close()
 
 
+def test_the_open_market_doors_guard_registration_and_the_wire(tmp_path):
+    """M4 at the doors: registering a peer takes operator authority, an
+    import without a valid wire signature is refused, and the sourcing
+    sweep answers one normalized comparison."""
+
+    from oolu.gateway import GatewayApp
+    from oolu.marketplace import sign_offer
+
+    bare, conn, ident = _app(tmp_path)
+    secret = "the-partner-markets-shared-secret"
+    app = GatewayApp(
+        bare._durable,
+        validator=ident.validator,
+        resolver=ident.resolver,
+        approval_authority=ident.authority,
+        commerce_peer_secrets={"partner-market": secret},
+    )
+    member = ident.token("user-1")
+    admin = ident.token("admin-1")
+    body = {"peer_id": "partner-market", "name": "Partner", "jurisdiction": "LOCAL"}
+    # A member cannot open the market to a stranger; the operator can.
+    assert (
+        app.handle(
+            _req("POST", "/v1/commerce/peers", token=member, body=body)
+        ).status
+        == 403
+    )
+    assert (
+        app.handle(
+            _req("POST", "/v1/commerce/peers", token=admin, body=body)
+        ).status
+        == 201
+    )
+    # A tampered offer never crosses the door.
+    from oolu.marketplace import Offer as MarketOffer
+
+    signed = sign_offer(
+        MarketOffer.model_validate(_offer_body()),
+        peer_id="partner-market",
+        secret=secret,
+    )
+    tampered = signed.model_copy(update={"subtotal_micros": 1})
+    refused = app.handle(
+        _req(
+            "POST",
+            "/v1/commerce/peers/partner-market/offers",
+            token=member,
+            body={"offer": tampered.model_dump(mode="json")},
+        )
+    )
+    assert refused.status == 400
+    assert refused.body["error"]["code"] == "protocol_violation"
+    imported = app.handle(
+        _req(
+            "POST",
+            "/v1/commerce/peers/partner-market/offers",
+            token=member,
+            body={"offer": signed.model_dump(mode="json")},
+        )
+    )
+    assert imported.status == 201
+    sourced = app.handle(
+        _req(
+            "GET",
+            "/v1/commerce/source",
+            token=member,
+            query={"category": "", "quantity": "1"},
+        )
+    )
+    assert sourced.status == 200
+    assert [row["origin"] for row in sourced.body["items"]] == [
+        "peer:partner-market"
+    ]
+    conn.close()
+
+
 def test_policy_roundtrip_and_no_execution_door(tmp_path):
     app, conn, ident = _app(tmp_path)
     token = ident.token("user-1")

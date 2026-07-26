@@ -60,5 +60,10 @@ class SellerUnverified(MarketplaceError):
     """Only verified sellers list. An MVP boundary, not a preference."""
 
 
+class ProtocolViolation(MarketplaceError):
+    """An external message failed the wire contract: unsigned, tampered,
+    or from nobody we know. It never reaches the intent door."""
+
+
 class ListingUnavailable(MarketplaceError):
     """The listing is not active, or cannot cover the asked quantity."""

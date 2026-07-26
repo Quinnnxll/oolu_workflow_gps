@@ -24,10 +24,12 @@ from .errors import (
     ListingUnavailable,
     MarketNotFound,
     MarketplaceError,
+    ProtocolViolation,
     SellerUnverified,
     StrongAuthenticationRequired,
     WrongState,
 )
+from .federation import FederationDesk, ImportedOffer, PeerMarket, SourcedOffer
 from .fraud import OrderHistory, RiskSignals
 from .inventory import InventoryService, Reservation
 from .jobdispatch import WorkerLeaseDispatcher, node_capability
@@ -60,6 +62,13 @@ from .orgcontrol import (
     PayoutChangeRequest,
     SelfApproval,
 )
+from .partners import (
+    FinancingQuote,
+    InsuranceQuote,
+    SimpleInterestFinancing,
+    financing_offer,
+    insurance_offer,
+)
 from .policy import (
     Decision,
     PolicyVerdict,
@@ -70,6 +79,7 @@ from .policy import (
     evaluate_purchase,
     evaluate_sale,
 )
+from .protocol import PROTOCOL_VERSION, sign_offer, verify_offer
 from .reconciliation import ReconciliationDesk, ReconciliationReport
 from .recurring import RecurringBook, RecurringObligation, RequiresNewApproval
 from .review import approval_summary, required_approvers, required_strength
@@ -146,6 +156,15 @@ __all__ = [
     "RequiresNewApproval",
     "SelfApproval",
     "WorkerLeaseDispatcher",
+    "FederationDesk",
+    "FinancingQuote",
+    "ImportedOffer",
+    "InsuranceQuote",
+    "PROTOCOL_VERSION",
+    "PeerMarket",
+    "ProtocolViolation",
+    "SimpleInterestFinancing",
+    "SourcedOffer",
     "Offer",
     "OrderRecord",
     "OrderService",
@@ -165,7 +184,11 @@ __all__ = [
     "WrongState",
     "approval_summary",
     "delegation_gaps",
+    "financing_offer",
+    "insurance_offer",
     "node_capability",
+    "sign_offer",
+    "verify_offer",
     "seller_kyc_key",
     "evaluate_purchase",
     "evaluate_sale",

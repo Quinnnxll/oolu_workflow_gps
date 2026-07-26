@@ -94,6 +94,7 @@ from ..mail import SendThrottle
 from ..marketplace import (
     AgentDelegation,
     CatalogService,
+    FederationDesk,
     InventoryService,
     JobDesk,
     MarketNotFound,
@@ -102,6 +103,7 @@ from ..marketplace import (
     OrderHistory,
     OrderService,
     PayoutChangeDesk,
+    ProtocolViolation,
     PurchasePolicy,
     ReconciliationDesk,
     RecurringBook,
@@ -632,6 +634,12 @@ class GatewayApp:
         commerce_job_dispatcher=None,  # marketplace.WorkerLeaseDispatcher
         # (or any callable taking an ExecutionJob): hands jobs to the
         # worker control plane's signed leases. None = record-only desk
+        commerce_peer_secrets=None,  # Mapping[peer_id, shared secret] for
+        # the A2A protocol — injected at composition (a vault concern);
+        # a peer without a secret can announce nothing this host trusts
+        commerce_extra_jurisdictions=(),  # extra billing.tax
+        # JurisdictionModules beyond the host's own — the federation's
+        # cross-border deployment gate reads the same registry
         google_signin: GoogleSignIn | None = None,  # "Continue with Google"
         identity_links: IdentityLinkStore | None = None,  # email/IdP -> account
         mail=None,  # mail.MailSender: verification + reset codes go out here
@@ -751,7 +759,9 @@ class GatewayApp:
             if commerce_jurisdiction is not None
             else JurisdictionModule(code="LOCAL", tax_rate_bps=0)
         )
-        self._commerce_tax = TaxRegistry((self._commerce_jurisdiction,))
+        self._commerce_tax = TaxRegistry(
+            (self._commerce_jurisdiction, *tuple(commerce_extra_jurisdictions))
+        )
         self._commerce_catalog = CatalogService(
             durable.conn,
             audit=durable.audit,
@@ -794,6 +804,14 @@ class GatewayApp:
             orders=self._commerce_orders.orders,
             ledger=self._commerce_ledger,
             invoices=self._commerce_invoices,
+        )
+        # M4: the open market — peers, imports, and the sourcing sweep,
+        # all behind the same policy engine and ledger.
+        self._commerce_federation = FederationDesk(
+            durable.conn,
+            audit=durable.audit,
+            tax=self._commerce_tax,
+            secrets=commerce_peer_secrets,
         )
         # Competitor intelligence, constructed on first use.
         self._competitors = None
@@ -1273,6 +1291,26 @@ class GatewayApp:
             "/v1/commerce/jobs/{job_id}/complete",
             self._commerce_job_complete,
         )
+        # M4: the open market.
+        r.add("GET", "/v1/commerce/peers", self._commerce_peers_list)
+        r.add(
+            "POST",
+            "/v1/commerce/peers",
+            self._commerce_peer_register,
+            requires_permission="providers:manage",
+        )
+        r.add(
+            "POST",
+            "/v1/commerce/peers/{peer_id}/state",
+            self._commerce_peer_state,
+            requires_permission="providers:manage",
+        )
+        r.add(
+            "POST",
+            "/v1/commerce/peers/{peer_id}/offers",
+            self._commerce_peer_import,
+        )
+        r.add("GET", "/v1/commerce/source", self._commerce_source)
         r.add(
             "GET",
             "/v1/commerce/reconciliation",
@@ -10248,6 +10286,8 @@ class GatewayApp:
             return GatewayError(403, "seller_unverified", str(exc))
         if isinstance(exc, SelfApproval):
             return GatewayError(403, "self_approval", str(exc))
+        if isinstance(exc, ProtocolViolation):
+            return GatewayError(400, "protocol_violation", str(exc))
         return GatewayError(409, "conflict", str(exc))
 
     def _commerce_seller_verified(self, tenant: str, principal: str) -> bool:
@@ -10991,6 +11031,88 @@ class GatewayApp:
         except MarketplaceError as exc:
             raise self._commerce_error(exc) from exc
         return json_response(200, job.model_dump(mode="json"))
+
+    # ------------------------------------------------------------------ #
+    # M4: the open market — peers, imports, and the sourcing sweep.       #
+    # ------------------------------------------------------------------ #
+    def _commerce_peers_list(self, request, session, params) -> Response:
+        return json_response(
+            200,
+            {
+                "items": [
+                    p.model_dump(mode="json")
+                    for p in self._commerce_federation.peers()
+                ]
+            },
+        )
+
+    def _commerce_peer_register(self, request, session, params) -> Response:
+        body = request.body or {}
+        peer_id = str(body.get("peer_id") or "")
+        if not peer_id:
+            raise GatewayError(400, "invalid_request", "peer_id is required")
+        peer = self._commerce_federation.register_peer(
+            peer_id=peer_id,
+            name=str(body.get("name") or peer_id),
+            jurisdiction=str(body.get("jurisdiction") or ""),
+            base_url=str(body.get("base_url") or ""),
+            now=request.now or self._clock(),
+        )
+        return json_response(201, peer.model_dump(mode="json"))
+
+    def _commerce_peer_state(self, request, session, params) -> Response:
+        state = str((request.body or {}).get("state") or "")
+        if state not in ("active", "suspended"):
+            raise GatewayError(
+                400, "invalid_request", "state must be active or suspended"
+            )
+        try:
+            peer = self._commerce_federation.set_peer_state(
+                params["peer_id"], state=state
+            )
+        except MarketplaceError as exc:
+            raise self._commerce_error(exc) from exc
+        return json_response(200, peer.model_dump(mode="json"))
+
+    def _commerce_peer_import(self, request, session, params) -> Response:
+        body = request.body or {}
+        try:
+            offer = CommerceOffer.model_validate(body.get("offer") or {})
+        except ValidationError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        attributes = body.get("attributes") or {}
+        if not isinstance(attributes, dict):
+            raise GatewayError(
+                400, "invalid_request", "attributes must be an object"
+            )
+        try:
+            record = self._commerce_federation.import_offer(
+                params["peer_id"],
+                offer,
+                attributes={str(k): str(v) for k, v in attributes.items()},
+                seller_attested=bool(body.get("seller_attested", False)),
+                now=request.now or self._clock(),
+            )
+        except MarketplaceError as exc:
+            raise self._commerce_error(exc) from exc
+        return json_response(201, record.model_dump(mode="json"))
+
+    def _commerce_source(self, request, session, params) -> Response:
+        try:
+            specification = RfqSpecification(
+                category=str(request.query.get("category") or ""),
+                quantity=int(request.query.get("quantity") or 1),
+            )
+        except (ValidationError, TypeError, ValueError) as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        rows = self._commerce_federation.source(
+            specification,
+            catalog=self._commerce_catalog,
+            now=request.now or self._clock(),
+        )
+        return json_response(
+            200, {"items": [row.model_dump(mode="json") for row in rows]}
+        )
 
     def _commerce_reconciliation_list(self, request, session, params) -> Response:
         reports = self._commerce_reconciliation.exceptions()

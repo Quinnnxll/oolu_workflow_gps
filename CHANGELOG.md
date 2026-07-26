@@ -4,6 +4,36 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+M4 — the open market (marketplace-build-plan): other markets' offers,
+our law, our ledger:
+
+- **The A2A wire contract** (`marketplace/protocol.py`) — an external
+  offer is the typed `Offer` the spine already trusts; its signature is
+  an HMAC over every material field under the announcing peer's shared
+  secret. Verification is arithmetic; there is no protocol beyond the
+  domain contract.
+- **Federation** (`marketplace/federation.py`) — peers registered by an
+  operator with their jurisdiction (secrets injected at composition;
+  durable records hold metadata only); suspension blocks imports
+  immediately; the compliance deployment gate crosses the boundary (an
+  unconfigured peer jurisdiction refuses import); a tampered or
+  unsigned offer never reaches the intent door. What survives import
+  is an ordinary offer: the ladder judges it, the digest binds it — a
+  peer re-signing at a new price kills the approval — and the
+  settlement posts on OUR ledger with our take.
+- **Sourcing** — one specification against the local shelf and every
+  federated import: one normalized, eligibility-marked comparison, the
+  local shelf judged by the same attribute bar as every quote.
+- **Partners** (`marketplace/partners.py`) — partner products are
+  offers: a financing plan is a RECURRING offer (the ladder forces its
+  approval; `SimpleInterestFinancing` is the deterministic reference
+  adapter), an insurance policy an offer with its own terms. Nothing a
+  partner sells can skip the ladder.
+- **Doors:** `/v1/commerce/peers` (+`/state`, +`/offers`; registration
+  behind operator authority), `/v1/commerce/source`.
+- Pinned by `tests/test_marketplace_federation.py` and the gateway
+  suite.
+
 M3 closed — jobs ride signed leases, disputes settle as postings, the
 surface learns schedules:
 

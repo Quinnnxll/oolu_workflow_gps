@@ -496,6 +496,35 @@ def build_openapi() -> dict:
         "/v1/commerce/jobs/{job_id}/complete": {
             "post": op("Execution evidence comes home"),
         },
+        "/v1/commerce/peers": {
+            "get": op("Registered peer markets"),
+            "post": op(
+                "Register a peer market (operator authority) with its "
+                "jurisdiction — the compliance gate crosses the federation "
+                "boundary"
+            ),
+        },
+        "/v1/commerce/peers/{peer_id}/state": {
+            "post": op(
+                "Suspend or reactivate a peer; suspension blocks new "
+                "imports immediately"
+            ),
+        },
+        "/v1/commerce/peers/{peer_id}/offers": {
+            "post": op(
+                "Import a peer's signed offer (the A2A wire contract): a "
+                "tampered or unsigned offer never reaches the intent door; "
+                "what survives is an ordinary typed offer under the same "
+                "policy engine and ledger"
+            ),
+        },
+        "/v1/commerce/source": {
+            "get": op(
+                "The sourcing sweep: one specification against the local "
+                "shelf and every federated import — one normalized, "
+                "eligibility-marked comparison"
+            ),
+        },
         "/v1/commerce/reconciliation": {
             "get": op("Reconciliation exceptions, each with its evidence trail"),
         },

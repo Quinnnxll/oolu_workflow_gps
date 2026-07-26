@@ -535,16 +535,59 @@ Goal Adherence:
 
 ### M4 — the open market (the spec's `phase_4`)
 
+**Status: LANDED (core)** — **The A2A wire contract**
+(`marketplace/protocol.py`): an external offer is the typed `Offer` the
+spine already trusts, its signature an HMAC over every material field
+under the announcing peer's shared secret; verification is arithmetic,
+and there is deliberately no protocol beyond the domain contract.
+**Federation** (`marketplace/federation.py`): peers are registered by an
+operator with their jurisdiction (secrets injected at composition — the
+durable records hold metadata only), suspension blocks imports
+immediately, the compliance deployment gate crosses the boundary (a
+peer jurisdiction with no configured module refuses import), and a
+tampered or unsigned offer never reaches the intent door. What survives
+import is an ordinary offer: the ladder judges it, the digest binds it
+(a peer re-signing at a new price kills the approval), and the
+settlement posts on OUR ledger with our take. **Sourcing**: one
+specification against the local shelf and every federated import — one
+normalized, eligibility-marked comparison where the local shelf is
+judged by the same attribute bar as every quote. **Partners**
+(`marketplace/partners.py`): partner products are offers — a financing
+plan is a RECURRING offer (the ladder forces its approval, the
+recurring book governs its renewals; `SimpleInterestFinancing` is the
+deterministic reference adapter), an insurance policy an offer with its
+own terms. Doors: `/v1/commerce/peers` (+state, +offers; registration
+behind operator authority), `/v1/commerce/source`. Pinned by
+`tests/test_marketplace_federation.py` and the gateway suite.
+Remaining: the live peer HTTP transport (fetch/announce over the wire —
+the import door is the seam), real financing/insurance adapters behind
+the ports, dynamic supply orchestration beyond the sourcing sweep, and
+the shell surface for federated sourcing.
+
+Goal Adherence:
+- [x] An external offer with a broken or missing wire signature never
+      reaches the intent door.
+- [x] A cross-market purchase is still a typed intent with a digest;
+      changed terms kill the approval across the federation boundary.
+- [x] The platform's share posts on cross-market settlements exactly as
+      on local ones.
+- [x] The compliance deployment gate crosses the boundary: an
+      unconfigured peer jurisdiction refuses import.
+- [x] Peer suspension blocks new imports immediately.
+- [x] The sourcing sweep is one normalized, eligibility-marked
+      comparison across every shelf — the local one included.
+- [x] A financing partner's product enters as a recurring offer and
+      cannot skip the ladder.
+
 Goal: OoLu's market meets other markets. Cross-marketplace sourcing,
 an agent-to-agent commercial protocol (typed offers/intents/approvals as the
 wire contract), dynamic supply orchestration, financing and insurance
 partners, and per-jurisdiction deployments of the compliance modules.
 
-Scope is deliberately sketched, not committed: M4 planning happens after M2
-ships and real usage data exists. Its one standing law is already fixed —
-external marketplaces and partner protocols integrate **behind the same
-policy engine and ledger**; a cross-market purchase is still a typed intent
-with a digest, and the platform's share is still a posting.
+Its one standing law held throughout: external marketplaces and partner
+protocols integrate **behind the same policy engine and ledger**; a
+cross-market purchase is still a typed intent with a digest, and the
+platform's share is still a posting.
 
 ---
 
