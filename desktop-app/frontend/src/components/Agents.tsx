@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, session } from "../api";
 import type {
   AdPlacement,
+  CalendarEvent,
   Contribution,
   ExplorerBrief,
   ExplorerRow,
@@ -12,6 +13,7 @@ import type {
   PressLicense,
   RosterAgent,
   Story,
+  TravelBrief,
 } from "../api";
 import { identityHue } from "../avatar";
 import { loadCompose, saveCompose, tf, useT } from "../ui";
@@ -431,6 +433,198 @@ export function ExplorerPanel() {
               </span>
             ))}
           </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// The travel desk's surface (A7): the plan form (window, nights, party,
+// budget), the brief with feasible plans ranked and broken constraints
+// NAMED, and the member's own calendar beneath — one calendar, the same
+// records a confirmed booking lands on. A party member who hasn't
+// shared availability refuses the plan by name; the server's words
+// render verbatim.
+export function TravelPanel() {
+  const tr = useT();
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState("");
+  const [nights, setNights] = useState("3");
+  const [party, setParty] = useState(session.principal ?? "");
+  const [budget, setBudget] = useState("500");
+  const [brief, setBrief] = useState<TravelBrief | null>(null);
+  const [note, setNote] = useState("");
+  const [events, setEvents] = useState<CalendarEvent[]>([]);
+  const [newTitle, setNewTitle] = useState("");
+  const [newDay, setNewDay] = useState("");
+
+  const refreshCalendar = () =>
+    api
+      .calendarList()
+      .then(({ items }) => setEvents(items ?? []))
+      .catch(() => setEvents([]));
+
+  useEffect(() => {
+    void refreshCalendar();
+  }, []);
+
+  async function plan() {
+    setNote("");
+    setBrief(null);
+    try {
+      setBrief(
+        await api.travelPlan({
+          window_start: new Date(start).toISOString(),
+          window_end: new Date(end).toISOString(),
+          nights: parseInt(nights, 10) || 1,
+          party,
+          budget_micros: Math.round(parseFloat(budget) * 1_000_000) || 0,
+        }),
+      );
+    } catch (e) {
+      // "bob has not shared their availability" arrives verbatim.
+      setNote(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function addEvent() {
+    if (!newTitle.trim() || !newDay) return;
+    const day = new Date(newDay);
+    try {
+      await api.calendarAdd({
+        title: newTitle,
+        starts_at: day.toISOString(),
+        ends_at: new Date(day.getTime() + 24 * 3600 * 1000).toISOString(),
+      });
+      setNewTitle("");
+      void refreshCalendar();
+    } catch {
+      /* the list's next refresh tells the truth */
+    }
+  }
+
+  return (
+    <div className="press-panel travel">
+      <div className="press-head">
+        <span className="press-heading">{tr("travel.heading")}</span>
+      </div>
+      <div className="travel-form">
+        <input
+          type="date"
+          aria-label={tr("travel.from")}
+          value={start}
+          onChange={(e) => setStart(e.target.value)}
+        />
+        <input
+          type="date"
+          aria-label={tr("travel.to")}
+          value={end}
+          onChange={(e) => setEnd(e.target.value)}
+        />
+        <input
+          type="number"
+          aria-label={tr("travel.nights")}
+          min={1}
+          value={nights}
+          onChange={(e) => setNights(e.target.value)}
+        />
+        <input
+          placeholder={tr("travel.partyPh")}
+          value={party}
+          onChange={(e) => setParty(e.target.value)}
+        />
+        <input
+          type="number"
+          aria-label={tr("travel.budget")}
+          value={budget}
+          onChange={(e) => setBudget(e.target.value)}
+        />
+        <button disabled={!start || !end} onClick={() => void plan()}>
+          {tr("travel.plan")}
+        </button>
+      </div>
+      {note && <div className="error">{note}</div>}
+      {brief && (
+        <>
+          {brief.feasible.map((c, i) => (
+            <div key={c.listing_id} className="press-card">
+              <div className="press-byline">
+                <span className="press-title">
+                  {i === 0 ? "★ " : ""}
+                  {c.title}
+                </span>
+                <span>{money(c.party_cost_micros, "USD")}</span>
+              </div>
+              <div className="muted">
+                {c.seller} · {tr("explorer.score")} {c.score}
+              </div>
+              <details className="press-why">
+                <summary>{tr("explorer.why")}</summary>
+                <div className="muted">
+                  {Object.entries(c.factors)
+                    .map(([name, value]) => `${name}: ${value}`)
+                    .join(" · ")}
+                </div>
+              </details>
+            </div>
+          ))}
+          {brief.infeasible.map((c) => (
+            <div key={c.listing_id} className="press-card infeasible">
+              <div className="press-title muted">{c.title}</div>
+              {/* Broken constraints carry names, never silent ranks. */}
+              <div className="press-meta">
+                {c.violations.map((v) => (
+                  <span key={v} className="press-chip">
+                    {v}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+          {brief.feasible.length === 0 && brief.infeasible.length === 0 && (
+            <div className="muted press-empty">{tr("travel.noSupply")}</div>
+          )}
+        </>
+      )}
+      <div className="press-head">
+        <span className="press-heading">{tr("travel.calendar")}</span>
+      </div>
+      <div className="row">
+        <input
+          placeholder={tr("travel.eventPh")}
+          value={newTitle}
+          onChange={(e) => setNewTitle(e.target.value)}
+        />
+        <input
+          type="date"
+          aria-label={tr("travel.eventDay")}
+          value={newDay}
+          onChange={(e) => setNewDay(e.target.value)}
+        />
+        <button className="ghost" onClick={() => void addEvent()}>
+          {tr("travel.addEvent")}
+        </button>
+      </div>
+      {events.map((event) => (
+        <div key={event.event_id} className="press-byline">
+          <span>
+            {event.source === "trip" ? "✈ " : ""}
+            {event.title}
+            <span className="muted">
+            {" "}· {event.starts_at.slice(0, 10)}
+            </span>
+          </span>
+          <button
+            className="linklike"
+            onClick={() =>
+              void api
+                .calendarDelete(event.event_id)
+                .then(() => refreshCalendar())
+                .catch(() => {})
+            }
+          >
+            {tr("travel.remove")}
+          </button>
         </div>
       ))}
     </div>
@@ -875,6 +1069,8 @@ export function AgentThread({ agent }: { agent: RosterAgent }) {
         {agent.agent_id === "poll" && <PollPanel />}
         {/* And the explorer desk (A6) heads the Explorer thread. */}
         {agent.agent_id === "explorer" && <ExplorerPanel />}
+        {/* The travel desk (A7) heads the Travel Plan thread. */}
+        {agent.agent_id === "travel" && <TravelPanel />}
         {/* The card welcomes honestly: what this agent does today, and
             what phase brings the rest — the same words the server would
             answer with, shown before the first message is ever sent. */}

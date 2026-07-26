@@ -2740,3 +2740,19 @@ button.ghost {
 .ad-card.consent {
   border-style: solid;
 }
+
+/* ---- the travel desk (agents-expansion A7) ------------------------------ */
+.travel-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.travel-form input {
+  max-width: 160px;
+}
+
+.press-card.infeasible {
+  opacity: 0.75;
+  border-style: dashed;
+}

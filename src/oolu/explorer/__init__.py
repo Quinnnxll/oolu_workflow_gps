@@ -21,6 +21,13 @@ policy ladder → approval → order.
 """
 
 from .bestbuy import BRIEF_MODES, BestBuyBrief, best_buy
+from .travel import (
+    TRAVEL_CATEGORY,
+    TravelBrief,
+    TravelCandidate,
+    TravelConstraints,
+    plan_trip,
+)
 from .comparisons import ComparisonRow, ComparisonSet, build_rows, discount_fact
 from .evidence import (
     EXPLORER_BRIEF_PREFIX,
@@ -50,7 +57,12 @@ __all__ = [
     "REVIEW_FINISHED_STATES",
     "ReviewDesk",
     "ReviewStore",
+    "TRAVEL_CATEGORY",
+    "TravelBrief",
+    "TravelCandidate",
+    "TravelConstraints",
     "best_buy",
+    "plan_trip",
     "build_rows",
     "discount_fact",
     "feedback_of",

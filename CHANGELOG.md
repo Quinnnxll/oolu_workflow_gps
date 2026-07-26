@@ -4,6 +4,32 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The travel desk (A7) — time, people, and budget; the roster complete:
+
+- **The calendar record model** (`src/oolu/records/calendar.py`) — the
+  codebase's first `CalendarEvent`/interval types: durable,
+  owner-walled events; `busy_intervals` whose RETURN TYPE is the
+  privacy wire shape (merged intervals — titles have no field to leak
+  through); `common_free` for a group's shared slots; and
+  `FreeBusyGrants` — per-peer, revocable, and reading without a grant
+  refuses by name. One calendar for OoLu, the starter shelf, and the
+  travel desk; events and grants ride account export and erasure.
+- **Constraints are walls with names** (`explorer/travel.py`) — travel
+  candidates from in-app supply score with the bestbuy arithmetic, but
+  a broken constraint ("over budget by 80.00 USD for 2 travellers",
+  "no common free window of 3 nights in the range") lands the plan in
+  `infeasible`, spelled out, never silently ranked below the feasible.
+- **Typed composition, standing rails** — group destination choice is
+  A3's polls in the `travel` genre, unchanged; the plan consumes
+  Explorer rows and calendar intervals (the import scan proves no
+  chat/social/assistant seam is touched); booking walks the standing
+  digest-bound approval path, and `POST /v1/travel/confirm` lands a
+  FINISHED order of yours as a `trip` calendar event — a pending order
+  books no calendar.
+- With A7 the agents-expansion roster (A0–A7) is complete: News, Poll,
+  Explorer, and Travel Plan all live below OoLu, each honest about
+  what it does and what remains.
+
 The explorer desk (A6) — compare on verified evidence, then the best buy:
 
 - **Three evidence types, none self-declared** (`explorer/evidence.py`)

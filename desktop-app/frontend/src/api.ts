@@ -721,6 +721,38 @@ export interface ExplorerBrief {
   }[];
 }
 
+// The travel desk (A7): calendar events, and the brief whose broken
+// constraints carry names.
+export interface CalendarEvent {
+  event_id: string;
+  title: string;
+  starts_at: string;
+  ends_at: string;
+  source: string; // "member" | "trip"
+}
+
+export interface TravelCandidate {
+  listing_id: string;
+  title: string;
+  seller: string;
+  price_micros: number;
+  party_cost_micros: number;
+  score: number;
+  factors: Record<string, number>;
+  feasible: boolean;
+  violations: string[];
+}
+
+export interface TravelBrief {
+  mode: string;
+  nights: number;
+  party: string[];
+  budget_micros: number;
+  open_slots: [string, string][];
+  feasible: TravelCandidate[];
+  infeasible: TravelCandidate[];
+}
+
 // The reveal's honest shapes: nothing before your vote, no counts below
 // the k-anonymity floor.
 export interface PollVerdict {
@@ -1530,6 +1562,39 @@ export const api = {
         tz_offset_minutes: -new Date().getTimezoneOffset() || 0,
       },
     ),
+  // The travel desk (A7): the calendar records and the planning brief.
+  calendarList: () =>
+    req<{ items: CalendarEvent[] }>("GET", "/v1/records/calendar"),
+  calendarAdd: (payload: { title: string; starts_at: string; ends_at: string }) =>
+    req<CalendarEvent>("POST", "/v1/records/calendar", payload),
+  calendarDelete: (eventId: string) =>
+    req<{ removed: boolean }>(
+      "DELETE",
+      `/v1/records/calendar/${encodeURIComponent(eventId)}`,
+    ),
+  freebusyGrant: (peer: string, enabled: boolean) =>
+    req<{ granted_to: string[] }>("POST", "/v1/records/freebusy/grants", {
+      peer,
+      enabled,
+    }),
+  travelPlan: (payload: {
+    window_start: string;
+    window_end: string;
+    nights: number;
+    party: string;
+    budget_micros: number;
+    mode?: string;
+  }) => {
+    const query = new URLSearchParams({
+      window_start: payload.window_start,
+      window_end: payload.window_end,
+      nights: String(payload.nights),
+      party: payload.party,
+      budget_micros: String(payload.budget_micros),
+      mode: payload.mode ?? "balanced",
+    });
+    return req<TravelBrief>("GET", `/v1/travel/plan?${query.toString()}`);
+  },
   // The data-subject's rights, self-serve: everything as one JSON
   // document, and erasure that says exactly what it removed.
   exportAccount: () => req<Record<string, unknown>>("GET", "/v1/account/export"),

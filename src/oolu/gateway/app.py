@@ -768,6 +768,13 @@ class GatewayApp:
 
         self._explorer_reviews = ReviewDesk(ReviewStore(durable.conn))
         self._explorer_lab = LabStore(durable.conn)
+        # The calendar records (A7's prerequisite): one calendar for
+        # OoLu, the starter shelf, and the travel desk — with the
+        # consented, privacy-shaped free-busy grants beside it.
+        from ..records import CalendarStore, FreeBusyGrants
+
+        self._calendar = CalendarStore(durable.conn)
+        self._freebusy = FreeBusyGrants(durable.conn)
         # The commercial spine (marketplace-build-plan M0): typed intents,
         # the deterministic policy ladder, digest-bound approvals. M2
         # wires the history port, so risk facts derive from the order
@@ -1544,6 +1551,20 @@ class GatewayApp:
         r.add("GET", "/v1/explorer/lab", self._explorer_lab_list)
         r.add("POST", "/v1/explorer/lab", self._explorer_lab_create)
         r.add("POST", "/v1/explorer/interests", self._explorer_interest)
+        # The travel desk (A7) and its prerequisite, the calendar records:
+        # one calendar, privacy-shaped free-busy, constraint-checked
+        # briefs, and the confirm door that lands a booked trip as events.
+        r.add("GET", "/v1/records/calendar", self._calendar_list)
+        r.add("POST", "/v1/records/calendar", self._calendar_add)
+        r.add(
+            "DELETE",
+            "/v1/records/calendar/{event_id}",
+            self._calendar_delete,
+        )
+        r.add("GET", "/v1/records/freebusy/grants", self._freebusy_grants)
+        r.add("POST", "/v1/records/freebusy/grants", self._freebusy_grant_set)
+        r.add("GET", "/v1/travel/plan", self._travel_plan)
+        r.add("POST", "/v1/travel/confirm", self._travel_confirm)
         # The data-subject's two rights, self-serve: everything as one
         # JSON document, and erasure that says exactly what it removed.
         r.add("GET", "/v1/account/export", self._account_export)
@@ -3856,6 +3877,238 @@ class GatewayApp:
                     "reason": "the brief fire raised — the log has the story",
                 },
             )
+
+    # -- the travel desk (A7) and the calendar records ----------------- #
+    @staticmethod
+    def _records_refused(exc) -> GatewayError:
+        code = {404: "not_found", 403: "forbidden"}.get(
+            exc.status, "invalid_request"
+        )
+        return GatewayError(exc.status, code, str(exc))
+
+    @staticmethod
+    def _parse_moment(value, field: str) -> datetime:
+        try:
+            moment = datetime.fromisoformat(str(value))
+        except (TypeError, ValueError):
+            raise GatewayError(
+                400, "invalid_request", f"{field} must be an ISO datetime"
+            ) from None
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=UTC)
+        return moment
+
+    def _calendar_list(self, request, session, params) -> Response:
+        start = self._parse_moment(
+            request.query.get("from") or "1970-01-01T00:00:00+00:00", "from"
+        )
+        end = self._parse_moment(
+            request.query.get("to") or "2200-01-01T00:00:00+00:00", "to"
+        )
+        events = self._calendar.between(
+            tenant=session.tenant_id,
+            owner=session.principal_id,
+            start=start,
+            end=end,
+        )
+        return json_response(
+            200, {"items": [e.model_dump(mode="json") for e in events]}
+        )
+
+    def _calendar_add(self, request, session, params) -> Response:
+        from ..records import RecordsError
+
+        body = request.body or {}
+        try:
+            event = self._calendar.add(
+                tenant=session.tenant_id,
+                owner=session.principal_id,
+                title=str(body.get("title") or ""),
+                starts_at=self._parse_moment(body.get("starts_at"), "starts_at"),
+                ends_at=self._parse_moment(body.get("ends_at"), "ends_at"),
+            )
+        except RecordsError as exc:
+            raise self._records_refused(exc) from exc
+        return json_response(201, event.model_dump(mode="json"))
+
+    def _calendar_delete(self, request, session, params) -> Response:
+        removed = self._calendar.delete(
+            params["event_id"],
+            tenant=session.tenant_id,
+            owner=session.principal_id,
+        )
+        if not removed:
+            raise GatewayError(404, "not_found", "no such event")
+        return json_response(200, {"removed": True})
+
+    def _freebusy_grants(self, request, session, params) -> Response:
+        return json_response(
+            200,
+            {
+                "granted_to": self._freebusy.granted_by(
+                    tenant=session.tenant_id, owner=session.principal_id
+                )
+            },
+        )
+
+    def _freebusy_grant_set(self, request, session, params) -> Response:
+        """Grant (or revoke) a PEER the right to read your busy/free —
+        intervals only, never event contents; that door does not exist."""
+        body = request.body or {}
+        peer = self._profile_principal(session, str(body.get("peer") or ""))
+        if peer == session.principal_id:
+            raise GatewayError(
+                400, "invalid_request", "your own time is already yours"
+            )
+        if body.get("enabled") is False:
+            self._freebusy.revoke(
+                tenant=session.tenant_id,
+                owner=session.principal_id,
+                peer=peer,
+            )
+        else:
+            self._freebusy.grant(
+                tenant=session.tenant_id,
+                owner=session.principal_id,
+                peer=peer,
+            )
+        return json_response(
+            200,
+            {
+                "granted_to": self._freebusy.granted_by(
+                    tenant=session.tenant_id, owner=session.principal_id
+                )
+            },
+        )
+
+    def _travel_plan(self, request, session, params) -> Response:
+        """The brief: travel candidates judged against the window, the
+        party's CONSENTED shared free time, and the budget. A party
+        member who has not shared availability refuses the plan by
+        name — silence is never treated as free time."""
+        from ..explorer import (
+            TRAVEL_CATEGORY,
+            TravelConstraints,
+            plan_trip,
+        )
+        from ..records import busy_intervals, common_free
+
+        query = request.query
+        window_start = self._parse_moment(query.get("window_start"), "window_start")
+        window_end = self._parse_moment(query.get("window_end"), "window_end")
+        if window_end <= window_start:
+            raise GatewayError(
+                400, "invalid_request", "the window ends after it starts"
+            )
+        nights = max(1, int(query.get("nights") or 2))
+        budget = int(query.get("budget_micros") or 0)
+        if budget <= 0:
+            raise GatewayError(
+                400, "invalid_request", "the party needs a budget"
+            )
+        mode = str(query.get("mode") or "balanced")
+        party = tuple(
+            dict.fromkeys(
+                p.strip()
+                for p in str(query.get("party") or "").split(",")
+                if p.strip()
+            )
+        ) or (session.principal_id,)
+        busy_by_member: dict[str, list] = {}
+        for member in party:
+            if member != session.principal_id:
+                self._profile_principal(session, member)  # exists, enabled
+                if not self._freebusy.allows(
+                    tenant=session.tenant_id,
+                    owner=member,
+                    peer=session.principal_id,
+                ):
+                    raise GatewayError(
+                        403,
+                        "forbidden",
+                        f"{member} has not shared their availability with "
+                        "you — ask them to grant free-busy sharing",
+                    )
+            busy_by_member[member] = busy_intervals(
+                self._calendar.between(
+                    tenant=session.tenant_id,
+                    owner=member,
+                    start=window_start,
+                    end=window_end,
+                ),
+                start=window_start,
+                end=window_end,
+            )
+        constraints = TravelConstraints(
+            window_start=window_start,
+            window_end=window_end,
+            nights=nights,
+            party=party,
+            budget_micros=budget,
+        )
+        slots = common_free(
+            busy_by_member,
+            start=window_start,
+            end=window_end,
+            min_length=constraints.trip_length(),
+        )
+        rows = self._explorer_rows(session, category=TRAVEL_CATEGORY)
+        try:
+            brief = plan_trip(
+                rows, constraints=constraints, open_slots=slots, mode=mode
+            )
+        except ValueError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(200, brief.model_dump(mode="json"))
+
+    def _travel_confirm(self, request, session, params) -> Response:
+        """A booked trip becomes calendar events. The booking itself
+        walked the standing spine (intent → digest → approval → order —
+        a declined approval books nothing, the marketplace's own pinned
+        law); this door only asks the durable order book whether YOUR
+        order stands finished, then writes the trip onto YOUR calendar."""
+        from ..records import RecordsError
+
+        body = request.body or {}
+        order = self._commerce_orders.orders.get(
+            str(body.get("order_id") or ""), tenant=session.tenant_id
+        )
+        if order is None or order.record.buyer_principal != session.principal_id:
+            raise GatewayError(404, "not_found", "no such order of yours")
+        if order.state not in ("accepted", "completed", "confirmed"):
+            raise GatewayError(
+                400,
+                "invalid_request",
+                f"the order is {order.state!r} — a trip lands on the "
+                "calendar once the booking stands",
+            )
+        starts_at = self._parse_moment(body.get("starts_at"), "starts_at")
+        nights = max(1, int(body.get("nights") or 1))
+        listing = self._commerce_catalog.store.get(order.record.offer.item_id)
+        title = str(
+            body.get("title")
+            or f"Trip: {listing.title if listing else order.record.offer.item_id}"
+        )
+        try:
+            event = self._calendar.add(
+                tenant=session.tenant_id,
+                owner=session.principal_id,
+                title=title,
+                starts_at=starts_at,
+                ends_at=starts_at + timedelta(days=nights),
+                source="trip",
+            )
+        except RecordsError as exc:
+            raise self._records_refused(exc) from exc
+        self._durable.audit.append(
+            "travel.confirmed",
+            {
+                "order_id": order.record.order_id,
+                "event_id": event.event_id,
+                "nights": nights,
+            },
+        )
+        return json_response(201, event.model_dump(mode="json"))
 
     def _adhouse_preview(self, request, session, params) -> Response:
         """The display-only forecast — the whole tenant's split, plus
@@ -7595,6 +7848,15 @@ class GatewayApp:
                     "media_type": photo[0],
                     "body_b64": b64encode(photo[1]).decode("ascii"),
                 }
+        export["calendar"] = [
+            e.model_dump(mode="json")
+            for e in self._calendar.between(
+                tenant=tenant,
+                owner=principal,
+                start=datetime(1970, 1, 1, tzinfo=UTC),
+                end=datetime(2200, 1, 1, tzinfo=UTC),
+            )
+        ]
         if self._reminders is not None:
             export["reminders"] = [
                 r.model_dump(mode="json")
@@ -7716,6 +7978,12 @@ class GatewayApp:
                 erased["preference_pairs"] = self._press.polls.pairwise.erase(
                     tenant=tenant, principal=principal
                 )
+        erased["calendar_events"] = self._calendar.erase(
+            tenant=tenant, owner=principal
+        )
+        erased["freebusy_grants"] = self._freebusy.erase(
+            tenant=tenant, principal=principal
+        )
         if self._reminders is not None:
             erased["reminders"] = self._reminders.erase(
                 tenant=tenant, principal=principal

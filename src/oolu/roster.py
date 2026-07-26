@@ -96,13 +96,16 @@ ROSTER: tuple[AgentCard, ...] = (
         name="Travel Plan",
         tagline="Trips under real constraints",
         scope=(
-            "I talk through planning trips — travel time, the group's "
-            "availability, schedules, budget. I do not read calendars, "
-            "compose itineraries, or book anything yet."
+            "I plan trips under real constraints: your calendar, the "
+            "group's consented free-busy (busy/free only, never event "
+            "contents), and the budget. Feasible packages rank with "
+            "every factor shown; broken constraints are named, never "
+            "buried. Booking walks the standing approval path, and a "
+            "confirmed trip lands on your calendar."
         ),
         ahead=(
-            "Real itineraries over your calendar, group free-busy, and "
-            "budget arrive in phase A7 of the agents-expansion plan."
+            "Multi-leg itineraries with inter-leg travel time are the "
+            "named next step; the roster's phases A0–A7 are complete."
         ),
         seat="travel.plan",
     ),

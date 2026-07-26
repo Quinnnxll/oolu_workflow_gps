@@ -577,6 +577,87 @@ describe("PressPanel (inside the News thread)", () => {
     expect(followed?.body).toMatchObject({ mode: "measured" });
   });
 
+  it("plans a trip: feasible ranks, broken constraints carry names", async () => {
+    const TRAVEL: RosterAgent = {
+      ...NEWS,
+      agent_id: "travel",
+      name: "Travel Plan",
+    };
+    routes["GET /v1/records/calendar"] = {
+      status: 200,
+      body: {
+        items: [
+          {
+            event_id: "e1",
+            title: "Trip: Coast package",
+            starts_at: "2026-08-01T00:00:00Z",
+            ends_at: "2026-08-04T00:00:00Z",
+            source: "trip",
+          },
+        ],
+      },
+    };
+    routes["GET /v1/travel/plan"] = {
+      status: 200,
+      body: {
+        mode: "balanced",
+        nights: 3,
+        party: ["alice", "bob"],
+        budget_micros: 100_000_000,
+        open_slots: [["2026-08-01T00:00:00Z", "2026-08-06T00:00:00Z"]],
+        feasible: [
+          {
+            listing_id: "coast",
+            title: "Coast package",
+            seller: "shop",
+            price_micros: 20_000_000,
+            party_cost_micros: 40_000_000,
+            score: 0.7,
+            factors: { price: 1, trust: 0.5 },
+            feasible: true,
+            violations: [],
+          },
+        ],
+        infeasible: [
+          {
+            listing_id: "alpine",
+            title: "Alpine package",
+            seller: "shop",
+            price_micros: 90_000_000,
+            party_cost_micros: 180_000_000,
+            score: 0.4,
+            factors: { price: 0.2, trust: 0.5 },
+            feasible: false,
+            violations: ["over budget by 80.00 USD for 2 travellers"],
+          },
+        ],
+      },
+    };
+    render(<AgentThread agent={TRAVEL} />);
+
+    // The calendar renders, the booked trip marked as one.
+    expect(await screen.findByText(/Trip: Coast package/)).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("From"), {
+      target: { value: "2026-08-01" },
+    });
+    fireEvent.change(screen.getByLabelText("To"), {
+      target: { value: "2026-08-14" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Plan" }));
+
+    // The feasible plan ranks with its reasons; the broken constraint
+    // renders by name, never silently buried.
+    expect(await screen.findByText(/★ Coast package/)).toBeTruthy();
+    expect(
+      screen.getByText("over budget by 80.00 USD for 2 travellers"),
+    ).toBeTruthy();
+    const planned = calls.find(
+      (c) => c.method === "GET" && c.path === "/v1/travel/plan",
+    );
+    expect(planned).toBeTruthy();
+  });
+
   it("stays silent on hosts from before the press", async () => {
     routes["GET /v1/press/genres"] = { status: 404, body: {} };
     render(<AgentThread agent={NEWS} />);

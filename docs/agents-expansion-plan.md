@@ -781,6 +781,43 @@ Goal Adherence:
 
 ### A7 — the travel desk (Explorer's logic plus time, people, and budget)
 
+**Status: LANDED** — **the prerequisite first**: `src/oolu/records/`
+closes the survey's hard wall with `calendar.py` — the codebase's first
+`CalendarEvent`/interval types: durable, tenant-scoped, owner-walled
+events; `busy_intervals` whose RETURN TYPE is the privacy wire shape
+(merged (start, end) blocks — titles have no field to leak through);
+`common_free` for the group's shared slots; and `FreeBusyGrants` —
+sharing is a standing per-peer, revocable grant, and reading without
+one refuses by name (silence is never treated as free time).
+`explorer/travel.py`: `TravelConstraints` (window, nights, party,
+budget envelope) and `plan_trip` — travel candidates from in-app supply
+(the `travel` category; thin at first, and the module says so: v1 is a
+planner over real constraints first), scored with the bestbuy factor
+arithmetic, with **broken constraints as walls, not weights**: an
+over-budget or no-common-window candidate lands in `infeasible` with
+the violated constraint spelled out ("over budget by 80.00 USD for 2
+travellers") and never outranks a feasible plan. Group choice rides A3
+unchanged (destination pieces in the `travel` genre poll under the
+standing honesty laws); composition is typed data end to end — the
+import scan proves `explorer/` and `records/` touch no chat, social, or
+assistant-history seam. Booking rides the standing spine unchanged (the
+declined-approval/reservation-release discipline is the marketplace's
+own pinned law); `POST /v1/travel/confirm` asks the durable order book
+whether YOUR order stands finished and lands the trip as calendar
+events (source `trip`) — a pending order books no calendar. Calendar
+events and grants ride account export and erasure. Doors:
+`/v1/records/calendar` (GET/POST/DELETE), `/v1/records/freebusy/grants`
+(GET/POST), `/v1/travel/plan`, `/v1/travel/confirm`. Surface: the
+Travel panel — the plan form, feasible plans ranked with reasons on
+demand, infeasible ones with their named violations, and the member's
+own calendar beneath. Deferred, named: multi-leg itineraries and
+inter-leg travel time. Pinned by `tests/test_travel.py` (the record
+model, the no-titles interval shape, grant semantics, the
+constraints-as-walls property, brief determinism, consent-by-name at
+the door, the SECRET-title privacy sweep over the whole brief, the
+trip-on-calendar flow, and the no-transcript scan) and the travel case
+in `Agents.test.tsx`.
+
 Goal: itinerary comparison under real constraints — travel time, group
 availability, schedules, and budget — with group decisions made through
 Poll and bookings through the commerce spine.
