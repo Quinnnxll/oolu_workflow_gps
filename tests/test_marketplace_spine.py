@@ -149,6 +149,8 @@ def test_digest_changes_for_every_material_field_and_only_those():
         refund_terms="no returns",
         recurring_terms="monthly",
         currency="EUR",
+        # A payment schedule is a term: milestones ride the digest.
+        milestones=(("deposit", 40 * M), ("balance", 60 * M)),
     )
     for field, value in material_offer.items():
         changed = _intent(offer_snapshot=_offer(**{field: value}))

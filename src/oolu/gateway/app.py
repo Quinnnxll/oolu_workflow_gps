@@ -95,16 +95,21 @@ from ..marketplace import (
     AgentDelegation,
     CatalogService,
     InventoryService,
+    JobDesk,
     MarketNotFound,
     MarketplaceError,
     MarketplaceSpine,
     OrderHistory,
     OrderService,
+    PayoutChangeDesk,
     PurchasePolicy,
+    ReconciliationDesk,
+    RecurringBook,
     RfqService,
     RfqSpecification,
     SalesPolicy,
     SalesPolicyStore,
+    SelfApproval,
     SellerKyc,
     SellerKycError,
     SellerUnverified,
@@ -769,6 +774,22 @@ class GatewayApp:
         self._commerce_rfq = RfqService(durable.conn, audit=durable.audit)
         self._commerce_sales_policies = SalesPolicyStore(durable.conn)
         self._commerce_evidence = commerce_evidence
+        # M3: recurring obligations, four-eyes payout changes, typed
+        # execution jobs, and the reconciliation desk.
+        self._commerce_recurring = RecurringBook(
+            durable.conn, audit=durable.audit
+        )
+        self._commerce_payout_changes = PayoutChangeDesk(
+            durable.conn, audit=durable.audit
+        )
+        self._commerce_jobs = JobDesk(durable.conn, audit=durable.audit)
+        self._commerce_reconciliation = ReconciliationDesk(
+            durable.conn,
+            audit=durable.audit,
+            orders=self._commerce_orders.orders,
+            ledger=self._commerce_ledger,
+            invoices=self._commerce_invoices,
+        )
         # Competitor intelligence, constructed on first use.
         self._competitors = None
         self._settings = settings_node
@@ -1173,6 +1194,84 @@ class GatewayApp:
             "GET",
             "/v1/commerce/orders/{order_id}/invoice",
             self._commerce_order_invoice,
+        )
+        # M3: milestones, recurring obligations, payout changes, jobs,
+        # and the reconciliation desk.
+        r.add(
+            "GET",
+            "/v1/commerce/orders/{order_id}/milestones",
+            self._commerce_milestones_list,
+        )
+        r.add(
+            "POST",
+            "/v1/commerce/orders/{order_id}/milestones/{index}/deliver",
+            self._commerce_milestone_deliver,
+        )
+        r.add(
+            "POST",
+            "/v1/commerce/orders/{order_id}/milestones/{index}/accept",
+            self._commerce_milestone_accept,
+        )
+        r.add(
+            "POST",
+            "/v1/commerce/orders/{order_id}/milestones/{index}/fail",
+            self._commerce_milestone_fail,
+        )
+        r.add(
+            "POST",
+            "/v1/commerce/orders/{order_id}/refund-unreleased",
+            self._commerce_refund_unreleased,
+        )
+        r.add("GET", "/v1/commerce/recurring", self._commerce_recurring_list)
+        r.add("POST", "/v1/commerce/recurring", self._commerce_recurring_create)
+        r.add(
+            "POST",
+            "/v1/commerce/recurring/{obligation_id}/renew",
+            self._commerce_recurring_renew,
+        )
+        r.add(
+            "DELETE",
+            "/v1/commerce/recurring/{obligation_id}",
+            self._commerce_recurring_cancel,
+        )
+        r.add(
+            "GET", "/v1/commerce/payout-changes", self._commerce_payout_list
+        )
+        r.add(
+            "POST", "/v1/commerce/payout-changes", self._commerce_payout_request
+        )
+        r.add(
+            "POST",
+            "/v1/commerce/payout-changes/{request_id}/approve",
+            self._commerce_payout_approve,
+        )
+        r.add(
+            "POST",
+            "/v1/commerce/payout-changes/{request_id}/apply",
+            self._commerce_payout_apply,
+        )
+        r.add(
+            "POST",
+            "/v1/commerce/orders/{order_id}/jobs",
+            self._commerce_job_dispatch,
+        )
+        r.add(
+            "POST", "/v1/commerce/jobs/{job_id}/ack", self._commerce_job_ack
+        )
+        r.add(
+            "POST",
+            "/v1/commerce/jobs/{job_id}/complete",
+            self._commerce_job_complete,
+        )
+        r.add(
+            "GET",
+            "/v1/commerce/reconciliation",
+            self._commerce_reconciliation_list,
+        )
+        r.add(
+            "POST",
+            "/v1/commerce/reconciliation/sweep",
+            self._commerce_reconciliation_sweep,
         )
         r.add("GET", "/v1/commerce/orders", self._commerce_orders_list)
         r.add("POST", "/v1/commerce/orders", self._commerce_order_place)
@@ -10137,6 +10236,8 @@ class GatewayApp:
             return GatewayError(403, "step_up_required", str(exc))
         if isinstance(exc, SellerUnverified):
             return GatewayError(403, "seller_unverified", str(exc))
+        if isinstance(exc, SelfApproval):
+            return GatewayError(403, "self_approval", str(exc))
         return GatewayError(409, "conflict", str(exc))
 
     def _commerce_seller_verified(self, tenant: str, principal: str) -> bool:
@@ -10599,6 +10700,256 @@ class GatewayApp:
         if invoice is None:
             raise GatewayError(404, "not_found", "no invoice yet")
         return json_response(200, invoice.model_dump(mode="json"))
+
+    # ------------------------------------------------------------------ #
+    # M3: milestones, recurring, payout changes, jobs, reconciliation.    #
+    # ------------------------------------------------------------------ #
+    def _commerce_milestones_list(self, request, session, params) -> Response:
+        stored = self._commerce_party_order(session, params["order_id"])
+        book = self._commerce_orders.milestones.for_order(stored.record.order_id)
+        return json_response(
+            200, {"items": [m.model_dump(mode="json") for m in book]}
+        )
+
+    def _commerce_milestone_index(self, params) -> int:
+        try:
+            return int(params["index"])
+        except (TypeError, ValueError):
+            raise GatewayError(
+                400, "invalid_request", "the milestone index must be a number"
+            ) from None
+
+    def _commerce_milestone_deliver(self, request, session, params) -> Response:
+        body = request.body or {}
+        try:
+            milestone = self._commerce_orders.deliver_milestone(
+                params["order_id"],
+                tenant=session.tenant_id,
+                actor=session.principal_id,
+                index=self._commerce_milestone_index(params),
+                evidence=self._commerce_evidence_ref(params, body),
+                now=request.now or self._clock(),
+            )
+        except MarketplaceError as exc:
+            raise self._commerce_error(exc) from exc
+        except PaymentError as exc:
+            raise GatewayError(402, "payment_declined", str(exc)) from exc
+        return json_response(200, milestone.model_dump(mode="json"))
+
+    def _commerce_milestone_accept(self, request, session, params) -> Response:
+        try:
+            milestone = self._commerce_orders.accept_milestone(
+                params["order_id"],
+                tenant=session.tenant_id,
+                actor=session.principal_id,
+                index=self._commerce_milestone_index(params),
+                now=request.now or self._clock(),
+            )
+        except MarketplaceError as exc:
+            raise self._commerce_error(exc) from exc
+        return json_response(200, milestone.model_dump(mode="json"))
+
+    def _commerce_milestone_fail(self, request, session, params) -> Response:
+        try:
+            milestone = self._commerce_orders.fail_milestone(
+                params["order_id"],
+                tenant=session.tenant_id,
+                actor=session.principal_id,
+                index=self._commerce_milestone_index(params),
+                now=request.now or self._clock(),
+                reason=str((request.body or {}).get("reason") or ""),
+            )
+        except MarketplaceError as exc:
+            raise self._commerce_error(exc) from exc
+        return json_response(200, milestone.model_dump(mode="json"))
+
+    def _commerce_refund_unreleased(self, request, session, params) -> Response:
+        return self._commerce_order_transition(
+            request,
+            session,
+            params,
+            self._commerce_orders.refund_unreleased,
+            reason=str((request.body or {}).get("reason") or ""),
+        )
+
+    def _commerce_recurring_list(self, request, session, params) -> Response:
+        records = self._commerce_recurring.list_for(
+            tenant=session.tenant_id, principal=session.principal_id
+        )
+        return json_response(
+            200, {"items": [r.model_dump(mode="json") for r in records]}
+        )
+
+    def _commerce_recurring_create(self, request, session, params) -> Response:
+        body = request.body or {}
+        intent_id = str(body.get("intent_id") or "")
+        if not intent_id:
+            raise GatewayError(400, "invalid_request", "intent_id is required")
+        try:
+            obligation = self._commerce_recurring.create_from_intent(
+                self._commerce,
+                intent_id,
+                tenant=session.tenant_id,
+                period_days=int(body.get("period_days") or 30),
+                now=request.now or self._clock(),
+            )
+        except MarketplaceError as exc:
+            raise self._commerce_error(exc) from exc
+        except (TypeError, ValueError) as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(201, obligation.model_dump(mode="json"))
+
+    def _commerce_recurring_renew(self, request, session, params) -> Response:
+        body = request.body or {}
+        try:
+            obligation = self._commerce_recurring.get(
+                params["obligation_id"], tenant=session.tenant_id
+            )
+            if obligation is None:
+                raise GatewayError(404, "not_found", "no such obligation")
+            current = obligation.offer
+            if body.get("current_offer") is not None:
+                current = CommerceOffer.model_validate(body["current_offer"])
+            renewal = self._commerce_recurring.renew(
+                self._commerce,
+                params["obligation_id"],
+                tenant=session.tenant_id,
+                current_offer=current,
+                now=request.now or self._clock(),
+            )
+        except ValidationError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        except MarketplaceError as exc:
+            raise self._commerce_error(exc) from exc
+        return json_response(201, self._commerce_intent_view(renewal))
+
+    def _commerce_recurring_cancel(self, request, session, params) -> Response:
+        try:
+            obligation = self._commerce_recurring.cancel(
+                params["obligation_id"],
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+                now=request.now or self._clock(),
+            )
+        except MarketplaceError as exc:
+            raise self._commerce_error(exc) from exc
+        return json_response(200, obligation.model_dump(mode="json"))
+
+    def _commerce_payout_list(self, request, session, params) -> Response:
+        records = self._commerce_payout_changes.list_for(
+            tenant=session.tenant_id
+        )
+        return json_response(
+            200, {"items": [r.model_dump(mode="json") for r in records]}
+        )
+
+    def _commerce_payout_request(self, request, session, params) -> Response:
+        body = request.body or {}
+        new_destination = str(body.get("new_destination") or "")
+        if not new_destination:
+            raise GatewayError(
+                400, "invalid_request", "new_destination is required"
+            )
+        record = self._commerce_payout_changes.request(
+            tenant=session.tenant_id,
+            principal=session.principal_id,
+            current_destination=str(body.get("current_destination") or ""),
+            new_destination=new_destination,
+            now=request.now or self._clock(),
+        )
+        return json_response(201, record.model_dump(mode="json"))
+
+    def _commerce_payout_approve(self, request, session, params) -> Response:
+        try:
+            record = self._commerce_payout_changes.approve(
+                params["request_id"],
+                tenant=session.tenant_id,
+                approver=session.principal_id,
+                assurance_level=session.assurance_level,
+                now=request.now or self._clock(),
+            )
+        except MarketplaceError as exc:
+            raise self._commerce_error(exc) from exc
+        return json_response(200, record.model_dump(mode="json"))
+
+    def _commerce_payout_apply(self, request, session, params) -> Response:
+        try:
+            record = self._commerce_payout_changes.apply(
+                params["request_id"],
+                tenant=session.tenant_id,
+                now=request.now or self._clock(),
+            )
+        except MarketplaceError as exc:
+            raise self._commerce_error(exc) from exc
+        return json_response(200, record.model_dump(mode="json"))
+
+    def _commerce_job_dispatch(self, request, session, params) -> Response:
+        stored = self._commerce_party_order(session, params["order_id"])
+        body = request.body or {}
+        node_id = str(body.get("node_id") or "")
+        if not node_id:
+            raise GatewayError(400, "invalid_request", "node_id is required")
+        parameters = body.get("parameters") or {}
+        if not isinstance(parameters, dict):
+            raise GatewayError(
+                400, "invalid_request", "parameters must be an object"
+            )
+        try:
+            job = self._commerce_jobs.dispatch(
+                stored,
+                node_id=node_id,
+                parameters={str(k): str(v) for k, v in parameters.items()},
+                now=request.now or self._clock(),
+            )
+        except MarketplaceError as exc:
+            raise self._commerce_error(exc) from exc
+        return json_response(201, job.model_dump(mode="json"))
+
+    def _commerce_job_ack(self, request, session, params) -> Response:
+        body = request.body or {}
+        try:
+            scheduled = datetime.fromisoformat(str(body.get("scheduled_at") or ""))
+        except ValueError:
+            raise GatewayError(
+                400, "invalid_request", "scheduled_at must be an ISO timestamp"
+            ) from None
+        try:
+            job = self._commerce_jobs.acknowledge(
+                params["job_id"],
+                tenant=session.tenant_id,
+                price_micros=int(body.get("price_micros") or 0),
+                scheduled_at=scheduled,
+                now=request.now or self._clock(),
+            )
+        except MarketplaceError as exc:
+            raise self._commerce_error(exc) from exc
+        except (TypeError, ValueError) as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(200, job.model_dump(mode="json"))
+
+    def _commerce_job_complete(self, request, session, params) -> Response:
+        try:
+            job = self._commerce_jobs.complete(
+                params["job_id"],
+                tenant=session.tenant_id,
+                evidence=str((request.body or {}).get("evidence") or ""),
+                now=request.now or self._clock(),
+            )
+        except MarketplaceError as exc:
+            raise self._commerce_error(exc) from exc
+        return json_response(200, job.model_dump(mode="json"))
+
+    def _commerce_reconciliation_list(self, request, session, params) -> Response:
+        reports = self._commerce_reconciliation.exceptions()
+        return json_response(
+            200, {"items": [r.model_dump(mode="json") for r in reports]}
+        )
+
+    def _commerce_reconciliation_sweep(self, request, session, params) -> Response:
+        result = self._commerce_reconciliation.sweep(
+            now=request.now or self._clock()
+        )
+        return json_response(200, result)
 
     def _commerce_orders_list(self, request, session, params) -> Response:
         # The lazy acceptance-timeout sweep rides list traffic, the same

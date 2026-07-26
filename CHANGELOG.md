@@ -4,6 +4,45 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+M3 — services, organizations, reconciliation (marketplace-build-plan):
+
+- **Milestones** — a service offer carries its payment schedule as a
+  digest-material term (tranches must sum to the subtotal); milestone
+  orders force escrow; the first evidenced delivery captures the whole
+  total; buyer acceptance releases exactly one tranche (fees and tax
+  split proportionally, remainders on the final); a failed milestone
+  disputes the order and freezes the remainder in escrow;
+  `refund-unreleased` resolves by returning exactly the frozen part
+  while accepted tranches stand.
+- **The recurring rule** (`marketplace/recurring.py`) — an obligation
+  exists only from an AUTHORIZED recurring intent (the ladder already
+  forced its approval); a renewal with identical terms proceeds as an
+  auto-approved intent — the digest still binds placement and a
+  revoked delegation still blocks it; a price increase or any material
+  change refuses with the changed terms named and re-enters policy as
+  a brand-new intent.
+- **Org controls** (`marketplace/orgcontrol.py`) — payout-destination
+  changes are always dual-control: two distinct approvers with step-up
+  authentication, self-approval refused, and an approved change
+  applies only after a delay window (default 48h) the real owner can
+  use to kill a hostile request.
+- **Execution jobs** (`marketplace/jobs.py`) — typed dispatch carrying
+  the order's APPROVED price; a node acknowledgement with different
+  terms doesn't renegotiate, it invalidates (audited, refused) — the
+  digest law restated for the physical world. The dispatcher port is
+  where the worker control plane's signed leases attach.
+- **Reconciliation** (`marketplace/reconciliation.py`) — finished
+  orders prove themselves against ledger, invoice, payment refs, and
+  evidence: matched orders close, mismatches file exceptions with the
+  evidence trail attached, and a duplicate charge moves the order to
+  disputed by itself.
+- **Doors:** per-order `/milestones` (+deliver/accept/fail,
+  `/refund-unreleased`), `/v1/commerce/recurring` (+renew, cancel),
+  `/v1/commerce/payout-changes` (+approve/apply),
+  per-order `/jobs` (+ack/complete), `/v1/commerce/reconciliation`
+  (+sweep).
+- Pinned by `tests/test_marketplace_{milestones,recurring,m3_ops}.py`.
+
 M2 closed — the market surface learns escrow, RFQ, and the signed
 boundary:
 

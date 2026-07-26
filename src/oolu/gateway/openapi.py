@@ -410,6 +410,94 @@ def build_openapi() -> dict:
                 "auto-accept price, discount and quantity limits)"
             ),
         },
+        "/v1/commerce/orders/{order_id}/milestones": {
+            "get": op("The order's payment schedule and each tranche's state"),
+        },
+        "/v1/commerce/orders/{order_id}/milestones/{index}/deliver": {
+            "post": op(
+                "Deliver one milestone with evidence — the first evidenced "
+                "delivery captures the whole total into escrow"
+            ),
+        },
+        "/v1/commerce/orders/{order_id}/milestones/{index}/accept": {
+            "post": op(
+                "Buyer acceptance of one milestone: exactly its tranche "
+                "leaves escrow; nothing of the siblings moves"
+            ),
+        },
+        "/v1/commerce/orders/{order_id}/milestones/{index}/fail": {
+            "post": op(
+                "Declare a milestone failed: the order disputes and every "
+                "unreleased tranche freezes in escrow"
+            ),
+        },
+        "/v1/commerce/orders/{order_id}/refund-unreleased": {
+            "post": op(
+                "Resolution for a frozen milestone order: the unreleased "
+                "remainder returns to the buyer; accepted tranches stand"
+            ),
+        },
+        "/v1/commerce/recurring": {
+            "get": op("The caller's recurring obligations"),
+            "post": op(
+                "Found a recurring obligation from an AUTHORIZED recurring "
+                "intent — no obligation exists without the full policy pass"
+            ),
+        },
+        "/v1/commerce/recurring/{obligation_id}/renew": {
+            "post": op(
+                "One period's renewal: identical terms proceed as an "
+                "auto-approved intent; any material change refuses and "
+                "re-enters policy as a new intent"
+            ),
+        },
+        "/v1/commerce/recurring/{obligation_id}": {
+            "delete": op("Cancel the obligation; nothing renews after"),
+        },
+        "/v1/commerce/payout-changes": {
+            "get": op("The tenant's payout-destination change requests"),
+            "post": op(
+                "Request a payout-destination change: always dual-control "
+                "(two distinct strong approvers, self-approval refused) "
+                "plus a delay window before it can apply"
+            ),
+        },
+        "/v1/commerce/payout-changes/{request_id}/approve": {
+            "post": op(
+                "One strong approval (step-up required; the requester can "
+                "never approve their own change)"
+            ),
+        },
+        "/v1/commerce/payout-changes/{request_id}/apply": {
+            "post": op(
+                "Apply the approved change — refused until the protection "
+                "window has elapsed"
+            ),
+        },
+        "/v1/commerce/orders/{order_id}/jobs": {
+            "post": op(
+                "Dispatch a typed execution job carrying the order's "
+                "APPROVED price — never an opening bid"
+            ),
+        },
+        "/v1/commerce/jobs/{job_id}/ack": {
+            "post": op(
+                "The node acknowledges price and schedule; different terms "
+                "invalidate the prior approval by the digest law"
+            ),
+        },
+        "/v1/commerce/jobs/{job_id}/complete": {
+            "post": op("Execution evidence comes home"),
+        },
+        "/v1/commerce/reconciliation": {
+            "get": op("Reconciliation exceptions, each with its evidence trail"),
+        },
+        "/v1/commerce/reconciliation/sweep": {
+            "post": op(
+                "Reconcile finished orders: matched close, mismatched file "
+                "exceptions, duplicate charges dispute themselves"
+            ),
+        },
         "/v1/earnings": {"get": op("The caller's own earnings balance")},
         "/v1/earnings/entries": {"get": op("The caller's own earnings ledger entries")},
         "/v1/payout-accounts": {

@@ -30,6 +30,8 @@ from .errors import (
 )
 from .fraud import OrderHistory, RiskSignals
 from .inventory import InventoryService, Reservation
+from .jobs import ExecutionJob, JobDesk
+from .milestones import MilestoneBook, MilestoneState
 from .models import (
     ApprovalRecord,
     CommercialIntent,
@@ -51,6 +53,12 @@ from .orders import (
     OrderStore,
     StoredOrder,
 )
+from .orgcontrol import (
+    DelayNotElapsed,
+    PayoutChangeDesk,
+    PayoutChangeRequest,
+    SelfApproval,
+)
 from .policy import (
     Decision,
     PolicyVerdict,
@@ -61,6 +69,8 @@ from .policy import (
     evaluate_purchase,
     evaluate_sale,
 )
+from .reconciliation import ReconciliationDesk, ReconciliationReport
+from .recurring import RecurringBook, RecurringObligation, RequiresNewApproval
 from .review import approval_summary, required_approvers, required_strength
 from .rfq import (
     QuoteRecord,
@@ -121,6 +131,19 @@ __all__ = [
     "SalesPolicyStore",
     "proposal_violations",
     "specification_gaps",
+    "DelayNotElapsed",
+    "ExecutionJob",
+    "JobDesk",
+    "MilestoneBook",
+    "MilestoneState",
+    "PayoutChangeDesk",
+    "PayoutChangeRequest",
+    "ReconciliationDesk",
+    "ReconciliationReport",
+    "RecurringBook",
+    "RecurringObligation",
+    "RequiresNewApproval",
+    "SelfApproval",
     "Offer",
     "OrderRecord",
     "OrderService",

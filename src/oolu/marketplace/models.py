@@ -18,7 +18,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class IntentAction(str, Enum):
@@ -54,8 +54,25 @@ class Offer(BaseModel):
     # "" = a one-time purchase. Any text here is a recurring obligation and
     # trips the recurring policy trigger.
     recurring_terms: str = ""
+    # M3: a service offer's payment schedule — (title, amount_micros) per
+    # milestone, in delivery order. Part of the digest: a changed schedule
+    # is a changed term. Empty = one delivery, one settlement.
+    milestones: tuple[tuple[str, int], ...] = ()
     expires_at: datetime | None = None
     signature: str = ""
+
+    @model_validator(mode="after")
+    def _milestones_cover_the_subtotal(self) -> "Offer":
+        if self.milestones:
+            total = sum(amount for _, amount in self.milestones)
+            if total != self.subtotal_micros:
+                raise ValueError(
+                    f"milestones sum to {total} micros, not the subtotal "
+                    f"{self.subtotal_micros}"
+                )
+            if any(amount <= 0 for _, amount in self.milestones):
+                raise ValueError("every milestone needs a positive amount")
+        return self
 
     @property
     def total_micros(self) -> int:

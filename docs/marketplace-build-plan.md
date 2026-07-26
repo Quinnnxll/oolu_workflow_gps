@@ -448,6 +448,39 @@ Goal Adherence:
 
 ### M3 — services, organizations, reconciliation (the spec's `phase_3`)
 
+**Status: LANDED (core)** — **Milestones**: the payment schedule rides
+the Offer (digest-material: a changed schedule is a changed term, and
+tranches must sum to the subtotal), `marketplace/milestones.py` keeps
+each tranche's life durably, and the order machine enforces the flow —
+milestone offers force escrow, the first evidenced delivery captures
+the whole total, acceptance releases exactly one tranche (fees and tax
+split proportionally, remainders on the final), a failure freezes the
+remainder in escrow, and `refund-unreleased` resolves by returning
+exactly the frozen part. **The recurring rule**
+(`marketplace/recurring.py` + `spine.mint_renewal`): obligations exist
+only from an AUTHORIZED recurring intent (the ladder already forced
+approval); identical renewals proceed as auto-approved intents —
+digest still binding, delegation still re-checked, so a revoked agent
+cannot renew — and any material change refuses with the changed terms
+named and re-enters policy as a new intent. **Org controls**
+(`marketplace/orgcontrol.py`): payout-destination changes always take
+the multi-approver path — two distinct strong approvers, self-approval
+refused, and a delay window before an approved change can apply; the
+owner can kill a hostile change inside the window. **Execution jobs**
+(`marketplace/jobs.py`): typed dispatch carrying the order's approved
+price; an acknowledgement with different terms invalidates
+deterministically (the digest law, restated for the physical world);
+the dispatcher port is where the worker control plane's signed leases
+attach. **Reconciliation** (`marketplace/reconciliation.py`): finished
+orders match against ledger, invoice, payment refs, and evidence —
+matched orders close, mismatches file exceptions with the trail
+attached, and a duplicate charge disputes the order itself. Doors for
+all five under `/v1/commerce/...`. Pinned by
+`tests/test_marketplace_{milestones,recurring,m3_ops}.py`. Remaining:
+the worker-lease dispatcher adapter, dispute-money resolution beyond
+the unreleased-refund path, and the shell surfaces for milestones and
+recurring obligations.
+
 Goal: beyond parcels — services with milestones, subscriptions under the
 recurring rule, organization approvals with dual control, physical execution
 nodes, and books that close themselves.
@@ -468,17 +501,17 @@ Deliverables:
   store.
 
 Goal Adherence:
-- [ ] A milestone releases only its own escrow tranche; a failed milestone
+- [x] A milestone releases only its own escrow tranche; a failed milestone
       freezes the remainder.
-- [ ] No recurring obligation is created or materially changed without a
+- [x] No recurring obligation is created or materially changed without a
       fresh policy pass; renewals inside approved terms proceed.
-- [ ] Above the dual-control limit, one approver is never enough;
+- [x] Above the dual-control limit, one approver is never enough;
       self-approval is refused (existing identity rule).
-- [ ] Payout-destination change requires the multi-approver path and a
+- [x] Payout-destination change requires the multi-approver path and a
       delay window.
-- [ ] A physical job's changed terms (price, schedule, scope) invalidate
+- [x] A physical job's changed terms (price, schedule, scope) invalidate
       the prior approval — same digest law as purchases.
-- [ ] Reconciliation closes matched orders and files unmatched ones as
+- [x] Reconciliation closes matched orders and files unmatched ones as
       exceptions; duplicate charges surface as disputes with evidence
       attached.
 

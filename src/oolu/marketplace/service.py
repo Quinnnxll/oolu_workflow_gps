@@ -43,7 +43,13 @@ from .models import (
     IntentAction,
     Offer,
 )
-from .policy import Decision, PurchaseFacts, PurchasePolicy, evaluate_purchase
+from .policy import (
+    Decision,
+    PolicyVerdict,
+    PurchaseFacts,
+    PurchasePolicy,
+    evaluate_purchase,
+)
 from .review import approval_summary
 from .store import ApprovalStore, IntentStore, PolicyStore, StoredIntent
 
@@ -261,6 +267,74 @@ class MarketplaceSpine:
             },
         )
         return stored, True
+
+    def mint_renewal(
+        self,
+        *,
+        obligation_offer: Offer,
+        tenant: str,
+        principal: str,
+        agent: str,
+        category: str,
+        delivery_destination: str,
+        idempotency_key: str,
+        reason: str,
+        now: datetime,
+        expires_in_minutes: int = 24 * 60,
+    ) -> StoredIntent:
+        """A renewal WITHIN approved recurring terms: auto-approved by
+        construction, because the ladder ran when the obligation was
+        approved and these are the same terms — the caller
+        (`RecurringBook.renew`) verified that equality before calling.
+
+        This is deliberately NOT a general bypass: the digest still binds
+        the exact terms, placement still recomputes it against the live
+        offer, and `authorize_execution` still re-checks the delegation —
+        a revoked agent cannot renew. Idempotent per period key.
+        """
+        policy = self.purchase_policy(tenant=tenant, principal=principal)
+        intent = CommercialIntent(
+            intent_id=uuid4().hex,
+            tenant_id=tenant,
+            principal_id=principal,
+            agent_id=agent,
+            action=IntentAction.PURCHASE,
+            offer_snapshot=obligation_offer,
+            category=category,
+            delivery_destination=delivery_destination,
+            data_permissions=(),
+            maximum_total_micros=obligation_offer.total_micros,
+            approval_policy_id=policy.policy_id,
+            idempotency_key=idempotency_key,
+            created_at=now,
+            expires_at=now + timedelta(minutes=expires_in_minutes),
+        )
+        verdict = PolicyVerdict(
+            decision=Decision.AUTO_EXECUTE,
+            reasons=(reason,),
+            required_approvers=0,
+            approval_strength="none",
+            approval_ttl_minutes=0,
+            policy_version=policy.policy_version,
+        )
+        digest = intent_digest(intent, policy_version=verdict.policy_version)
+        stored, created = self.intents.add(
+            intent, state="auto_approved", digest=digest, verdict=verdict
+        )
+        if created:
+            self._audit.append(
+                "market.intent.renewal",
+                {
+                    "tenant": tenant,
+                    "intent_id": intent.intent_id,
+                    "principal": principal,
+                    "agent": agent,
+                    "reason": reason,
+                    "total_micros": obligation_offer.total_micros,
+                    "intent_digest": digest,
+                },
+            )
+        return stored
 
     def _derive_history_facts(
         self,

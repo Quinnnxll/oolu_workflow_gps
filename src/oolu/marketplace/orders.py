@@ -38,6 +38,7 @@ from ..billing.psp import PaymentProviderPort
 from ..billing.tax import InvoiceBook, JurisdictionModule
 from .errors import ListingUnavailable, MarketNotFound, WrongState
 from .inventory import InventoryService
+from .milestones import MilestoneBook, MilestoneState
 from .models import Offer
 from .service import MarketplaceSpine
 
@@ -233,6 +234,7 @@ class OrderService:
         jurisdiction: JurisdictionModule | None = None,
     ) -> None:
         self.orders = OrderStore(conn)
+        self.milestones = MilestoneBook(conn)
         self._audit = audit
         self._spine = spine
         self._psp = psp
@@ -314,6 +316,14 @@ class OrderService:
             seller_id=offer.seller_id,
             digital=digital,
         )
+        if offer.milestones:
+            # A payment schedule IS an escrow arrangement: tranches release
+            # one accepted milestone at a time; no policy exception applies.
+            if self._escrow is None:
+                raise WrongState(
+                    "milestone offers require an escrow policy on this host"
+                )
+            held = True
         record = OrderRecord(
             order_id=uuid4().hex,
             tenant_id=tenant,
@@ -332,6 +342,8 @@ class OrderService:
         order, created = self.orders.add(record, state="payment_authorizing")
         if not created:
             return order, False
+        if offer.milestones:
+            self.milestones.seed(record.order_id, offer.milestones)
         self._audit.append(
             "market.order.placed",
             {
@@ -738,6 +750,279 @@ class OrderService:
                         "total_micros": invoice.total_micros,
                     },
                 )
+
+    # ------------------------------------------------------------------ #
+    # Milestones (M3): each tranche releases alone; a failure freezes     #
+    # every unreleased sibling.                                           #
+    # ------------------------------------------------------------------ #
+    def _milestone_split(self, record: OrderRecord, index: int) -> tuple[int, int, int]:
+        """(tranche_subtotal, tranche_fees, tranche_tax): fees and tax
+        split proportionally, remainders landing on the final milestone so
+        the tranches always sum to the offer exactly."""
+        offer = record.offer
+        tranche = offer.milestones[index][1]
+
+        def share(total: int, amount: int) -> int:
+            return total * amount // offer.subtotal_micros
+
+        if index == len(offer.milestones) - 1:
+            prior = offer.milestones[:index]
+            fees = offer.fees_micros - sum(
+                share(offer.fees_micros, amount) for _, amount in prior
+            )
+            tax = offer.tax_estimate_micros - sum(
+                share(offer.tax_estimate_micros, amount) for _, amount in prior
+            )
+            return tranche, fees, tax
+        return (
+            tranche,
+            share(offer.fees_micros, tranche),
+            share(offer.tax_estimate_micros, tranche),
+        )
+
+    def _frozen(self, order_id: str) -> bool:
+        return any(
+            milestone.state == "failed"
+            for milestone in self.milestones.for_order(order_id)
+        )
+
+    def deliver_milestone(
+        self,
+        order_id: str,
+        *,
+        tenant: str,
+        actor: str,
+        index: int,
+        evidence: str,
+        now: datetime,
+    ) -> MilestoneState:
+        """One milestone delivered, with evidence — never without. The
+        first evidenced delivery captures the WHOLE total into escrow;
+        every release after that is a tranche leaving it."""
+        order = self._get(order_id, tenant=tenant)
+        self._party(order, actor)
+        record = order.record
+        if not record.offer.milestones:
+            raise WrongState("the order has no milestone schedule")
+        if order.state not in ("confirmed", "fulfilling"):
+            raise WrongState(f"order is {order.state}, not in fulfillment")
+        if not evidence:
+            raise WrongState("a milestone delivery needs evidence")
+        if self._frozen(order_id):
+            raise WrongState("a failed milestone froze this order")
+        if not self.milestones.set_state(
+            order_id, index, state="delivered", expected=("pending",),
+            evidence=evidence,
+        ):
+            current = self.milestones.get(order_id, index)
+            state = current.state if current else "absent"
+            raise WrongState(f"milestone {index} is {state}, not pending")
+        self.orders.set_state(
+            order_id, tenant=tenant, state="fulfilling", expected=("confirmed",)
+        )
+        self._audit.append(
+            "market.milestone.delivered",
+            {
+                "tenant": tenant,
+                "order_id": order_id,
+                "index": index,
+                "evidence": evidence,
+            },
+        )
+        fresh = self._get(order_id, tenant=tenant)
+        if fresh.record.charge_ref is None:
+            self._capture_to_escrow(fresh, now=now)
+        settled = self.milestones.get(order_id, index)
+        assert settled is not None
+        return settled
+
+    def accept_milestone(
+        self, order_id: str, *, tenant: str, actor: str, index: int, now: datetime
+    ) -> MilestoneState:
+        """Buyer acceptance of ONE milestone: exactly its tranche leaves
+        escrow — no sibling's money moves, released or pending."""
+        order = self._get(order_id, tenant=tenant)
+        self._party(order, actor, buyer_only=True)
+        record = order.record
+        if self._frozen(order_id):
+            raise WrongState("a failed milestone froze the remainder")
+        milestone = self.milestones.get(order_id, index)
+        if milestone is None or milestone.state != "delivered":
+            state = milestone.state if milestone else "absent"
+            raise WrongState(f"milestone {index} is {state}, not delivered")
+        if record.charge_ref is None:
+            raise WrongState("nothing is captured; deliver with evidence first")
+        tranche, fees, tax = self._milestone_split(record, index)
+        fee = tranche * record.take_rate_bps // 10_000
+        txn, posted = self._ledger.post(
+            LedgerTransaction(
+                txn_id=uuid4().hex,
+                idempotency_key=(
+                    f"ledger:release:m{index}:{tenant}:{record.idempotency_key}"
+                ),
+                kind="release",
+                order_id=order_id,
+                currency=record.offer.currency,
+                entries=release_entries(
+                    subtotal_micros=tranche,
+                    fees_micros=fees,
+                    tax_micros=tax,
+                    take_fee_micros=fee,
+                ),
+                memo=(
+                    f"order {order_id} milestone {index} "
+                    f"({record.offer.milestones[index][0]}) released"
+                ),
+                created_at=now,
+            )
+        )
+        self.milestones.set_state(
+            order_id, index, state="released", expected=("delivered",)
+        )
+        if posted:
+            self._audit.append(
+                "market.milestone.released",
+                {
+                    "tenant": tenant,
+                    "order_id": order_id,
+                    "index": index,
+                    "ledger_txn": txn.txn_id,
+                    "tranche_micros": tranche,
+                },
+            )
+        book = self.milestones.for_order(order_id)
+        if all(m.state == "released" for m in book):
+            self.orders.set_state(
+                order_id, tenant=tenant, state="completed",
+                expected=("fulfilling",),
+            )
+            self._audit.append(
+                "market.order.completed",
+                {"tenant": tenant, "order_id": order_id},
+            )
+            self._settle_extras(record, now=now)
+        settled = self.milestones.get(order_id, index)
+        assert settled is not None
+        return settled
+
+    def fail_milestone(
+        self,
+        order_id: str,
+        *,
+        tenant: str,
+        actor: str,
+        index: int,
+        now: datetime,
+        reason: str,
+    ) -> MilestoneState:
+        """The buyer declares a milestone failed: the order disputes and
+        every unreleased tranche freezes where it sits — in escrow."""
+        order = self._get(order_id, tenant=tenant)
+        self._party(order, actor, buyer_only=True)
+        if not self.milestones.set_state(
+            order_id, index, state="failed", expected=("pending", "delivered")
+        ):
+            current = self.milestones.get(order_id, index)
+            state = current.state if current else "absent"
+            raise WrongState(f"milestone {index} is {state}; nothing to fail")
+        self.orders.set_state(
+            order_id,
+            tenant=tenant,
+            state="disputed",
+            expected=("confirmed", "fulfilling"),
+        )
+        self._audit.append(
+            "market.milestone.failed",
+            {
+                "tenant": tenant,
+                "order_id": order_id,
+                "index": index,
+                "reason": reason,
+            },
+        )
+        settled = self.milestones.get(order_id, index)
+        assert settled is not None
+        return settled
+
+    def refund_unreleased(
+        self,
+        order_id: str,
+        *,
+        tenant: str,
+        actor: str,
+        now: datetime,
+        reason: str = "",
+    ) -> StoredOrder:
+        """Resolution for a frozen milestone order: the captured-but-
+        unreleased remainder returns to the buyer; released tranches
+        stand — they were accepted."""
+        order = self._get(order_id, tenant=tenant)
+        self._party(order, actor)
+        record = order.record
+        if order.state != "disputed":
+            raise WrongState(f"order is {order.state}, not disputed")
+        if record.charge_ref is None:
+            raise WrongState("nothing was captured; cancel instead")
+        captured = sum(
+            entry.amount_micros
+            for txn in self._ledger.transactions(order_id=order_id)
+            if txn.kind == "capture"
+            for entry in txn.entries
+            if entry.account == "marketplace_cash"
+        )
+        released = sum(
+            entry.amount_micros
+            for txn in self._ledger.transactions(order_id=order_id)
+            if txn.kind == "release"
+            for entry in txn.entries
+            if entry.account == "escrow_liability"
+        )
+        remainder = captured - released
+        if remainder <= 0:
+            raise WrongState("nothing unreleased remains in escrow")
+        self._guard_money()
+        refund_ref = self._psp.refund(
+            record.charge_ref,
+            amount_micros=remainder,
+            idempotency_key=f"refund:unreleased:{tenant}:{record.idempotency_key}",
+        )
+        self._ledger.post(
+            LedgerTransaction(
+                txn_id=uuid4().hex,
+                idempotency_key=(
+                    f"ledger:refund:unreleased:{tenant}:{record.idempotency_key}"
+                ),
+                kind="refund",
+                order_id=order_id,
+                currency=record.offer.currency,
+                entries=(
+                    LedgerEntry(
+                        account="marketplace_cash", amount_micros=-remainder
+                    ),
+                    LedgerEntry(
+                        account="escrow_liability", amount_micros=remainder
+                    ),
+                ),
+                memo=f"order {order_id} unreleased escrow refunded: {reason}",
+                created_at=now,
+            )
+        )
+        updated = record.model_copy(update={"refund_ref": refund_ref})
+        self.orders.update_record(updated)
+        self.orders.set_state(
+            order_id, tenant=tenant, state="resolved", expected=("disputed",)
+        )
+        self._audit.append(
+            "market.order.resolved",
+            {
+                "tenant": tenant,
+                "order_id": order_id,
+                "refunded_micros": remainder,
+                "refund_ref": refund_ref,
+                "resolution": reason or "unreleased escrow refunded",
+            },
+        )
+        return self._get(order_id, tenant=tenant)
 
     # ------------------------------------------------------------------ #
     # Cancellation and refund: always a compensating step, never an edit. #
