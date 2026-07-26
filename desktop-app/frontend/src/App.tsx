@@ -3,6 +3,7 @@ import { api, isRemote, requiresLogin, session, signOut } from "./api";
 import { applyLanguage, applyTheme } from "./ui";
 import type { InboxItem, TaskView } from "./types";
 import { Life } from "./components/Life";
+import { Market } from "./components/Market";
 import { TaskPane } from "./components/TaskPane";
 import { Inbox } from "./components/Inbox";
 import { Skills } from "./components/Skills";
@@ -19,6 +20,9 @@ export function App() {
   // sign-in screen over the running local app when the user asks for it.
   const [showAuth, setShowAuth] = useState(false);
   const [dev, setDev] = useState(false);
+  // The market surface (marketplace-build-plan M1): buying and selling
+  // over the commerce doors, beside the conversation, never inside it.
+  const [market, setMarket] = useState(false);
 
   // The settings node owns theme and language; once signed in, its
   // values replace the locally cached guesses.
@@ -52,6 +56,12 @@ export function App() {
     <div className="app">
       <header>
         <div className="brand">OoLu</div>
+        <button
+          className="linklike dev-toggle"
+          onClick={() => setMarket(!market)}
+        >
+          {market ? "chat" : "market"}
+        </button>
         {import.meta.env.DEV && (
           <button className="linklike dev-toggle" onClick={() => setDev(!dev)}>
             {dev ? "chat" : "dev"}
@@ -81,8 +91,8 @@ export function App() {
         </div>
       </header>
 
-      <main className={dev ? "" : "chat-main"}>
-        {dev ? <DevScreens /> : <Life />}
+      <main className={dev || market ? "" : "chat-main"}>
+        {market ? <Market /> : dev ? <DevScreens /> : <Life />}
       </main>
     </div>
   );

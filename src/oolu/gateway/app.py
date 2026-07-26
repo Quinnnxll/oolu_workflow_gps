@@ -97,6 +97,8 @@ from ..marketplace import (
     MarketplaceSpine,
     OrderService,
     PurchasePolicy,
+    SellerKyc,
+    SellerKycError,
     SellerUnverified,
     StrongAuthenticationRequired,
 )
@@ -604,6 +606,11 @@ class GatewayApp:
         # sealed releases, revocation — the build policy's ledgers
         stripe_webhooks=None,  # gateway.StripeWebhookVerifier: real Stripe
         # events land at /v1/webhooks/stripe only when this is configured
+        commerce_psp=None,  # billing.psp.PaymentProviderPort: the order
+        # machine's payment provider — live StripePaymentIntents when a
+        # secret key exists, the pre-launch FakePsp otherwise
+        commerce_providers=(),  # identity ProviderConfigs for the money
+        # gate: a live commerce PSP demands require_production_money
         google_signin: GoogleSignIn | None = None,  # "Continue with Google"
         identity_links: IdentityLinkStore | None = None,  # email/IdP -> account
         mail=None,  # mail.MailSender: verification + reset codes go out here
@@ -708,6 +715,7 @@ class GatewayApp:
         # double-entry ledger. The payment provider is the pre-launch
         # fake — live Stripe swaps in behind the same port, gated by
         # require_production_money.
+        self._commerce_seller_kyc = SellerKyc(durable.conn, audit=durable.audit)
         self._commerce_catalog = CatalogService(
             durable.conn,
             audit=durable.audit,
@@ -718,8 +726,9 @@ class GatewayApp:
             durable.conn,
             audit=durable.audit,
             spine=self._commerce,
-            psp=FakePsp(),
+            psp=commerce_psp if commerce_psp is not None else FakePsp(),
             ledger=self._commerce_ledger,
+            providers=tuple(commerce_providers),
         )
         # Competitor intelligence, constructed on first use.
         self._competitors = None
@@ -1075,6 +1084,21 @@ class GatewayApp:
             self._commerce_intent_approve,
         )
         # The fixed-price market (M1): the catalog and the order machine.
+        # Seller KYC: apply as a legal entity; a reviewer with approve
+        # authority decides; verification is what publication reads.
+        r.add("GET", "/v1/commerce/seller/kyc", self._commerce_seller_kyc_status)
+        r.add("POST", "/v1/commerce/seller/kyc", self._commerce_seller_kyc_apply)
+        r.add(
+            "GET",
+            "/v1/commerce/seller/kyc/queue",
+            self._commerce_seller_kyc_queue,
+            requires_permission="kyc:review",
+        )
+        r.add(
+            "POST",
+            "/v1/commerce/seller/kyc/decide",
+            self._commerce_seller_kyc_decide,
+        )
         r.add("GET", "/v1/commerce/catalog", self._commerce_catalog_browse)
         r.add("GET", "/v1/commerce/listings", self._commerce_listings_list)
         r.add("POST", "/v1/commerce/listings", self._commerce_listing_create)
@@ -10054,14 +10078,12 @@ class GatewayApp:
         return GatewayError(409, "conflict", str(exc))
 
     def _commerce_seller_verified(self, tenant: str, principal: str) -> bool:
-        """The M1 seller gate over the standing KYC seam: a seller is
-        verified when a VERIFIED KYC record exists under the
-        ``seller:{tenant}:{principal}`` key. No KYC service = nobody
-        publishes; refusal is the default, not trust."""
-        if self._kyc is None:
-            return False
-        record = self._kyc.status_for(f"seller:{tenant}:{principal}")
-        return record is not None and record.status.value == "verified"
+        """The M1 seller gate: a seller is verified when their own
+        seller-KYC application was approved by a human reviewer. No
+        record, no publication; refusal is the default, not trust."""
+        return self._commerce_seller_kyc.is_verified(
+            tenant=tenant, principal=principal
+        )
 
     @staticmethod
     def _commerce_intent_view(stored) -> dict:
@@ -10241,6 +10263,77 @@ class GatewayApp:
             "order": stored.record.model_dump(mode="json"),
             "state": stored.state,
         }
+
+    def _commerce_seller_kyc_status(self, request, session, params) -> Response:
+        record = self._commerce_seller_kyc.status_for(
+            tenant=session.tenant_id, principal=session.principal_id
+        )
+        if record is None:
+            return json_response(200, {"status": "not_applied"})
+        return json_response(200, record.model_dump(mode="json"))
+
+    def _commerce_seller_kyc_apply(self, request, session, params) -> Response:
+        body = request.body or {}
+        try:
+            record = self._commerce_seller_kyc.apply(
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+                legal_name=str(body.get("legal_name") or ""),
+                company_email=str(body.get("company_email") or ""),
+                registration_no=str(body.get("registration_no") or ""),
+            )
+        except SellerKycError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(201, record.model_dump(mode="json"))
+
+    def _commerce_seller_kyc_queue(self, request, session, params) -> Response:
+        records = self._commerce_seller_kyc.pending(tenant=session.tenant_id)
+        return json_response(
+            200, {"items": [r.model_dump(mode="json") for r in records]}
+        )
+
+    def _commerce_seller_kyc_decide(self, request, session, params) -> Response:
+        """A human reviewer's verdict on a seller — approve authority
+        required (the same authority seam every approval walks)."""
+        if self._approval is None:
+            raise GatewayError(
+                404, "not_found", "approval authority is not configured"
+            )
+        body = request.body or {}
+        principal = str(body.get("principal") or "")
+        if not principal or "approved" not in body:
+            raise GatewayError(
+                400,
+                "invalid_request",
+                "principal and approved (true or false) are required",
+            )
+        current = self._commerce_seller_kyc.status_for(
+            tenant=session.tenant_id, principal=principal
+        )
+        if current is None:
+            raise GatewayError(404, "not_found", "no seller application here")
+        try:
+            self._approval.approve(
+                session,
+                run_id=f"seller-kyc:{session.tenant_id}:{principal}",
+                policy="kyc.review",
+                requester_id=current.applicant,
+                required_assurance=int(body.get("required_assurance", 1)),
+                now=request.now or self._clock(),
+            )
+        except AuthorizationError as exc:
+            raise GatewayError(403, "forbidden", str(exc)) from exc
+        try:
+            record = self._commerce_seller_kyc.decide(
+                tenant=session.tenant_id,
+                principal=principal,
+                reviewer=session.principal_id,
+                approved=bool(body.get("approved")),
+                note=str(body.get("note") or ""),
+            )
+        except SellerKycError as exc:
+            raise GatewayError(409, "conflict", str(exc)) from exc
+        return json_response(200, record.model_dump(mode="json"))
 
     def _commerce_catalog_browse(self, request, session, params) -> Response:
         return json_response(
@@ -12523,7 +12616,7 @@ class GatewayApp:
         finds the metering event it reverses and a payout confirmation
         finds its batch. Unknown event types are acknowledged (200) so
         Stripe stops retrying them; only bad signatures are refused."""
-        if self._stripe_webhooks is None or self._disputes is None:
+        if self._stripe_webhooks is None:
             raise GatewayError(404, "not_found", "Stripe webhooks are not enabled")
         body = request.body or {}
         raw = (
@@ -12548,9 +12641,30 @@ class GatewayApp:
         def process() -> dict:
             event_type = str(body.get("type", ""))
             result: dict = {"handled": event_type}
+            oolu_order = str(metadata.get("oolu_order_id") or "")
+            oolu_tenant = str(metadata.get("oolu_tenant") or "")
+            if oolu_order and oolu_tenant:
+                # Marketplace orders: the provider event replays into the
+                # order machine's own idempotent transitions and postings.
+                mapped = {
+                    "payment_intent.succeeded": "payment.captured",
+                    "payment_intent.amount_capturable_updated": None,  # ack
+                    "charge.refunded": "payment.refunded",
+                }
+                order_kind = mapped.get(event_type, None)
+                if order_kind is not None:
+                    result["order"] = self._commerce_orders.process_psp_event(
+                        {
+                            "type": order_kind,
+                            "tenant": oolu_tenant,
+                            "order_id": oolu_order,
+                        },
+                        now=request.now or self._clock(),
+                    )
+                return result
             if event_type in ("charge.refunded", "charge.dispute.created"):
                 oolu_event = metadata.get("oolu_event_id")
-                if oolu_event:
+                if oolu_event and self._disputes is not None:
                     self._disputes.refund(event_id=oolu_event, reason=event_type)
                     result["clawback_event_id"] = oolu_event
                 else:

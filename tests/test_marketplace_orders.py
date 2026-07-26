@@ -15,7 +15,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-
 from test_marketplace_spine import _SAFE_RISK, _delegation, _offer
 
 from oolu.billing.doubleentry import DoubleEntryLedger

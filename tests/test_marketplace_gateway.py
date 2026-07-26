@@ -293,6 +293,104 @@ def test_orders_flow_from_intent_to_completed_with_ledger(tmp_path):
     conn.close()
 
 
+def test_seller_kyc_from_application_to_published_listing(tmp_path):
+    """The full seller path: a personal mailbox is refused outright, a
+    company application queues, only approve authority decides, and a
+    verified seller's listing reaches the public catalog."""
+    app, conn, ident = _app(tmp_path)
+    seller = ident.token("user-1")
+    refused = app.handle(
+        _req(
+            "POST",
+            "/v1/commerce/seller/kyc",
+            token=seller,
+            body={"legal_name": "Acme GmbH", "company_email": "a@gmail.com"},
+        )
+    )
+    assert refused.status == 400  # a personal mailbox cannot anchor an entity
+
+    applied = app.handle(
+        _req(
+            "POST",
+            "/v1/commerce/seller/kyc",
+            token=seller,
+            body={"legal_name": "Acme GmbH", "company_email": "kyc@acme.example"},
+        )
+    )
+    assert applied.status == 201
+    assert applied.body["status"] == "pending_review"
+
+    draft = app.handle(
+        _req(
+            "POST",
+            "/v1/commerce/listings",
+            token=seller,
+            body={
+                "title": "Steel bottle",
+                "unit_price_micros": 100 * M,
+                "quantity_available": 3,
+            },
+        )
+    )
+    listing_id = draft.body["listing_id"]
+    # Pending is not verified: publication still refuses.
+    assert (
+        app.handle(
+            _req(
+                "POST", f"/v1/commerce/listings/{listing_id}/publish", token=seller
+            )
+        ).status
+        == 403
+    )
+    # The applicant cannot decide their own application — approve
+    # authority is a stored grant, not a wish.
+    decide_body = {"principal": "user-1", "approved": True}
+    assert (
+        app.handle(
+            _req(
+                "POST",
+                "/v1/commerce/seller/kyc/decide",
+                token=seller,
+                body=decide_body,
+            )
+        ).status
+        == 403
+    )
+    decided = app.handle(
+        _req(
+            "POST",
+            "/v1/commerce/seller/kyc/decide",
+            token=ident.token("approver-1"),
+            body=decide_body,
+        )
+    )
+    assert decided.status == 200
+    assert decided.body["status"] == "verified"
+
+    published = app.handle(
+        _req("POST", f"/v1/commerce/listings/{listing_id}/publish", token=seller)
+    )
+    assert published.status == 200
+    catalog = app.handle(_req("GET", "/v1/commerce/catalog", token=seller))
+    assert [item["listing_id"] for item in catalog.body["items"]] == [listing_id]
+    # A verified seller cannot re-apply over a verified record.
+    assert (
+        app.handle(
+            _req(
+                "POST",
+                "/v1/commerce/seller/kyc",
+                token=seller,
+                body={
+                    "legal_name": "Acme GmbH",
+                    "company_email": "kyc@acme.example",
+                },
+            )
+        ).status
+        == 400
+    )
+    conn.close()
+
+
 def test_listings_publish_is_gated_on_seller_verification(tmp_path):
     app, conn, ident = _app(tmp_path)
     token = ident.token("user-1")

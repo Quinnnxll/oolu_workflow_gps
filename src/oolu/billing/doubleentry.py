@@ -32,7 +32,8 @@ ACCOUNTS = (
 )
 
 _SCHEMA = """CREATE TABLE IF NOT EXISTS marketplace_ledger (
-    txn_id TEXT PRIMARY KEY,
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    txn_id TEXT NOT NULL UNIQUE,
     idempotency_key TEXT NOT NULL UNIQUE,
     order_id TEXT,
     kind TEXT NOT NULL,
@@ -134,23 +135,24 @@ class DoubleEntryLedger:
         return LedgerTransaction.model_validate_json(row["payload_json"])
 
     def transactions(self, *, order_id: str | None = None) -> list[LedgerTransaction]:
+        """In posting order — the explicit ``seq``, never the clock, which
+        can tie, and never SQLite's implicit row order, which PostgreSQL
+        does not have."""
         with self._conn.lock:
             if order_id is None:
                 rows = self._conn.db.execute(
-                    "SELECT payload_json FROM marketplace_ledger"
+                    "SELECT payload_json FROM marketplace_ledger ORDER BY seq"
                 ).fetchall()
             else:
                 rows = self._conn.db.execute(
                     "SELECT payload_json FROM marketplace_ledger"
-                    " WHERE order_id = ?",
+                    " WHERE order_id = ? ORDER BY seq",
                     (order_id,),
                 ).fetchall()
-        txns = [
+        return [
             LedgerTransaction.model_validate_json(row["payload_json"])
             for row in rows
         ]
-        txns.sort(key=lambda t: (t.created_at.isoformat(), t.txn_id))
-        return txns
 
     # ------------------------------------------------------------------ #
     # Projections. Computed by replay, never stored.                      #

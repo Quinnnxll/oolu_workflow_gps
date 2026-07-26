@@ -912,6 +912,106 @@ export interface KycView {
   required?: boolean;
 }
 
+// ---- commerce wire shapes: the embedded marketplace (M1) -------------------
+export interface CommerceOffer {
+  offer_id: string;
+  seller_id: string;
+  offer_version: number;
+  item_id: string;
+  quantity: number;
+  subtotal_micros: number;
+  currency: string;
+  tax_estimate_micros: number;
+  fees_micros: number;
+  fulfillment_terms: string;
+  refund_terms: string;
+  refundable: boolean;
+  recurring_terms: string;
+}
+
+export interface CommerceListing {
+  listing_id: string;
+  seller_principal: string;
+  seller_id: string;
+  title: string;
+  category: string;
+  description: string;
+  unit_price_micros: number;
+  currency: string;
+  quantity_available: number;
+  refund_terms: string;
+  fulfillment_terms: string;
+  refundable: boolean;
+  status: "draft" | "active" | "suspended";
+  version: number;
+}
+
+export interface CommerceVerdict {
+  decision: string;
+  reasons: string[];
+  required_approvers: number;
+  approval_strength: string;
+  policy_version: string;
+}
+
+export interface CommerceIntent {
+  intent: {
+    intent_id: string;
+    action: string;
+    offer_snapshot: CommerceOffer;
+    category: string;
+    expires_at: string;
+  };
+  state: string;
+  intent_digest: string;
+  verdict: CommerceVerdict;
+}
+
+// The approval preview: rendered by the server FROM the digest fields, so
+// what the human reads is what the approval binds.
+export interface CommerceApproval {
+  intent_id: string;
+  item: string;
+  quantity: number;
+  seller: string;
+  total: string;
+  delivery_terms: string;
+  refund_terms: string;
+  risks: string[];
+  approval_strength: string;
+  intent_digest: string;
+  expires_at: string;
+}
+
+export interface CommerceOrder {
+  order: {
+    order_id: string;
+    buyer_principal: string;
+    seller_id: string;
+    seller_principal: string;
+    offer: CommerceOffer;
+    tracking: string;
+    delivery_evidence: string;
+    created_at: string;
+  };
+  state: string;
+}
+
+export interface CommerceLedgerTxn {
+  txn_id: string;
+  kind: string;
+  entries: { account: string; amount_micros: number }[];
+  memo: string;
+}
+
+export interface SellerKycView {
+  status: "not_applied" | "pending_review" | "verified" | "rejected";
+  legal_name?: string;
+  company_email?: string;
+  screen_note?: string;
+  decision_note?: string;
+}
+
 export const api = {
   // One turn with the assistant. The conversation is client-held, so the
   // recent history rides along; a work turn comes back with the run id the
@@ -1507,6 +1607,72 @@ export const api = {
       q ? `/v1/listings?q=${encodeURIComponent(q)}` : "/v1/listings",
     ),
   workerHealth: () => req<WorkerHealth>("GET", "/v1/worker-health"),
+  // ---- commerce: the embedded marketplace (M1) ---------------------------
+  // Buying is three doors, in law-imposed order: mint the exact versioned
+  // offer, bind an intent to it (the policy ladder answers with a verdict),
+  // and place the order — which the server refuses unless the live terms
+  // still hash to what was approved.
+  commerceCatalog: () =>
+    req<{ items: CommerceListing[] }>("GET", "/v1/commerce/catalog"),
+  commerceListingOffer: (listingId: string, quantity: number) =>
+    req<CommerceOffer>("POST", `/v1/commerce/listings/${listingId}/offer`, {
+      quantity,
+    }),
+  commerceIntentCreate: (offer: CommerceOffer, category: string) =>
+    req<CommerceIntent>("POST", "/v1/commerce/intents", {
+      offer,
+      category,
+      idempotency_key: crypto.randomUUID(),
+      // A hosted listing only exists published when its seller passed
+      // KYC — the one risk fact the client can honestly assert.
+      risk_facts: { seller_identity_verified: true },
+    }),
+  commerceIntents: (state?: string) =>
+    req<{ items: CommerceIntent[] }>(
+      "GET",
+      state ? `/v1/commerce/intents?state=${state}` : "/v1/commerce/intents",
+    ),
+  commerceApprovals: () =>
+    req<{ items: CommerceApproval[] }>("GET", "/v1/commerce/approvals"),
+  commerceDecide: (intentId: string, approve: boolean) =>
+    req<{ approval: unknown; state: string }>(
+      "POST",
+      `/v1/commerce/intents/${intentId}/approval`,
+      { decision: approve ? "approve" : "reject" },
+    ),
+  commerceOrders: () =>
+    req<{ items: CommerceOrder[] }>("GET", "/v1/commerce/orders"),
+  commerceOrderPlace: (intentId: string) =>
+    req<CommerceOrder>("POST", "/v1/commerce/orders", { intent_id: intentId }),
+  commerceOrderStep: (
+    orderId: string,
+    step: "ship" | "deliver" | "accept" | "cancel" | "refund",
+    body?: Record<string, string>,
+  ) =>
+    req<CommerceOrder>("POST", `/v1/commerce/orders/${orderId}/${step}`, body ?? {}),
+  commerceOrderLedger: (orderId: string) =>
+    req<{ items: CommerceLedgerTxn[] }>(
+      "GET",
+      `/v1/commerce/orders/${orderId}/ledger`,
+    ),
+  // Selling: KYC first (a human decides), then listings, then publication.
+  commerceMyListings: () =>
+    req<{ items: CommerceListing[] }>("GET", "/v1/commerce/listings"),
+  commerceListingCreate: (body: {
+    title: string;
+    unit_price_micros: number;
+    quantity_available: number;
+    category?: string;
+    description?: string;
+  }) => req<CommerceListing>("POST", "/v1/commerce/listings", body),
+  commerceListingPublish: (listingId: string) =>
+    req<CommerceListing>("POST", `/v1/commerce/listings/${listingId}/publish`),
+  sellerKyc: () => req<SellerKycView>("GET", "/v1/commerce/seller/kyc"),
+  sellerKycApply: (body: {
+    legal_name: string;
+    company_email: string;
+    registration_no?: string;
+  }) => req<SellerKycView>("POST", "/v1/commerce/seller/kyc", body),
 };
 
 export function timelineSocket(

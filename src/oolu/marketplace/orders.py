@@ -286,7 +286,9 @@ class OrderService:
                 customer_ref=customer_ref,
                 payment_method_ref=payment_method_ref,
                 idempotency_key=f"auth:{tenant}:{record.idempotency_key}",
-                metadata={"oolu_order_id": record.order_id},
+                # Round-trips through the provider onto webhook events, so
+                # a delivery can find the order it reconciles against.
+                metadata={"oolu_order_id": record.order_id, "oolu_tenant": tenant},
             )
         except PaymentError as exc:
             self.orders.set_state(

@@ -4,6 +4,34 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+M1 closed — the market gets its face, its provider, and its trust gate:
+
+- **The shell Market surface** — `Market.tsx` (and the rebuilt shell
+  bundle): Shop / Approvals / Orders / Sell over the real `/v1/commerce`
+  doors. Buying walks offer → intent → verdict → approval → order and
+  never shortcuts the spine; the approval card shows the server's own
+  digest-rendered terms, never a client paraphrase; "Accept — capture
+  payment" names the moment money becomes irreversible; the Sell pane
+  is seller-KYC-gated end to end. Pinned by `Market.test.tsx` (vitest).
+- **Live Stripe for orders** — the assembly swaps `StripePaymentIntents`
+  in exactly when a Stripe secret key exists (`FakePsp` otherwise, and
+  the app builds its order machine from the injected provider);
+  `oolu_order_id`/`oolu_tenant` metadata round-trips through the
+  provider, and `/v1/webhooks/stripe` now reconciles `payment_intent`
+  events into the order machine's idempotent transitions — a retried
+  delivery completes an order exactly once. Wire shapes, secret-vault
+  discipline, and the assembly swap are pinned by
+  `tests/test_marketplace_psp.py`.
+- **Seller KYC** — `marketplace/sellerkyc.py` on the standing KYC store
+  and mailbox screen: sellers apply as legal entities (personal
+  mailboxes refused before anything is stored), a reviewer with approve
+  authority decides through the same approval seam as everything else,
+  and only a verified seller's listing can publish. Doors:
+  `/v1/commerce/seller/kyc` (+`/queue` for reviewers, +`/decide`).
+- The marketplace ledger orders transactions by an explicit posting
+  sequence (never the clock, which ties; never implicit row order,
+  which PostgreSQL lacks).
+
 The fixed-price market (marketplace-build-plan M1) — the first fee is a
 ledger fact:
 

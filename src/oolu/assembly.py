@@ -1121,9 +1121,20 @@ def build_host_runtime(
             transport=stripe_transport,
             api_key_ref=stripe_key_ref,
         )
+        # The marketplace order machine's provider: manual-capture
+        # PaymentIntents behind the same vault/transport seam. Live mode
+        # additionally demands require_production_money at every call.
+        from .billing.psp import StripePaymentIntents
+
+        commerce_psp: Any = StripePaymentIntents(
+            vault=stripe_vault,
+            transport=stripe_transport,
+            api_key_ref=stripe_key_ref,
+        )
     else:
         card_vault = FakeCardVault()
         payout_adapter = FakePayoutAdapter()
+        commerce_psp = None  # the gateway defaults to the pre-launch FakePsp
     dispute_service = DisputeService(
         ledger=earnings_ledger,
         disputes=DisputeStore(conn),
@@ -1312,6 +1323,8 @@ def build_host_runtime(
         payout_adapter=payout_adapter,
         disputes=dispute_service,
         stripe_webhooks=stripe_webhooks,
+        commerce_psp=commerce_psp,
+        commerce_providers=tuple(identity_providers),
         # The public execution API: machine keys + signed run webhooks.
         api_keys=ApiKeyService(conn),
         webhook_endpoints=(endpoints := WebhookEndpointStore(conn)),

@@ -283,7 +283,7 @@ Goal Adherence:
 
 ### M1 — the fixed-price market (first real dollar, first fee)
 
-**Status: LANDED (core)** — `billing/doubleentry.py`: the eight-account
+**Status: LANDED** — `billing/doubleentry.py`: the eight-account
 balanced append-only ledger with replay projections (balances, GMV, the
 take). `billing/psp.py`: the authorize/capture/refund/void provider port
 — `StripePaymentIntents` (manual capture, vault/transport discipline)
@@ -297,10 +297,24 @@ replaying into idempotent transitions, and `require_production_money`
 in front of any live provider call. Doors: `/v1/commerce/{catalog,
 listings, orders}` and per-order ship/deliver/accept/cancel/refund/
 ledger. Pinned by `tests/test_marketplace_{ledger,orders,gateway}.py`.
-Remaining before the phase closes: the shell surfaces (commerce cards,
-seller console), the live-Stripe contract suite over the injected
-transport, and the seller-KYC application flow behind the
-`seller:{tenant}:{principal}` convention.
+
+**Phase closed** by three follow-ups: **(1) the shell Market surface**
+(`desktop-app/frontend/src/components/Market.tsx` + the rebuilt shell
+bundle) — Shop / Approvals / Orders / Sell over the real `/v1/commerce`
+doors; buying walks offer → intent → verdict → approval → order with the
+server's digest-rendered summary on the approval card, acceptance is
+labeled as the capture moment, and the Sell pane is KYC-gated end to
+end (vitest-pinned in `Market.test.tsx`). **(2) Live Stripe** —
+`marketplace/sellerkyc`-independent: the assembly swaps
+`StripePaymentIntents` in exactly when a secret key exists, order
+metadata (`oolu_order_id`/`oolu_tenant`) round-trips through the
+provider, and `/v1/webhooks/stripe` reconciles `payment_intent` events
+into the order machine's idempotent transitions
+(`tests/test_marketplace_psp.py`). **(3) Seller KYC** —
+`marketplace/sellerkyc.py` on the standing KYC store and mailbox
+screen: apply (personal mailboxes refused outright) → reviewer with
+approve authority decides → publication opens; doors under
+`/v1/commerce/seller/kyc` (+queue, +decide).
 
 Goal: the spec's `phase_1` inside its `mvp_boundaries` — a working
 fixed-price marketplace for low-risk physical goods: one currency, one

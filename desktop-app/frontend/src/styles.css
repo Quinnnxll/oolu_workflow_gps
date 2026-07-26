@@ -2490,3 +2490,36 @@ button.ghost {
   gap: 10px;
   font-size: 1.5em;
 }
+
+/* The market surface (marketplace-build-plan M1): the shop grid and its
+   cards. Cards reuse the settings card idiom; the grid stays fluid. */
+.market {
+  width: 100%;
+  max-width: 64rem;
+  margin: 0 auto;
+  padding: 12px 16px 32px;
+  overflow-y: auto;
+}
+
+.market-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+  align-items: start;
+}
+
+.market .order-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.market .order-card button {
+  margin-top: 6px;
+}
+
+.market .order-card ul {
+  margin: 6px 0;
+  padding-left: 18px;
+}

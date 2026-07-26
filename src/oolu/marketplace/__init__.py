@@ -53,6 +53,7 @@ from .policy import (
     evaluate_sale,
 )
 from .review import approval_summary, required_approvers, required_strength
+from .sellerkyc import SellerKyc, SellerKycError, seller_kyc_key
 from .service import MarketplaceSpine
 from .store import ApprovalStore, IntentStore, PolicyStore, StoredIntent
 
@@ -91,6 +92,8 @@ __all__ = [
     "PurchasePolicy",
     "SaleFacts",
     "SalesPolicy",
+    "SellerKyc",
+    "SellerKycError",
     "SellerUnverified",
     "StoredIntent",
     "StoredOrder",
@@ -98,6 +101,7 @@ __all__ = [
     "WrongState",
     "approval_summary",
     "delegation_gaps",
+    "seller_kyc_key",
     "evaluate_purchase",
     "evaluate_sale",
     "intent_digest",
