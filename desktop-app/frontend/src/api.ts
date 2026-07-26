@@ -691,6 +691,36 @@ export interface AdPlacement {
   breakdown: Record<string, unknown>;
 }
 
+// The explorer desk (A6): one normalized comparison row — evidence
+// summaries included — and the deterministic brief with its breakdown.
+export interface ExplorerRow {
+  listing_id: string;
+  title: string;
+  seller: string;
+  price_micros: number;
+  currency: string;
+  list_price_micros: number | null;
+  discount_percent: number | null; // the fact, or nothing
+  feedback: { count: number; mean: number | null; factor: number };
+  trust: { score: number; basis: string; [key: string]: unknown };
+  lab: { count: number; mean_score: number | null; factor: number };
+  eligible: boolean;
+  gaps: string[];
+}
+
+export interface ExplorerBrief {
+  mode: string;
+  winner_listing_id: string | null;
+  ranked: {
+    listing_id: string;
+    title: string;
+    seller: string;
+    score: number;
+    factors: Record<string, number>;
+    weights: Record<string, number>;
+  }[];
+}
+
 // The reveal's honest shapes: nothing before your vote, no counts below
 // the k-anonymity floor.
 export interface PollVerdict {
@@ -1474,6 +1504,31 @@ export const api = {
     req<{ recorded: boolean; kind: string }>(
       "POST",
       `/v1/adhouse/placements/${encodeURIComponent(placementId)}/click`,
+    ),
+  // The explorer desk (A6): the matrix and the brief in one read.
+  explorerCompare: (category: string, mode: string) => {
+    const query = new URLSearchParams();
+    if (category) query.set("category", category);
+    query.set("mode", mode);
+    return req<{
+      category: string;
+      rows: ExplorerRow[];
+      brief: ExplorerBrief;
+    }>("GET", `/v1/explorer/compare?${query.toString()}`);
+  },
+  explorerInterest: (payload: {
+    category: string;
+    mode: string;
+    enabled?: boolean;
+    at_minute?: number;
+  }) =>
+    req<{ interest: Record<string, unknown> | null }>(
+      "POST",
+      "/v1/explorer/interests",
+      {
+        ...payload,
+        tz_offset_minutes: -new Date().getTimezoneOffset() || 0,
+      },
     ),
   // The data-subject's rights, self-serve: everything as one JSON
   // document, and erasure that says exactly what it removed.

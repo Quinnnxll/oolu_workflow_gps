@@ -488,6 +488,95 @@ describe("PressPanel (inside the News thread)", () => {
     ).toBeTruthy();
   });
 
+  it("compares on verified evidence and crowns a deterministic best buy", async () => {
+    const EXPLORER: RosterAgent = {
+      ...NEWS,
+      agent_id: "explorer",
+      name: "Explorer",
+    };
+    routes["GET /v1/press/genres"] = GENRES;
+    routes["GET /v1/explorer/compare"] = {
+      status: 200,
+      body: {
+        category: "",
+        rows: [
+          {
+            listing_id: "steel",
+            title: "Steel kettle",
+            seller: "shop",
+            price_micros: 20_000_000,
+            currency: "USD",
+            list_price_micros: 25_000_000,
+            discount_percent: 20,
+            feedback: { count: 3, mean: 4.3, factor: 0.86 },
+            trust: { score: 0.9, basis: "derived from the order book" },
+            lab: { count: 1, mean_score: 92, factor: 0.92 },
+            eligible: true,
+            gaps: [],
+          },
+          {
+            listing_id: "glass",
+            title: "Glass kettle",
+            seller: "shop",
+            price_micros: 30_000_000,
+            currency: "USD",
+            list_price_micros: null,
+            discount_percent: null,
+            feedback: { count: 0, mean: null, factor: 0.5 },
+            trust: { score: 0.5, basis: "no order history" },
+            lab: { count: 0, mean_score: null, factor: 0.5 },
+            eligible: false,
+            gaps: ["out of stock"],
+          },
+        ],
+        brief: {
+          mode: "balanced",
+          winner_listing_id: "steel",
+          ranked: [
+            {
+              listing_id: "steel",
+              title: "Steel kettle",
+              seller: "shop",
+              score: 0.81,
+              factors: { price: 1, discount: 0.2, feedback: 0.86, trust: 0.9, lab: 0.92 },
+              weights: {},
+            },
+          ],
+        },
+      },
+    };
+    routes["POST /v1/explorer/interests"] = {
+      status: 200,
+      body: { interest: { schedule_id: "s1" } },
+    };
+    render(<AgentThread agent={EXPLORER} />);
+
+    // The winner banner with the reasons on demand.
+    expect(await screen.findByText("Best buy")).toBeTruthy();
+    fireEvent.click(screen.getByText("Why this pick"));
+    expect(screen.getByText(/trust: 0.9/)).toBeTruthy();
+    // The discount renders only where it is a FACT; the ineligible row
+    // stays visible with its gap named.
+    expect(screen.getByText("−20%")).toBeTruthy();
+    expect(screen.getByText("out of stock")).toBeTruthy();
+    expect(screen.getByText(/3 verified reviews/)).toBeTruthy();
+
+    // A mode chip refetches with the mode named.
+    fireEvent.click(screen.getByRole("button", { name: "Measured" }));
+    const modes = calls.filter(
+      (c) => c.method === "GET" && c.path === "/v1/explorer/compare",
+    );
+    expect(modes.length).toBeGreaterThanOrEqual(2);
+
+    // Following schedules the daily brief.
+    fireEvent.click(screen.getByText("Follow this"));
+    expect(await screen.findByText("Following ✓")).toBeTruthy();
+    const followed = calls.find(
+      (c) => c.method === "POST" && c.path === "/v1/explorer/interests",
+    );
+    expect(followed?.body).toMatchObject({ mode: "measured" });
+  });
+
   it("stays silent on hosts from before the press", async () => {
     routes["GET /v1/press/genres"] = { status: 404, body: {} };
     render(<AgentThread agent={NEWS} />);

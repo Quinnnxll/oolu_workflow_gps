@@ -48,6 +48,10 @@ class Listing(BaseModel):
     category: str = ""
     description: str = ""
     unit_price_micros: int = Field(ge=0)
+    # The seller's stated regular price, when one exists — the ONLY thing
+    # a displayed discount may derive from (agents-expansion A6: a "was"
+    # price is a fact or it is nothing; policy ceilings never render).
+    list_price_micros: int | None = Field(default=None, ge=0)
     currency: str = "USD"
     quantity_available: int = Field(default=0, ge=0)
     refund_terms: str = "30-day returns"
@@ -152,6 +156,7 @@ class CatalogService:
         refund_terms: str = "30-day returns",
         fulfillment_terms: str = "standard shipping",
         refundable: bool = True,
+        list_price_micros: int | None = None,
     ) -> Listing:
         listing = Listing(
             listing_id=uuid4().hex,
@@ -162,6 +167,7 @@ class CatalogService:
             category=category,
             description=description,
             unit_price_micros=unit_price_micros,
+            list_price_micros=list_price_micros,
             currency=currency,
             quantity_available=quantity_available,
             refund_terms=refund_terms,

@@ -4,6 +4,29 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The explorer desk (A6) — compare on verified evidence, then the best buy:
+
+- **Three evidence types, none self-declared** (`explorer/evidence.py`)
+  — verified-buyer reviews (a review needs a finished order by its own
+  buyer for that listing; self-reviews refused; one voice per member
+  per product), the browsable trust score derived from the durable
+  order book (trouble weighs double; no history = the honest neutral),
+  and lab evidence as live, author-attached `results` contributions —
+  byline, provenance, and dividend-eligibility structural.
+- **The discount is a fact or it is nothing** — listings gained
+  `list_price_micros`; a "was" price renders only when a stated list
+  price genuinely exceeds the current one. Policy ceilings never render.
+- **One matrix, one brief** (`explorer/comparisons.py`, `bestbuy.py`) —
+  the RFQ compare-like-with-like discipline generalized (ineligible
+  rows stay, gaps named); four modes as declared weight sets over five
+  factors; deterministic ranking; every row carrying its full factor
+  breakdown and the weighing stance.
+- **Followed interests on the pulse** — a daily brief lands as
+  Explorer's own thread message; buying hands off to the standing
+  commerce spine unchanged (offer → intent → policy verdict, walked in
+  the end-to-end test). Advertising provably cannot reach these
+  rankings: `explorer/` imports no `adhouse` (import-scan-proven).
+
 The contributor dividend (A5) — verified delivery pays, conserved:
 
 - **The standing pipeline, reused whole** (`billing/addividend.py`) — a

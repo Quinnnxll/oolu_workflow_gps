@@ -704,6 +704,39 @@ Goal Adherence:
 
 ### A6 — the explorer desk (compare, then the best buy)
 
+**Status: LANDED** — `src/oolu/explorer/`: `evidence.py` with the three
+missing evidence types: **verified-buyer reviews** (`ReviewDesk` — a
+review needs a finished order (`accepted`/`completed`) by its OWN buyer
+for THAT listing, self-reviews are refused by the standing self-dealing
+law, one voice per member per product), the **browsable trust score**
+(`trust_from_book` — the PurchaseFacts derivations made a persistent
+explainable read model: finished/refunded/disputed from the durable
+order book, trouble weighing double, no history sitting at the honest
+neutral), and **lab evidence** (`LabReport` — a LIVE press contribution
+in the `results` genre, attached only by its own author, so byline,
+provenance, and dividend-eligibility are structural; broader
+certification is decision-log item 6). The catalog gained
+`list_price_micros` so the **discount is a fact or nothing** — no
+policy ceiling ever renders as a "was" price (`discount_fact`).
+`comparisons.py`: the RFQ discipline generalized — one normalized
+matrix, ineligible rows kept with named gaps. `bestbuy.py`: four modes
+(`value`/`balanced`/`proven`/`measured`) as declared weight sets over
+five factors, absent evidence at the neutral 0.5, deterministic ranking
+with ties on listing_id, every ranked row carrying its full factor
+breakdown AND the stance that weighed it. Followed interests ride the
+pulse (`explorer.brief:<category>:<mode>` sentinel) and land as
+Explorer's own thread messages. Buying is a handoff: the end-to-end
+test walks the brief's winner through the STANDING spine — listing
+offer → intent → policy verdict — unchanged. The walls hold
+structurally: explorer imports no adhouse (the A4 scan covers the
+package the moment it exists) and no outside-content seam. Doors:
+`/v1/explorer/compare`, `/v1/explorer/reviews` (GET/POST),
+`/v1/explorer/lab` (GET/POST), `/v1/explorer/interests`. Surface: the
+Explorer panel — mode chips, category, the winner card with reasons on
+demand, the matrix rows with evidence summaries and the discount fact,
+the follow toggle. Pinned by `tests/test_explorer.py` and the explorer
+case in `Agents.test.tsx`.
+
 Goal: side-by-side comparisons over verified in-app data — price, discount,
 customer feedback, trust, lab performance — and deterministic best-buy
 briefs for followed interests.

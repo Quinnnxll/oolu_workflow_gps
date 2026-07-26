@@ -79,14 +79,15 @@ ROSTER: tuple[AgentCard, ...] = (
         name="Explorer",
         tagline="Compare, then the best buy",
         scope=(
-            "I talk through comparing products — price, discount, "
-            "customer feedback, trust, lab results — and what a best-buy "
-            "brief will look like. I do not rank real listings or quote "
-            "real prices yet."
+            "I compare real listings side by side — price, the discount "
+            "fact, verified-buyer feedback, the order-book trust score, "
+            "member lab results — and crown a best buy per mode, every "
+            "factor shown. Follow an interest and the brief arrives here "
+            "daily; buying walks the standing approval path."
         ),
         ahead=(
-            "Verified comparisons and best-buy briefs over the real "
-            "catalog arrive in phase A6 of the agents-expansion plan."
+            "Travel planning over your calendar and group arrives in "
+            "phase A7 of the agents-expansion plan."
         ),
         seat="explore.brief",
     ),

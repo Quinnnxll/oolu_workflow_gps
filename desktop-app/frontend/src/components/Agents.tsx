@@ -3,6 +3,8 @@ import { api, session } from "../api";
 import type {
   AdPlacement,
   Contribution,
+  ExplorerBrief,
+  ExplorerRow,
   FileMeta,
   PollPair,
   PollVerdict,
@@ -287,6 +289,150 @@ export function PollPanel() {
           {tr("poll.next")}
         </button>
       </div>
+    </div>
+  );
+}
+
+const EXPLORER_MODES = ["value", "balanced", "proven", "measured"] as const;
+
+function money(micros: number, currency: string): string {
+  return `${(micros / 1_000_000).toFixed(2)} ${currency}`;
+}
+
+// The explorer desk's surface (A6): one comparison matrix over verified
+// evidence, the deterministic brief with its winner and every factor on
+// demand, and the follow button that schedules the daily brief into
+// this thread. Nothing sponsored is anywhere near these rows.
+export function ExplorerPanel() {
+  const tr = useT();
+  const [category, setCategory] = useState("");
+  const [mode, setMode] = useState<(typeof EXPLORER_MODES)[number]>("balanced");
+  const [rows, setRows] = useState<ExplorerRow[]>([]);
+  const [brief, setBrief] = useState<ExplorerBrief | null>(null);
+  const [followed, setFollowed] = useState(false);
+  const [absent, setAbsent] = useState(false);
+
+  async function compare(cat: string, m: string) {
+    try {
+      const result = await api.explorerCompare(cat, m);
+      setRows(result.rows ?? []);
+      setBrief(result.brief ?? null);
+    } catch {
+      setAbsent(true); // no explorer on this host: no panel
+    }
+  }
+
+  useEffect(() => {
+    void compare("", "balanced");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (absent) return null;
+
+  const winner =
+    brief?.winner_listing_id != null
+      ? brief.ranked.find((r) => r.listing_id === brief.winner_listing_id)
+      : undefined;
+
+  return (
+    <div className="press-panel explorer">
+      <div className="press-head">
+        <span className="press-heading">{tr("explorer.heading")}</span>
+        <button
+          className={`ghost${followed ? " on" : ""}`}
+          title={tr("explorer.followHint")}
+          onClick={() =>
+            void api
+              .explorerInterest({
+                category,
+                mode,
+                ...(followed ? { enabled: false } : {}),
+              })
+              .then(({ interest }) => setFollowed(interest !== null))
+              .catch(() => {})
+          }
+        >
+          {followed ? tr("explorer.following") : tr("explorer.follow")}
+        </button>
+      </div>
+      <div className="row">
+        <input
+          placeholder={tr("explorer.categoryPh")}
+          value={category}
+          onChange={(e) => setCategory(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void compare(category, mode);
+          }}
+        />
+      </div>
+      <div className="press-genres">
+        {EXPLORER_MODES.map((m) => (
+          <button
+            key={m}
+            type="button"
+            className={`press-chip${mode === m ? " on" : ""}`}
+            onClick={() => {
+              setMode(m);
+              void compare(category, m);
+            }}
+          >
+            {tr(`explorer.mode.${m}`)}
+          </button>
+        ))}
+      </div>
+      {winner && (
+        <div className="press-card story">
+          <span className="ad-label">{tr("explorer.winner")}</span>
+          <div className="press-title">{winner.title}</div>
+          <div className="muted">
+            {winner.seller} · {tr("explorer.score")} {winner.score}
+          </div>
+          {/* The reasons, on demand — invariant 10's whole point. */}
+          <details className="press-why">
+            <summary>{tr("explorer.why")}</summary>
+            <div className="muted">
+              {Object.entries(winner.factors)
+                .map(([name, value]) => `${name}: ${value}`)
+                .join(" · ")}
+            </div>
+          </details>
+        </div>
+      )}
+      {rows.map((row) => (
+        <div key={row.listing_id} className="press-card explorer-row">
+          <div className="press-byline">
+            <span className="press-title">{row.title}</span>
+            <span>
+              {money(row.price_micros, row.currency)}
+              {/* The discount renders only where it IS a fact. */}
+              {row.discount_percent != null && (
+                <span className="press-chip credit">
+                  −{row.discount_percent}%
+                </span>
+              )}
+            </span>
+          </div>
+          <div className="press-meta muted">
+            <span>{row.seller}</span>
+            <span>
+              {tf("explorer.reviews", { n: row.feedback.count })}
+              {row.feedback.mean != null ? ` · ${row.feedback.mean}/5` : ""}
+            </span>
+            <span>
+              {tr("explorer.trust")} {row.trust.score}
+            </span>
+            <span>
+              {tf("explorer.lab", { n: row.lab.count })}
+              {row.lab.mean_score != null ? ` · ${row.lab.mean_score}` : ""}
+            </span>
+            {row.gaps.map((gap) => (
+              <span key={gap} className="press-chip">
+                {gap}
+              </span>
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -727,6 +873,8 @@ export function AgentThread({ agent }: { agent: RosterAgent }) {
         {agent.agent_id === "news" && <PressPanel />}
         {/* The poll floor (A3) heads the Poll thread the same way. */}
         {agent.agent_id === "poll" && <PollPanel />}
+        {/* And the explorer desk (A6) heads the Explorer thread. */}
+        {agent.agent_id === "explorer" && <ExplorerPanel />}
         {/* The card welcomes honestly: what this agent does today, and
             what phase brings the rest — the same words the server would
             answer with, shown before the first message is ever sent. */}

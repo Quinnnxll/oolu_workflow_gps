@@ -762,6 +762,12 @@ class GatewayApp:
         self._ad_campaigns = CampaignStore(durable.conn)
         self._ad_placements = PlacementStore(durable.conn)
         self._ad_events = AdEventStore(durable.conn)
+        # The explorer desk (A6): verified-buyer reviews and member lab
+        # reports — the evidence layer the comparison matrix reads.
+        from ..explorer import LabStore, ReviewDesk, ReviewStore
+
+        self._explorer_reviews = ReviewDesk(ReviewStore(durable.conn))
+        self._explorer_lab = LabStore(durable.conn)
         # The commercial spine (marketplace-build-plan M0): typed intents,
         # the deterministic policy ladder, digest-bound approvals. M2
         # wires the history port, so risk facts derive from the order
@@ -1530,6 +1536,14 @@ class GatewayApp:
         # A5: verified impressions become conserved contributor money —
         # production-gated; a local host answers with the honest refusal.
         r.add("POST", "/v1/adhouse/settle", self._adhouse_settle)
+        # The explorer desk (A6): verified evidence, one comparison
+        # matrix, deterministic best-buy briefs, followed interests.
+        r.add("GET", "/v1/explorer/compare", self._explorer_compare)
+        r.add("GET", "/v1/explorer/reviews", self._explorer_reviews_list)
+        r.add("POST", "/v1/explorer/reviews", self._explorer_review_create)
+        r.add("GET", "/v1/explorer/lab", self._explorer_lab_list)
+        r.add("POST", "/v1/explorer/lab", self._explorer_lab_create)
+        r.add("POST", "/v1/explorer/interests", self._explorer_interest)
         # The data-subject's two rights, self-serve: everything as one
         # JSON document, and erasure that says exactly what it removed.
         r.add("GET", "/v1/account/export", self._account_export)
@@ -3538,6 +3552,310 @@ class GatewayApp:
         return json_response(
             200, {"settled": settled, "refused": refused, "skipped": skipped}
         )
+
+    # -- the explorer desk (A6) ---------------------------------------- #
+    @staticmethod
+    def _explorer_refused(exc) -> GatewayError:
+        code = {404: "not_found", 403: "forbidden", 409: "conflict"}.get(
+            exc.status, "invalid_request"
+        )
+        return GatewayError(exc.status, code, str(exc))
+
+    def _explorer_trust_for(self, tenant: str):
+        """The trust read model: derive per seller from the durable
+        order book — finished, refunded, disputed — never from a claim."""
+        from ..explorer import trust_from_book
+
+        store = self._commerce_orders.orders
+
+        def trust(seller: str) -> dict:
+            finished = refunded = disputed = 0
+            for order in store.list_for(tenant=tenant, principal=seller):
+                if order.record.seller_principal != seller:
+                    continue  # their buying is not their selling record
+                if order.state in ("accepted", "completed"):
+                    finished += 1
+                elif order.state == "refunded":
+                    refunded += 1
+                elif order.state == "disputed":
+                    disputed += 1
+            return trust_from_book(
+                finished=finished, refunded=refunded, disputed=disputed
+            )
+
+        return trust
+
+    def _explorer_rows(self, session, *, category: str):
+        from ..explorer import build_rows, feedback_of, lab_of
+
+        listings = [
+            listing
+            for listing in self._commerce_catalog.store.active()
+            if listing.tenant_id == session.tenant_id
+            and (not category or listing.category == category)
+        ]
+        tenant = session.tenant_id
+        return build_rows(
+            listings,
+            feedback_for=lambda lid: feedback_of(
+                self._explorer_reviews.store.for_listing(lid, tenant=tenant)
+            ),
+            trust_for=self._explorer_trust_for(tenant),
+            lab_for=lambda lid: lab_of(
+                self._explorer_lab.for_listing(lid, tenant=tenant)
+            ),
+        )
+
+    def _explorer_compare(self, request, session, params) -> Response:
+        """The matrix and the brief in one read: every candidate a
+        normalized row (ineligible ones keep their named gaps), the
+        eligible ones ranked by the named mode with the full factor
+        breakdown. Deterministic end to end — and nothing sponsored is
+        anywhere near these inputs (the import scan holds the wall)."""
+        from ..explorer import best_buy
+
+        category = str(request.query.get("category") or "")
+        mode = str(request.query.get("mode") or "balanced")
+        rows = self._explorer_rows(session, category=category)
+        try:
+            brief = best_buy(rows, mode=mode)
+        except ValueError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(
+            200,
+            {
+                "category": category,
+                "rows": [row.model_dump(mode="json") for row in rows],
+                "brief": brief.model_dump(mode="json"),
+            },
+        )
+
+    def _explorer_reviews_list(self, request, session, params) -> Response:
+        listing_id = str(request.query.get("listing") or "")
+        if not listing_id:
+            raise GatewayError(400, "invalid_request", "listing is required")
+        reviews = self._explorer_reviews.store.for_listing(
+            listing_id, tenant=session.tenant_id
+        )
+        return json_response(
+            200,
+            {"items": [r.model_dump(mode="json") for r in reviews]},
+        )
+
+    def _explorer_review_create(self, request, session, params) -> Response:
+        """The verified-buyer gate at the door: the order and the
+        listing resolve HERE, from the durable stores — the desk judges
+        exactly what stands."""
+        from ..explorer import ExplorerError
+
+        body = request.body or {}
+        listing = self._commerce_catalog.store.get(
+            str(body.get("listing_id") or "")
+        )
+        if listing is None or listing.tenant_id != session.tenant_id:
+            raise GatewayError(404, "not_found", "no such listing")
+        order = self._commerce_orders.orders.get(
+            str(body.get("order_id") or ""), tenant=session.tenant_id
+        )
+        try:
+            review = self._explorer_reviews.review(
+                tenant=session.tenant_id,
+                reviewer=session.principal_id,
+                listing=listing,
+                order=order,
+                rating=int(body.get("rating") or 0),
+                words=str(body.get("words") or ""),
+            )
+        except ExplorerError as exc:
+            raise self._explorer_refused(exc) from exc
+        self._durable.audit.append(
+            "explorer.reviewed",
+            {
+                "review_id": review.review_id,
+                "listing_id": review.listing_id,
+                "order_id": review.order_id,
+                "rating": review.rating,
+            },
+        )
+        return json_response(201, review.model_dump(mode="json"))
+
+    def _explorer_lab_list(self, request, session, params) -> Response:
+        listing_id = str(request.query.get("listing") or "")
+        if not listing_id:
+            raise GatewayError(400, "invalid_request", "listing is required")
+        reports = self._explorer_lab.for_listing(
+            listing_id, tenant=session.tenant_id
+        )
+        return json_response(
+            200,
+            {"items": [r.model_dump(mode="json") for r in reports]},
+        )
+
+    def _explorer_lab_create(self, request, session, params) -> Response:
+        """Lab evidence: a LIVE results contribution, attached by its
+        own author — byline, provenance, and dividend-eligibility are
+        the contribution's, structurally."""
+        from ..explorer import ExplorerError, lab_report
+
+        press = self._require_press()
+        body = request.body or {}
+        listing = self._commerce_catalog.store.get(
+            str(body.get("listing_id") or "")
+        )
+        if listing is None or listing.tenant_id != session.tenant_id:
+            raise GatewayError(404, "not_found", "no such listing")
+        contribution = press.store.get(
+            str(body.get("contribution_id") or ""), tenant=session.tenant_id
+        )
+        try:
+            report = lab_report(
+                tenant=session.tenant_id,
+                listing_id=listing.listing_id,
+                contribution=contribution,
+                caller=session.principal_id,
+                score=int(body.get("score") or -1),
+                metrics=body.get("metrics") or {},
+                now=self._explorer_lab.now(),
+            )
+            self._explorer_lab.insert(report)
+        except ExplorerError as exc:
+            raise self._explorer_refused(exc) from exc
+        self._durable.audit.append(
+            "explorer.lab_attached",
+            {
+                "report_id": report.report_id,
+                "listing_id": report.listing_id,
+                "contribution_id": report.contribution_id,
+                "score": report.score,
+            },
+        )
+        return json_response(201, report.model_dump(mode="json"))
+
+    def _explorer_interest(self, request, session, params) -> Response:
+        """Follow an interest: one standing daily pulse whose goal names
+        the category and the mode — the brief arrives in Explorer's own
+        thread. enabled:false lays the interest down."""
+        from ..explorer import BRIEF_MODES, EXPLORER_BRIEF_PREFIX
+
+        body = request.body or {}
+        category = str(body.get("category") or "").strip()
+        mode = str(body.get("mode") or "balanced")
+        if mode not in BRIEF_MODES:
+            raise GatewayError(400, "invalid_request", f"unknown mode: {mode}")
+        goal = f"{EXPLORER_BRIEF_PREFIX}{category}:{mode}"
+        standing = [
+            s
+            for s in self._pulse.list_for(
+                session.tenant_id, session.principal_id
+            )
+            if s.goal == goal
+        ]
+        if body.get("enabled") is False:
+            for schedule in standing:
+                self._pulse.delete(
+                    schedule.schedule_id,
+                    tenant=session.tenant_id,
+                    principal=session.principal_id,
+                )
+            return json_response(200, {"interest": None})
+        if standing:
+            schedule = standing[0]
+        else:
+            try:
+                schedule = self._pulse.add(
+                    session.tenant_id,
+                    session.principal_id,
+                    cadence="daily",
+                    at_minute=int(body.get("at_minute", 9 * 60)),
+                    goal=goal,
+                    tz_offset_minutes=_tz_minutes(body.get("tz_offset_minutes")),
+                    label=f"Explorer: {category or 'everything'} ({mode})",
+                    now=request.now or self._clock(),
+                )
+            except ValueError as exc:
+                raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(
+            200,
+            {
+                "interest": self._pulse_row(
+                    schedule, request.now or self._clock()
+                )
+            },
+        )
+
+    def _fire_explorer(self, schedule, occurrence: str, skipped: int) -> None:
+        """A followed interest fires: build the matrix, crown the brief,
+        land it as Explorer's own thread message. Audited, never raised
+        into the serving request."""
+        from types import SimpleNamespace
+
+        from ..explorer import EXPLORER_BRIEF_PREFIX, best_buy
+
+        try:
+            spec = schedule.goal[len(EXPLORER_BRIEF_PREFIX) :]
+            category, _, mode = spec.rpartition(":")
+            session = SimpleNamespace(
+                tenant_id=schedule.tenant, principal_id=schedule.principal
+            )
+            rows = self._explorer_rows(session, category=category)
+            brief = best_buy(rows, mode=mode or "balanced")
+            if brief.winner_listing_id is None:
+                message = (
+                    f"Nothing to compare in {category or 'the catalog'} "
+                    "today — the shelf is empty or out of stock."
+                )
+            else:
+                lines = [
+                    f"Your {mode or 'balanced'} brief for "
+                    f"{category or 'the catalog'}:"
+                ]
+                for i, item in enumerate(brief.ranked[:5], start=1):
+                    lines.append(
+                        f"{i}. {item['title']} — {item['seller']} · "
+                        f"score {item['score']}"
+                    )
+                if skipped:
+                    lines.append(
+                        f"(Catching up: {skipped} earlier brief"
+                        f"{'s were' if skipped != 1 else ' was'} missed.)"
+                    )
+                message = "\n".join(lines)
+            if self._assistant_history is not None:
+                self._assistant_history.append(
+                    tenant=schedule.tenant,
+                    principal=schedule.principal,
+                    kind="assistant",
+                    body=message,
+                    agent="explorer",
+                )
+            self._durable.audit.append(
+                "pulse.fired",
+                {
+                    "schedule_id": schedule.schedule_id,
+                    "occurrence": occurrence,
+                    "run_id": "",
+                    "skipped": skipped,
+                    "tenant": schedule.tenant,
+                    "principal": schedule.principal,
+                    "goal": schedule.goal,
+                },
+            )
+        except Exception:  # noqa: BLE001 - the tick must keep serving
+            logging.getLogger("oolu.gateway").exception(
+                "explorer brief failed for %s", schedule.schedule_id
+            )
+            self._durable.audit.append(
+                "pulse.fire_failed",
+                {
+                    "schedule_id": schedule.schedule_id,
+                    "occurrence": occurrence,
+                    "tenant": schedule.tenant,
+                    "principal": schedule.principal,
+                    "goal": schedule.goal,
+                    "code": "explorer_error",
+                    "reason": "the brief fire raised — the log has the story",
+                },
+            )
 
     def _adhouse_preview(self, request, session, params) -> Response:
         """The display-only forecast — the whole tenant's split, plus
@@ -11285,6 +11603,11 @@ class GatewayApp:
         if schedule.goal == EDITION_PULSE_GOAL:
             self._fire_edition(schedule, occurrence, skipped)
             return
+        from ..explorer import EXPLORER_BRIEF_PREFIX
+
+        if schedule.goal.startswith(EXPLORER_BRIEF_PREFIX):
+            self._fire_explorer(schedule, occurrence, skipped)
+            return
         from types import SimpleNamespace
 
         session = SimpleNamespace(
@@ -11983,6 +12306,13 @@ class GatewayApp:
                     body.get("fulfillment_terms") or "standard shipping"
                 ),
                 refundable=bool(body.get("refundable", True)),
+                # The discount FACT's only source: a stated regular
+                # price. Absent = no "was" price ever renders (A6).
+                list_price_micros=(
+                    int(body["list_price_micros"])
+                    if body.get("list_price_micros") is not None
+                    else None
+                ),
             )
         except (ValidationError, ValueError, TypeError) as exc:
             raise GatewayError(400, "invalid_request", str(exc)) from exc
