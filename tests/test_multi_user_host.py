@@ -463,7 +463,9 @@ def test_tenant_wide_workflows_are_operator_authority_only(host):
     assert everyone.status == 200
     assert [r["submitted_by"] for r in everyone.body["items"]] == ["bob"]
 
-    # The all-nodes overview rides the same authority.
+    # The all-nodes overview rides the same authority. Nobody BUILT
+    # anything here, but both sign-ins seeded the starter shelf (P1) —
+    # so the operator sees exactly those, named per owner.
     assert host.gateway.handle(
         _req("GET", "/v1/nodes/overview", token=bob)
     ).status == 403
@@ -471,4 +473,12 @@ def test_tenant_wide_workflows_are_operator_authority_only(host):
         _req("GET", "/v1/nodes/overview", token=admin)
     )
     assert overview.status == 200
-    assert overview.body == {"items": []}
+    from oolu.nodeplace.personal_templates import STARTER_SHELF
+
+    owners = {i["owner"] for i in overview.body["items"]}
+    assert owners == {"admin", "bob"}
+    for owner in ("admin", "bob"):
+        titles = sorted(
+            i["title"] for i in overview.body["items"] if i["owner"] == owner
+        )
+        assert titles == sorted(s.name for s in STARTER_SHELF)

@@ -4,6 +4,34 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Personal nodes P1 — the starter shelf: seven nodes at account birth:
+
+- **The reviewed catalog.** ``nodeplace/personal_templates.py``:
+  Calendar, Tasks, Reminders, Automation Trigger, Stock, Cashflow,
+  and Invoice Scan — each with one responsibility, an executable
+  goal, plain-word asks (every label passes the B0 mechanism
+  lexicon), and a DETERMINISTIC starter function that reads its
+  bound values and files them as a structured record. No model
+  writes a starter and no model spend happens at seeding; every
+  script passes the standing birth gate and provably executes.
+- **Seeded exactly once, deletable forever.** The ``StarterLedger``
+  claim (INSERT OR IGNORE, per person) makes the pass exactly-once
+  across racing sign-ins — and because the claim never leaves, a
+  deleted starter is never resurrected. Minting goes through the
+  ordinary doors: contribute with labeled consumes, the person as
+  the desk account's responsible, ``src/main.py`` landed (B2), one
+  ``node.starter_seeded`` audit line per node, refusals audited as
+  ``node.starter_failed`` without blanking the shelf.
+- **Hooked at every door, harmlessly.** Login, e-mail verify, phone
+  verify, and Google finish all seed best-effort — a seeding failure
+  can never break a sign-in.
+- **Pinned** by ``tests/test_starter_shelf.py``: seven gate-clean
+  specs whose scripts execute in a real subprocess; the seeding pass
+  mints seven ordinary nodes once (drawer copies landed, labels on
+  the listings); a deleted starter stays gone; a seeded node runs
+  through the standing run door; the login-door circle lands the
+  shelf on a fresh account's desk.
+
 Personal nodes P0 — the pulse: schedules that fire runs:
 
 - **Durable rhythms on the owner's clock.** ``PulseStore``

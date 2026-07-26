@@ -8769,6 +8769,152 @@ class GatewayApp:
         )
 
     # ------------------------------------------------------------------ #
+    # The starter shelf (personal-nodes plan P1): seven nodes at birth.   #
+    # ------------------------------------------------------------------ #
+    def _starter_ledger(self):
+        cached = getattr(self, "_starter_ledger_obj", None)
+        if cached is not None:
+            return cached
+        from ..nodeplace.personal_templates import StarterLedger
+
+        self._starter_ledger_obj = StarterLedger(self._durable.conn)
+        return self._starter_ledger_obj
+
+    def _maybe_seed_starters(self, tenant: str, principal: str) -> None:
+        """The sign-in hook: best-effort, never a reason a door fails."""
+        try:
+            self._seed_starter_shelf(tenant, principal)
+        except Exception:  # noqa: BLE001 - seeding must not break sign-in
+            logging.getLogger("oolu.gateway").exception(
+                "starter seeding failed for %s", principal
+            )
+
+    def _seed_starter_shelf(self, tenant: str, principal: str) -> list[dict]:
+        """Mint the seven personal starter nodes for one person, exactly
+        once — the ledger's INSERT-OR-IGNORE claim decides, so racing
+        sign-ins seed once and a DELETED starter is never resurrected
+        (the claim never leaves). Each node is an ORDINARY node: the
+        contribute door, the person as its responsible, declared io
+        with plain-word labels, and the function landed in its drawer
+        (B2). One audit line per node."""
+        from types import SimpleNamespace
+
+        from ..nodeplace.personal_templates import (
+            STARTER_SHELF,
+            starter_script,
+        )
+
+        if self._nodeplace is None or self._desk is None:
+            return []
+        if not self._starter_ledger().claim(tenant, principal):
+            return []
+        session = SimpleNamespace(tenant_id=tenant, principal_id=principal)
+        created: list[dict] = []
+        for spec in STARTER_SHELF:
+            # Idempotent by goal: a node already answering (however it
+            # was made) is never duplicated.
+            if self._resolve_node_function(session, spec.goal) is not None:
+                continue
+            script = starter_script(spec)
+            skill_id = self._function_skill_id(tenant, spec.goal)
+            skill = ReusableSkill.model_validate(
+                {
+                    "id": skill_id,
+                    "name": spec.name,
+                    "description": spec.goal,
+                    "signature": {
+                        "application": "script",
+                        "adapter": "script",
+                    },
+                    "parameters": [
+                        {
+                            "name": item.name,
+                            "value_type": item.value_type,
+                            "required": False,
+                        }
+                        for item in spec.inputs
+                    ],
+                    "actions": [
+                        {
+                            "correlation_id": "function",
+                            "adapter": "script",
+                            "operation": "run",
+                            "parameters": {
+                                "goal": spec.goal,
+                                "script": script,
+                                "node_key": f"node:{skill_id}",
+                            },
+                        }
+                    ],
+                }
+            )
+            consumes = [
+                Slot(
+                    name=item.name,
+                    value_type=item.value_type,
+                    role="input",
+                    required=False,
+                    label=item.label,
+                    example=item.example,
+                )
+                for item in spec.inputs
+            ]
+            produces = [Slot(name="record", value_type="json", role="result")]
+            try:
+                result = self._nodeplace.contribute(
+                    noder_principal=principal,
+                    tenant_id=tenant,
+                    skill=skill,
+                    semver="1.0.0",
+                    title=spec.name,
+                    summary=spec.responsibility,
+                    consumes=consumes,
+                    produces=produces,
+                )
+                self._desk.create_account(
+                    result.node.node_id,
+                    principal=principal,
+                    tenant=tenant,
+                    policy_version=NODE_POLICY_VERSION,
+                )
+            except Exception as exc:  # noqa: BLE001 - one refusal never
+                # blanks the shelf; the miss is named on the chain.
+                self._durable.audit.append(
+                    "node.starter_failed",
+                    {
+                        "starter": spec.key,
+                        "tenant": tenant,
+                        "principal": principal,
+                        "reason": str(exc),
+                    },
+                )
+                continue
+            # B2: the function's drawer home lands with the publish.
+            self._land_src(
+                session, result.node.node_id, script, goal=spec.goal
+            )
+            self._durable.audit.append(
+                "node.starter_seeded",
+                {
+                    "node_id": result.node.node_id,
+                    "starter": spec.key,
+                    "tenant": tenant,
+                    "principal": principal,
+                },
+            )
+            created.append(
+                {
+                    "node_id": result.node.node_id,
+                    "key": spec.key,
+                    "name": spec.name,
+                }
+            )
+        self._starter_ledger().record_nodes(
+            tenant, principal, [c["node_id"] for c in created]
+        )
+        return created
+
+    # ------------------------------------------------------------------ #
     # Node hygiene: the policy agreed upfront, and its enforcement.       #
     # ------------------------------------------------------------------ #
     def _node_policy(self, request, session, params) -> Response:
@@ -11662,6 +11808,8 @@ class GatewayApp:
         # theirs or a stranger's — is dead weight now, and clearing it
         # closes the window a mailed password would otherwise hold open.
         self._pending_passwords.clear(username)
+        # P1: the first sign-in seeds the starter shelf, exactly once.
+        self._maybe_seed_starters(result.tenant_id, result.principal)
         return json_response(
             200,
             {
@@ -11808,6 +11956,8 @@ class GatewayApp:
             result = accounts.external_login(username, method="phone", now=now)
         except AuthenticationError as exc:
             raise GatewayError(401, "unauthorized", str(exc)) from exc
+        # P1: a phone-born account gets its starter shelf too.
+        self._maybe_seed_starters(result.tenant_id, result.principal)
         return json_response(
             200,
             {
@@ -11939,6 +12089,8 @@ class GatewayApp:
             result = accounts.login(link["username"], password, now=self._clock())
         except AuthenticationError as exc:
             raise GatewayError(401, "unauthorized", str(exc)) from exc
+        # P1: a freshly verified account gets its starter shelf.
+        self._maybe_seed_starters(result.tenant_id, result.principal)
         return json_response(
             200,
             {
@@ -12146,9 +12298,16 @@ class GatewayApp:
         if not state:
             raise GatewayError(400, "invalid_request", "state is required")
         try:
-            return json_response(200, google.finish(state))
+            finished = google.finish(state)
         except SignInError as exc:
             raise GatewayError(404, "not_found", str(exc)) from exc
+        # P1: a completed Google sign-in seeds the starter shelf.
+        if finished.get("status") == "complete":
+            self._maybe_seed_starters(
+                str(finished.get("tenant") or ""),
+                str(finished.get("principal") or ""),
+            )
+        return json_response(200, finished)
 
     @staticmethod
     def _user_view(user) -> dict:

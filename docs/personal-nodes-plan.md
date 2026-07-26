@@ -134,6 +134,27 @@ again.*
 
 ### Phase P1 — the starter shelf: seven nodes at account birth
 
+**Status: LANDED** — `nodeplace/personal_templates.py`: the reviewed
+catalog (seven `StarterSpec`s with one-sentence responsibilities,
+executable goals, and B1 plain-word asks — every label passes the B0
+lexicon) and `starter_script` (deterministic, bindings-reading,
+record-emitting — every script passes the standing birth gate and
+actually executes, proven by subprocess in the tests). The seeding
+pass (`_seed_starter_shelf`) rides the `StarterLedger`'s
+INSERT-OR-IGNORE claim — exactly once per person, racing sign-ins
+seed once, and a DELETED starter is never resurrected because the
+claim never leaves — minting each node through the ordinary doors:
+`nodeplace.contribute` with labeled consumes, the person as the desk
+account's responsible, the function landed in `src/main.py` (B2),
+one `node.starter_seeded` audit line each, refusals audited as
+`node.starter_failed` without blanking the shelf. Hooked best-effort
+at all four sign-in doors (login, e-mail verify, phone verify,
+Google finish) — seeding can never break a sign-in
+(`tests/test_starter_shelf.py`: the login-door circle lands seven on
+the desk; a seeded Tasks node runs through the standing run door
+with no build and no model spend). Remaining: P2/P3 grow the real
+record-keeping functions on these seats.
+
 *Day one is never an empty desk.*
 
 - **The personal catalog** (`nodeplace/personal_templates.py`,
