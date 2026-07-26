@@ -12855,6 +12855,10 @@ class GatewayApp:
         # P4: a rhythm the trigger node parsed becomes a standing
         # schedule — filed by this hand, never by the sandbox.
         self._file_schedule(state)
+        # P3 remainder closed: an invoice the deterministic parse could
+        # not read is offered to the reading seat, whose checked values
+        # come back as bindings on one ordinary re-run.
+        self._consult_invoice_reader(state)
         if self._metering is None or self._nodeplace is None:
             return
         if state.phase is Phase.COMPLETED:
@@ -13340,6 +13344,162 @@ class GatewayApp:
                 "goal": schedule.goal,
                 "cadence": schedule.cadence,
                 "run_id": state.run_id,
+            },
+        )
+
+    _INVOICE_READING_PROMPT = (
+        "You are the reading seat for scanned invoices. From the invoice "
+        "text below, extract EXACTLY these fields and reply with ONE "
+        "JSON object and nothing else:\n"
+        '  {"vendor": "<the issuing business>", '
+        '"date": "<YYYY-MM-DD or empty>", '
+        '"total": "<the invoice total as digits>"}\n'
+        "Rules: read, never guess — if you cannot find a definite total, "
+        "reply with the single word UNREADABLE instead of JSON. Never "
+        "invent a number that is not in the text."
+    )
+
+    def _consult_invoice_reader(self, state: RunState) -> None:
+        """P3's model door: a COMPLETED run that emitted ``needs_reading``
+        (the deterministic parse found no total) is offered to the
+        reading seat — the tenant's author model, seated and metered.
+        The seat's extraction is STRICTLY CHECKED (a total that does not
+        parse as a number is refused — never a guessed number) and comes
+        back as bindings on ONE ordinary re-run of the same function, so
+        the row still lands through a run and every record law (B3 io,
+        the sheet, the entry hand-off) holds. No model configured: the
+        run's worded refusal stands, audited. Once per run."""
+        result = self._completed_result(state)
+        if result is None:
+            return
+        ask = result.get("needs_reading")
+        if not (isinstance(ask, dict) and str(ask.get("file") or "").strip()):
+            return
+        already = any(
+            e.event_type in ("invoice.read_by_seat", "invoice.reading_failed")
+            and e.payload.get("run_id") == state.run_id
+            for e in self._durable.audit.records()
+        )
+        if already:
+            return
+        tenant = str(state.contract.metadata.get("tenant_id", ""))
+        principal = str(state.contract.submitted_by or "")
+        function = state.contract.metadata["node_function"]
+        name = str(ask["file"])
+
+        def _refuse(reason: str) -> None:
+            self._durable.audit.append(
+                "invoice.reading_failed",
+                {
+                    "run_id": state.run_id,
+                    "file": name,
+                    "tenant": tenant,
+                    "principal": principal,
+                    "reason": reason,
+                },
+            )
+
+        author = None
+        try:
+            author = self._node_function_author(tenant)
+        except Exception:  # noqa: BLE001 - a broken keyring reads as none
+            author = None
+        if author is None:
+            _refuse(
+                "no model is configured to read invoices — the worded "
+                "refusal stands"
+            )
+            return
+        text = ""
+        if self._files is not None:
+            text = next(
+                (
+                    f.content
+                    for f in self._files.list(
+                        tenant=tenant, node_id=str(function["node_id"])
+                    )
+                    if f.folder == "messages" and f.name == name
+                ),
+                "",
+            )
+        if not text:
+            _refuse("the named file is no longer in the drawer")
+            return
+        seat = self._seat_actor(author, principal)
+        try:
+            raw = seat.reply(
+                [
+                    {
+                        "role": "system",
+                        "content": self._INVOICE_READING_PROMPT,
+                    },
+                    {"role": "user", "content": text[:6000]},
+                ]
+            )
+        except Exception as exc:  # noqa: BLE001 - the seat may be down
+            _refuse(f"the reading seat did not answer: {exc}")
+            return
+        if "UNREADABLE" in str(raw):
+            _refuse("the reading seat found no definite total — nothing "
+                    "was guessed")
+            return
+        from ..orchestrator.proposals import _json_candidates
+
+        extracted = None
+        for blob in _json_candidates(str(raw)):
+            try:
+                candidate = json.loads(blob)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(candidate, dict) and candidate.get("total"):
+                extracted = candidate
+                break
+        if extracted is None:
+            _refuse("the reading seat's answer was not a checked "
+                    "extraction — nothing was guessed")
+            return
+        # The strict value check, before anything binds: a total that
+        # does not parse as a positive number is refused in words.
+        try:
+            total = float(
+                str(extracted["total"]).replace(",", "").replace("$", "")
+            )
+        except (TypeError, ValueError):
+            total = 0.0
+        if not total > 0:
+            _refuse("the seat's total did not check as a number — "
+                    "nothing was guessed")
+            return
+        day = str(extracted.get("date") or "").strip()
+        if not re.match(r"^20\d\d-\d\d-\d\d$", day):
+            day = ""
+        vendor = str(extracted.get("vendor") or "").strip()[:60]
+        from types import SimpleNamespace
+
+        session = SimpleNamespace(tenant_id=tenant, principal_id=principal)
+        try:
+            reread = self._start_intent_run(
+                session,
+                str(function.get("goal") or state.contract.intent),
+                extra_bindings={
+                    "invoice_file": name,
+                    "extracted_total": round(total, 2),
+                    "extracted_vendor": vendor,
+                    "extracted_date": day,
+                },
+            )
+        except GatewayError as exc:
+            _refuse(f"the re-run was refused: {exc.message}")
+            return
+        self._durable.audit.append(
+            "invoice.read_by_seat",
+            {
+                "run_id": state.run_id,
+                "reread_run_id": str(reread["run_id"]),
+                "file": name,
+                "total": round(total, 2),
+                "tenant": tenant,
+                "principal": principal,
             },
         )
 

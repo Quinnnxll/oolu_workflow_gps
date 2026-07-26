@@ -446,6 +446,8 @@ if name:
     except OSError:
         text = ""
 entry = ""
+needs_reading = None
+seat_read = False
 if not name:
     answer = (
         "Which file is the invoice? Forward it to this node (it lands "
@@ -473,12 +475,40 @@ else:
         amount = float(raw.replace(",", ""))
     except ValueError:
         amount = None
+    offered = values.get("extracted_total")
+    if amount is None and offered is not None:
+        # The reading seat's extraction arrives as BINDINGS — values,
+        # strictly checked here like any other: a total that does not
+        # parse as a number lands nothing.
+        try:
+            amount = float(str(offered).replace(",", ""))
+            seat_read = True
+        except ValueError:
+            amount = None
+        # The seat was only consulted because the deterministic read
+        # failed — its vendor line is a blur's first line, so the
+        # seat's naming wins where it offered one.
+        seat_vendor = str(values.get("extracted_vendor") or "").strip()
+        if seat_vendor:
+            vendor = seat_vendor.replace(",", " ")[:60]
+        seat_day = str(values.get("extracted_date") or "").strip()
+        if re.match(r"^20\d\d-\d\d-\d\d$", seat_day) and not day_found:
+            day = seat_day
     if amount is None:
-        answer = (
-            "I couldn't read a total from \"" + name + "\" - no amount "
-            "was recorded, nothing was guessed. A clearer copy will "
-            "read; nothing lands without a checked number."
-        )
+        if offered is None:
+            needs_reading = {"file": name}
+            answer = (
+                "I couldn't read a total from \"" + name + "\" myself - "
+                "if a reading seat is configured it will take a look "
+                "and file only what it reads as a checked number; "
+                "nothing is guessed either way."
+            )
+        else:
+            answer = (
+                "The reading seat's total for \"" + name + "\" did not "
+                "check as a number - nothing was recorded, nothing was "
+                "guessed."
+            )
     else:
         rows.append({"file": name, "vendor": vendor, "date": day,
                      "amount": amount})
@@ -486,6 +516,11 @@ else:
             name, vendor or "(no vendor line)", amount, day)
         answer = "Read %s: %s - %.2f on %s. Added to the sheet." % (
             name, vendor or "(no vendor line)", amount, day)
+        if seat_read:
+            answer += (
+                " (Read by the reading seat - say the word if a "
+                "number is wrong.)"
+            )
 sheet = ["file,vendor,date,amount"]
 for row in rows:
     sheet.append("%s,%s,%s,%.2f" % (
@@ -501,6 +536,8 @@ payload = {
 }
 if entry:
     payload["entry"] = entry
+if needs_reading:
+    payload["needs_reading"] = needs_reading
 emit_result(payload)
 '''
 

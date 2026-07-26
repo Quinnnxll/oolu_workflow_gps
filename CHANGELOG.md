@@ -4,6 +4,34 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Invoice scan — the reading seat (P3's model door, closed):
+
+- **The ask.** A run whose deterministic parse found no total now
+  EMITS ``needs_reading`` alongside its worded refusal — the sandbox
+  asks, it never reaches for the model itself.
+- **The seat.** ``_consult_invoice_reader`` (on the standing
+  terminal-run hook chain) offers the document to the tenant's
+  author model — seated, metered, once per run — under a prompt
+  whose one law is read-never-guess (UNREADABLE beats an invented
+  number).
+- **The strict check, twice.** The gateway refuses an extraction
+  whose total does not parse as a positive number; the checked
+  values then return as BINDINGS on one ordinary re-run of the same
+  function, where the script checks them again before the row lands
+  — through a run, so B3 io, the sheet, and the cashflow hand-off
+  all hold. The act is cited: ``invoice.read_by_seat`` names the
+  original and the re-run.
+- **Honest absences.** No model configured, the seat answering
+  UNREADABLE, or an unchecked extraction: ``invoice.reading_failed``
+  on the chain and the worded refusal stands — nothing lands,
+  nothing is guessed.
+- **Pinned** by ``tests/test_invoice_reading.py``: the script asks /
+  lands the seat's checked values / refuses an unparseable seat
+  total without re-asking; the full circle consults the seat with
+  the document once, re-runs with the checked bindings and the
+  re-staged document, and cites both runs; no-model and UNREADABLE
+  end with the refusal standing and exactly one run.
+
 Personal nodes P4 — the automated life: the pieces wired:
 
 - **The Automation Trigger node is the pulse worn as a node.** Its

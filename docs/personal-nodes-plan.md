@@ -257,10 +257,18 @@ reads (nothing guessed, nothing landed), and emits the parsed
 ``entry`` as a standing output the EXISTING B4 hand-off offers to
 Cashflow: running Cashflow alone asks, yes binds the exact words
 through the binder, and the movement lands run-cited on the graph
-(`tests/test_business_trio.py`). Remaining: the author-seat model
-consult for invoices the deterministic parse cannot read — the
-worded refusal stands either way; the model door can land with a
-later phase.
+(`tests/test_business_trio.py`). The model door closed after P4: a
+run whose deterministic parse found no total EMITS ``needs_reading``;
+`_consult_invoice_reader` offers the document to the READING SEAT
+(the tenant's author model, seated and metered), strictly checks the
+extraction — a total that does not parse as a positive number is
+refused, never a guessed number — and the checked values come back
+as bindings on ONE ordinary re-run of the same function, so the row
+still lands through a run and every record law holds; the act is
+cited (``invoice.read_by_seat``, original and re-run named). No
+model configured, the seat answering UNREADABLE, or an unchecked
+extraction: the worded refusal stands, audited
+(`tests/test_invoice_reading.py`). Remaining: none for P3.
 
 *The small-business spine: what's on the shelf, what the money did,
 and the paper that proves it.*

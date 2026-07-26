@@ -166,8 +166,10 @@ def test_an_unreadable_total_refuses_in_words_and_lands_nothing(tmp_path):
         attachments={"blur.txt": "a smudged photograph of a receipt"},
     )
     assert read["records"] == []
-    assert "nothing was guessed" in read["answer"].lower()
+    assert "nothing is guessed" in read["answer"].lower()
     assert "entry" not in read
+    # The refusal now also ASKS: the reading seat may take a look.
+    assert read["needs_reading"] == {"file": "blur.txt"}
     missing = _execute(
         tmp_path, "invoice_scan", {"invoice_file": "gone.txt"}
     )
