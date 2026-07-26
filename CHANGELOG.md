@@ -4,6 +4,37 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Personal nodes P3 — the business trio: stock, cashflow, invoice scan:
+
+- **Stock**: movements and floors in plain words; levels are a
+  projection summed from the movement ledger at every read; an
+  unreadable movement records nothing and says how to say it; a
+  level under its floor emits the restock offer the standing
+  reminder machinery turns into a question.
+- **Cashflow**: amount, direction, and day read from the entry's own
+  words (an unclassified direction is read as money in and says so);
+  every run rebuilds the chart from the ledger alone — a
+  self-contained HTML/SVG at day/week/month/year scales — landed in
+  the drawer by the new ``_land_emitted_files`` hook
+  (``records/cashflow.html``), alongside the invoice sheet.
+- **Invoice scan**: a binding that names a file in the node's
+  ``messages/`` drawer stages it into the sandbox as
+  ``attachments/<name>`` (a new generic ``_attachments`` carrier —
+  data, like the book); the function parses total/date/vendor
+  deterministically, refuses in words when no total reads (nothing
+  guessed), lands the sheet row, and emits the parsed ``entry`` as a
+  standing output — which the EXISTING B4 hand-off offers to
+  Cashflow: yes binds the exact words, and the movement lands
+  run-cited on the graph.
+- ``_handoff_bindings`` now skips empty standing values — an empty
+  port is nothing to offer.
+- **Pinned** by ``tests/test_business_trio.py``: levels equal the
+  ledger's sum at every read; the floor breach stands as an offer;
+  the chart regenerates from the book alone at all four scales; a
+  readable invoice lands on the sheet and an unreadable total
+  refuses in words; the invoice-to-cashflow circle ends with the
+  entry bound on a yes and a run-cited handoff edge.
+
 Personal nodes P2 — the records trio: calendar, tasks, reminders:
 
 - **One record discipline.** The drawer's ``records/rows.json``

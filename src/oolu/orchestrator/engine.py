@@ -336,6 +336,7 @@ class WorkflowOrchestrator:
             "_value_tenant",
             "_output_ports",
             "_records",
+            "_attachments",
         ):
             if carried in function:
                 parameters[carried] = function[carried]

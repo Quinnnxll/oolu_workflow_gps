@@ -3475,6 +3475,8 @@ class GatewayApp:
                     pick["ref"], tenant=session.tenant_id
                 )
                 value = record.value
+                if value in ("", None, [], {}):
+                    continue  # an empty standing value is nothing to offer
                 preview = (
                     value
                     if isinstance(value, str)
@@ -4996,6 +4998,13 @@ class GatewayApp:
                     **extra_bindings,
                 },
             }
+        if function is not None:
+            # P3: a binding that NAMES a delivered document (a file in
+            # the node's message drawer) stages that document into the
+            # run — the sandbox reads what was forwarded, nothing more.
+            attachments = self._binding_attachments(session, function)
+            if attachments:
+                function = {**function, "_attachments": attachments}
         if function is not None:
             metadata["node_function"] = function
         revivable = self._revivable_run_for(session, intent)
@@ -12663,6 +12672,8 @@ class GatewayApp:
         # reminder the run asked for is filed into the standing store.
         self._land_records(state)
         self._file_reminder(state)
+        # P3: emitted sheets and charts land under the drawer's records.
+        self._land_emitted_files(state)
         if self._metering is None or self._nodeplace is None:
             return
         if state.phase is Phase.COMPLETED:
@@ -12876,6 +12887,92 @@ class GatewayApp:
         except Exception:  # noqa: BLE001 - the run's answer stands either way
             logging.getLogger("oolu.gateway").warning(
                 "handoff filing failed for run %s", state.run_id, exc_info=True
+            )
+
+    def _binding_attachments(self, session, function: dict) -> dict:
+        """P3 — the delivered-document stage: for each binding whose
+        value names a file in the node's ``messages/`` drawer folder,
+        that file's content rides the run (staged by the runner under
+        ``attachments/``). Bounded and literal: only exact name
+        matches, only the message drawer, at most a handful."""
+        if self._files is None:
+            return {}
+        bindings = function.get("bindings") or {}
+        node_id = str(function.get("node_id") or "")
+        wanted = {
+            str(value)
+            for value in bindings.values()
+            if isinstance(value, str) and value.strip()
+        }
+        if not wanted or not node_id:
+            return {}
+        attachments: dict[str, str] = {}
+        try:
+            for file in self._files.list(
+                tenant=session.tenant_id, node_id=node_id
+            ):
+                if file.folder != "messages" or file.blob_ref:
+                    continue
+                if file.name in wanted and len(attachments) < 5:
+                    attachments[file.name] = file.content
+        except Exception:  # noqa: BLE001 - staging is best-effort
+            return {}
+        return attachments
+
+    def _land_emitted_files(self, state: RunState) -> None:
+        """P3 — a run that emitted ``files`` ({name: content}) lands
+        each in the node's drawer under ``records/`` — the cashflow
+        chart, the invoice sheet: projections and sheets the function
+        rebuilt from its own book, replaced whole, best-effort. Names
+        are flattened to basenames; a handful per run, bounded size."""
+        if self._files is None:
+            return
+        result = self._completed_result(state)
+        if result is None or not isinstance(result.get("files"), dict):
+            return
+        function = state.contract.metadata["node_function"]
+        tenant = str(state.contract.metadata.get("tenant_id", ""))
+        node_id = str(function["node_id"])
+        try:
+            existing = {
+                f.name: f
+                for f in self._files.list(tenant=tenant, node_id=node_id)
+                if f.folder == "records"
+            }
+            for raw_name, content in list(result["files"].items())[:5]:
+                name = str(raw_name).replace("/", "_").replace("\\", "_")
+                content = str(content)
+                if not name or len(content) > 1_000_000:
+                    continue
+                current = existing.get(name)
+                if current is not None:
+                    if current.content != content:
+                        self._files.save(
+                            current.model_copy(update={"content": content})
+                        )
+                    continue
+                media = (
+                    "text/html"
+                    if name.endswith(".html")
+                    else "text/csv"
+                    if name.endswith(".csv")
+                    else "text/plain"
+                )
+                self._files.save(
+                    UserFile(
+                        tenant_id=tenant,
+                        node_id=node_id,
+                        folder="records",
+                        name=name,
+                        media_type=media,
+                        content=content,
+                    )
+                )
+        except Exception:  # noqa: BLE001 - bookkeeping never fails a run
+            logging.getLogger("oolu.gateway").warning(
+                "emitted-file landing failed for run %s",
+                state.run_id,
+                exc_info=True,
             )
 
     @staticmethod

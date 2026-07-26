@@ -234,6 +234,34 @@ book.*
 
 ### Phase P3 — the business trio: stock, cashflow, invoice scan
 
+**Status: LANDED** — the trio joined the P2 record discipline with
+real deterministic functions (same birth gates, subprocess-proven).
+Stock parses movements and floors in plain words ("received 40 boxes
+of paper", "keep at least 10 …" — an unreadable movement records
+NOTHING and says how to say it), levels are a PROJECTION summed from
+the movement ledger at every read (M1's law), and a level under its
+floor emits the restock offer the P2 reminder machinery turns into a
+standing question. Cashflow reads amount, direction, and day from
+the entry's own words (an unclassified direction is read as money in
+and SAYS so), and every run emits the chart REBUILT from the ledger
+alone — a self-contained HTML/SVG at all four scales (day / week /
+month / year, in as the calm blue, out as amber below the line),
+landed in the drawer by the new `_land_emitted_files` hook alongside
+the invoice sheet (``records/cashflow.html``, ``records/
+invoices.csv``). Invoice Scan reads a DELIVERED document — the new
+generic attachment stage: a binding that names a file in the node's
+``messages/`` drawer rides into the sandbox as ``attachments/<name>``
+(a ``_attachments`` carrier, data like ``_records``) — parses total /
+date / vendor deterministically, refuses in words when no total
+reads (nothing guessed, nothing landed), and emits the parsed
+``entry`` as a standing output the EXISTING B4 hand-off offers to
+Cashflow: running Cashflow alone asks, yes binds the exact words
+through the binder, and the movement lands run-cited on the graph
+(`tests/test_business_trio.py`). Remaining: the author-seat model
+consult for invoices the deterministic parse cannot read — the
+worded refusal stands either way; the model door can land with a
+later phase.
+
 *The small-business spine: what's on the shelf, what the money did,
 and the paper that proves it.*
 

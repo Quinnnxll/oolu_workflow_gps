@@ -57,19 +57,30 @@ def test_the_shelf_holds_seven_distinct_gate_clean_specs():
             assert item.label.endswith("?")
 
 
+# One parseable sample per starter — each function's own words.
+_SAMPLES = {
+    "calendar": "hello world today",
+    "tasks": "hello world tomorrow",
+    "reminders": "hello world tomorrow at 9",
+    "trigger": "hello world",
+    "stock": "received 4 hello world",
+    "cashflow": "hello world 120 in today",
+    "invoice_scan": "hello-world.txt",
+}
+
+
 def test_every_starter_function_actually_executes(tmp_path):
     # Verify-by-execution, for real: each deterministic script runs in
     # a subprocess against a bindings.json, emits its payload, and the
-    # bound value lands in it — the P2 trio in its book, the filing
-    # starters in their record.
+    # bound value lands in it — the record-keepers in their book, the
+    # filing starters in their record.
     for index, spec in enumerate(STARTER_SHELF):
         workdir = tmp_path / f"starter-{index}"
         workdir.mkdir()
         first = spec.inputs[0].name
+        sample = _SAMPLES[spec.key]
         (workdir / "main.py").write_text(starter_script(spec))
-        (workdir / "bindings.json").write_text(
-            json.dumps({first: "hello world"})
-        )
+        (workdir / "bindings.json").write_text(json.dumps({first: sample}))
         (workdir / "_oolu_runtime.py").write_text(_RUNTIME_SHIM)
         subprocess.run(
             [sys.executable, "main.py"],
@@ -80,7 +91,7 @@ def test_every_starter_function_actually_executes(tmp_path):
         )
         payload = json.loads((workdir / "result.json").read_text())
         assert isinstance(payload, dict)
-        assert "hello world" in json.dumps(payload), spec.key
+        assert sample in json.dumps(payload), spec.key
         # Every declared output port is covered — the armed run-time
         # contract check will hold real runs to exactly this.
         for port in spec.outputs:

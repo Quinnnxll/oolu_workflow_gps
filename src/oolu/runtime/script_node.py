@@ -390,6 +390,18 @@ class NodeScriptRunner:
         records = action.parameters.get("_records")
         if isinstance(records, str) and records:
             files = {**files, "records.json": records}
+        # Delivered documents (P3): a binding that NAMED a file in the
+        # node's message drawer rides in as ./attachments/<name> — the
+        # run reads what was forwarded to it, nothing more.
+        attachments = action.parameters.get("_attachments")
+        if isinstance(attachments, dict):
+            files = {
+                **files,
+                **{
+                    f"attachments/{str(name)}": str(content)
+                    for name, content in attachments.items()
+                },
+            }
         # A large tree rides as a content-addressed bundle: resolve its id
         # to a packed archive (cache-first) once, here, and hand it to every
         # backend run below instead of a per-file dict.

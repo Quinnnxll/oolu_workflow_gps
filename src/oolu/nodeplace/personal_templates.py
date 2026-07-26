@@ -252,10 +252,265 @@ if not answer:
 emit_result({"answer": answer, "records": rows, "reminder": reminder})
 '''
 
+_STOCK_BODY = r'''
+movement = str(values.get("movement") or "").strip()
+if movement:
+    low = movement.lower()
+    floor_found = re.search(
+        r"(?:keep\s+)?at\s+least\s+(\d+)\s+(?:of\s+)?(.+)", low
+    )
+    came = re.search(
+        r"(?:received|bought|restocked|added|got)\s+(\d+)\s+(?:of\s+)?(.+)",
+        low,
+    )
+    went = re.search(
+        r"(?:sold|used|shipped|sent|lost)\s+(\d+)\s+(?:of\s+)?(.+)", low
+    )
+    if floor_found:
+        item = floor_found.group(2).strip().rstrip(".")
+        rows.append({"kind": "floor", "item": item,
+                     "floor": int(floor_found.group(1))})
+        answer = "Noted — keep at least %s %s." % (
+            floor_found.group(1), item)
+    elif came:
+        item = came.group(2).strip().rstrip(".")
+        rows.append({"kind": "move", "item": item,
+                     "change": int(came.group(1)), "words": movement})
+        answer = "In: %s %s." % (came.group(1), item)
+    elif went:
+        item = went.group(2).strip().rstrip(".")
+        rows.append({"kind": "move", "item": item,
+                     "change": -int(went.group(1)), "words": movement})
+        answer = "Out: %s %s." % (went.group(1), item)
+    else:
+        answer = (
+            "I couldn't read that movement — say it like \"received 40 "
+            "boxes of paper\", \"sold 3 boxes of paper\", or \"keep at "
+            "least 10 boxes of paper\". Nothing was recorded."
+        )
+levels = {}
+for row in rows:
+    if row.get("kind") == "move":
+        item = str(row.get("item"))
+        levels[item] = levels.get(item, 0) + int(row.get("change") or 0)
+floors = {}
+for row in rows:
+    if row.get("kind") == "floor":
+        floors[str(row.get("item"))] = int(row.get("floor") or 0)
+low_stock = [
+    "%s — %d left, floor %d" % (item, levels.get(item, 0), floor)
+    for item, floor in sorted(floors.items())
+    if levels.get(item, 0) < floor
+]
+offer = {}
+if low_stock:
+    offer = {
+        "text": "restock: " + "; ".join(low_stock),
+        "day": (today + timedelta(days=1)).isoformat(),
+        "time": "09:00",
+    }
+if not answer:
+    if levels:
+        answer = "On the shelf: " + "; ".join(
+            "%s: %d" % (item, count) for item, count in sorted(levels.items())
+        )
+    else:
+        answer = "The shelf is empty — nothing recorded yet."
+if low_stock:
+    answer = answer + " LOW: " + "; ".join(low_stock)
+emit_result({
+    "answer": answer,
+    "records": rows,
+    "levels": levels,
+    "low_stock": low_stock,
+    "reminder_offer": offer,
+})
+'''
+
+_CASHFLOW_BODY = r'''
+entry = str(values.get("entry") or "").strip()
+if entry:
+    low = " " + entry.lower() + " "
+    found = re.search(r"(\d[\d,]*(?:\.\d{1,2})?)", entry)
+    if not found:
+        answer = (
+            "I couldn't read an amount in that — say it like "
+            "\"invoice paid, 1200 in, tomorrow\". Nothing was recorded."
+        )
+    else:
+        amount = float(found.group(1).replace(",", ""))
+        outward = (
+            " out " in low
+            or any(w in low for w in (" spent ", " bought ", " paid for "))
+        )
+        if outward:
+            amount = -amount
+        day = day_of(entry, today) or today.isoformat()
+        rows.append({"entry": entry, "amount": amount, "on": day})
+        answer = "Recorded: %s (%s%.2f on %s)." % (
+            entry, "-" if amount < 0 else "+", abs(amount), day
+        )
+        if not outward and " in " not in low:
+            answer += " I read that as money IN - say \"out\" to record spending."
+
+def _bucket(day, scale):
+    if scale == "day":
+        return day
+    if scale == "month":
+        return day[:7]
+    if scale == "year":
+        return day[:4]
+    import datetime as _dt
+    parsed = _dt.date.fromisoformat(day)
+    year, week, _ = parsed.isocalendar()
+    return "%04d-W%02d" % (year, week)
+
+def _chart(rows):
+    took = {"in": 0.0, "out": 0.0}
+    for row in rows:
+        amount = float(row.get("amount") or 0)
+        took["in" if amount > 0 else "out"] += abs(amount)
+    net = took["in"] - took["out"]
+    keep = {"day": 14, "week": 12, "month": 12, "year": 5}
+    parts = [
+        "<h1>Cashflow</h1>",
+        "<p>In %.2f - Out %.2f - Net %+.2f</p>" % (
+            took["in"], took["out"], net),
+    ]
+    for scale in ("day", "week", "month", "year"):
+        buckets = {}
+        for row in rows:
+            day = str(row.get("on") or "")
+            if len(day) == 10:
+                key = _bucket(day, scale)
+                buckets[key] = buckets.get(key, 0.0) + float(
+                    row.get("amount") or 0)
+        named = sorted(buckets.items())[-keep[scale]:]
+        parts.append("<h2>Per %s</h2>" % scale)
+        if not named:
+            parts.append("<p>No entries yet.</p>")
+            continue
+        top = max(abs(v) for _, v in named) or 1.0
+        width = 44
+        svg = ["<svg width='%d' height='150' role='img'>"
+               % (len(named) * width + 10)]
+        svg.append(
+            "<line x1='0' y1='75' x2='%d' y2='75' stroke='#9ca3af'/>"
+            % (len(named) * width + 10)
+        )
+        for index, (key, value) in enumerate(named):
+            bar = int(abs(value) / top * 60)
+            x = index * width + 8
+            if value >= 0:
+                y, color = 75 - bar, "#2563eb"
+            else:
+                y, color = 75, "#d97706"
+            svg.append(
+                "<rect x='%d' y='%d' width='28' height='%d' rx='3' "
+                "fill='%s'/>" % (x, y, max(bar, 2), color)
+            )
+            svg.append(
+                "<text x='%d' y='148' font-size='9' fill='#6b7280'>%s"
+                "</text>" % (x, key[-5:])
+            )
+        svg.append("</svg>")
+        parts.append("".join(svg))
+    return (
+        "<div style='font-family: sans-serif; color: #1f2937'>"
+        + "".join(parts) + "</div>"
+    )
+
+took_in = sum(float(r.get("amount") or 0) for r in rows
+              if float(r.get("amount") or 0) > 0)
+took_out = sum(-float(r.get("amount") or 0) for r in rows
+               if float(r.get("amount") or 0) < 0)
+summary = {"in": took_in, "out": took_out, "net": took_in - took_out}
+if not answer:
+    answer = "In %.2f - out %.2f - net %+.2f over %d entries." % (
+        took_in, took_out, summary["net"], len(rows))
+emit_result({
+    "answer": answer,
+    "records": rows,
+    "cashflow_summary": summary,
+    "files": {"cashflow.html": _chart(rows)},
+})
+'''
+
+_INVOICE_BODY = r'''
+name = str(values.get("invoice_file") or "").strip()
+text = ""
+if name:
+    try:
+        with open("attachments/" + name.replace("/", "_")) as handle:
+            text = handle.read()
+    except OSError:
+        text = ""
+entry = ""
+if not name:
+    answer = (
+        "Which file is the invoice? Forward it to this node (it lands "
+        "in the drawer's messages) and give me its name."
+    )
+elif not text:
+    answer = (
+        "I can't find \"" + name + "\" in this node's drawer - forward "
+        "the invoice here first, then ask again."
+    )
+else:
+    labeled = re.search(
+        r"total[^0-9-]{0,24}(\d[\d,]*(?:\.\d{1,2})?)", text, re.I
+    )
+    numbers = re.findall(r"(\d[\d,]*\.\d{2})", text)
+    raw = labeled.group(1) if labeled else (numbers[-1] if numbers else "")
+    day_found = re.search(r"(20\d\d-\d\d-\d\d)", text)
+    day = day_found.group(1) if day_found else today.isoformat()
+    vendor = ""
+    for line in text.splitlines():
+        if line.strip():
+            vendor = line.strip().replace(",", " ")[:60]
+            break
+    try:
+        amount = float(raw.replace(",", ""))
+    except ValueError:
+        amount = None
+    if amount is None:
+        answer = (
+            "I couldn't read a total from \"" + name + "\" - no amount "
+            "was recorded, nothing was guessed. A clearer copy will "
+            "read; nothing lands without a checked number."
+        )
+    else:
+        rows.append({"file": name, "vendor": vendor, "date": day,
+                     "amount": amount})
+        entry = "invoice %s from %s: %.2f out, %s" % (
+            name, vendor or "(no vendor line)", amount, day)
+        answer = "Read %s: %s - %.2f on %s. Added to the sheet." % (
+            name, vendor or "(no vendor line)", amount, day)
+sheet = ["file,vendor,date,amount"]
+for row in rows:
+    sheet.append("%s,%s,%s,%.2f" % (
+        str(row.get("file", "")).replace(",", " "),
+        str(row.get("vendor", "")).replace(",", " "),
+        row.get("date", ""),
+        float(row.get("amount") or 0),
+    ))
+payload = {
+    "answer": answer,
+    "records": rows,
+    "files": {"invoices.csv": "\n".join(sheet) + "\n"},
+}
+if entry:
+    payload["entry"] = entry
+emit_result(payload)
+'''
+
 _RECORD_BODIES = {
     "calendar": _CALENDAR_BODY,
     "tasks": _TASKS_BODY,
     "reminders": _REMINDERS_BODY,
+    "stock": _STOCK_BODY,
+    "cashflow": _CASHFLOW_BODY,
+    "invoice_scan": _INVOICE_BODY,
 }
 
 
@@ -377,6 +632,12 @@ STARTER_SHELF: tuple[StarterSpec, ...] = (
                 example="received 40 boxes of paper",
             ),
         ),
+        outputs=(
+            StarterOutput(name="answer", value_type="str"),
+            StarterOutput(name="records"),
+            StarterOutput(name="levels"),
+            StarterOutput(name="low_stock"),
+        ),
     ),
     StarterSpec(
         key="cashflow",
@@ -393,6 +654,11 @@ STARTER_SHELF: tuple[StarterSpec, ...] = (
                 example="invoice paid, 1200 in, July 3",
             ),
         ),
+        outputs=(
+            StarterOutput(name="answer", value_type="str"),
+            StarterOutput(name="records"),
+            StarterOutput(name="cashflow_summary"),
+        ),
     ),
     StarterSpec(
         key="invoice_scan",
@@ -406,8 +672,12 @@ STARTER_SHELF: tuple[StarterSpec, ...] = (
             StarterInput(
                 name="invoice_file",
                 label="Which file is the invoice?",
-                example="invoice-042.pdf",
+                example="invoice-042.txt",
             ),
+        ),
+        outputs=(
+            StarterOutput(name="answer", value_type="str"),
+            StarterOutput(name="records"),
         ),
     ),
 )
