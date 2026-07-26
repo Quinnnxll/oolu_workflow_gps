@@ -4,6 +4,31 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Investor panel — the deployed page is the page again:
+
+- **The stale-serving defect.** ``docker-compose.prod.yml``
+  bind-mounted the Caddyfile and ``investor-panel.html`` as SINGLE
+  FILES. A single-file bind mount pins the file's inode at container
+  start — and every deploy's ``git reset --hard`` replaces changed
+  files with new inodes — so the caddy container kept serving the
+  panel (and reloading the config) exactly as they were the day it
+  was created: the old manual-token page, while every deploy
+  reported success.
+- **The fix.** The ``deploy/`` directory is mounted WHOLE
+  (``./deploy:/srv/deploy:ro`` — directory mounts resolve names on
+  every lookup); Caddy runs from the mounted config
+  (``caddy run --config /srv/deploy/Caddyfile``), the workflow
+  validates and reloads that same path, and the investors block
+  serves ``root * /srv/deploy`` with ``Cache-Control: no-cache`` so
+  browsers revalidate (ETag keeps it a cheap 304) — a deployed panel
+  is the panel people see. The compose change itself forces the
+  caddy container to be recreated on the next deploy, refreshing
+  every mount.
+- **Pinned** by ``tests/test_deploy_config.py``: the directory mount
+  with no single-file deploy mounts anywhere, the three files
+  agreeing on the one mounted path, and the repo's panel being the
+  live same-origin version.
+
 Invoice scan — the reading seat (P3's model door, closed):
 
 - **The ask.** A run whose deterministic parse found no total now

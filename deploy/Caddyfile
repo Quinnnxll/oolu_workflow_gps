@@ -37,8 +37,15 @@
 		reverse_proxy oolu:8765
 	}
 	handle {
-		root * /srv/investors
+		# The deploy directory rides in as one mount (see the compose
+		# file: single-file mounts go stale on git deploys). Every page
+		# path rewrites to the panel, so nothing else in the directory
+		# is reachable — and no-cache makes browsers REVALIDATE on each
+		# visit (ETag keeps that a cheap 304), so a deployed panel is
+		# the panel people see.
+		root * /srv/deploy
 		rewrite * /investor-panel.html
+		header Cache-Control "no-cache"
 		file_server
 	}
 }
