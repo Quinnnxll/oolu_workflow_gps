@@ -66,6 +66,12 @@ class PurchasePolicy(BaseModel):
     strong_fraud_score: float = 0.5
     fraud_deny_score: float = 0.85
     approval_ttl_minutes: int = 24 * 60
+    # Reputation's ONE lever (spec trust_layer rule): a counterparty whose
+    # earned reputation clears this bar counts as trusted for the
+    # auto-execution requirement — and nothing else. Reputation never
+    # touches the deny, dual-control, strong, or approval rungs: it
+    # modifies review requirements, never explicit constraints.
+    reputation_trust_threshold: float = 0.9
 
 
 class PurchaseFacts(BaseModel):
@@ -97,6 +103,9 @@ class PurchaseFacts(BaseModel):
     budget_exceeded: bool = False
     seller_identity_verified: bool = False
     payout_destination_change: bool = False
+    # Earned trust in [0, 1], derived from verified order history. None =
+    # no history. Read by exactly one rung — see the policy's threshold.
+    counterparty_reputation: float | None = None
 
 
 class PolicyVerdict(BaseModel):
@@ -234,7 +243,13 @@ def evaluate_purchase(policy: PurchasePolicy, facts: PurchaseFacts) -> PolicyVer
     auto_missing: list[str] = []
     if facts.category not in policy.trusted_categories:
         auto_missing.append(f"category '{facts.category}' is not trusted")
-    if facts.counterparty not in policy.trusted_counterparties:
+    reputation_trusted = (
+        facts.counterparty_reputation is not None
+        and facts.counterparty_reputation >= policy.reputation_trust_threshold
+    )
+    if facts.counterparty not in policy.trusted_counterparties and not (
+        reputation_trusted
+    ):
         auto_missing.append(f"counterparty '{facts.counterparty}' is not trusted")
     if facts.delivery_destination not in policy.preapproved_destinations:
         auto_missing.append("delivery destination is not pre-approved")

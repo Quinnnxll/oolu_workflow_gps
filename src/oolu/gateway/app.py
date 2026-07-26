@@ -37,9 +37,11 @@ from ..billing import (
     PayoutStore,
 )
 from ..billing.doubleentry import DoubleEntryLedger
+from ..billing.escrow import EscrowPolicy
 from ..billing.launch import LaunchGuard
 from ..billing.psp import FakePsp
 from ..billing.subscription import SubscriptionError, SubscriptionService
+from ..billing.tax import InvoiceBook, JurisdictionModule, TaxRegistry
 from ..chat import (
     BUILDER_OFFER_NOTE,
     GROWTH_BUILD_INSTEAD,
@@ -92,11 +94,17 @@ from ..mail import SendThrottle
 from ..marketplace import (
     AgentDelegation,
     CatalogService,
+    InventoryService,
     MarketNotFound,
     MarketplaceError,
     MarketplaceSpine,
+    OrderHistory,
     OrderService,
     PurchasePolicy,
+    RfqService,
+    RfqSpecification,
+    SalesPolicy,
+    SalesPolicyStore,
     SellerKyc,
     SellerKycError,
     SellerUnverified,
@@ -611,6 +619,8 @@ class GatewayApp:
         # secret key exists, the pre-launch FakePsp otherwise
         commerce_providers=(),  # identity ProviderConfigs for the money
         # gate: a live commerce PSP demands require_production_money
+        commerce_jurisdiction=None,  # billing.tax.JurisdictionModule: the
+        # host's operating jurisdiction; None = a zero-rate LOCAL module
         google_signin: GoogleSignIn | None = None,  # "Continue with Google"
         identity_links: IdentityLinkStore | None = None,  # email/IdP -> account
         mail=None,  # mail.MailSender: verification + reset codes go out here
@@ -709,19 +719,38 @@ class GatewayApp:
         self._pulse = PulseStore(durable.conn)
         self._pulse_gate = 0.0
         # The commercial spine (marketplace-build-plan M0): typed intents,
-        # the deterministic policy ladder, digest-bound approvals.
-        self._commerce = MarketplaceSpine(durable.conn, audit=durable.audit)
-        # The fixed-price market (M1): catalog, orders, and the
-        # double-entry ledger. The payment provider is the pre-launch
-        # fake — live Stripe swaps in behind the same port, gated by
-        # require_production_money.
+        # the deterministic policy ladder, digest-bound approvals. M2
+        # wires the history port, so risk facts derive from the order
+        # book instead of arriving on faith.
+        self._commerce = MarketplaceSpine(
+            durable.conn,
+            audit=durable.audit,
+            history=OrderHistory(durable.conn),
+        )
+        # The fixed-price market (M1) + M2's trust machinery: catalog,
+        # atomic inventory, escrow-held orders, the double-entry ledger,
+        # tax and invoices. The payment provider is the pre-launch fake —
+        # live Stripe swaps in behind the same port, gated by
+        # require_production_money. The jurisdiction module is the
+        # compliance deployment gate: no module, no transacting.
         self._commerce_seller_kyc = SellerKyc(durable.conn, audit=durable.audit)
+        self._commerce_inventory = InventoryService(durable.conn)
+        self._commerce_jurisdiction = (
+            commerce_jurisdiction
+            if commerce_jurisdiction is not None
+            else JurisdictionModule(code="LOCAL", tax_rate_bps=0)
+        )
+        self._commerce_tax = TaxRegistry((self._commerce_jurisdiction,))
         self._commerce_catalog = CatalogService(
             durable.conn,
             audit=durable.audit,
             seller_verified=self._commerce_seller_verified,
+            inventory=self._commerce_inventory,
+            tax=self._commerce_tax,
+            jurisdiction=self._commerce_jurisdiction.code,
         )
         self._commerce_ledger = DoubleEntryLedger(durable.conn)
+        self._commerce_invoices = InvoiceBook(durable.conn)
         self._commerce_orders = OrderService(
             durable.conn,
             audit=durable.audit,
@@ -729,7 +758,13 @@ class GatewayApp:
             psp=commerce_psp if commerce_psp is not None else FakePsp(),
             ledger=self._commerce_ledger,
             providers=tuple(commerce_providers),
+            escrow=EscrowPolicy(),
+            inventory=self._commerce_inventory,
+            invoices=self._commerce_invoices,
+            jurisdiction=self._commerce_jurisdiction,
         )
+        self._commerce_rfq = RfqService(durable.conn, audit=durable.audit)
+        self._commerce_sales_policies = SalesPolicyStore(durable.conn)
         # Competitor intelligence, constructed on first use.
         self._competitors = None
         self._settings = settings_node
@@ -1111,6 +1146,29 @@ class GatewayApp:
             "POST",
             "/v1/commerce/listings/{listing_id}/offer",
             self._commerce_listing_offer,
+        )
+        # M2: RFQ and quotes, seller automation policy, evidence and
+        # invoices.
+        r.add("GET", "/v1/commerce/rfqs", self._commerce_rfqs_list)
+        r.add("POST", "/v1/commerce/rfqs", self._commerce_rfq_open)
+        r.add(
+            "GET", "/v1/commerce/rfqs/{rfq_id}/quotes", self._commerce_quotes_list
+        )
+        r.add(
+            "POST", "/v1/commerce/rfqs/{rfq_id}/quotes", self._commerce_quote_submit
+        )
+        r.add("POST", "/v1/commerce/rfqs/{rfq_id}/award", self._commerce_rfq_award)
+        r.add("GET", "/v1/commerce/sales-policy", self._commerce_sales_policy_get)
+        r.add("PUT", "/v1/commerce/sales-policy", self._commerce_sales_policy_put)
+        r.add(
+            "POST",
+            "/v1/commerce/orders/{order_id}/evidence",
+            self._commerce_order_evidence,
+        )
+        r.add(
+            "GET",
+            "/v1/commerce/orders/{order_id}/invoice",
+            self._commerce_order_invoice,
         )
         r.add("GET", "/v1/commerce/orders", self._commerce_orders_list)
         r.add("POST", "/v1/commerce/orders", self._commerce_order_place)
@@ -10403,7 +10461,146 @@ class GatewayApp:
             raise GatewayError(400, "invalid_request", str(exc)) from exc
         return json_response(200, offer.model_dump(mode="json"))
 
+    # ------------------------------------------------------------------ #
+    # M2: RFQ and quotes, seller automation, evidence, invoices.          #
+    # ------------------------------------------------------------------ #
+    def _commerce_rfqs_list(self, request, session, params) -> Response:
+        requests = self._commerce_rfq.open_requests(
+            tenant=session.tenant_id, now=request.now or self._clock()
+        )
+        return json_response(
+            200, {"items": [r.model_dump(mode="json") for r in requests]}
+        )
+
+    def _commerce_rfq_open(self, request, session, params) -> Response:
+        body = request.body or {}
+        attributes = body.get("required_attributes") or {}
+        if not isinstance(attributes, dict):
+            raise GatewayError(
+                400, "invalid_request", "required_attributes must be an object"
+            )
+        try:
+            specification = RfqSpecification(
+                category=str(body.get("category") or ""),
+                required_attributes=tuple(
+                    sorted((str(k), str(v)) for k, v in attributes.items())
+                ),
+                quantity=int(body.get("quantity") or 1),
+                destination_reference=str(body.get("destination_reference") or ""),
+            )
+            rfq = self._commerce_rfq.open(
+                tenant=session.tenant_id,
+                buyer=session.principal_id,
+                specification=specification,
+                now=request.now or self._clock(),
+            )
+        except (ValidationError, ValueError, TypeError) as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(201, rfq.model_dump(mode="json"))
+
+    def _commerce_quotes_list(self, request, session, params) -> Response:
+        try:
+            quotes = self._commerce_rfq.quotes(
+                params["rfq_id"], tenant=session.tenant_id
+            )
+        except MarketplaceError as exc:
+            raise self._commerce_error(exc) from exc
+        return json_response(
+            200, {"items": [q.model_dump(mode="json") for q in quotes]}
+        )
+
+    def _commerce_quote_submit(self, request, session, params) -> Response:
+        body = request.body or {}
+        try:
+            offer = CommerceOffer.model_validate(body.get("offer") or {})
+        except ValidationError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        attributes = body.get("attributes") or {}
+        if not isinstance(attributes, dict):
+            raise GatewayError(
+                400, "invalid_request", "attributes must be an object"
+            )
+        try:
+            quote = self._commerce_rfq.submit_quote(
+                params["rfq_id"],
+                tenant=session.tenant_id,
+                seller_principal=session.principal_id,
+                offer=offer,
+                attributes={str(k): str(v) for k, v in attributes.items()},
+                # The seller's own signed automation boundary gates the
+                # quote — the absolute floor refuses without discretion.
+                sales_policy=self._commerce_sales_policies.get(
+                    tenant=session.tenant_id, principal=session.principal_id
+                ),
+                now=request.now or self._clock(),
+            )
+        except MarketplaceError as exc:
+            raise self._commerce_error(exc) from exc
+        return json_response(201, quote.model_dump(mode="json"))
+
+    def _commerce_rfq_award(self, request, session, params) -> Response:
+        body = request.body or {}
+        quote_id = str(body.get("quote_id") or "")
+        if not quote_id:
+            raise GatewayError(400, "invalid_request", "quote_id is required")
+        try:
+            offer = self._commerce_rfq.award(
+                params["rfq_id"],
+                quote_id,
+                tenant=session.tenant_id,
+                buyer=session.principal_id,
+                now=request.now or self._clock(),
+            )
+        except MarketplaceError as exc:
+            raise self._commerce_error(exc) from exc
+        return json_response(200, offer.model_dump(mode="json"))
+
+    def _commerce_sales_policy_get(self, request, session, params) -> Response:
+        policy = self._commerce_sales_policies.get(
+            tenant=session.tenant_id, principal=session.principal_id
+        )
+        return json_response(200, policy.model_dump(mode="json"))
+
+    def _commerce_sales_policy_put(self, request, session, params) -> Response:
+        try:
+            policy = SalesPolicy.model_validate(request.body or {})
+        except ValidationError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        self._commerce_sales_policies.put(
+            policy, tenant=session.tenant_id, principal=session.principal_id
+        )
+        self._durable.audit.append(
+            "market.sales_policy.updated",
+            {
+                "tenant": session.tenant_id,
+                "principal": session.principal_id,
+                "policy_version": policy.policy_version,
+            },
+        )
+        return json_response(200, policy.model_dump(mode="json"))
+
+    def _commerce_order_evidence(self, request, session, params) -> Response:
+        return self._commerce_order_transition(
+            request,
+            session,
+            params,
+            self._commerce_orders.attach_evidence,
+            evidence=str((request.body or {}).get("evidence") or ""),
+        )
+
+    def _commerce_order_invoice(self, request, session, params) -> Response:
+        stored = self._commerce_party_order(session, params["order_id"])
+        invoice = self._commerce_invoices.for_order(stored.record.order_id)
+        if invoice is None:
+            raise GatewayError(404, "not_found", "no invoice yet")
+        return json_response(200, invoice.model_dump(mode="json"))
+
     def _commerce_orders_list(self, request, session, params) -> Response:
+        # The lazy acceptance-timeout sweep rides list traffic, the same
+        # way every clock in this codebase rides a request.
+        self._commerce_orders.sweep_acceptance_timeouts(
+            now=request.now or self._clock()
+        )
         orders = self._commerce_orders.orders.list_for(
             tenant=session.tenant_id, principal=session.principal_id
         )

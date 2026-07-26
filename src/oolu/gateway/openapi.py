@@ -367,6 +367,49 @@ def build_openapi() -> dict:
         "/v1/commerce/orders/{order_id}/ledger": {
             "get": op("The order's balanced ledger transactions"),
         },
+        "/v1/commerce/orders/{order_id}/evidence": {
+            "post": op(
+                "Attach late delivery evidence — the escrow exception's "
+                "way out; capture into escrow follows"
+            ),
+        },
+        "/v1/commerce/orders/{order_id}/invoice": {
+            "get": op("The completed order's generated invoice"),
+        },
+        "/v1/commerce/rfqs": {
+            "get": op("Live requests for quotes (what sellers browse)"),
+            "post": op(
+                "Open a request for quotes from a typed specification — "
+                "required attributes are the eligibility bar every quote "
+                "meets or is marked by"
+            ),
+        },
+        "/v1/commerce/rfqs/{rfq_id}/quotes": {
+            "get": op(
+                "Normalized comparison: eligible quotes by landed total, "
+                "substitutes after them with their gaps named"
+            ),
+            "post": op(
+                "Submit a quote (the seller's signed sales policy gates "
+                "it — below the absolute floor is refused without model "
+                "discretion; specification eligibility is judged and "
+                "stored before any policy evaluation)"
+            ),
+        },
+        "/v1/commerce/rfqs/{rfq_id}/award": {
+            "post": op(
+                "Award one ELIGIBLE quote; returns its exact versioned "
+                "offer for the intent door — discovery never bypasses "
+                "the digest law"
+            ),
+        },
+        "/v1/commerce/sales-policy": {
+            "get": op("The caller's seller automation policy"),
+            "put": op(
+                "Replace the caller's seller automation policy (floors, "
+                "auto-accept price, discount and quantity limits)"
+            ),
+        },
         "/v1/earnings": {"get": op("The caller's own earnings balance")},
         "/v1/earnings/entries": {"get": op("The caller's own earnings ledger entries")},
         "/v1/payout-accounts": {

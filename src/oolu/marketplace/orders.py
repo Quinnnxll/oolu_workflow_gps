@@ -25,16 +25,19 @@ four; this machine owns the rest:
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict
 
 from ..billing.doubleentry import DoubleEntryLedger, LedgerEntry, LedgerTransaction
+from ..billing.escrow import EscrowPolicy, capture_entries, release_entries
 from ..billing.guard import require_production_money
 from ..billing.payout import PaymentError
 from ..billing.psp import PaymentProviderPort
-from .errors import MarketNotFound, WrongState
+from ..billing.tax import InvoiceBook, JurisdictionModule
+from .errors import ListingUnavailable, MarketNotFound, WrongState
+from .inventory import InventoryService
 from .models import Offer
 from .service import MarketplaceSpine
 
@@ -73,6 +76,10 @@ class OrderRecord(BaseModel):
     offer: Offer
     idempotency_key: str
     take_rate_bps: int
+    # M2: whether captured money waits in escrow until a release
+    # condition holds, and the clock the acceptance timeout reads.
+    escrow_held: bool = False
+    delivered_at: datetime | None = None
     auth_ref: str | None = None
     charge_ref: str | None = None
     refund_ref: str | None = None
@@ -165,6 +172,27 @@ class OrderStore:
                 (record.model_dump_json(), record.order_id, record.tenant_id),
             )
 
+    def in_state(self, state: str) -> list[StoredOrder]:
+        """Every order in one state, host-wide — the sweep's read."""
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                "SELECT payload_json, state FROM market_orders WHERE state = ?",
+                (state,),
+            ).fetchall()
+        orders = [self._row(row) for row in rows]
+        orders.sort(key=lambda o: (o.record.created_at.isoformat(), o.record.order_id))
+        return orders
+
+    def for_seller(self, *, seller_id: str) -> list[StoredOrder]:
+        """Every order naming this commercial seller — the reputation
+        aggregate's read. Rates only ever leave it, never buyer data."""
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                "SELECT payload_json, state FROM market_orders"
+            ).fetchall()
+        orders = [self._row(row) for row in rows]
+        return [o for o in orders if o.record.seller_id == seller_id]
+
     def list_for(self, *, tenant: str, principal: str) -> list[StoredOrder]:
         """The principal's orders, as buyer or as hosted seller."""
         with self._conn.lock:
@@ -199,6 +227,10 @@ class OrderService:
         durable=None,
         providers: tuple = (),
         take_rate_bps: int = DEFAULT_TAKE_RATE_BPS,
+        escrow: EscrowPolicy | None = None,
+        inventory: InventoryService | None = None,
+        invoices: InvoiceBook | None = None,
+        jurisdiction: JurisdictionModule | None = None,
     ) -> None:
         self.orders = OrderStore(conn)
         self._audit = audit
@@ -210,6 +242,12 @@ class OrderService:
         self._durable = durable if durable is not None else conn
         self._providers = tuple(providers)
         self._take_rate_bps = take_rate_bps
+        # M2: escrow discipline, atomic stock, and the invoice book.
+        # None = the M1 direct-settlement flow (escrow is a policy choice).
+        self._escrow = escrow
+        self._inventory = inventory
+        self._invoices = invoices
+        self._jurisdiction = jurisdiction
 
     @property
     def psp_mode(self) -> str:
@@ -234,12 +272,16 @@ class OrderService:
         payment_method_ref: str,
         current_offer: Offer | None = None,
         seller_principal: str = "",
+        digital: bool = False,
     ) -> tuple[StoredOrder, bool]:
         """Place the order for an intent — exactly once per intent.
 
         A duplicate request (same intent, hence same idempotency key)
         returns the existing order without touching the spine or the
-        provider — the spec's duplicate-execution acceptance test.
+        provider — the spec's duplicate-execution acceptance test. When
+        the offer's item is inventory-tracked, the units are RESERVED
+        atomically before any payment call; a sold-out shelf refuses
+        here, never after money moved.
         """
         existing = self.orders.by_intent(intent_id, tenant=tenant)
         if existing is not None:
@@ -247,8 +289,30 @@ class OrderService:
         self._guard_money()
         stored_intent = self._spine.get_intent(intent_id, tenant=tenant)
         offer = current_offer or stored_intent.intent.offer_snapshot
-        authorization = self._spine.authorize_execution(
-            intent_id, tenant=tenant, current_offer=offer, now=now
+        reservation = None
+        if self._inventory is not None and self._inventory.tracked(offer.item_id):
+            reservation = self._inventory.reserve(
+                offer.item_id,
+                quantity=offer.quantity,
+                holder=intent_id,
+                now=now,
+            )
+            if reservation is None:
+                raise ListingUnavailable(
+                    "the listing cannot cover the quantity right now"
+                )
+        try:
+            authorization = self._spine.authorize_execution(
+                intent_id, tenant=tenant, current_offer=offer, now=now
+            )
+        except Exception:
+            if reservation is not None and self._inventory is not None:
+                self._inventory.release(reservation.reservation_id)
+            raise
+        held = self._escrow is not None and self._escrow.holds(
+            total_micros=offer.total_micros,
+            seller_id=offer.seller_id,
+            digital=digital,
         )
         record = OrderRecord(
             order_id=uuid4().hex,
@@ -262,6 +326,7 @@ class OrderService:
             offer=offer,
             idempotency_key=stored_intent.intent.idempotency_key,
             take_rate_bps=self._take_rate_bps,
+            escrow_held=held,
             created_at=now,
         )
         order, created = self.orders.add(record, state="payment_authorizing")
@@ -297,6 +362,8 @@ class OrderService:
                 state="cancelled",
                 expected=("payment_authorizing",),
             )
+            if reservation is not None and self._inventory is not None:
+                self._inventory.release(reservation.reservation_id)
             self._audit.append(
                 "market.payment.declined",
                 {"tenant": tenant, "order_id": record.order_id, "reason": str(exc)},
@@ -362,27 +429,72 @@ class OrderService:
     def mark_delivered(
         self, order_id: str, *, tenant: str, actor: str, now: datetime, evidence: str = ""
     ) -> StoredOrder:
+        """Delivery confirmation. Escrow orders CAPTURE here — but only on
+        evidence: a delivery nobody can verify keeps the buyer's money
+        uncaptured and files an exception instead of trusting the claim."""
         order = self._get(order_id, tenant=tenant)
         self._party(order, actor)
         if not self.orders.set_state(
             order_id, tenant=tenant, state="delivered", expected=("fulfilling",)
         ):
             raise WrongState(f"order is {order.state}, not fulfilling")
-        updated = order.record.model_copy(update={"delivery_evidence": evidence})
+        updated = order.record.model_copy(
+            update={"delivery_evidence": evidence, "delivered_at": now}
+        )
         self.orders.update_record(updated)
         self._audit.append(
             "market.order.delivered",
             {"tenant": tenant, "order_id": order_id, "evidence": evidence},
         )
+        if updated.escrow_held:
+            if evidence:
+                return self._capture_to_escrow(
+                    StoredOrder(updated, state="delivered"), now=now
+                )
+            self._audit.append(
+                "market.escrow.exception",
+                {
+                    "tenant": tenant,
+                    "order_id": order_id,
+                    "reason": "delivery evidence is missing; escrow unreleased",
+                },
+            )
         return StoredOrder(updated, state="delivered")
+
+    def attach_evidence(
+        self, order_id: str, *, tenant: str, actor: str, now: datetime, evidence: str
+    ) -> StoredOrder:
+        """Late evidence for a delivered order — the exception's way out."""
+        order = self._get(order_id, tenant=tenant)
+        self._party(order, actor)
+        if order.state != "delivered":
+            raise WrongState(f"order is {order.state}, not delivered")
+        if not evidence:
+            raise WrongState("evidence cannot be empty")
+        updated = order.record.model_copy(update={"delivery_evidence": evidence})
+        self.orders.update_record(updated)
+        self._audit.append(
+            "market.order.evidence_attached",
+            {"tenant": tenant, "order_id": order_id, "evidence": evidence},
+        )
+        current = StoredOrder(updated, state="delivered")
+        if updated.escrow_held and updated.charge_ref is None:
+            return self._capture_to_escrow(current, now=now)
+        return current
 
     def accept(
         self, order_id: str, *, tenant: str, actor: str, now: datetime
     ) -> StoredOrder:
-        """Buyer acceptance: the irreversible step, so capture happens here
-        — and only here."""
+        """Buyer acceptance — a release condition. Direct-settlement
+        orders capture and split here; escrow orders must already hold
+        captured, evidenced money, which acceptance releases."""
         order = self._get(order_id, tenant=tenant)
         self._party(order, actor, buyer_only=True)
+        if order.record.escrow_held and order.record.charge_ref is None:
+            raise WrongState(
+                "delivery evidence is missing; escrow stays held and the "
+                "exception stands"
+            )
         if not self.orders.set_state(
             order_id, tenant=tenant, state="accepted", expected=("delivered",)
         ):
@@ -390,7 +502,47 @@ class OrderService:
         self._audit.append(
             "market.order.accepted", {"tenant": tenant, "order_id": order_id}
         )
-        return self._capture(self._get(order_id, tenant=tenant), now=now)
+        current = self._get(order_id, tenant=tenant)
+        if current.record.escrow_held:
+            return self._release_escrow(current, now=now, reason="buyer acceptance")
+        return self._capture(current, now=now)
+
+    def sweep_acceptance_timeouts(self, *, now: datetime) -> list[str]:
+        """Automatic acceptance: a delivered, evidenced, escrow-captured
+        order past the timeout releases on its own. Lazy, like every
+        clock in this codebase — callers sweep on traffic."""
+        if self._escrow is None:
+            return []
+        released: list[str] = []
+        deadline = timedelta(days=self._escrow.acceptance_timeout_days)
+        for order in self.orders.in_state("delivered"):
+            record = order.record
+            if not record.escrow_held or record.charge_ref is None:
+                continue
+            if record.delivered_at is None or now - record.delivered_at < deadline:
+                continue
+            if not self.orders.set_state(
+                record.order_id,
+                tenant=record.tenant_id,
+                state="accepted",
+                expected=("delivered",),
+            ):
+                continue
+            self._audit.append(
+                "market.order.auto_accepted",
+                {
+                    "tenant": record.tenant_id,
+                    "order_id": record.order_id,
+                    "reason": "acceptance timeout",
+                },
+            )
+            self._release_escrow(
+                self._get(record.order_id, tenant=record.tenant_id),
+                now=now,
+                reason="acceptance timeout",
+            )
+            released.append(record.order_id)
+        return released
 
     def _capture_entries(self, record: OrderRecord) -> tuple[LedgerEntry, ...]:
         offer = record.offer
@@ -459,7 +611,133 @@ class OrderService:
                 "market.order.completed",
                 {"tenant": record.tenant_id, "order_id": record.order_id},
             )
+        self._settle_extras(updated, now=now)
         return StoredOrder(updated, state="completed")
+
+    # ------------------------------------------------------------------ #
+    # Escrow (M2): capture holds, a release condition settles.            #
+    # ------------------------------------------------------------------ #
+    def _capture_to_escrow(self, order: StoredOrder, *, now: datetime) -> StoredOrder:
+        """The provider captures, the book HOLDS: cash against the escrow
+        liability, nothing split until a release condition speaks."""
+        record = order.record
+        if record.auth_ref is None:
+            raise WrongState("no payment authorization to capture")
+        self._guard_money()
+        charge_ref = self._psp.capture(
+            record.auth_ref,
+            amount_micros=record.offer.total_micros,
+            idempotency_key=f"capture:{record.tenant_id}:{record.idempotency_key}",
+        )
+        txn, posted = self._ledger.post(
+            LedgerTransaction(
+                txn_id=uuid4().hex,
+                idempotency_key=(
+                    f"ledger:capture:{record.tenant_id}:{record.idempotency_key}"
+                ),
+                kind="capture",
+                order_id=record.order_id,
+                currency=record.offer.currency,
+                entries=capture_entries(total_micros=record.offer.total_micros),
+                memo=f"order {record.order_id} captured into escrow",
+                created_at=now,
+            )
+        )
+        updated = record.model_copy(update={"charge_ref": charge_ref})
+        self.orders.update_record(updated)
+        if posted:
+            self._audit.append(
+                "market.escrow.captured",
+                {
+                    "tenant": record.tenant_id,
+                    "order_id": record.order_id,
+                    "charge_ref": charge_ref,
+                    "ledger_txn": txn.txn_id,
+                    "amount_micros": record.offer.total_micros,
+                },
+            )
+        return StoredOrder(updated, state=order.state)
+
+    def _release_escrow(
+        self, order: StoredOrder, *, now: datetime, reason: str
+    ) -> StoredOrder:
+        """A release condition holds: escrow empties into the split."""
+        record = order.record
+        offer = record.offer
+        fee = offer.subtotal_micros * record.take_rate_bps // 10_000
+        txn, posted = self._ledger.post(
+            LedgerTransaction(
+                txn_id=uuid4().hex,
+                idempotency_key=(
+                    f"ledger:release:{record.tenant_id}:{record.idempotency_key}"
+                ),
+                kind="release",
+                order_id=record.order_id,
+                currency=offer.currency,
+                entries=release_entries(
+                    subtotal_micros=offer.subtotal_micros,
+                    fees_micros=offer.fees_micros,
+                    tax_micros=offer.tax_estimate_micros,
+                    take_fee_micros=fee,
+                ),
+                memo=f"order {record.order_id} escrow released: {reason}",
+                created_at=now,
+            )
+        )
+        self.orders.set_state(
+            record.order_id,
+            tenant=record.tenant_id,
+            state="completed",
+            expected=("accepted",),
+        )
+        if posted:
+            self._audit.append(
+                "market.escrow.released",
+                {
+                    "tenant": record.tenant_id,
+                    "order_id": record.order_id,
+                    "ledger_txn": txn.txn_id,
+                    "reason": reason,
+                },
+            )
+            self._audit.append(
+                "market.order.completed",
+                {"tenant": record.tenant_id, "order_id": record.order_id},
+            )
+        self._settle_extras(record, now=now)
+        return StoredOrder(record, state="completed")
+
+    def _settle_extras(self, record: OrderRecord, *, now: datetime) -> None:
+        """What completion owes beyond the ledger: the reservation commits
+        and the invoice issues — both idempotent."""
+        if self._inventory is not None:
+            reservation = self._inventory.for_holder(record.intent_id)
+            if reservation is not None:
+                self._inventory.commit(reservation.reservation_id)
+        if self._invoices is not None and self._jurisdiction is not None:
+            invoice, issued = self._invoices.issue(
+                order_id=record.order_id,
+                jurisdiction=self._jurisdiction,
+                seller_id=record.seller_id,
+                buyer_principal=record.buyer_principal,
+                item_id=record.offer.item_id,
+                quantity=record.offer.quantity,
+                subtotal_micros=record.offer.subtotal_micros,
+                fees_micros=record.offer.fees_micros,
+                tax_micros=record.offer.tax_estimate_micros,
+                currency=record.offer.currency,
+                now=now,
+            )
+            if issued:
+                self._audit.append(
+                    "market.invoice.issued",
+                    {
+                        "tenant": record.tenant_id,
+                        "order_id": record.order_id,
+                        "invoice": invoice.number,
+                        "total_micros": invoice.total_micros,
+                    },
+                )
 
     # ------------------------------------------------------------------ #
     # Cancellation and refund: always a compensating step, never an edit. #
@@ -488,6 +766,10 @@ class OrderService:
             state="cancelled",
             expected=("cancellation_pending",),
         )
+        if self._inventory is not None:
+            reservation = self._inventory.for_holder(order.record.intent_id)
+            if reservation is not None:
+                self._inventory.release(reservation.reservation_id)
         self._audit.append(
             "market.order.cancelled", {"tenant": tenant, "order_id": order_id}
         )
@@ -503,7 +785,9 @@ class OrderService:
         reason: str = "",
     ) -> StoredOrder:
         """Full refund of a completed order: the provider reverses the
-        charge and the ledger posts the capture's exact negation."""
+        charge and the ledger posts the exact negation of EVERY settlement
+        transaction the order made — the capture alone for direct
+        settlement, the capture and the release for escrow."""
         order = self._get(order_id, tenant=tenant)
         self._party(order, actor)
         record = order.record
@@ -517,23 +801,28 @@ class OrderService:
             amount_micros=record.offer.total_micros,
             idempotency_key=f"refund:{tenant}:{record.idempotency_key}",
         )
-        capture = self._ledger.by_key(
-            f"ledger:capture:{tenant}:{record.idempotency_key}"
-        )
-        assert capture is not None  # a completed order always has its capture
-        self._ledger.post(
-            LedgerTransaction(
-                txn_id=uuid4().hex,
-                idempotency_key=f"ledger:refund:{tenant}:{record.idempotency_key}",
-                kind="refund",
-                order_id=record.order_id,
-                currency=record.offer.currency,
-                entries=tuple(entry.negated() for entry in capture.entries),
-                memo=f"order {record.order_id} refunded: {reason}",
-                created_at=now,
-                reverses_txn_id=capture.txn_id,
+        settled = [
+            txn
+            for txn in self._ledger.transactions(order_id=record.order_id)
+            if txn.kind in ("capture", "release")
+        ]
+        assert settled  # a completed order always settled something
+        for txn in settled:
+            self._ledger.post(
+                LedgerTransaction(
+                    txn_id=uuid4().hex,
+                    idempotency_key=(
+                        f"ledger:refund:{txn.kind}:{tenant}:{record.idempotency_key}"
+                    ),
+                    kind="refund",
+                    order_id=record.order_id,
+                    currency=record.offer.currency,
+                    entries=tuple(entry.negated() for entry in txn.entries),
+                    memo=f"order {record.order_id} refunded: {reason}",
+                    created_at=now,
+                    reverses_txn_id=txn.txn_id,
+                )
             )
-        )
         updated = record.model_copy(update={"refund_ref": refund_ref})
         self.orders.update_record(updated)
         self.orders.set_state(
@@ -617,26 +906,30 @@ class OrderService:
             if order.state == "refunded":
                 return {"applied": False, "reason": "already refunded"}
             if order.state == "refund_pending":
-                capture = self._ledger.by_key(
-                    f"ledger:capture:{tenant}:{record.idempotency_key}"
-                )
-                if capture is None:
-                    return {"applied": False, "reason": "no capture to reverse"}
-                self._ledger.post(
-                    LedgerTransaction(
-                        txn_id=uuid4().hex,
-                        idempotency_key=(
-                            f"ledger:refund:{tenant}:{record.idempotency_key}"
-                        ),
-                        kind="refund",
-                        order_id=record.order_id,
-                        currency=record.offer.currency,
-                        entries=tuple(e.negated() for e in capture.entries),
-                        memo=f"order {record.order_id} refunded (provider event)",
-                        created_at=now,
-                        reverses_txn_id=capture.txn_id,
+                settled = [
+                    txn
+                    for txn in self._ledger.transactions(order_id=record.order_id)
+                    if txn.kind in ("capture", "release")
+                ]
+                if not settled:
+                    return {"applied": False, "reason": "nothing settled to reverse"}
+                for txn in settled:
+                    self._ledger.post(
+                        LedgerTransaction(
+                            txn_id=uuid4().hex,
+                            idempotency_key=(
+                                f"ledger:refund:{txn.kind}:{tenant}:"
+                                f"{record.idempotency_key}"
+                            ),
+                            kind="refund",
+                            order_id=record.order_id,
+                            currency=record.offer.currency,
+                            entries=tuple(e.negated() for e in txn.entries),
+                            memo=f"order {record.order_id} refunded (provider event)",
+                            created_at=now,
+                            reverses_txn_id=txn.txn_id,
+                        )
                     )
-                )
                 self.orders.set_state(
                     order_id,
                     tenant=tenant,

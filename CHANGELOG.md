@@ -4,6 +4,46 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+M2 — negotiation, escrow, and trust (marketplace-build-plan):
+
+- **RFQ and quotes** (`marketplace/rfq.py`) — typed specifications;
+  quotes judged for eligibility BEFORE policy evaluation (a substitute
+  outside the required attributes is stored ineligible with its gaps
+  named and can never be awarded); normalized comparison; the award
+  returns the exact versioned offer for the intent door. The seller's
+  durable `SalesPolicy` gates submission: below the absolute floor is
+  refused without model discretion.
+- **Negotiation within signed bounds** (`marketplace/negotiation.py`) —
+  a pure violation check over the signed boundary (side, limit price,
+  round budget, delegable terms), durable sessions that count rounds
+  across restarts, probes outside the boundary costing their round and
+  refusing, and `agree` re-checking the bounds at commitment.
+- **Atomic inventory** (`marketplace/inventory.py`) — stock only a
+  guarded UPDATE touches: exactly one of two concurrent buyers gets the
+  last unit; reservations expire lazily and release exactly once;
+  placement reserves before any payment call and completion commits.
+- **Escrow** (`billing/escrow.py` + the order machine) — evidenced
+  delivery captures into `escrow_liability`; missing evidence files an
+  exception, blocks acceptance, and late evidence heals it; acceptance
+  or the automatic timeout sweep releases the split; the spec's
+  exceptions (low-value trusted, immediate digital) settle directly;
+  refunds reverse BOTH settlement legs and the trial balance returns
+  to zero.
+- **Tax and invoices** (`billing/tax.py`) — the jurisdiction registry
+  is a hard deployment gate (an unconfigured jurisdiction refuses at
+  the catalog door); offers carry real tax estimates; every completed
+  order issues one sequential invoice, exactly once.
+- **Derived trust** (`marketplace/fraud.py`) — spend totals,
+  counterparty familiarity, reputation, and deterministic risk signals
+  (self-dealing, duplicate orders, refund abuse, price anomaly) now
+  derive from the durable order book; explicit caller facts always
+  win. Reputation's one lever is the auto-execution trust bar —
+  property-tested to never relax an explicit constraint.
+- **Doors:** `/v1/commerce/rfqs` (+quotes, +award),
+  `/v1/commerce/sales-policy`, per-order `/evidence` and `/invoice`.
+- Pinned by `tests/test_marketplace_{rfq,inventory,escrow,trust}.py`
+  and the updated gateway suite.
+
 M1 closed — the market gets its face, its provider, and its trust gate:
 
 - **The shell Market surface** — `Market.tsx` (and the rebuilt shell

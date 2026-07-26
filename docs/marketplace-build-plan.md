@@ -361,6 +361,37 @@ Goal Adherence (the spec's acceptance tests, distributed):
 
 ### M2 — negotiation, escrow, and trust (the spec's `phase_2`)
 
+**Status: LANDED (core)** — `marketplace/rfq.py`: typed specifications,
+multi-seller quotes judged for eligibility BEFORE policy (substitutes
+marked with their gaps, never awardable), normalized comparison, awards
+returning the exact offer for the intent door; the seller's signed
+`SalesPolicy` (durable per principal) gates submission — below the
+absolute floor refuses without model discretion.
+`marketplace/negotiation.py`: signed bounds, durable round budgets, a
+pure violation check, and an `agree` that re-checks bounds at the
+moment of commitment. `marketplace/inventory.py`: guarded-UPDATE
+reservations (exactly one contender gets the last unit), lazy expiry,
+commit/release exactly once. `billing/escrow.py` + the order machine:
+capture into `escrow_liability` on evidenced delivery (missing evidence
+files an exception and blocks acceptance; late evidence heals),
+release on acceptance or the automatic timeout sweep, the spec's
+direct-settlement exceptions, refunds reversing BOTH settlement legs.
+`billing/tax.py`: the jurisdiction registry as a hard deployment gate
+(unconfigured = no offers minted), tax estimates on catalog offers,
+sequential invoices issued exactly once per completed order.
+`marketplace/fraud.py`: risk facts DERIVED from the order book — spend
+totals, counterparty familiarity, reputation (its one lever: the
+auto-execution trust bar, property-tested to never touch an explicit
+constraint), and deterministic risk signals (self-dealing, duplicates,
+refund abuse, price anomaly) — explicit caller facts always win.
+Doors: `/v1/commerce/rfqs` (+quotes, +award), `/v1/commerce/
+sales-policy`, per-order `/evidence` and `/invoice`; the acceptance-
+timeout sweep rides order-list traffic. Pinned by
+`tests/test_marketplace_{rfq,inventory,escrow,trust}.py` and the
+updated gateway suite. Remaining before the phase closes: the shell
+surfaces for RFQ/quotes and the escrow states, and delivery-evidence
+blobs in the object store (refs ride the audit chain today).
+
 Goal: autonomy grows on both sides — within signed bounds. RFQ and
 structured quotes, negotiation limits, escrow/delayed settlement gated on
 delivery evidence, reputation and fraud scoring, tax/invoice integration.
@@ -385,21 +416,21 @@ Deliverables:
   jurisdiction; the jurisdiction registry as a deployment gate.
 
 Goal Adherence:
-- [ ] A negotiation agent cannot accept terms outside its signed bounds;
+- [x] A negotiation agent cannot accept terms outside its signed bounds;
       an offer below the seller's absolute floor is denied **without model
       discretion**.
-- [ ] Two concurrent orders for the last unit: exactly one reservation
+- [x] Two concurrent orders for the last unit: exactly one reservation
       wins; the other is refused; expired reservations release stock.
-- [ ] Missing delivery evidence keeps escrow unreleased and opens an
+- [x] Missing delivery evidence keeps escrow unreleased and opens an
       exception; verified evidence (or acceptance timeout) releases it with
       balanced postings.
-- [ ] Reputation never relaxes an explicit spending/category/legal
+- [x] Reputation never relaxes an explicit spending/category/legal
       constraint (property test over policy inputs).
-- [ ] Elevated fraud score forces the strong-approval path; score ≥ deny
+- [x] Elevated fraud score forces the strong-approval path; score ≥ deny
       threshold refuses deterministically.
-- [ ] Every completed order has a generated invoice and a tax posting;
+- [x] Every completed order has a generated invoice and a tax posting;
       transacting in an unconfigured jurisdiction is refused.
-- [ ] OoLu recommending a substitute outside required specifications marks
+- [x] OoLu recommending a substitute outside required specifications marks
       the offer ineligible *before* policy evaluation.
 
 ### M3 — services, organizations, reconciliation (the spec's `phase_3`)

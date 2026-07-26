@@ -124,11 +124,17 @@ class CatalogService:
         *,
         audit,
         seller_verified: Callable[[str, str], bool] | None = None,
+        inventory=None,  # marketplace.InventoryService: publication seeds it
+        tax=None,  # billing.tax.TaxRegistry: offers carry real estimates
+        jurisdiction: str = "",  # the host's operating jurisdiction code
     ) -> None:
         self.store = CatalogStore(conn)
         self._audit = audit
         # No verifier wired = nobody publishes. Refusal is the default.
         self._seller_verified = seller_verified or (lambda tenant, seller: False)
+        self._inventory = inventory
+        self._tax = tax
+        self._jurisdiction = jurisdiction
 
     def create_draft(
         self,
@@ -199,6 +205,10 @@ class CatalogService:
             update={"status": "active", "updated_at": now}
         )
         self.store.save(published)
+        if self._inventory is not None:
+            # Publication puts the stated stock on the tracked shelf; from
+            # here on, reservations — not the listing row — are the truth.
+            self._inventory.seed(listing_id, published.quantity_available)
         self._audit.append(
             "market.listing.published",
             {
@@ -267,27 +277,43 @@ class CatalogService:
         return updated
 
     def offer_for(self, listing_id: str, *, quantity: int, now: datetime) -> Offer:
-        """Mint the exact versioned offer a buyer's intent binds to."""
+        """Mint the exact versioned offer a buyer's intent binds to.
+
+        Availability is read from LIVE stock when the listing is
+        inventory-tracked (ripe holds swept first), and the tax estimate
+        comes from the configured jurisdiction module — a host whose
+        jurisdiction has no module refuses to transact at all, here,
+        before any intent exists (the compliance deployment rule).
+        """
         listing = self.store.get(listing_id)
         if listing is None:
             raise MarketNotFound("no such listing")
         if listing.status != "active":
             raise ListingUnavailable("the listing is not active")
-        if quantity < 1 or quantity > listing.quantity_available:
+        available = listing.quantity_available
+        if self._inventory is not None and self._inventory.tracked(listing_id):
+            live = self._inventory.available(listing_id, now=now)
+            available = live if live is not None else available
+        if quantity < 1 or quantity > available:
             raise ListingUnavailable(
                 f"the listing cannot cover quantity {quantity}"
             )
+        subtotal = listing.unit_price_micros * quantity
+        tax_estimate = 0
+        if self._tax is not None:
+            try:
+                tax_estimate = self._tax.tax_micros(self._jurisdiction, subtotal)
+            except Exception as exc:
+                raise ListingUnavailable(str(exc)) from exc
         return Offer(
             offer_id=f"{listing.listing_id}:v{listing.version}",
             seller_id=listing.seller_id,
             offer_version=listing.version,
             item_id=listing.listing_id,
             quantity=quantity,
-            subtotal_micros=listing.unit_price_micros * quantity,
+            subtotal_micros=subtotal,
             currency=listing.currency,
-            # Tax calculation is an M2 port; the MVP jurisdiction ships
-            # tax-inclusive prices.
-            tax_estimate_micros=0,
+            tax_estimate_micros=tax_estimate,
             fees_micros=0,
             fulfillment_terms=listing.fulfillment_terms,
             refund_terms=listing.refund_terms,

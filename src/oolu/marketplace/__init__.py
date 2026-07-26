@@ -28,12 +28,21 @@ from .errors import (
     StrongAuthenticationRequired,
     WrongState,
 )
+from .fraud import OrderHistory, RiskSignals
+from .inventory import InventoryService, Reservation
 from .models import (
     ApprovalRecord,
     CommercialIntent,
     ExecutionAuthorization,
     IntentAction,
     Offer,
+)
+from .negotiation import (
+    NegotiationBounds,
+    NegotiationLedger,
+    NegotiationSession,
+    OutsideBounds,
+    proposal_violations,
 )
 from .orders import (
     DEFAULT_TAKE_RATE_BPS,
@@ -53,9 +62,23 @@ from .policy import (
     evaluate_sale,
 )
 from .review import approval_summary, required_approvers, required_strength
+from .rfq import (
+    QuoteRecord,
+    QuoteRefused,
+    RequestForQuote,
+    RfqService,
+    RfqSpecification,
+    specification_gaps,
+)
 from .sellerkyc import SellerKyc, SellerKycError, seller_kyc_key
 from .service import MarketplaceSpine
-from .store import ApprovalStore, IntentStore, PolicyStore, StoredIntent
+from .store import (
+    ApprovalStore,
+    IntentStore,
+    PolicyStore,
+    SalesPolicyStore,
+    StoredIntent,
+)
 
 __all__ = [
     "AgentDelegation",
@@ -82,6 +105,22 @@ __all__ = [
     "MarketNotFound",
     "MarketplaceError",
     "MarketplaceSpine",
+    "InventoryService",
+    "NegotiationBounds",
+    "NegotiationLedger",
+    "NegotiationSession",
+    "OrderHistory",
+    "OutsideBounds",
+    "QuoteRecord",
+    "QuoteRefused",
+    "RequestForQuote",
+    "Reservation",
+    "RfqService",
+    "RfqSpecification",
+    "RiskSignals",
+    "SalesPolicyStore",
+    "proposal_violations",
+    "specification_gaps",
     "Offer",
     "OrderRecord",
     "OrderService",

@@ -19,7 +19,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from .models import ApprovalRecord, CommercialIntent
-from .policy import PolicyVerdict, PurchasePolicy
+from .policy import PolicyVerdict, PurchasePolicy, SalesPolicy
 
 _INTENTS_SCHEMA = """CREATE TABLE IF NOT EXISTS commercial_intents (
     intent_id TEXT PRIMARY KEY,
@@ -45,6 +45,13 @@ _APPROVALS_SCHEMA = """CREATE TABLE IF NOT EXISTS market_approvals (
 )"""
 
 _POLICIES_SCHEMA = """CREATE TABLE IF NOT EXISTS market_policies (
+    tenant TEXT NOT NULL,
+    principal TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    PRIMARY KEY (tenant, principal)
+)"""
+
+_SALES_POLICIES_SCHEMA = """CREATE TABLE IF NOT EXISTS market_sales_policies (
     tenant TEXT NOT NULL,
     principal TEXT NOT NULL,
     payload_json TEXT NOT NULL,
@@ -304,6 +311,36 @@ class PolicyStore:
         with self._conn.transaction() as db:
             db.execute(
                 "INSERT OR REPLACE INTO market_policies"
+                " (tenant, principal, payload_json) VALUES (?, ?, ?)",
+                (tenant, principal, policy.model_dump_json()),
+            )
+
+
+class SalesPolicyStore:
+    """Each seller's signed automation boundary — floors, auto-accept
+    price, discount and quantity limits. Absent row = conservative
+    defaults; the ABSOLUTE floor in it is the line no model crosses."""
+
+    def __init__(self, conn) -> None:
+        self._conn = conn
+        with self._conn.transaction() as db:
+            db.execute(_SALES_POLICIES_SCHEMA)
+
+    def get(self, *, tenant: str, principal: str) -> SalesPolicy:
+        with self._conn.lock:
+            row = self._conn.db.execute(
+                "SELECT payload_json FROM market_sales_policies"
+                " WHERE tenant = ? AND principal = ?",
+                (tenant, principal),
+            ).fetchone()
+        if row is None:
+            return SalesPolicy()
+        return SalesPolicy.model_validate_json(row["payload_json"])
+
+    def put(self, policy: SalesPolicy, *, tenant: str, principal: str) -> None:
+        with self._conn.transaction() as db:
+            db.execute(
+                "INSERT OR REPLACE INTO market_sales_policies"
                 " (tenant, principal, payload_json) VALUES (?, ?, ?)",
                 (tenant, principal, policy.model_dump_json()),
             )

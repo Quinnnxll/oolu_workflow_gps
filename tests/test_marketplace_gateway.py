@@ -244,28 +244,57 @@ def test_orders_flow_from_intent_to_completed_with_ledger(tmp_path):
     assert duplicate.status == 200
     assert duplicate.body["order"]["order_id"] == order_id
 
-    for step, body in (("ship", {"tracking": "TRK1"}), ("deliver", {}), ("accept", {})):
-        response = app.handle(
-            _req(
-                "POST",
-                f"/v1/commerce/orders/{order_id}/{step}",
-                token=token,
-                body=body,
-            )
+    shipped = app.handle(
+        _req(
+            "POST",
+            f"/v1/commerce/orders/{order_id}/ship",
+            token=token,
+            body={"tracking": "TRK1"},
         )
-        assert response.status == 200, step
-    assert response.body["state"] == "completed"
+    )
+    assert shipped.status == 200
+    # Delivery WITHOUT evidence: the escrow exception — nothing captures,
+    # and acceptance refuses until evidence lands.
+    bare = app.handle(
+        _req("POST", f"/v1/commerce/orders/{order_id}/deliver", token=token)
+    )
+    assert bare.status == 200
+    refused = app.handle(
+        _req("POST", f"/v1/commerce/orders/{order_id}/accept", token=token)
+    )
+    assert refused.status == 409
+    assert "evidence" in refused.body["error"]["message"]
+    evidenced = app.handle(
+        _req(
+            "POST",
+            f"/v1/commerce/orders/{order_id}/evidence",
+            token=token,
+            body={"evidence": "signed-photo"},
+        )
+    )
+    assert evidenced.status == 200
+    accepted = app.handle(
+        _req("POST", f"/v1/commerce/orders/{order_id}/accept", token=token)
+    )
+    assert accepted.status == 200
+    assert accepted.body["state"] == "completed"
 
     book = app.handle(
         _req("GET", f"/v1/commerce/orders/{order_id}/ledger", token=token)
     )
     assert book.status == 200
-    assert [txn["kind"] for txn in book.body["items"]] == ["capture"]
+    # Escrow discipline on the book: capture holds, release settles.
+    assert [txn["kind"] for txn in book.body["items"]] == ["capture", "release"]
     assert sum(
         entry["amount_micros"]
         for txn in book.body["items"]
         for entry in txn["entries"]
     ) == 0
+    invoice = app.handle(
+        _req("GET", f"/v1/commerce/orders/{order_id}/invoice", token=token)
+    )
+    assert invoice.status == 200
+    assert invoice.body["number"].startswith("INV-")
 
     refunded = app.handle(
         _req(
@@ -280,7 +309,13 @@ def test_orders_flow_from_intent_to_completed_with_ledger(tmp_path):
     book = app.handle(
         _req("GET", f"/v1/commerce/orders/{order_id}/ledger", token=token)
     )
-    assert [txn["kind"] for txn in book.body["items"]] == ["capture", "refund"]
+    # Both settlement transactions reversed; the book nets to zero.
+    assert [txn["kind"] for txn in book.body["items"]] == [
+        "capture",
+        "release",
+        "refund",
+        "refund",
+    ]
 
     # A stranger from another tenant sees no order and no book.
     other = ident.token("user-2", tenant="t2")
