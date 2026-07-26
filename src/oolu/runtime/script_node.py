@@ -381,6 +381,15 @@ class NodeScriptRunner:
                     bindings, ensure_ascii=False, sort_keys=True, default=str
                 ),
             }
+        # The node's OWN book (personal-nodes plan P2): the drawer's
+        # standing records ride into the sandbox as DATA (./records.json)
+        # so the function reads its book and emits the updated one — the
+        # completion hook lands it back in the drawer. Data, not code:
+        # it never joins the frozen tree or the cache key, so the same
+        # script replays against the CURRENT book on every run.
+        records = action.parameters.get("_records")
+        if isinstance(records, str) and records:
+            files = {**files, "records.json": records}
         # A large tree rides as a content-addressed bundle: resolve its id
         # to a packed archive (cache-first) once, here, and hand it to every
         # backend run below instead of a per-file dict.

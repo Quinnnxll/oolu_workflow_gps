@@ -59,7 +59,9 @@ def test_the_shelf_holds_seven_distinct_gate_clean_specs():
 
 def test_every_starter_function_actually_executes(tmp_path):
     # Verify-by-execution, for real: each deterministic script runs in
-    # a subprocess against a bindings.json and emits its record.
+    # a subprocess against a bindings.json, emits its payload, and the
+    # bound value lands in it — the P2 trio in its book, the filing
+    # starters in their record.
     for index, spec in enumerate(STARTER_SHELF):
         workdir = tmp_path / f"starter-{index}"
         workdir.mkdir()
@@ -77,10 +79,12 @@ def test_every_starter_function_actually_executes(tmp_path):
             capture_output=True,
         )
         payload = json.loads((workdir / "result.json").read_text())
-        record = payload["record"]
-        assert record["kind"] == spec.key
-        assert record[first] == "hello world"
-        assert record["kept_at"]
+        assert isinstance(payload, dict)
+        assert "hello world" in json.dumps(payload), spec.key
+        # Every declared output port is covered — the armed run-time
+        # contract check will hold real runs to exactly this.
+        for port in spec.outputs:
+            assert port.name in payload, (spec.key, port.name)
 
 
 # --------------------------------------------------------------------------- #

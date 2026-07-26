@@ -1646,6 +1646,12 @@ class GatewayApp:
                     turn, run = self._run_with_handoff(
                         session, offered_goal, bind=answer == "yes"
                     )
+                elif answer is not None and kind == "task_reminder":
+                    # The offered reminder (P2): yes files the row into
+                    # the standing store; no leaves the task alone.
+                    turn = self._answer_task_reminder(
+                        session, offered_goal, accept=answer == "yes"
+                    )
                 elif answer == "yes" and kind == "reuse":
                     turn, run = self._reuse_node_and_run(session, offered_goal)
                 elif answer == "yes":
@@ -1805,6 +1811,8 @@ class GatewayApp:
                         say, run, autobuild_hint=in_node
                     )
                     if not in_node:
+                        # P2: a task the run dated offers its reminder.
+                        say = self._offer_task_reminder(say, session, run)
                         say = self._offer_growth(
                             say, session, turn.task, run=run
                         )
@@ -3520,6 +3528,79 @@ class GatewayApp:
             "this run? (yes / no — “no” runs it without)"
         )
 
+    def _offer_task_reminder(self, say: str, session, run: dict | None) -> str:
+        """P2 — a task with a date OFFERS a reminder, never files one
+        silently: the run's result carried ``reminder_offer``; the
+        question stands for exactly one message like every offer, and
+        only the user's yes creates the row."""
+        if run is None or self._reminders is None:
+            return say
+        state = next(
+            (
+                s
+                for s in self._durable.runs.list(limit=10_000)
+                if s.run_id == run.get("run_id")
+            ),
+            None,
+        )
+        result = self._completed_result(state) if state is not None else None
+        offer = (result or {}).get("reminder_offer")
+        if not (isinstance(offer, dict) and str(offer.get("text") or "").strip()):
+            return say
+        self._growth_offers.put(
+            session.tenant_id,
+            session.principal_id,
+            kind="task_reminder",
+            goal=json.dumps(
+                {
+                    "text": str(offer["text"]),
+                    "day": str(offer.get("day") or ""),
+                    "time": str(offer.get("time") or "09:00"),
+                }
+            ),
+            original_goal=str(offer["text"]),
+        )
+        return (
+            f"{say} That task carries a date — want a reminder "
+            f"“{offer['text']}” on {offer.get('day')} at "
+            f"{offer.get('time') or '09:00'}? (yes / no)"
+        )
+
+    def _answer_task_reminder(
+        self, session, offered: str, *, accept: bool
+    ) -> ChatTurn:
+        """The answered offer: yes files the reminder into the standing
+        store and reads the ROW back; no leaves things exactly as they
+        were."""
+        if not accept:
+            return ChatTurn(
+                say="Okay — no reminder. The task stands on its own.",
+                source="tool",
+            )
+        try:
+            ask = json.loads(offered)
+            due = datetime.fromisoformat(
+                f"{ask.get('day')}T{ask.get('time') or '09:00'}"
+            ).replace(tzinfo=UTC)
+            row = self._reminders.add(
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+                text=str(ask.get("text") or ""),
+                due_at=due,
+            )
+        except (TypeError, ValueError) as exc:
+            return ChatTurn(
+                say=f"I couldn't set that reminder: {exc}", source="tool"
+            )
+        return ChatTurn(
+            say=(
+                f"Reminder set: “{row.text}” — "
+                f"{row.due_at:%Y-%m-%d %H:%M} UTC."
+            ),
+            source="tool",
+            actions=[{"tool": "create_reminder"}],
+        )
+
     def _run_with_handoff(
         self, session, goal: str, *, bind: bool
     ) -> tuple[ChatTurn, dict | None]:
@@ -4601,6 +4682,11 @@ class GatewayApp:
                     staged[file.name] = file.content
                 elif folder.startswith("src/"):
                     staged[f"{folder[4:]}/{file.name}"] = file.content
+                elif folder == "records" and file.name == "rows.json":
+                    # P2: the node's OWN book rides the run as DATA
+                    # (staged as ./records.json by the runner) — never
+                    # part of the frozen code tree.
+                    extras["_records"] = file.content
             if staged:
                 extras["files"] = staged
         return extras
@@ -4963,11 +5049,64 @@ class GatewayApp:
         self._record_function_verification(state)
         return self._run_dict(state)
 
+    def _checked_run_values(
+        self, session, intent: str, provided
+    ) -> dict | None:
+        """The form's values, through B1's ONE strict check: each key
+        must be a declared input of the node this goal resolves to, each
+        value type-checked in words against the input's own plain label
+        — then bound onto the run exactly as a conversation's yes would
+        bind them. None when nothing was provided."""
+        if not provided:
+            return None
+        if not isinstance(provided, dict):
+            raise GatewayError(
+                400, "invalid_request", "values must be an object"
+            )
+        function = self._resolve_node_function(session, str(intent))
+        inputs = (function or {}).get("_input_ports") or []
+        if not inputs:
+            raise GatewayError(
+                400,
+                "invalid_request",
+                "values only bind to a node's declared inputs — no node "
+                "with declared inputs answers this goal",
+            )
+        from ..skills.contract import ValueInput
+        from ..skills.inputs import BoundInput, validate_user_inputs
+
+        manifest = [
+            BoundInput(
+                str(function.get("node_id") or ""),
+                str(function.get("title") or ""),
+                str(item.get("name") or ""),
+                ValueInput(
+                    name=str(item.get("name") or ""),
+                    value_type=(
+                        "number"
+                        if item.get("type") == "number"
+                        else "string"
+                    ),
+                    label=str(item.get("label") or ""),
+                ),
+            )
+            for item in inputs
+        ]
+        try:
+            return validate_user_inputs(manifest, provided)
+        except ValueError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+
     def _submit_run(self, request, session, params) -> Response:
         body = request.body or {}
         intent = body.get("intent")
         if not intent:
             raise GatewayError(400, "invalid_request", "intent is required")
+        # P2: a form's values ride the run through the B1 strict check —
+        # the manifest is the ask, nothing undeclared smuggles in.
+        run_values = self._checked_run_values(
+            session, str(intent), body.get("values")
+        )
         node_version_id = body.get("node_version_id")
         if node_version_id is not None and (
             self._market is None
@@ -5005,7 +5144,10 @@ class GatewayApp:
                 # including reviving this goal's FAILED run in place
                 # instead of piling a sibling thread beside it.
                 return self._start_intent_run(
-                    session, intent, max_recovery=max_recovery
+                    session,
+                    intent,
+                    max_recovery=max_recovery,
+                    extra_bindings=run_values,
                 )
             metadata: dict = {"tenant_id": session.tenant_id}
             if node_version_id is None:
@@ -8859,7 +9001,10 @@ class GatewayApp:
                 )
                 for item in spec.inputs
             ]
-            produces = [Slot(name="record", value_type="json", role="result")]
+            produces = [
+                Slot(name=item.name, value_type=item.value_type, role="result")
+                for item in spec.outputs
+            ]
             try:
                 result = self._nodeplace.contribute(
                     noder_principal=principal,
@@ -12514,6 +12659,10 @@ class GatewayApp:
         # B4: every value this run moved along an output:// edge lands a
         # run-cited handoff edge on the temporal graph.
         self._land_handoffs(state)
+        # P2: the node's emitted book lands back in its drawer, and a
+        # reminder the run asked for is filed into the standing store.
+        self._land_records(state)
+        self._file_reminder(state)
         if self._metering is None or self._nodeplace is None:
             return
         if state.phase is Phase.COMPLETED:
@@ -12728,6 +12877,135 @@ class GatewayApp:
             logging.getLogger("oolu.gateway").warning(
                 "handoff filing failed for run %s", state.run_id, exc_info=True
             )
+
+    @staticmethod
+    def _completed_result(state: RunState) -> dict | None:
+        """The dict payload a COMPLETED node-function run emitted, or
+        None — the one reader the P2 completion hooks share."""
+        if state.phase is not Phase.COMPLETED or state.execution is None:
+            return None
+        function = (state.contract.metadata or {}).get("node_function")
+        if not isinstance(function, dict) or not function.get("node_id"):
+            return None
+        for outcome in state.execution.action_outcomes:
+            if outcome.status is not ExecutionStatus.SUCCEEDED:
+                continue
+            result = (outcome.evidence or {}).get("result")
+            if isinstance(result, dict):
+                return result
+        return None
+
+    def _land_records(self, state: RunState) -> None:
+        """P2 — the record discipline's write-back: a run that emitted
+        ``records`` (the node's updated book, a list) lands it in the
+        drawer as ``records/rows.json`` — the file the next run stages
+        as ``./records.json``. The drawer IS the personal content:
+        written verbatim (it is the user's own book, not a shared
+        corpus), replaced whole, best-effort."""
+        if self._files is None:
+            return
+        result = self._completed_result(state)
+        if result is None or not isinstance(result.get("records"), list):
+            return
+        function = state.contract.metadata["node_function"]
+        tenant = str(state.contract.metadata.get("tenant_id", ""))
+        node_id = str(function["node_id"])
+        content = json.dumps(
+            result["records"], ensure_ascii=False, default=str
+        )
+        if len(content) > 1_000_000:
+            logging.getLogger("oolu.gateway").warning(
+                "records write skipped for %s: the book outgrew the "
+                "drawer write",
+                node_id,
+            )
+            return
+        try:
+            current = next(
+                (
+                    f
+                    for f in self._files.list(tenant=tenant, node_id=node_id)
+                    if f.folder == "records" and f.name == "rows.json"
+                ),
+                None,
+            )
+            if current is not None:
+                if current.content != content:
+                    self._files.save(
+                        current.model_copy(update={"content": content})
+                    )
+            else:
+                self._files.save(
+                    UserFile(
+                        tenant_id=tenant,
+                        node_id=node_id,
+                        folder="records",
+                        name="rows.json",
+                        media_type="application/json",
+                        content=content,
+                    )
+                )
+        except Exception:  # noqa: BLE001 - bookkeeping never fails a run
+            logging.getLogger("oolu.gateway").warning(
+                "records write failed for run %s", state.run_id, exc_info=True
+            )
+
+    def _file_reminder(self, state: RunState) -> None:
+        """P2 — the reminders node's hand: a run that emitted a
+        ``reminder`` ({text, day, time}) has it filed into the standing
+        ``ReminderStore`` AS THE OWNER — the sandbox never touches the
+        host's stores; the emitted result is the ask, this hook is the
+        hand. Filed once (the store's own delivery guarantees stand);
+        a past time or a host without reminders is audited, never an
+        error."""
+        if self._reminders is None:
+            return
+        result = self._completed_result(state)
+        if result is None:
+            return
+        ask = result.get("reminder")
+        if not (isinstance(ask, dict) and str(ask.get("text") or "").strip()):
+            return
+        tenant = str(state.contract.metadata.get("tenant_id", ""))
+        principal = str(state.contract.submitted_by or "")
+        already = any(
+            e.event_type == "reminder.filed"
+            and e.payload.get("run_id") == state.run_id
+            for e in self._durable.audit.records()
+        )
+        if already:
+            return  # one run files its reminder exactly once
+        try:
+            due = datetime.fromisoformat(
+                f"{ask.get('day')}T{ask.get('time') or '09:00'}"
+            ).replace(tzinfo=UTC)
+            row = self._reminders.add(
+                tenant=tenant,
+                principal=principal,
+                text=str(ask["text"]),
+                due_at=due,
+            )
+        except (TypeError, ValueError) as exc:
+            self._durable.audit.append(
+                "reminder.not_filed",
+                {
+                    "run_id": state.run_id,
+                    "tenant": tenant,
+                    "principal": principal,
+                    "reason": str(exc),
+                },
+            )
+            return
+        self._durable.audit.append(
+            "reminder.filed",
+            {
+                "run_id": state.run_id,
+                "reminder_id": row.reminder_id,
+                "tenant": tenant,
+                "principal": principal,
+                "due_at": row.due_at.isoformat(),
+            },
+        )
 
     def _node_last_result(self, tenant: str, node_id: str) -> dict | None:
         """The node's standing result — a PROJECTION over the drawer's

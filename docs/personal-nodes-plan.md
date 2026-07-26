@@ -179,6 +179,33 @@ record-keeping functions on these seats.
 
 ### Phase P2 — the personal records trio: calendar, tasks, reminders
 
+**Status: LANDED** — the record discipline is one circle: the
+drawer's ``records/rows.json`` stages into the sandbox as
+``./records.json`` (a new ``_records`` carrier — DATA, never part of
+the frozen code tree or the cache key), the function reads its book,
+changes it, and emits it with the projections; the completion hook
+(`_land_records`, riding the same terminal-run chain as B3/B4) lands
+the emitted book back in the drawer verbatim — it is the user's own
+content, exportable with the node. The trio's REAL deterministic
+functions replaced the P1 filing scripts in the catalog (same birth
+gates, subprocess-proven): Calendar keeps events with the day plain
+words name (today/tomorrow/weekday/ISO — undated is honest, never
+guessed) and projects ``events_today``/``events_week`` — standing on
+the port index for the trigger to consume (B4); Tasks adds, marks
+done by words, projects ``open_tasks``, and a DATED task emits a
+``reminder_offer`` the conversation turns into a standing question —
+the reminder is created only on the user's yes; Reminders parses the
+day and clock ("call the bank tomorrow at 9") and its emitted ask is
+filed into the standing ``ReminderStore`` AS THE OWNER by the
+`_file_reminder` hook (law 4: the sandbox never touches host
+stores), audited ``reminder.filed``, delivered by the client's
+standing poll. En route, forms became real for node runs: POST
+``/v1/runs`` accepts ``values``, checked through B1's ONE strict
+door (`validate_user_inputs` over the declared inputs' own labels —
+unknown keys refuse in words) and bound into ``bindings.json``
+verbatim (`tests/test_records_trio.py`). Remaining: none for P2; P3
+inherits the record discipline.
+
 *The three shapes every life runs on, each a node that keeps its own
 book.*
 

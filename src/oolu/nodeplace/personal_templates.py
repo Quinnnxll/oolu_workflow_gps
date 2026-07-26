@@ -46,6 +46,18 @@ class StarterInput(BaseModel):
     example: str = ""
 
 
+class StarterOutput(BaseModel):
+    """One declared output port — what every run's payload must cover."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    value_type: str = "json"
+
+
+_RECORD_OUTPUT = (StarterOutput(name="record", value_type="json"),)
+
+
 class StarterSpec(BaseModel):
     """One shelf node: a name, one responsibility, one function."""
 
@@ -59,13 +71,12 @@ class StarterSpec(BaseModel):
     # the exact words a P0 schedule fires it by.
     goal: str
     inputs: tuple[StarterInput, ...]
+    outputs: tuple[StarterOutput, ...] = _RECORD_OUTPUT
 
 
-def starter_script(spec: StarterSpec) -> str:
-    """The node's essential function: deterministic, self-contained —
-    read the bound values, file them as a structured record, emit it.
-    No model writes this; the shelf IS the plan. The node grows from
-    here ("revise …" rewrites it through the standing doors)."""
+def _filing_script(spec: StarterSpec) -> str:
+    """The P1 essential function: file what the run was given as a
+    structured record — the honest first step the later phases grow."""
     record = {"kind": spec.key, "kept_at": ""}
     for item in spec.inputs:
         record[item.name] = ""
@@ -93,6 +104,177 @@ def starter_script(spec: StarterSpec) -> str:
     )
 
 
+# The record discipline's shared prelude (P2): read the bound values
+# and the node's OWN book (./records.json — the drawer's standing rows,
+# staged by the runner), plus the deterministic ears for the day and
+# clock time plain words name. No model, no network, no guessing.
+_BOOK_PRELUDE = r'''import json
+import re
+from datetime import date, timedelta
+from _oolu_runtime import emit_result
+
+
+def _load(path):
+    try:
+        with open(path) as handle:
+            return json.load(handle)
+    except (FileNotFoundError, ValueError):
+        return None
+
+
+WEEKDAY_NAMES = [
+    "monday", "tuesday", "wednesday", "thursday",
+    "friday", "saturday", "sunday",
+]
+
+
+def day_of(text, today):
+    """The day plain words name, deterministically — or '' when the
+    words name none (an undated row is honest, never guessed)."""
+    low = " " + str(text).lower() + " "
+    if " today " in low or " tonight " in low:
+        return today.isoformat()
+    if " tomorrow " in low:
+        return (today + timedelta(days=1)).isoformat()
+    found = re.search(r"(20\d\d-\d\d-\d\d)", str(text))
+    if found:
+        return found.group(1)
+    for index, name in enumerate(WEEKDAY_NAMES):
+        if name in low:
+            ahead = (index - today.weekday()) % 7
+            return (today + timedelta(days=ahead)).isoformat()
+    return ""
+
+
+def time_of(text):
+    """The clock time plain words name ("at 3pm", "at 9:30"), or ''."""
+    found = re.search(
+        r"\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", str(text).lower()
+    )
+    if not found:
+        return ""
+    hour = int(found.group(1))
+    minute = int(found.group(2) or 0)
+    meridiem = found.group(3) or ""
+    if meridiem:
+        if not 1 <= hour <= 12:
+            return ""
+        hour = hour % 12 + (12 if meridiem == "pm" else 0)
+    if hour > 23 or minute > 59:
+        return ""
+    return "%02d:%02d" % (hour, minute)
+
+
+values = _load("bindings.json") or {}
+rows = _load("records.json") or []
+today = date.today()
+answer = ""
+'''
+
+_CALENDAR_BODY = '''
+entry = str(values.get("entry") or "").strip()
+if entry:
+    rows.append({"event": entry, "on": day_of(entry, today)})
+    answer = "Noted: " + entry
+week_end = (today + timedelta(days=7)).isoformat()
+events_today = [
+    str(r.get("event")) for r in rows if r.get("on") == today.isoformat()
+]
+events_week = [
+    str(r.get("event"))
+    for r in rows
+    if r.get("on") and today.isoformat() <= str(r.get("on")) <= week_end
+]
+if not answer:
+    if events_today:
+        answer = "Today: " + "; ".join(events_today)
+    else:
+        answer = "Nothing on the calendar today."
+emit_result({
+    "answer": answer,
+    "records": rows,
+    "events_today": events_today,
+    "events_week": events_week,
+})
+'''
+
+_TASKS_BODY = '''
+task = str(values.get("task") or "").strip()
+finished = str(values.get("done") or "").strip()
+offer = {}
+if task:
+    due = day_of(task, today)
+    rows.append({"task": task, "due": due, "done": False})
+    answer = "Added: " + task
+    if due:
+        offer = {"text": task, "day": due, "time": time_of(task) or "09:00"}
+elif finished:
+    answer = "No open task matches: " + finished
+    for row in rows:
+        name = str(row.get("task") or "")
+        if not row.get("done") and finished.lower() in name.lower():
+            row["done"] = True
+            answer = "Done: " + name
+            break
+open_tasks = [str(r.get("task")) for r in rows if not r.get("done")]
+if not answer:
+    if open_tasks:
+        answer = "Open: " + "; ".join(open_tasks)
+    else:
+        answer = "Nothing open."
+emit_result({
+    "answer": answer,
+    "records": rows,
+    "open_tasks": open_tasks,
+    "reminder_offer": offer,
+})
+'''
+
+_REMINDERS_BODY = '''
+asked = str(values.get("reminder") or "").strip()
+reminder = {}
+if asked:
+    day = day_of(asked, today) or (today + timedelta(days=1)).isoformat()
+    clock = time_of(asked) or "09:00"
+    rows.append({"reminder": asked, "day": day, "time": clock})
+    reminder = {"text": asked, "day": day, "time": clock}
+    answer = "I'll nudge you: " + asked + " (" + day + " " + clock + ")."
+standing = [
+    str(r.get("reminder")) + " (" + str(r.get("day")) + " "
+    + str(r.get("time")) + ")"
+    for r in rows
+]
+if not answer:
+    if standing:
+        answer = "Standing: " + "; ".join(standing)
+    else:
+        answer = "No standing reminders."
+emit_result({"answer": answer, "records": rows, "reminder": reminder})
+'''
+
+_RECORD_BODIES = {
+    "calendar": _CALENDAR_BODY,
+    "tasks": _TASKS_BODY,
+    "reminders": _REMINDERS_BODY,
+}
+
+
+def starter_script(spec: StarterSpec) -> str:
+    """The node's function, deterministic either way: the records trio
+    (P2) keep their own book — read it, change it, emit it with the
+    projections other nodes consume; every other starter files its
+    structured record (P1) until its phase grows it. No model writes
+    any of these; the shelf IS the plan."""
+    body = _RECORD_BODIES.get(spec.key)
+    if body is None:
+        return _filing_script(spec)
+    return (
+        f'"""{spec.name} — {spec.responsibility}"""\n'
+        + _BOOK_PRELUDE
+        + body
+    )
+
+
 # --------------------------------------------------------------------------- #
 # The shelf: seven nodes, reviewed words, plain asks.                          #
 # --------------------------------------------------------------------------- #
@@ -111,6 +293,12 @@ STARTER_SHELF: tuple[StarterSpec, ...] = (
                 example="dentist Tuesday 3pm",
             ),
         ),
+        outputs=(
+            StarterOutput(name="answer", value_type="str"),
+            StarterOutput(name="records"),
+            StarterOutput(name="events_today"),
+            StarterOutput(name="events_week"),
+        ),
     ),
     StarterSpec(
         key="tasks",
@@ -125,6 +313,17 @@ STARTER_SHELF: tuple[StarterSpec, ...] = (
                 label="What needs doing?",
                 example="send the quote to Alex",
             ),
+            StarterInput(
+                name="done",
+                label="Which task is finished?",
+                example="the quote",
+            ),
+        ),
+        outputs=(
+            StarterOutput(name="answer", value_type="str"),
+            StarterOutput(name="records"),
+            StarterOutput(name="open_tasks"),
+            StarterOutput(name="reminder_offer"),
         ),
     ),
     StarterSpec(
@@ -140,6 +339,11 @@ STARTER_SHELF: tuple[StarterSpec, ...] = (
                 label="What should I remind you about, and when?",
                 example="call the bank tomorrow at 9",
             ),
+        ),
+        outputs=(
+            StarterOutput(name="answer", value_type="str"),
+            StarterOutput(name="records"),
+            StarterOutput(name="reminder"),
         ),
     ),
     StarterSpec(

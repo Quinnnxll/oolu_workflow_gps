@@ -4,6 +4,37 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Personal nodes P2 — the records trio: calendar, tasks, reminders:
+
+- **One record discipline.** The drawer's ``records/rows.json``
+  stages into the sandbox as ``./records.json`` (a new ``_records``
+  carrier — data, never part of the frozen code tree or the cache
+  key); the function reads its book, changes it, emits it; the
+  completion hook lands the emitted book back in the drawer
+  verbatim. Every mutation is a RUN, so B3 files each change's io
+  and the interact window answers for free.
+- **Real deterministic functions** replace the P1 filing scripts for
+  the trio (same birth gates, subprocess-proven): Calendar keeps
+  events with the day plain words name and projects
+  ``events_today``/``events_week`` onto the port index (the slot the
+  trigger consumes, B4); Tasks adds, marks done by words, projects
+  ``open_tasks``; Reminders parses day and clock from plain words.
+- **The sandbox never touches host stores.** The reminders node
+  EMITS its ask; the ``_file_reminder`` hook files it into the
+  standing ``ReminderStore`` as the owner (audited, once per run,
+  delivered by the client's standing poll). A DATED task emits a
+  ``reminder_offer`` that becomes a standing question in the
+  conversation — the reminder is created only on the user's yes.
+- **Forms became real for node runs.** POST ``/v1/runs`` accepts
+  ``values``, checked through B1's one strict door against the
+  node's declared inputs and their own labels — unknown keys refuse
+  in words — and bound into ``bindings.json`` verbatim.
+- **Pinned** by ``tests/test_records_trio.py``: the trio's behavior
+  under real execution; the book's land-and-restage circle through
+  the gateway; the values door's verbatim staging and worded
+  refusal; the reminder filed as the owner exactly once; the dated
+  task's offer created only on yes.
+
 Personal nodes P1 — the starter shelf: seven nodes at account birth:
 
 - **The reviewed catalog.** ``nodeplace/personal_templates.py``:

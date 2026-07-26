@@ -335,6 +335,7 @@ class WorkflowOrchestrator:
             "bindings",
             "_value_tenant",
             "_output_ports",
+            "_records",
         ):
             if carried in function:
                 parameters[carried] = function[carried]
