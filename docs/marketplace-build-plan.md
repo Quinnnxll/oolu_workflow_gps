@@ -232,6 +232,23 @@ substrate (PostgreSQL durable adapter + JWKS OIDC) from Nodeplace P0.
 
 ### M0 — the commercial spine (intents, digests, policy — no catalog, no money)
 
+**Status: LANDED** — `src/oolu/marketplace/`: the spec's contracts as
+frozen records (`models.py`), the canonical SHA-256 digest over exactly
+the spec's `intent_digest_fields` (`digest.py`), the six-decision ladder
+as pure functions with the default purchase AND sales policies
+(`policy.py`), typed revocable delegation (`delegation.py`), durable
+tenant-scoped stores with UNIQUE-keyed idempotent intent creation
+(`store.py`), the review surface's pure rules and exact-terms summaries
+(`review.py`), and `MarketplaceSpine` (`service.py`) — creation,
+digest-bound approval (step-up floor, dual control, single-use,
+expiring), revocation that blocks unexecuted intents both at revocation
+and live at authorization, and `authorize_execution` recomputing the
+digest against the LIVE offer. Doors: `/v1/commerce/{policy,
+delegations, intents, approvals}` — deliberately no execution door.
+Gates pinned by `tests/test_marketplace_spine.py` and
+`tests/test_marketplace_gateway.py`, including the import scan proving
+the package touches no money path.
+
 Goal: the governing rule as running code. Typed commercial intents, the
 deterministic policy ladder, digest-bound approvals, and revocable agent
 delegation — proven with fake offers and zero payment paths.
@@ -252,17 +269,17 @@ Deliverables:
 - Gateway routes for intents and approvals (no order execution yet).
 
 Goal Adherence:
-- [ ] An intent's digest changes iff a material field changes (property test
+- [x] An intent's digest changes iff a material field changes (property test
       over the digest field set).
-- [ ] Approval of digest A can never execute digest B — including
+- [x] Approval of digest A can never execute digest B — including
       offer-version bumps (the spec's "seller changes price after approval"
       acceptance test).
-- [ ] Expired approvals are refused; approval reuse is refused.
-- [ ] Policy evaluation is a pure function of typed inputs: same inputs,
+- [x] Expired approvals are refused; approval reuse is refused.
+- [x] Policy evaluation is a pure function of typed inputs: same inputs,
       same decision, with reasons and `policy_version` recorded.
-- [ ] Every decision (including `deny`) lands on the audit chain.
-- [ ] Revoking a delegation blocks all unexecuted intents immediately.
-- [ ] No code path in M0 can move money (no PSP port exists yet).
+- [x] Every decision (including `deny`) lands on the audit chain.
+- [x] Revoking a delegation blocks all unexecuted intents immediately.
+- [x] No code path in M0 can move money (no PSP port exists yet).
 
 ### M1 — the fixed-price market (first real dollar, first fee)
 

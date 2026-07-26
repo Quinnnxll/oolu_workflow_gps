@@ -4,6 +4,31 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The commercial spine (marketplace-build-plan M0) — the embedded
+marketplace's law, before its market:
+
+- **`src/oolu/marketplace/`** — typed commercial intents bound to exact
+  versioned offers; the canonical SHA-256 **intent digest** over the
+  spec's material fields (change any term and every approval dies); the
+  six-decision **policy ladder** (`auto_execute` → `deny`) as pure
+  functions over typed facts, purchase and sales sides, reasons and
+  policy version on every verdict; typed, expiring, **revocable agent
+  delegation** — revocation blocks every unexecuted intent immediately
+  and is re-checked live at authorization; digest-bound, single-use,
+  expiring **approvals** with a step-up floor and dual control; and
+  `authorize_execution`, which recomputes the digest against the LIVE
+  offer so approval of digest A can never execute digest B.
+- **Doors:** `/v1/commerce/policy`, `/v1/commerce/delegations`,
+  `/v1/commerce/intents`, `/v1/commerce/approvals` — authenticated,
+  tenant-scoped, idempotent on `idempotency_key`. Deliberately **no
+  execution door and no money path**: the package imports no billing or
+  provider code, and a test scans the imports to keep it that way.
+- **Audited end to end:** every policy decision (including deny), every
+  approval, expiry, block, digest mismatch, and authorization lands on
+  the hash-linked audit chain.
+- Pinned by `tests/test_marketplace_spine.py` and
+  `tests/test_marketplace_gateway.py`.
+
 Investor panel — the deployed page is the page again:
 
 - **The stale-serving defect.** ``docker-compose.prod.yml``

@@ -268,6 +268,50 @@ def build_openapi() -> dict:
                 "(quality minus weighted cost) instead of quality alone"
             ),
         },
+        "/v1/commerce/policy": {
+            "get": op("The caller's purchase policy (typed limits, versioned)"),
+            "put": op("Replace the caller's purchase policy"),
+        },
+        "/v1/commerce/delegations": {
+            "get": op("The caller's agent delegations"),
+            "post": op(
+                "Grant an agent a typed, expiring, revocable commercial "
+                "delegation (actions, categories, amounts, counterparties, "
+                "destinations)"
+            ),
+        },
+        "/v1/commerce/delegations/{delegation_id}": {
+            "delete": op(
+                "Revoke a delegation; every unexecuted intent the agent "
+                "minted is blocked immediately"
+            ),
+        },
+        "/v1/commerce/intents": {
+            "get": op("The caller's commercial intents with states and verdicts"),
+            "post": op(
+                "Create an immutable purchase intent bound to an exact "
+                "versioned offer; the deterministic policy ladder decides "
+                "auto-execute / notify / approval / deny and the digest is "
+                "minted (idempotent on idempotency_key; no money moves — "
+                "no execution door exists yet)"
+            ),
+        },
+        "/v1/commerce/intents/{intent_id}": {
+            "get": op("One intent: exact terms, state, digest, and verdict"),
+        },
+        "/v1/commerce/approvals": {
+            "get": op(
+                "The commerce review inbox: exact-terms summaries of every "
+                "intent awaiting a digest-bound approval"
+            ),
+        },
+        "/v1/commerce/intents/{intent_id}/approval": {
+            "post": op(
+                "Approve or reject the exact digested terms (strong "
+                "decisions demand step-up authentication; approvals are "
+                "single-use and expire)"
+            ),
+        },
         "/v1/earnings": {"get": op("The caller's own earnings balance")},
         "/v1/earnings/entries": {"get": op("The caller's own earnings ledger entries")},
         "/v1/payout-accounts": {

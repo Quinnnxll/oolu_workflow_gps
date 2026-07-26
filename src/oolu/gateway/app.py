@@ -87,6 +87,17 @@ from ..identity.sessions import default_assurance
 from ..identity.tokens import OidcValidator
 from ..knowledge.traces import TraceStore
 from ..mail import SendThrottle
+from ..marketplace import (
+    AgentDelegation,
+    MarketNotFound,
+    MarketplaceError,
+    MarketplaceSpine,
+    PurchasePolicy,
+    StrongAuthenticationRequired,
+)
+from ..marketplace import (
+    Offer as CommerceOffer,
+)
 from ..metering.attribution import AttributionStore
 from ..metering.models import MeteringEvent
 from ..metering.store import MeteringLedger
@@ -685,6 +696,10 @@ class GatewayApp:
 
         self._pulse = PulseStore(durable.conn)
         self._pulse_gate = 0.0
+        # The commercial spine (marketplace-build-plan M0): typed intents,
+        # the deterministic policy ladder, digest-bound approvals. No order
+        # execution and no payment path exists behind these doors yet.
+        self._commerce = MarketplaceSpine(durable.conn, audit=durable.audit)
         # Competitor intelligence, constructed on first use.
         self._competitors = None
         self._settings = settings_node
@@ -1018,6 +1033,26 @@ class GatewayApp:
         r.add("POST", "/v1/pulse", self._pulse_create)
         r.add("POST", "/v1/pulse/{schedule_id}", self._pulse_toggle)
         r.add("DELETE", "/v1/pulse/{schedule_id}", self._pulse_delete)
+        # The commercial spine (marketplace-build-plan M0): intents and
+        # digest-bound approvals only — no order execution door exists.
+        r.add("GET", "/v1/commerce/policy", self._commerce_policy_get)
+        r.add("PUT", "/v1/commerce/policy", self._commerce_policy_put)
+        r.add("GET", "/v1/commerce/delegations", self._commerce_delegations_list)
+        r.add("POST", "/v1/commerce/delegations", self._commerce_delegation_grant)
+        r.add(
+            "DELETE",
+            "/v1/commerce/delegations/{delegation_id}",
+            self._commerce_delegation_revoke,
+        )
+        r.add("GET", "/v1/commerce/intents", self._commerce_intents_list)
+        r.add("POST", "/v1/commerce/intents", self._commerce_intent_create)
+        r.add("GET", "/v1/commerce/intents/{intent_id}", self._commerce_intent_get)
+        r.add("GET", "/v1/commerce/approvals", self._commerce_approvals_inbox)
+        r.add(
+            "POST",
+            "/v1/commerce/intents/{intent_id}/approval",
+            self._commerce_intent_approve,
+        )
         r.add(
             "POST",
             "/v1/reminders/{reminder_id}/delivered",
@@ -9936,6 +9971,188 @@ class GatewayApp:
             },
         )
         return json_response(200, {"cancelled": params["schedule_id"]})
+
+    # ------------------------------------------------------------------ #
+    # The commercial spine (marketplace-build-plan M0). Intents and       #
+    # digest-bound approvals; deliberately no execution door — M1's       #
+    # order service is the first consumer of an authorization.            #
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _commerce_error(exc: MarketplaceError) -> GatewayError:
+        if isinstance(exc, MarketNotFound):
+            return GatewayError(404, "not_found", str(exc))
+        if isinstance(exc, StrongAuthenticationRequired):
+            return GatewayError(403, "step_up_required", str(exc))
+        return GatewayError(409, "conflict", str(exc))
+
+    @staticmethod
+    def _commerce_intent_view(stored) -> dict:
+        return {
+            "intent": stored.intent.model_dump(mode="json"),
+            "state": stored.state,
+            "intent_digest": stored.digest,
+            "verdict": stored.verdict.model_dump(mode="json"),
+        }
+
+    def _commerce_policy_get(self, request, session, params) -> Response:
+        policy = self._commerce.purchase_policy(
+            tenant=session.tenant_id, principal=session.principal_id
+        )
+        return json_response(200, policy.model_dump(mode="json"))
+
+    def _commerce_policy_put(self, request, session, params) -> Response:
+        try:
+            policy = PurchasePolicy.model_validate(request.body or {})
+        except ValidationError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        self._commerce.set_purchase_policy(
+            policy, tenant=session.tenant_id, principal=session.principal_id
+        )
+        return json_response(200, policy.model_dump(mode="json"))
+
+    def _commerce_delegations_list(self, request, session, params) -> Response:
+        records = self._commerce.delegations.list_for(
+            tenant=session.tenant_id, principal=session.principal_id
+        )
+        return json_response(
+            200, {"items": [r.model_dump(mode="json") for r in records]}
+        )
+
+    def _commerce_delegation_grant(self, request, session, params) -> Response:
+        body = dict(request.body or {})
+        body.setdefault("delegation_id", uuid4().hex)
+        # The delegation binds to the AUTHENTICATED principal — a caller
+        # cannot mint authority for someone else by naming them.
+        body["tenant_id"] = session.tenant_id
+        body["principal_id"] = session.principal_id
+        try:
+            record = AgentDelegation.model_validate(body)
+        except ValidationError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        self._commerce.grant_delegation(record)
+        return json_response(201, record.model_dump(mode="json"))
+
+    def _commerce_delegation_revoke(self, request, session, params) -> Response:
+        try:
+            blocked = self._commerce.revoke_delegation(
+                params["delegation_id"],
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+                now=request.now or self._clock(),
+            )
+        except MarketplaceError as exc:
+            raise self._commerce_error(exc) from exc
+        return json_response(
+            200,
+            {"revoked": params["delegation_id"], "blocked_intents": blocked},
+        )
+
+    def _commerce_intents_list(self, request, session, params) -> Response:
+        records = self._commerce.list_intents(
+            tenant=session.tenant_id,
+            principal=session.principal_id,
+            state=request.query.get("state"),
+        )
+        return json_response(
+            200, {"items": [self._commerce_intent_view(r) for r in records]}
+        )
+
+    def _commerce_intent_create(self, request, session, params) -> Response:
+        body = request.body or {}
+        try:
+            offer = CommerceOffer.model_validate(body.get("offer") or {})
+        except ValidationError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        idempotency_key = str(body.get("idempotency_key") or "")
+        if not idempotency_key:
+            raise GatewayError(
+                400, "invalid_request", "idempotency_key is required"
+            )
+        maximum = body.get("maximum_total_micros")
+        if maximum is not None:
+            try:
+                maximum = int(maximum)
+            except (TypeError, ValueError):
+                raise GatewayError(
+                    400,
+                    "invalid_request",
+                    "maximum_total_micros must be a whole number of micros",
+                ) from None
+        risk_facts = body.get("risk_facts")
+        if risk_facts is not None and not isinstance(risk_facts, dict):
+            raise GatewayError(
+                400, "invalid_request", "risk_facts must be an object"
+            )
+        permissions = body.get("data_permissions") or ()
+        if not isinstance(permissions, (list, tuple)):
+            raise GatewayError(
+                400, "invalid_request", "data_permissions must be a list"
+            )
+        try:
+            stored, created = self._commerce.create_purchase_intent(
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+                agent=str(body.get("agent_id") or "oolu"),
+                offer=offer,
+                idempotency_key=idempotency_key,
+                now=request.now or self._clock(),
+                category=str(body.get("category") or ""),
+                delivery_destination=str(body.get("delivery_destination") or ""),
+                data_permissions=tuple(str(p) for p in permissions),
+                maximum_total_micros=maximum,
+                risk_facts=risk_facts,
+            )
+        except (ValidationError, ValueError) as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(
+            201 if created else 200, self._commerce_intent_view(stored)
+        )
+
+    def _commerce_intent_get(self, request, session, params) -> Response:
+        try:
+            stored = self._commerce.get_intent(
+                params["intent_id"], tenant=session.tenant_id
+            )
+        except MarketplaceError as exc:
+            raise self._commerce_error(exc) from exc
+        return json_response(200, self._commerce_intent_view(stored))
+
+    def _commerce_approvals_inbox(self, request, session, params) -> Response:
+        summaries = self._commerce.pending_approvals(
+            tenant=session.tenant_id,
+            principal=session.principal_id,
+            now=request.now or self._clock(),
+        )
+        return json_response(200, {"items": summaries})
+
+    def _commerce_intent_approve(self, request, session, params) -> Response:
+        body = request.body or {}
+        decision = str(body.get("decision") or "")
+        if decision not in ("approve", "reject"):
+            raise GatewayError(
+                400, "invalid_request", "decision must be approve or reject"
+            )
+        try:
+            record = self._commerce.record_approval(
+                params["intent_id"],
+                tenant=session.tenant_id,
+                approver_id=session.principal_id,
+                assurance_level=session.assurance_level,
+                approve=decision == "approve",
+                now=request.now or self._clock(),
+            )
+        except MarketplaceError as exc:
+            raise self._commerce_error(exc) from exc
+        stored = self._commerce.get_intent(
+            params["intent_id"], tenant=session.tenant_id
+        )
+        return json_response(
+            200,
+            {
+                "approval": record.model_dump(mode="json"),
+                "state": stored.state,
+            },
+        )
 
     def _list_own_nodes(self, request, session, params) -> Response:
         nodeplace = self._require_nodeplace()
