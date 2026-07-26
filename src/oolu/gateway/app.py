@@ -9063,6 +9063,22 @@ class GatewayApp:
                     "name": spec.name,
                 }
             )
+        # P4: the morning pulse ships with the shelf, DISABLED — one
+        # sentence ("turn on the morning pulse") switches it on.
+        from ..nodeplace.personal_templates import MORNING_PULSE_GOAL
+
+        try:
+            self._pulse.add(
+                tenant,
+                principal,
+                cadence="daily",
+                at_minute=9 * 60,
+                goal=MORNING_PULSE_GOAL,
+                label="the morning pulse — today's calendar and open tasks",
+                enabled=False,
+            )
+        except ValueError:
+            pass  # a full schedule book leaves the shelf standing
         self._starter_ledger().record_nodes(
             tenant, principal, [c["node_id"] for c in created]
         )
@@ -9428,12 +9444,115 @@ class GatewayApp:
             )
             self._fire_schedule(schedule, occurrence, skipped)
 
+    def _fire_morning(self, schedule, occurrence: str, skipped: int) -> None:
+        """P4 — the morning pulse: fire the owner's Calendar and Tasks
+        as ORDINARY pulse-stamped runs, then land the combined answer
+        as OoLu's own message through the reminder channel (the row the
+        client's standing poll already delivers). Two accounts get two
+        different mornings from the same shelf, by construction: each
+        fire runs the OWNER's nodes over the OWNER's books."""
+        from types import SimpleNamespace
+
+        from ..nodeplace.personal_templates import STARTER_SHELF
+
+        session = SimpleNamespace(
+            tenant_id=schedule.tenant, principal_id=schedule.principal
+        )
+        goals = [
+            spec.goal
+            for spec in STARTER_SHELF
+            if spec.key in ("calendar", "tasks")
+        ]
+        stamp = {
+            "schedule_id": schedule.schedule_id,
+            "occurrence": occurrence,
+            "label": schedule.label,
+            "skipped": skipped,
+        }
+        lines: list[str] = []
+        run_ids: list[str] = []
+        for goal in goals:
+            try:
+                run = self._start_intent_run(session, goal, pulse=stamp)
+            except GatewayError:
+                continue  # a deleted starter is a quieter morning
+            except Exception:  # noqa: BLE001 - the tick must keep serving
+                logging.getLogger("oolu.gateway").exception(
+                    "morning pulse run failed for %s", schedule.schedule_id
+                )
+                continue
+            run_ids.append(str(run["run_id"]))
+            state = next(
+                (
+                    s
+                    for s in self._durable.runs.list(limit=10_000)
+                    if s.run_id == run["run_id"]
+                ),
+                None,
+            )
+            result = (
+                self._completed_result(state) if state is not None else None
+            )
+            answer = str((result or {}).get("answer") or "").strip()
+            if answer:
+                lines.append(answer)
+        if not lines or self._reminders is None:
+            self._durable.audit.append(
+                "pulse.fire_failed",
+                {
+                    "schedule_id": schedule.schedule_id,
+                    "occurrence": occurrence,
+                    "tenant": schedule.tenant,
+                    "principal": schedule.principal,
+                    "goal": schedule.goal,
+                    "code": "morning_empty",
+                    "reason": (
+                        "no reminder channel on this host"
+                        if self._reminders is None
+                        else "no starter answered — were they deleted?"
+                    ),
+                },
+            )
+            return
+        combined = "Good morning — the day's shape: " + " • ".join(lines)
+        try:
+            self._reminders.add(
+                tenant=schedule.tenant,
+                principal=schedule.principal,
+                text=combined[:490],
+                due_at=(self._clock() + timedelta(minutes=2)),
+            )
+        except ValueError:
+            pass  # a full reminder book is not a failed morning
+        if run_ids:
+            self._pulse.set_claim_run(
+                schedule.schedule_id, occurrence, run_ids[0]
+            )
+        self._durable.audit.append(
+            "pulse.fired",
+            {
+                "schedule_id": schedule.schedule_id,
+                "occurrence": occurrence,
+                "run_id": ",".join(run_ids),
+                "skipped": skipped,
+                "tenant": schedule.tenant,
+                "principal": schedule.principal,
+                "goal": schedule.goal,
+            },
+        )
+
     def _fire_schedule(self, schedule, occurrence: str, skipped: int) -> None:
         """One scheduled fire: an ORDINARY run, submitted as the owner
         through the standing doors — audited, metered, walled, and
         inbox-visible on failure exactly like a hand-started run. A
         refusal (the goal no longer resolves, the tenant is over its
-        cap) is audited, never raised into the serving request."""
+        cap) is audited, never raised into the serving request. The
+        morning pulse's own goal fires its composite instead."""
+        from ..nodeplace.personal_templates import MORNING_PULSE_GOAL
+
+        if schedule.goal == MORNING_PULSE_GOAL:
+            self._fire_morning(schedule, occurrence, skipped)
+            return
         from types import SimpleNamespace
 
         session = SimpleNamespace(
@@ -9525,6 +9644,61 @@ class GatewayApp:
     _PULSE_LIST = frozenset(
         {"schedules", "my schedules", "list schedules", "show schedules"}
     )
+    _MORNING_ON = frozenset(
+        {"turn on the morning pulse", "enable the morning pulse",
+         "start the morning pulse", "morning pulse on"}
+    )
+    _MORNING_OFF = frozenset(
+        {"turn off the morning pulse", "disable the morning pulse",
+         "pause the morning pulse", "stop the morning pulse",
+         "morning pulse off"}
+    )
+
+    def _answer_morning_switch(self, session, *, enabled: bool, now) -> str:
+        """P4 — the one-sentence switch: find the seeded morning-pulse
+        schedule and flip it, reading the store back."""
+        from ..nodeplace.personal_templates import MORNING_PULSE_GOAL
+        from ..pulse import next_occurrence
+
+        mine = [
+            s
+            for s in self._pulse.list_for(
+                session.tenant_id, session.principal_id
+            )
+            if s.goal == MORNING_PULSE_GOAL
+        ]
+        if not mine:
+            return (
+                "There's no morning pulse on your desk — it arrives with "
+                "the starter shelf."
+            )
+        updated = self._pulse.set_enabled(
+            mine[0].schedule_id,
+            tenant=session.tenant_id,
+            principal=session.principal_id,
+            enabled=enabled,
+            now=now,
+        )
+        self._durable.audit.append(
+            "pulse.toggled",
+            {
+                "schedule_id": mine[0].schedule_id,
+                "tenant": session.tenant_id,
+                "principal": session.principal_id,
+                "enabled": enabled,
+            },
+        )
+        if enabled and updated is not None:
+            return (
+                "The morning pulse is ON — every day at 09:00 I'll run "
+                "your Calendar and Tasks and bring you the day's shape. "
+                f"First one {next_occurrence(updated, now)} (your clock). "
+                "“turn off the morning pulse” stops it."
+            )
+        return (
+            "The morning pulse is OFF. “turn on the morning pulse” "
+            "starts it again — the paused mornings stay skipped."
+        )
 
     def _pulse_command(self, session, message, body, now) -> str | None:
         """The pulse's deterministic ear: create, list, cancel, pause,
@@ -9535,6 +9709,10 @@ class GatewayApp:
 
         text = (message or "").strip()
         lowered = text.casefold().rstrip(".!")
+        if lowered in self._MORNING_ON or lowered in self._MORNING_OFF:
+            return self._answer_morning_switch(
+                session, enabled=lowered in self._MORNING_ON, now=now
+            )
         if lowered in self._PULSE_LIST:
             rows = self._pulse.list_for(
                 session.tenant_id, session.principal_id
@@ -12674,6 +12852,9 @@ class GatewayApp:
         self._file_reminder(state)
         # P3: emitted sheets and charts land under the drawer's records.
         self._land_emitted_files(state)
+        # P4: a rhythm the trigger node parsed becomes a standing
+        # schedule — filed by this hand, never by the sandbox.
+        self._file_schedule(state)
         if self._metering is None or self._nodeplace is None:
             return
         if state.phase is Phase.COMPLETED:
@@ -13101,6 +13282,64 @@ class GatewayApp:
                 "tenant": tenant,
                 "principal": principal,
                 "due_at": row.due_at.isoformat(),
+            },
+        )
+
+    def _file_schedule(self, state: RunState) -> None:
+        """P4 — the trigger node's hand: a run that emitted a parsed
+        ``schedule`` ({cadence, at_minute, goal, …}) has it filed into
+        the standing ``PulseStore`` AS THE OWNER — the sandbox parses
+        the words, this hook keeps the rhythm. Once per run, audited
+        as ``pulse.created`` with the run named; an unusable spec is
+        audited, never an error."""
+        result = self._completed_result(state)
+        if result is None:
+            return
+        ask = result.get("schedule")
+        if not (isinstance(ask, dict) and str(ask.get("goal") or "").strip()):
+            return
+        already = any(
+            e.event_type == "pulse.created"
+            and e.payload.get("run_id") == state.run_id
+            for e in self._durable.audit.records()
+        )
+        if already:
+            return  # one run keeps its rhythm exactly once
+        tenant = str(state.contract.metadata.get("tenant_id", ""))
+        principal = str(state.contract.submitted_by or "")
+        try:
+            schedule = self._pulse.add(
+                tenant,
+                principal,
+                cadence=str(ask.get("cadence") or ""),
+                at_minute=int(ask.get("at_minute") or 0),
+                goal=str(ask.get("goal") or ""),
+                weekday=ask.get("weekday"),
+                day_of_month=ask.get("day_of_month"),
+                month=ask.get("month"),
+                day=ask.get("day"),
+                label=str(ask.get("words") or "")[:200],
+            )
+        except (TypeError, ValueError) as exc:
+            self._durable.audit.append(
+                "pulse.ask_failed",
+                {
+                    "run_id": state.run_id,
+                    "tenant": tenant,
+                    "principal": principal,
+                    "reason": str(exc),
+                },
+            )
+            return
+        self._durable.audit.append(
+            "pulse.created",
+            {
+                "schedule_id": schedule.schedule_id,
+                "tenant": tenant,
+                "principal": principal,
+                "goal": schedule.goal,
+                "cadence": schedule.cadence,
+                "run_id": state.run_id,
             },
         )
 

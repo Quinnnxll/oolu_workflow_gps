@@ -504,6 +504,122 @@ if entry:
 emit_result(payload)
 '''
 
+# The morning pulse (P4): a daily schedule seeded DISABLED with the
+# shelf. Its goal is this exact sentence — the pulse tick recognizes it
+# and fires the owner's Calendar and Tasks as ordinary runs, landing
+# the combined answer through the reminder channel.
+MORNING_PULSE_GOAL = "the morning pulse — today's calendar and open tasks"
+
+_TRIGGER_BODY = r'''
+rhythm = str(values.get("rhythm") or "").strip().rstrip(".!")
+MONTHS_OF = {
+    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5,
+    "june": 6, "july": 7, "august": 8, "september": 9, "october": 10,
+    "november": 11, "december": 12,
+}
+TIME_PART = r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?"
+GOAL_PART = r"\s*[,:]?\s+(?:run\s+|do\s+)?(.+?)$"
+
+
+def _minute(hour_text, minute_text, meridiem):
+    hour = int(hour_text)
+    minute = int(minute_text or 0)
+    meridiem = (meridiem or "").lower()
+    if meridiem:
+        if not 1 <= hour <= 12:
+            return None
+        hour = hour % 12 + (12 if meridiem == "pm" else 0)
+    if hour > 23 or minute > 59:
+        return None
+    return hour * 60 + minute
+
+
+parsed = None
+if rhythm:
+    daily = re.match(
+        r"^every\s+day\s+at\s+" + TIME_PART + GOAL_PART, rhythm, re.I)
+    weekly = re.match(
+        r"^every\s+(monday|tuesday|wednesday|thursday|friday|saturday"
+        r"|sunday)\s+at\s+" + TIME_PART + GOAL_PART, rhythm, re.I)
+    monthly = re.match(
+        r"^every\s+month\s+on\s+(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?"
+        r"\s+at\s+" + TIME_PART + GOAL_PART, rhythm, re.I)
+    yearly = re.match(
+        r"^every\s+year\s+on\s+(january|february|march|april|may|june"
+        r"|july|august|september|october|november|december)"
+        r"\s+(\d{1,2})(?:st|nd|rd|th)?\s+at\s+" + TIME_PART + GOAL_PART,
+        rhythm, re.I)
+    if daily:
+        minute = _minute(daily.group(1), daily.group(2), daily.group(3))
+        if minute is not None:
+            parsed = {"cadence": "daily", "at_minute": minute,
+                      "goal": daily.group(4).strip()}
+    elif weekly:
+        minute = _minute(weekly.group(2), weekly.group(3), weekly.group(4))
+        if minute is not None:
+            parsed = {
+                "cadence": "weekly",
+                "weekday": WEEKDAY_NAMES.index(weekly.group(1).lower()),
+                "at_minute": minute, "goal": weekly.group(5).strip(),
+            }
+    elif monthly:
+        minute = _minute(monthly.group(2), monthly.group(3),
+                         monthly.group(4))
+        if minute is not None:
+            parsed = {
+                "cadence": "monthly",
+                "day_of_month": int(monthly.group(1)),
+                "at_minute": minute, "goal": monthly.group(5).strip(),
+            }
+    elif yearly:
+        minute = _minute(yearly.group(3), yearly.group(4), yearly.group(5))
+        if minute is not None:
+            parsed = {
+                "cadence": "yearly",
+                "month": MONTHS_OF[yearly.group(1).lower()],
+                "day": int(yearly.group(2)),
+                "at_minute": minute, "goal": yearly.group(6).strip(),
+            }
+if rhythm and parsed:
+    rows.append({"rhythm": rhythm})
+    schedule = dict(parsed)
+    schedule["words"] = rhythm
+    answer = (
+        "Standing rhythm set: " + rhythm + ". Each firing is an "
+        "ordinary run of that goal - say \"schedules\" for the "
+        "standing list, \"cancel schedule <id>\" to stop one."
+    )
+elif rhythm:
+    answer = (
+        "I couldn't read that rhythm - say it like \"every day at 9, "
+        "run my invoice node\" or \"every monday at 7:30pm, send the "
+        "weekly report\". Nothing was set."
+    )
+else:
+    asked = [str(r.get("rhythm")) for r in rows if r.get("rhythm")]
+    if asked:
+        answer = (
+            "Rhythms asked through this node: " + "; ".join(asked)
+            + ". The standing list answers to \"schedules\"."
+        )
+    else:
+        answer = (
+            "No rhythms yet - say \"every day at 9, run ...\" and "
+            "I'll keep the beat."
+        )
+import datetime as _dt
+now_stamp = _dt.datetime.now()
+payload = {
+    "answer": answer,
+    "records": rows,
+    "fired_at": now_stamp.isoformat(),
+    "occasion": WEEKDAY_NAMES[now_stamp.weekday()],
+}
+if rhythm and parsed:
+    payload["schedule"] = schedule
+emit_result(payload)
+'''
+
 _RECORD_BODIES = {
     "calendar": _CALENDAR_BODY,
     "tasks": _TASKS_BODY,
@@ -511,6 +627,7 @@ _RECORD_BODIES = {
     "stock": _STOCK_BODY,
     "cashflow": _CASHFLOW_BODY,
     "invoice_scan": _INVOICE_BODY,
+    "trigger": _TRIGGER_BODY,
 }
 
 
@@ -615,6 +732,12 @@ STARTER_SHELF: tuple[StarterSpec, ...] = (
                 label="When should it run, in plain words?",
                 example="every day at 9, run my invoice node",
             ),
+        ),
+        outputs=(
+            StarterOutput(name="answer", value_type="str"),
+            StarterOutput(name="records"),
+            StarterOutput(name="fired_at", value_type="str"),
+            StarterOutput(name="occasion", value_type="str"),
         ),
     ),
     StarterSpec(

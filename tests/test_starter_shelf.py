@@ -62,7 +62,7 @@ _SAMPLES = {
     "calendar": "hello world today",
     "tasks": "hello world tomorrow",
     "reminders": "hello world tomorrow at 9",
-    "trigger": "hello world",
+    "trigger": "every day at 9, run hello world",
     "stock": "received 4 hello world",
     "cashflow": "hello world 120 in today",
     "invoice_scan": "hello-world.txt",

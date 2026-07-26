@@ -294,6 +294,28 @@ and the paper that proves it.*
 
 ### Phase P4 — the automated life: the pieces wired
 
+**Status: LANDED** — the Automation Trigger node is the pulse worn
+as a node: its deterministic function parses a rhythm in the
+sandbox (daily/weekly/monthly/yearly, the same shapes as the chat
+ear, self-contained) and EMITS the parsed schedule; the
+`_file_schedule` completion hook keeps the beat in the standing
+``PulseStore`` as the owner — once per run, ``pulse.created`` cited
+with the run — while an unreadable rhythm refuses in words and sets
+nothing. Its every run also emits ``fired_at``/``occasion`` onto the
+port index, routable upstream like any standing output. The morning
+pulse seeds DISABLED with the shelf (a daily 09:00 schedule whose
+goal is its own recognized sentence) and switches on in one plain
+sentence ("turn on the morning pulse"); its fire runs the owner's
+Calendar and Tasks as ORDINARY pulse-stamped runs and lands the two
+answers as ONE message through the reminder channel the client
+already polls — two accounts get two different mornings from the
+same shelf, proven side by side, and "what fired you, when" answers
+from the stores: every fired run's metadata names the schedule and
+occurrence, the claim names a fired run. The cross-node offers
+(invoice→cashflow, task→reminder, stock→reminder) stood from P2/P3
+(`tests/test_automated_life.py`). Remaining: none — the plan is
+complete.
+
 *The seven nodes plus the pulse equal automation nobody had to
 build.*
 

@@ -4,6 +4,32 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Personal nodes P4 — the automated life: the pieces wired:
+
+- **The Automation Trigger node is the pulse worn as a node.** Its
+  deterministic function parses a rhythm in the sandbox (the same
+  daily/weekly/monthly/yearly shapes as the chat ear,
+  self-contained) and EMITS the parsed schedule; the
+  ``_file_schedule`` completion hook keeps the beat in the standing
+  ``PulseStore`` as the owner — once per run, ``pulse.created``
+  cited with the run. An unreadable rhythm refuses in words and
+  sets nothing. Every run also emits ``fired_at``/``occasion`` onto
+  the port index — routable upstream like any standing output.
+- **The morning pulse.** A daily 09:00 schedule seeds DISABLED with
+  the starter shelf and switches on in one sentence ("turn on the
+  morning pulse"). Its fire runs the owner's Calendar and Tasks as
+  ORDINARY pulse-stamped runs and lands the two answers as ONE
+  message through the reminder channel the client already polls —
+  the day's shape, before it starts.
+- **Pinned** by ``tests/test_automated_life.py``: the trigger
+  parses and refuses honestly under real execution; a trigger run's
+  emitted schedule stands in the pulse store, audited with the run;
+  the morning pulse seeds off and flips in a sentence; two accounts
+  fire side by side and receive two DIFFERENT mornings from the
+  same shelf; every fired run names its schedule and occurrence,
+  the claim names a fired run, and the occurrence never fires
+  twice.
+
 Personal nodes P3 — the business trio: stock, cashflow, invoice scan:
 
 - **Stock**: movements and floors in plain words; levels are a
