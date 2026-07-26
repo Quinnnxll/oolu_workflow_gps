@@ -448,7 +448,7 @@ Goal Adherence:
 
 ### M3 — services, organizations, reconciliation (the spec's `phase_3`)
 
-**Status: LANDED (core)** — **Milestones**: the payment schedule rides
+**Status: LANDED** — **Milestones**: the payment schedule rides
 the Offer (digest-material: a changed schedule is a changed term, and
 tranches must sum to the subtotal), `marketplace/milestones.py` keeps
 each tranche's life durably, and the order machine enforces the flow —
@@ -476,10 +476,28 @@ orders match against ledger, invoice, payment refs, and evidence —
 matched orders close, mismatches file exceptions with the trail
 attached, and a duplicate charge disputes the order itself. Doors for
 all five under `/v1/commerce/...`. Pinned by
-`tests/test_marketplace_{milestones,recurring,m3_ops}.py`. Remaining:
-the worker-lease dispatcher adapter, dispute-money resolution beyond
-the unreleased-refund path, and the shell surfaces for milestones and
-recurring obligations.
+`tests/test_marketplace_{milestones,recurring,m3_ops}.py`.
+
+**Phase closed** by three follow-ups: **(1) the worker-lease
+dispatcher** (`marketplace/jobdispatch.py`) — jobs become
+capability-scoped tasks on the worker control plane
+(`execute:<node>`), assigned only to a worker holding that capability
+under an HMAC-signed, expiring, audience-bound lease that worker alone
+can verify; the lease token never rides the audit chain (a credential
+is not evidence), and a dispatch with no capable worker fails LOUDLY —
+the job marks failed and the caller hears it. **(2) adjudication**
+(`OrderService.adjudicate` + the `/adjudicate` door behind approve
+authority) — the marketplace's verdict as deterministic postings:
+`replacement` re-enters fulfillment untouched, `reject` releases
+frozen escrow to the seller with the split's exact remainders,
+`full_refund` reverses every settlement, and `partial_refund` returns
+the awarded amount from frozen escrow first and the seller's payable
+for the rest — the platform's fee and the tax line stand. **(3) the
+shell surfaces** — milestone schedules on order cards (deliver with
+evidence, accept tranche, fail — each naming what it does to escrow)
+and standing obligations with one-click lawful renewal (renew →
+auto-approved intent → placement, digest law included) and
+cancellation; pinned in `Market.test.tsx`, shell bundle rebuilt.
 
 Goal: beyond parcels — services with milestones, subscriptions under the
 recurring rule, organization approvals with dual control, physical execution

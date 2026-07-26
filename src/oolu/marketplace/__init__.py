@@ -30,6 +30,7 @@ from .errors import (
 )
 from .fraud import OrderHistory, RiskSignals
 from .inventory import InventoryService, Reservation
+from .jobdispatch import WorkerLeaseDispatcher, node_capability
 from .jobs import ExecutionJob, JobDesk
 from .milestones import MilestoneBook, MilestoneState
 from .models import (
@@ -144,6 +145,7 @@ __all__ = [
     "RecurringObligation",
     "RequiresNewApproval",
     "SelfApproval",
+    "WorkerLeaseDispatcher",
     "Offer",
     "OrderRecord",
     "OrderService",
@@ -163,6 +165,7 @@ __all__ = [
     "WrongState",
     "approval_summary",
     "delegation_gaps",
+    "node_capability",
     "seller_kyc_key",
     "evaluate_purchase",
     "evaluate_sale",

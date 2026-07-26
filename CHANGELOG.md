@@ -4,6 +4,32 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+M3 closed — jobs ride signed leases, disputes settle as postings, the
+surface learns schedules:
+
+- **The worker-lease dispatcher** (`marketplace/jobdispatch.py`) — an
+  execution job becomes a capability-scoped task (`execute:<node>`) on
+  the worker control plane, assigned only to a worker holding that
+  capability under an HMAC-signed, expiring, audience-bound lease that
+  worker alone can verify. The lease token never rides the audit chain
+  — a credential is not evidence. No capable worker = a LOUD failure:
+  the job marks failed, the caller hears it, nothing is silently
+  promised.
+- **Adjudication** (`OrderService.adjudicate` + `/adjudicate` behind
+  approve authority) — the marketplace's dispute verdict as
+  deterministic postings: `replacement` re-enters fulfillment
+  untouched; `reject` releases frozen escrow to the seller with the
+  split's exact remainders; `full_refund` reverses every settlement;
+  `partial_refund` returns the awarded amount from frozen escrow
+  first, the seller's payable for the rest — the platform's fee and
+  the tax line stand. Trial balance zero after every outcome.
+- **The shell learns schedules** — milestone rows on order cards
+  (deliver with evidence, "Accept tranche", fail — each naming what it
+  does to escrow, plus refund-unreleased on frozen orders) and
+  standing obligations with one-click lawful renewal (renew →
+  auto-approved intent → placement, digest law included) and
+  cancellation. Pinned in `Market.test.tsx`; shell bundle rebuilt.
+
 M3 — services, organizations, reconciliation (marketplace-build-plan):
 
 - **Milestones** — a service offer carries its payment schedule as a

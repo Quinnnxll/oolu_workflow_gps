@@ -927,6 +927,26 @@ export interface CommerceOffer {
   refund_terms: string;
   refundable: boolean;
   recurring_terms: string;
+  // M3: a service offer's payment schedule — digest-material.
+  milestones?: [string, number][];
+}
+
+export interface CommerceMilestone {
+  order_id: string;
+  index: number;
+  title: string;
+  amount_micros: number;
+  state: "pending" | "delivered" | "released" | "failed";
+  evidence: string;
+}
+
+export interface CommerceRecurring {
+  obligation_id: string;
+  offer: CommerceOffer;
+  period_days: number;
+  state: "active" | "cancelled";
+  renewals: number;
+  category: string;
 }
 
 export interface CommerceListing {
@@ -1758,6 +1778,41 @@ export const api = {
     }),
   commerceOrderInvoice: (orderId: string) =>
     req<CommerceInvoice>("GET", `/v1/commerce/orders/${orderId}/invoice`),
+  // M3: milestones and recurring obligations.
+  commerceOrderMilestones: (orderId: string) =>
+    req<{ items: CommerceMilestone[] }>(
+      "GET",
+      `/v1/commerce/orders/${orderId}/milestones`,
+    ),
+  commerceMilestoneStep: (
+    orderId: string,
+    index: number,
+    step: "deliver" | "accept" | "fail",
+    body?: Record<string, string>,
+  ) =>
+    req<CommerceMilestone>(
+      "POST",
+      `/v1/commerce/orders/${orderId}/milestones/${index}/${step}`,
+      body ?? {},
+    ),
+  commerceRefundUnreleased: (orderId: string, reason: string) =>
+    req<CommerceOrder>(
+      "POST",
+      `/v1/commerce/orders/${orderId}/refund-unreleased`,
+      { reason },
+    ),
+  commerceRecurring: () =>
+    req<{ items: CommerceRecurring[] }>("GET", "/v1/commerce/recurring"),
+  commerceRecurringRenew: (obligationId: string) =>
+    req<CommerceIntent>(
+      "POST",
+      `/v1/commerce/recurring/${obligationId}/renew`,
+    ),
+  commerceRecurringCancel: (obligationId: string) =>
+    req<CommerceRecurring>(
+      "DELETE",
+      `/v1/commerce/recurring/${obligationId}`,
+    ),
 };
 
 export function timelineSocket(

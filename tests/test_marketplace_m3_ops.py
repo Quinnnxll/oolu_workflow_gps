@@ -184,6 +184,182 @@ def test_a_jobs_changed_terms_invalidate_the_prior_approval(tmp_path):
     conn.close()
 
 
+def test_the_worker_lease_dispatcher_hands_jobs_to_capable_workers_only(
+    tmp_path,
+):
+    """The M3 closer: a job rides the worker control plane's signed,
+    single-use lease — assigned only to a worker holding the node's
+    capability, verifiable by that worker alone; no capable worker means
+    a LOUD failure, never a silent promise."""
+    from oolu.marketplace import WorkerLeaseDispatcher
+    from oolu.worker.control_plane import ControlPlane, WorkerInfo
+    from oolu.worker.leases import LeaseSigner, LeaseVerifier
+    from oolu.worker.ledger import InMemoryLeaseLedger
+
+    conn, audit, spine, orders, ledger, _ = _rig(tmp_path)
+    secret = "a-thirty-two-character-plus-lease-secret"
+    lease_ledger = InMemoryLeaseLedger()
+    control = ControlPlane(LeaseSigner(secret), ledger=lease_ledger)
+    control.register_worker(
+        WorkerInfo(worker_id="w1", capabilities=frozenset({"execute:drone-7"}))
+    )
+    desk = JobDesk(
+        conn, audit=audit, dispatcher=WorkerLeaseDispatcher(control, audit=audit)
+    )
+    order = _placed(spine, orders)
+    job = desk.dispatch(order, node_id="drone-7", now=NOW)
+    assignment = control.poll("w1")
+    assert assignment is not None
+    assert assignment.payload["job_id"] == job.job_id
+    lease = LeaseVerifier(secret, audience="w1", ledger=lease_ledger).verify(
+        assignment.lease_token
+    )
+    assert lease.tenant_id == "t1"
+    leased = [
+        r.payload for r in audit.records() if r.event_type == "market.job.leased"
+    ]
+    assert leased and leased[-1]["worker_id"] == "w1"
+    # The credential itself never rides the chain.
+    assert assignment.lease_token not in str(leased)
+
+    # No worker holds the crane capability: the dispatch fails loudly.
+    with pytest.raises(WrongState, match="crane-1"):
+        desk.dispatch(order, node_id="crane-1", now=NOW)
+    failed = [
+        job_row
+        for job_row in [desk.get(j, tenant="t1") for j in _job_ids(conn)]
+        if job_row.state == "failed"
+    ]
+    assert failed
+    assert any(
+        r.event_type == "market.job.dispatch_failed" for r in audit.records()
+    )
+    conn.close()
+
+
+def _job_ids(conn) -> list[str]:
+    with conn.lock:
+        rows = conn.db.execute("SELECT job_id FROM market_jobs").fetchall()
+    return [row["job_id"] for row in rows]
+
+
+# --------------------------------------------------------------------------- #
+# Adjudication: the marketplace decides, the book obeys.                       #
+# --------------------------------------------------------------------------- #
+def test_partial_awards_come_from_the_sellers_side_and_balance(tmp_path):
+    conn, audit, spine, orders, ledger, _ = _rig(tmp_path)
+    order = _placed(spine, orders)
+    order_id = order.record.order_id
+    _complete(orders, order_id)
+    orders.open_dispute(
+        order_id, tenant="t1", actor="user-1", now=NOW, reason="scratched"
+    )
+    resolved = orders.adjudicate(
+        order_id,
+        tenant="t1",
+        adjudicator="operator-1",
+        outcome="partial_refund",
+        amount_micros=30 * M,
+        now=NOW,
+        note="cosmetic damage",
+    )
+    assert resolved.state == "resolved"
+    assert ledger.balance("marketplace_cash") == 78 * M
+    assert ledger.balance("seller_payable") == -65 * M  # the seller bears it
+    assert ledger.take_micros() == 5 * M  # the platform's fee stands
+    assert sum(ledger.trial_balance().values()) == 0
+    # An award beyond what was ever captured is refused.
+    other = _placed(spine, orders, key="over-award")
+    _complete(orders, other.record.order_id)
+    orders.open_dispute(
+        other.record.order_id, tenant="t1", actor="user-1", now=NOW,
+        reason="broken",
+    )
+    with pytest.raises(WrongState, match="award"):
+        orders.adjudicate(
+            other.record.order_id,
+            tenant="t1",
+            adjudicator="operator-1",
+            outcome="partial_refund",
+            amount_micros=200 * M,
+            now=NOW,
+        )
+    conn.close()
+
+
+def test_full_refund_and_reject_close_a_dispute_with_balanced_books(tmp_path):
+    conn, audit, spine, orders, ledger, _ = _rig(tmp_path)
+    refunded_order = _placed(spine, orders, key="buyer-wins")
+    _complete(orders, refunded_order.record.order_id)
+    orders.open_dispute(
+        refunded_order.record.order_id, tenant="t1", actor="user-1", now=NOW,
+        reason="never worked",
+    )
+    verdict = orders.adjudicate(
+        refunded_order.record.order_id,
+        tenant="t1",
+        adjudicator="operator-1",
+        outcome="full_refund",
+        now=NOW,
+    )
+    assert verdict.state == "refunded"
+    assert all(v == 0 for v in ledger.trial_balance().values())
+    assert ledger.gmv_micros() == 0 and ledger.take_micros() == 0
+
+    # Reject with frozen escrow: the remainder releases to the seller.
+    from test_marketplace_milestones import _service_offer
+
+    frozen = _placed(spine, orders, key="seller-wins", offer=_service_offer())
+    frozen_id = frozen.record.order_id
+    orders.deliver_milestone(
+        frozen_id, tenant="t1", actor="user-1", index=0, evidence="doc", now=NOW
+    )
+    orders.accept_milestone(
+        frozen_id, tenant="t1", actor="user-1", index=0, now=NOW
+    )
+    orders.fail_milestone(
+        frozen_id, tenant="t1", actor="user-1", index=1, now=NOW,
+        reason="alleged defect",
+    )
+    upheld = orders.adjudicate(
+        frozen_id,
+        tenant="t1",
+        adjudicator="operator-1",
+        outcome="reject",
+        now=NOW,
+        note="the work met the specification",
+    )
+    assert upheld.state == "resolved"
+    assert ledger.balance("escrow_liability") == 0
+    # The seller ends whole: the full 95 share plus tax and fee settled.
+    assert ledger.balance("seller_payable") == -95 * M
+    assert ledger.take_micros() == 5 * M
+    assert sum(ledger.trial_balance().values()) == 0
+    conn.close()
+
+
+def test_replacement_sends_the_order_back_to_fulfillment(tmp_path):
+    conn, audit, spine, orders, ledger, _ = _rig(tmp_path)
+    order = _placed(spine, orders)
+    order_id = order.record.order_id
+    _complete(orders, order_id)
+    orders.open_dispute(
+        order_id, tenant="t1", actor="user-1", now=NOW, reason="wrong color"
+    )
+    replaced = orders.adjudicate(
+        order_id,
+        tenant="t1",
+        adjudicator="operator-1",
+        outcome="replacement",
+        now=NOW,
+        note="seller re-ships",
+    )
+    assert replaced.state == "fulfilling"
+    # The money stands untouched while the replacement ships.
+    assert ledger.balance("marketplace_cash") == 108 * M
+    conn.close()
+
+
 # --------------------------------------------------------------------------- #
 # Reconciliation: matched closes, mismatched files, duplicates dispute.        #
 # --------------------------------------------------------------------------- #

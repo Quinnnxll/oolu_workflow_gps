@@ -483,6 +483,175 @@ describe("RequestsPane: RFQ discovery never bypasses the law", () => {
   });
 });
 
+describe("Market: milestones and standing obligations", () => {
+  const serviceOffer = {
+    ...offer,
+    milestones: [
+      ["deposit", 40_000_000],
+      ["balance", 60_000_000],
+    ] as [string, number][],
+  };
+
+  function serviceOrder(state: string) {
+    return {
+      order: {
+        order_id: "o1",
+        buyer_principal: "user-1",
+        seller_id: "acme",
+        seller_principal: "",
+        offer: serviceOffer,
+        tracking: "",
+        delivery_evidence: "",
+        escrow_held: true,
+        charge_ref: "ch_1",
+        created_at: "2026-07-01T12:00:00+00:00",
+      },
+      state,
+    };
+  }
+
+  it("walks a tranche through deliver and accept over the doors", async () => {
+    routes["GET /v1/commerce/orders"] = {
+      status: 200,
+      body: { items: [serviceOrder("fulfilling")] },
+    };
+    routes["GET /v1/commerce/orders/o1/milestones"] = {
+      status: 200,
+      body: {
+        items: [
+          {
+            order_id: "o1",
+            index: 0,
+            title: "deposit",
+            amount_micros: 40_000_000,
+            state: "pending",
+            evidence: "",
+          },
+          {
+            order_id: "o1",
+            index: 1,
+            title: "balance",
+            amount_micros: 60_000_000,
+            state: "delivered",
+            evidence: "doc",
+          },
+        ],
+      },
+    };
+    routes["POST /v1/commerce/orders/o1/milestones/0/deliver"] = {
+      status: 200,
+      body: {},
+    };
+    routes["POST /v1/commerce/orders/o1/milestones/1/accept"] = {
+      status: 200,
+      body: {},
+    };
+    render(<Market />);
+    fireEvent.click(await screen.findByText(/Orders/));
+    fireEvent.click(await screen.findByText("Milestones"));
+    await screen.findByText(/deposit/);
+    fireEvent.change(screen.getByPlaceholderText("evidence"), {
+      target: { value: "deposit-doc" },
+    });
+    fireEvent.click(screen.getByText("Deliver"));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) =>
+            c.method === "POST" &&
+            c.path === "/v1/commerce/orders/o1/milestones/0/deliver" &&
+            (c.body as { evidence: string }).evidence === "deposit-doc",
+        ),
+      ).toBe(true),
+    );
+    fireEvent.click(screen.getByText("Accept tranche"));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) =>
+            c.method === "POST" &&
+            c.path === "/v1/commerce/orders/o1/milestones/1/accept",
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it("renews a standing obligation through the intent door and places it", async () => {
+    routes["GET /v1/commerce/recurring"] = {
+      status: 200,
+      body: {
+        items: [
+          {
+            obligation_id: "ob1",
+            offer,
+            period_days: 30,
+            state: "active",
+            renewals: 2,
+            category: "household",
+          },
+        ],
+      },
+    };
+    routes["POST /v1/commerce/recurring/ob1/renew"] = {
+      status: 201,
+      body: {
+        intent: { intent_id: "i-renewal", offer_snapshot: offer },
+        state: "auto_approved",
+        intent_digest: "d".repeat(64),
+        verdict: { decision: "auto_execute", reasons: ["renewal"] },
+      },
+    };
+    routes["POST /v1/commerce/orders"] = {
+      status: 201,
+      body: { order: { order_id: "o9", offer }, state: "confirmed" },
+    };
+    render(<Market />);
+    fireEvent.click(await screen.findByText(/Orders/));
+    await screen.findByText(/Standing: l1/);
+    fireEvent.click(screen.getByText("Renew now"));
+    await waitFor(() => {
+      const posts = calls.filter((c) => c.method === "POST");
+      expect(posts.map((c) => c.path)).toEqual([
+        "/v1/commerce/recurring/ob1/renew",
+        "/v1/commerce/orders",
+      ]);
+      expect(
+        (posts[1].body as { intent_id: string }).intent_id,
+      ).toBe("i-renewal");
+    });
+  });
+
+  it("cancels an obligation so nothing renews after", async () => {
+    routes["GET /v1/commerce/recurring"] = {
+      status: 200,
+      body: {
+        items: [
+          {
+            obligation_id: "ob1",
+            offer,
+            period_days: 30,
+            state: "active",
+            renewals: 0,
+            category: "household",
+          },
+        ],
+      },
+    };
+    routes["DELETE /v1/commerce/recurring/ob1"] = { status: 200, body: {} };
+    render(<Market />);
+    fireEvent.click(await screen.findByText(/Orders/));
+    fireEvent.click(await screen.findByText("Cancel"));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) =>
+            c.method === "DELETE" && c.path === "/v1/commerce/recurring/ob1",
+        ),
+      ).toBe(true),
+    );
+  });
+});
+
 describe("SellPane: the signed boundary", () => {
   it("loads the sales policy and signs the new floors in micros", async () => {
     routes["GET /v1/commerce/seller/kyc"] = {

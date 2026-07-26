@@ -6,9 +6,11 @@ import type {
   CommerceInvoice,
   CommerceLedgerTxn,
   CommerceListing,
+  CommerceMilestone,
   CommerceOffer,
   CommerceOrder,
   CommerceQuote,
+  CommerceRecurring,
   CommerceRfq,
   CommerceSalesPolicy,
   SellerKycView,
@@ -49,21 +51,24 @@ export function Market() {
   const [approvals, setApprovals] = useState<CommerceApproval[]>([]);
   const [ready, setReady] = useState<CommerceIntent[]>([]);
   const [orders, setOrders] = useState<CommerceOrder[]>([]);
+  const [obligations, setObligations] = useState<CommerceRecurring[]>([]);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
 
   const refresh = useCallback(async () => {
     try {
-      const [cat, inbox, approved, mine] = await Promise.all([
+      const [cat, inbox, approved, mine, standing] = await Promise.all([
         api.commerceCatalog(),
         api.commerceApprovals(),
         api.commerceIntents("approved"),
         api.commerceOrders(),
+        api.commerceRecurring(),
       ]);
       setCatalog(cat.items ?? []);
       setApprovals(inbox.items ?? []);
       setReady(approved.items ?? []);
       setOrders(mine.items ?? []);
+      setObligations(standing.items ?? []);
       setError("");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -174,7 +179,9 @@ export function Market() {
           }
         />
       )}
-      {tab === "orders" && <OrdersPane orders={orders} act={act} />}
+      {tab === "orders" && (
+        <OrdersPane orders={orders} obligations={obligations} act={act} />
+      )}
       {tab === "sell" && <SellPane onChanged={refresh} />}
     </div>
   );
@@ -469,17 +476,177 @@ function escrowChip(order: CommerceOrder["order"], state: string): string | null
   return null;
 }
 
+// One recurring obligation card: the approved terms, renewed or ended.
+function Obligations({
+  obligations,
+  act,
+}: {
+  obligations: CommerceRecurring[];
+  act: (work: () => Promise<string>) => void;
+}) {
+  if (!obligations.length) return null;
+  return (
+    <>
+      {obligations.map((obligation) => (
+        <div className="order-card" key={obligation.obligation_id}>
+          <strong>Standing: {obligation.offer.item_id}</strong>{" "}
+          <span className="chip">{obligation.state}</span>
+          <p>
+            {money(offerTotal(obligation.offer), obligation.offer.currency)}
+            <span className="muted">
+              {" "}
+              · every {obligation.period_days} days · renewed{" "}
+              {obligation.renewals}×
+            </span>
+          </p>
+          {obligation.state === "active" && (
+            <>
+              <button
+                onClick={() =>
+                  act(async () => {
+                    // Identical terms renew without a human; the intent
+                    // places like any order — digest law included.
+                    const renewal = await api.commerceRecurringRenew(
+                      obligation.obligation_id,
+                    );
+                    const order = await api.commerceOrderPlace(
+                      renewal.intent.intent_id,
+                    );
+                    return `renewed — order ${order.state}`;
+                  })
+                }
+              >
+                Renew now
+              </button>{" "}
+              <button
+                className="linklike"
+                onClick={() =>
+                  act(async () => {
+                    await api.commerceRecurringCancel(
+                      obligation.obligation_id,
+                    );
+                    return "obligation cancelled — nothing renews after";
+                  })
+                }
+              >
+                Cancel
+              </button>
+            </>
+          )}
+        </div>
+      ))}
+    </>
+  );
+}
+
+// A milestone order's schedule, one tranche at a time.
+function MilestoneRows({
+  order,
+  milestones,
+  act,
+  onChanged,
+}: {
+  order: CommerceOrder["order"];
+  milestones: CommerceMilestone[];
+  act: (work: () => Promise<string>) => void;
+  onChanged: () => void;
+}) {
+  const [evidence, setEvidence] = useState("");
+  return (
+    <ul className="muted">
+      {milestones.map((milestone) => (
+        <li key={milestone.index}>
+          {milestone.title}:{" "}
+          {money(milestone.amount_micros, order.offer.currency)}{" "}
+          <span className="chip">{milestone.state}</span>{" "}
+          {milestone.state === "pending" && (
+            <>
+              <input
+                placeholder="evidence"
+                value={evidence}
+                onChange={(e) => setEvidence(e.target.value)}
+              />{" "}
+              <button
+                onClick={() =>
+                  act(async () => {
+                    await api.commerceMilestoneStep(
+                      order.order_id,
+                      milestone.index,
+                      "deliver",
+                      { evidence },
+                    );
+                    onChanged();
+                    return `milestone ${milestone.index} delivered`;
+                  })
+                }
+              >
+                Deliver
+              </button>
+            </>
+          )}
+          {milestone.state === "delivered" && (
+            <>
+              <button
+                onClick={() =>
+                  act(async () => {
+                    await api.commerceMilestoneStep(
+                      order.order_id,
+                      milestone.index,
+                      "accept",
+                    );
+                    onChanged();
+                    return `tranche ${milestone.index} released from escrow`;
+                  })
+                }
+              >
+                Accept tranche
+              </button>{" "}
+              <button
+                className="linklike"
+                onClick={() =>
+                  act(async () => {
+                    await api.commerceMilestoneStep(
+                      order.order_id,
+                      milestone.index,
+                      "fail",
+                      { reason: "does not match the specification" },
+                    );
+                    onChanged();
+                    return "milestone failed — the remainder is frozen in escrow";
+                  })
+                }
+              >
+                Fail
+              </button>
+            </>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export function OrdersPane({
   orders,
+  obligations = [],
   act,
 }: {
   orders: CommerceOrder[];
+  obligations?: CommerceRecurring[];
   act: (work: () => Promise<string>) => void;
 }) {
   const [inputs, setInputs] = useState<Record<string, string>>({});
   const [bookFor, setBookFor] = useState<string | null>(null);
   const [book, setBook] = useState<CommerceLedgerTxn[]>([]);
   const [invoices, setInvoices] = useState<Record<string, CommerceInvoice>>({});
+  const [schedules, setSchedules] = useState<
+    Record<string, CommerceMilestone[]>
+  >({});
+
+  const loadMilestones = useCallback(async (orderId: string) => {
+    const { items } = await api.commerceOrderMilestones(orderId);
+    setSchedules((held) => ({ ...held, [orderId]: items ?? [] }));
+  }, []);
 
   const openBook = useCallback(async (orderId: string) => {
     setBook((await api.commerceOrderLedger(orderId)).items ?? []);
@@ -499,11 +666,12 @@ export function OrdersPane({
     [act],
   );
 
-  if (!orders.length) {
+  if (!orders.length && !obligations.length) {
     return <p className="empty">No orders yet.</p>;
   }
   return (
     <div className="market-grid">
+      <Obligations obligations={obligations} act={act} />
       {orders.map(({ order, state }) => {
         const escrow = escrowChip(order, state);
         const evidence = inputs[order.order_id] ?? "";
@@ -629,6 +797,40 @@ export function OrdersPane({
                 )}
                 )
               </p>
+            )}
+            {(order.offer.milestones?.length ?? 0) > 0 && (
+              <>
+                {" "}
+                <button
+                  className="linklike"
+                  onClick={() => void loadMilestones(order.order_id)}
+                >
+                  Milestones
+                </button>
+                {schedules[order.order_id] && (
+                  <MilestoneRows
+                    order={order}
+                    milestones={schedules[order.order_id]}
+                    act={act}
+                    onChanged={() => void loadMilestones(order.order_id)}
+                  />
+                )}
+                {state === "disputed" && (
+                  <button
+                    onClick={() =>
+                      act(async () => {
+                        await api.commerceRefundUnreleased(
+                          order.order_id,
+                          "frozen milestones resolved",
+                        );
+                        return "the unreleased remainder returned to you";
+                      })
+                    }
+                  >
+                    Refund unreleased
+                  </button>
+                )}
+              </>
             )}{" "}
             <button className="linklike" onClick={() => openBook(order.order_id)}>
               Book

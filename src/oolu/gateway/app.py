@@ -629,6 +629,9 @@ class GatewayApp:
         commerce_evidence=None,  # artifact store for delivery evidence:
         # content lands content-addressed (sha256:<digest>), so the ref
         # on the audit chain is tamper-evident. None = refs only
+        commerce_job_dispatcher=None,  # marketplace.WorkerLeaseDispatcher
+        # (or any callable taking an ExecutionJob): hands jobs to the
+        # worker control plane's signed leases. None = record-only desk
         google_signin: GoogleSignIn | None = None,  # "Continue with Google"
         identity_links: IdentityLinkStore | None = None,  # email/IdP -> account
         mail=None,  # mail.MailSender: verification + reset codes go out here
@@ -782,7 +785,9 @@ class GatewayApp:
         self._commerce_payout_changes = PayoutChangeDesk(
             durable.conn, audit=durable.audit
         )
-        self._commerce_jobs = JobDesk(durable.conn, audit=durable.audit)
+        self._commerce_jobs = JobDesk(
+            durable.conn, audit=durable.audit, dispatcher=commerce_job_dispatcher
+        )
         self._commerce_reconciliation = ReconciliationDesk(
             durable.conn,
             audit=durable.audit,
@@ -1221,6 +1226,11 @@ class GatewayApp:
             "POST",
             "/v1/commerce/orders/{order_id}/refund-unreleased",
             self._commerce_refund_unreleased,
+        )
+        r.add(
+            "POST",
+            "/v1/commerce/orders/{order_id}/adjudicate",
+            self._commerce_order_adjudicate,
         )
         r.add("GET", "/v1/commerce/recurring", self._commerce_recurring_list)
         r.add("POST", "/v1/commerce/recurring", self._commerce_recurring_create)
@@ -10771,6 +10781,49 @@ class GatewayApp:
             self._commerce_orders.refund_unreleased,
             reason=str((request.body or {}).get("reason") or ""),
         )
+
+    def _commerce_order_adjudicate(self, request, session, params) -> Response:
+        """The marketplace's verdict on a dispute — approve authority
+        required, the same seam every consequential decision walks."""
+        if self._approval is None:
+            raise GatewayError(
+                404, "not_found", "approval authority is not configured"
+            )
+        stored = self._commerce_orders.orders.get(
+            params["order_id"], tenant=session.tenant_id
+        )
+        if stored is None:
+            raise GatewayError(404, "not_found", "no such order")
+        body = request.body or {}
+        try:
+            self._approval.approve(
+                session,
+                run_id=f"dispute:{session.tenant_id}:{params['order_id']}",
+                policy="dispute.adjudication",
+                requester_id=stored.record.buyer_principal,
+                required_assurance=int(body.get("required_assurance", 1)),
+                now=request.now or self._clock(),
+            )
+        except AuthorizationError as exc:
+            raise GatewayError(403, "forbidden", str(exc)) from exc
+        amount = body.get("amount_micros")
+        try:
+            order = self._commerce_orders.adjudicate(
+                params["order_id"],
+                tenant=session.tenant_id,
+                adjudicator=session.principal_id,
+                outcome=str(body.get("outcome") or ""),
+                now=request.now or self._clock(),
+                amount_micros=int(amount) if amount is not None else None,
+                note=str(body.get("note") or ""),
+            )
+        except MarketplaceError as exc:
+            raise self._commerce_error(exc) from exc
+        except PaymentError as exc:
+            raise GatewayError(402, "payment_declined", str(exc)) from exc
+        except (TypeError, ValueError) as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(200, self._commerce_order_view(order))
 
     def _commerce_recurring_list(self, request, session, params) -> Response:
         records = self._commerce_recurring.list_for(

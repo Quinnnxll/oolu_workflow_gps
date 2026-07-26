@@ -437,6 +437,13 @@ def build_openapi() -> dict:
                 "remainder returns to the buyer; accepted tranches stand"
             ),
         },
+        "/v1/commerce/orders/{order_id}/adjudicate": {
+            "post": op(
+                "The marketplace's dispute verdict (approve authority "
+                "required): replacement, reject, full_refund, or "
+                "partial_refund — each a deterministic posting"
+            ),
+        },
         "/v1/commerce/recurring": {
             "get": op("The caller's recurring obligations"),
             "post": op(

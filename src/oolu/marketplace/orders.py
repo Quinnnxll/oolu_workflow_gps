@@ -1126,6 +1126,256 @@ class OrderService:
         return self._get(order_id, tenant=tenant)
 
     # ------------------------------------------------------------------ #
+    # Adjudication (M3): the marketplace decides, the book obeys.         #
+    # ------------------------------------------------------------------ #
+    def _order_position(self, order_id: str) -> dict:
+        """What the ledger says this order's money is doing right now."""
+        txns = self._ledger.transactions(order_id=order_id)
+        captured = sum(
+            e.amount_micros
+            for t in txns
+            if t.kind == "capture"
+            for e in t.entries
+            if e.account == "marketplace_cash"
+        )
+        refunded = -sum(
+            e.amount_micros
+            for t in txns
+            if t.kind == "refund"
+            for e in t.entries
+            if e.account == "marketplace_cash"
+        )
+        escrow_remaining = -sum(
+            e.amount_micros
+            for t in txns
+            for e in t.entries
+            if e.account == "escrow_liability"
+        )
+        released: dict[str, int] = {
+            "seller_payable": 0,
+            "marketplace_fee_revenue": 0,
+            "tax_payable": 0,
+        }
+        for txn in txns:
+            if txn.kind not in ("capture", "release"):
+                continue
+            for entry in txn.entries:
+                if entry.account in released:
+                    released[entry.account] += -entry.amount_micros
+        return {
+            "captured": captured,
+            "refunded": refunded,
+            "escrow_remaining": escrow_remaining,
+            "released": released,
+        }
+
+    def adjudicate(
+        self,
+        order_id: str,
+        *,
+        tenant: str,
+        adjudicator: str,
+        outcome: str,
+        now: datetime,
+        amount_micros: int | None = None,
+        note: str = "",
+    ) -> StoredOrder:
+        """The marketplace's verdict on a disputed order, as money.
+
+        Four outcomes, all deterministic postings: ``replacement`` sends
+        the order back to fulfillment untouched; ``reject`` releases any
+        frozen escrow to the seller and closes; ``full_refund`` reverses
+        every settlement; ``partial_refund`` returns exactly the awarded
+        amount — from frozen escrow first, from the seller's payable for
+        the rest. Authority is the route's job; this method records and
+        posts.
+        """
+        order = self._get(order_id, tenant=tenant)
+        record = order.record
+        if order.state != "disputed":
+            raise WrongState(f"order is {order.state}, not disputed")
+        position = self._order_position(order_id)
+        offer = record.offer
+
+        def close(state: str) -> StoredOrder:
+            self.orders.set_state(
+                order_id, tenant=tenant, state=state, expected=("disputed",)
+            )
+            self._audit.append(
+                "market.dispute.adjudicated",
+                {
+                    "tenant": tenant,
+                    "order_id": order_id,
+                    "adjudicator": adjudicator,
+                    "outcome": outcome,
+                    "amount_micros": amount_micros,
+                    "note": note,
+                },
+            )
+            return self._get(order_id, tenant=tenant)
+
+        if outcome == "replacement":
+            self.orders.set_state(
+                order_id, tenant=tenant, state="fulfilling", expected=("disputed",)
+            )
+            self._audit.append(
+                "market.dispute.adjudicated",
+                {
+                    "tenant": tenant,
+                    "order_id": order_id,
+                    "adjudicator": adjudicator,
+                    "outcome": outcome,
+                    "note": note,
+                },
+            )
+            return self._get(order_id, tenant=tenant)
+
+        if outcome == "reject":
+            remaining = position["escrow_remaining"]
+            if remaining > 0:
+                take_fee = offer.subtotal_micros * record.take_rate_bps // 10_000
+                seller_full = offer.subtotal_micros + offer.fees_micros - take_fee
+                rem_seller = seller_full - position["released"]["seller_payable"]
+                rem_fee = take_fee - position["released"]["marketplace_fee_revenue"]
+                rem_tax = (
+                    offer.tax_estimate_micros - position["released"]["tax_payable"]
+                )
+                entries = [
+                    LedgerEntry(
+                        account="escrow_liability", amount_micros=remaining
+                    ),
+                    LedgerEntry(
+                        account="seller_payable", amount_micros=-rem_seller
+                    ),
+                ]
+                if rem_fee:
+                    entries.append(
+                        LedgerEntry(
+                            account="marketplace_fee_revenue",
+                            amount_micros=-rem_fee,
+                        )
+                    )
+                if rem_tax:
+                    entries.append(
+                        LedgerEntry(account="tax_payable", amount_micros=-rem_tax)
+                    )
+                self._ledger.post(
+                    LedgerTransaction(
+                        txn_id=uuid4().hex,
+                        idempotency_key=(
+                            f"ledger:adjudicate:release:{tenant}:"
+                            f"{record.idempotency_key}"
+                        ),
+                        kind="release",
+                        order_id=order_id,
+                        currency=offer.currency,
+                        entries=tuple(entries),
+                        memo=f"order {order_id} adjudicated for the seller: {note}",
+                        created_at=now,
+                    )
+                )
+            return close("resolved")
+
+        if outcome == "full_refund":
+            if position["refunded"]:
+                raise WrongState(
+                    "money was already partially returned; award the rest "
+                    "with partial_refund"
+                )
+            refundable = position["captured"]
+            if refundable <= 0 or record.charge_ref is None:
+                raise WrongState("nothing was captured; cancel instead")
+            self._guard_money()
+            refund_ref = self._psp.refund(
+                record.charge_ref,
+                amount_micros=refundable,
+                idempotency_key=(
+                    f"refund:adjudicate:{tenant}:{record.idempotency_key}"
+                ),
+            )
+            for txn in self._ledger.transactions(order_id=order_id):
+                if txn.kind not in ("capture", "release"):
+                    continue
+                self._ledger.post(
+                    LedgerTransaction(
+                        txn_id=uuid4().hex,
+                        idempotency_key=f"ledger:adjudicate:{txn.txn_id}",
+                        kind="refund",
+                        order_id=order_id,
+                        currency=offer.currency,
+                        entries=tuple(e.negated() for e in txn.entries),
+                        memo=f"order {order_id} adjudicated for the buyer: {note}",
+                        created_at=now,
+                        reverses_txn_id=txn.txn_id,
+                    )
+                )
+            self.orders.update_record(
+                record.model_copy(update={"refund_ref": refund_ref})
+            )
+            return close("refunded")
+
+        if outcome == "partial_refund":
+            awarded = int(amount_micros or 0)
+            available = position["captured"] - position["refunded"]
+            if awarded <= 0 or awarded > available:
+                raise WrongState(
+                    f"the award must be between 1 and {available} micros"
+                )
+            if record.charge_ref is None:
+                raise WrongState("nothing was captured; cancel instead")
+            self._guard_money()
+            refund_ref = self._psp.refund(
+                record.charge_ref,
+                amount_micros=awarded,
+                idempotency_key=(
+                    f"refund:adjudicate:partial:{tenant}:{record.idempotency_key}"
+                ),
+            )
+            from_escrow = min(awarded, position["escrow_remaining"])
+            from_seller = awarded - from_escrow
+            entries = [
+                LedgerEntry(account="marketplace_cash", amount_micros=-awarded)
+            ]
+            if from_escrow:
+                entries.append(
+                    LedgerEntry(
+                        account="escrow_liability", amount_micros=from_escrow
+                    )
+                )
+            if from_seller:
+                # The seller bears the awarded remainder; the platform's
+                # fee and the tax line stand as settled.
+                entries.append(
+                    LedgerEntry(
+                        account="seller_payable", amount_micros=from_seller
+                    )
+                )
+            self._ledger.post(
+                LedgerTransaction(
+                    txn_id=uuid4().hex,
+                    idempotency_key=(
+                        f"ledger:adjudicate:partial:{tenant}:"
+                        f"{record.idempotency_key}"
+                    ),
+                    kind="refund",
+                    order_id=order_id,
+                    currency=offer.currency,
+                    entries=tuple(entries),
+                    memo=f"order {order_id} partially awarded to the buyer: {note}",
+                    created_at=now,
+                )
+            )
+            self.orders.update_record(
+                record.model_copy(update={"refund_ref": refund_ref})
+            )
+            return close("resolved")
+
+        raise WrongState(
+            "outcome must be replacement, reject, full_refund, or "
+            "partial_refund"
+        )
+
+    # ------------------------------------------------------------------ #
     # Disputes: manual review in M1 — states and audit only.              #
     # ------------------------------------------------------------------ #
     def open_dispute(

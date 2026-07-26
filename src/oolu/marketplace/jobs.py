@@ -107,7 +107,23 @@ class JobDesk:
         )
         self._save(job)
         if self._dispatcher is not None:
-            self._dispatcher(job)
+            try:
+                self._dispatcher(job)
+            except Exception as exc:
+                # A job that silently went nowhere is a fulfillment promise
+                # nobody keeps: fail it, audit it, and let the caller hear.
+                self._save(job.model_copy(update={"state": "failed"}))
+                self._audit.append(
+                    "market.job.dispatch_failed",
+                    {
+                        "tenant": job.tenant_id,
+                        "job_id": job.job_id,
+                        "order_id": job.order_id,
+                        "node_id": node_id,
+                        "reason": str(exc),
+                    },
+                )
+                raise
         self._audit.append(
             "market.job.dispatched",
             {
