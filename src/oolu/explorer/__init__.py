@@ -21,13 +21,6 @@ policy ladder → approval → order.
 """
 
 from .bestbuy import BRIEF_MODES, BestBuyBrief, best_buy
-from .travel import (
-    TRAVEL_CATEGORY,
-    TravelBrief,
-    TravelCandidate,
-    TravelConstraints,
-    plan_trip,
-)
 from .comparisons import ComparisonRow, ComparisonSet, build_rows, discount_fact
 from .evidence import (
     EXPLORER_BRIEF_PREFIX,
@@ -42,6 +35,13 @@ from .evidence import (
     lab_of,
     lab_report,
     trust_from_book,
+)
+from .travel import (
+    TRAVEL_CATEGORY,
+    TravelBrief,
+    TravelCandidate,
+    TravelConstraints,
+    plan_trip,
 )
 
 __all__ = [

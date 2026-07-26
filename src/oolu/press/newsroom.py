@@ -32,7 +32,7 @@ from .contributions import (
     ContributionStore,
     PressError,
 )
-from .standards import RUBRIC_VERSION, RubricBreakdown, corroborating, select
+from .standards import RUBRIC_VERSION, corroborating, select
 
 # The anchor holds this share of a story's lineage; corroborators and
 # near-duplicate credits split the remainder equally. A lone anchor

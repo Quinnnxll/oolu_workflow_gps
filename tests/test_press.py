@@ -26,7 +26,6 @@ from oolu.press import (
     MAX_BODY_CHARS,
     TAXONOMY_VERSION,
     ContributionStore,
-    MediaRef,
     PressDesk,
     PressError,
     leak_report,

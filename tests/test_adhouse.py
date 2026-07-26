@@ -18,21 +18,15 @@ import random
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import pytest
-from test_http_gateway import NOW as GATEWAY_NOW
 from test_http_gateway import _app, _req
 
 from oolu.adhouse import (
     AD_COMMISSION_ALPHA,
-    AdError,
-    AdEventStore,
-    Campaign,
-    CampaignStore,
     MAX_PER_VIEWER_PER_DAY,
     SPONSORED_LABEL,
+    Campaign,
     forecast_split,
     match,
-    preview_earnings,
 )
 from oolu.durable.connection import DurableConnection
 from oolu.gateway import GatewayApp

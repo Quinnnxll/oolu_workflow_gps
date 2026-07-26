@@ -745,15 +745,6 @@ def build_host_runtime(
         RegistryStore,
         WorkDesk,
     )
-    from .providers.keyring import ModelKeyring
-    from .reminders import ReminderStore
-    from .representative import (
-        RepresentativeEngine,
-        RepresentativeStore,
-        StoreAdapterServer,
-        VllmAdapterServer,
-    )
-    from .settings_node import SettingsNode, SettingsStore
     from .press import (
         ContributionStore,
         PairwiseStore,
@@ -763,6 +754,15 @@ def build_host_runtime(
         PressDesk,
         StoryStore,
     )
+    from .providers.keyring import ModelKeyring
+    from .reminders import ReminderStore
+    from .representative import (
+        RepresentativeEngine,
+        RepresentativeStore,
+        StoreAdapterServer,
+        VllmAdapterServer,
+    )
+    from .settings_node import SettingsNode, SettingsStore
     from .social import (
         AssistantHistoryStore,
         DirectMessageStore,

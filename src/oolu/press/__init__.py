@@ -45,7 +45,7 @@ from .polls import (
     comparable,
 )
 from .standards import RUBRIC_VERSION, RubricBreakdown, score, select
-from .taxonomy import TAXONOMY_VERSION, GENRES, Genre, taxonomy_items
+from .taxonomy import GENRES, TAXONOMY_VERSION, Genre, taxonomy_items
 
 __all__ = [
     "EDITION_LABEL",

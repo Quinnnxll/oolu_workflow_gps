@@ -190,6 +190,7 @@ from ..providers.chatmodel import CHAT_PURPOSE, ChatModelRouter
 from ..providers.keyring import PROVIDERS, ModelKeyring
 from ..providers.vault import SecretVault
 from ..representative import pair_exchanges as pair_representative_exchanges
+from ..roster import agent_card, agent_turn, roster_items
 from ..runtime.bundle import BundleError, BundleStore
 from ..seats import SEATS, DeskFiles, SeatViolation
 from ..settings_node import SettingError, SettingsNode
@@ -204,7 +205,6 @@ from ..skills.contract import (
 from ..skills.inputs import bind_inputs, inputs_manifest, validate_user_inputs
 from ..skills.models import ActionEvent, ExecutionStatus, ReusableSkill
 from ..skills.ports import ActionExecutor
-from ..roster import agent_card, agent_turn, roster_items
 from ..social import MAX_MESSAGE_CHARS, MAX_PHOTO_BYTES
 from .errors import GatewayError, WebhookError
 from .http import (

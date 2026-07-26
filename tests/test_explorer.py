@@ -23,7 +23,6 @@ from test_http_gateway import _app, _req
 from oolu.durable.connection import DurableConnection
 from oolu.explorer import (
     ExplorerError,
-    LabStore,
     ReviewDesk,
     ReviewStore,
     best_buy,

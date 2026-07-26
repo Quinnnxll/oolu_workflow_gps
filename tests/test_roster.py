@@ -11,7 +11,7 @@ roster seat is registered, so no roster model call can ride unmetered.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pytest
 from test_http_gateway import NOW as GATEWAY_NOW
