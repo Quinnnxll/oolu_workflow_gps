@@ -4,6 +4,33 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The robotic actuation protocol foundation (R0) — contracts before commands:
+
+- **The plan, reviewed and phased**
+  (`docs/robotic-actuation-protocol-plan.md`) — the Authorized Machine
+  Feedback Loop build plan mapped onto what OoLu already is (approval
+  spine, audit log, rights engine, nodeplace routing), its standards
+  citations corrected, its fifteen phases consolidated into six build
+  stages R0–R5 with exit gates keyed to the plan's acceptance tests.
+- **The protocol nouns** (`src/oolu/actuation/`) — a pure library with
+  no command surface at all: typed action intents, actuation
+  capabilities with declared hazards and reversibility, validated
+  operating envelopes, and the digest-bound actuation job whose
+  aggregate digest binds workpiece, tool, fixture, frame, recipe,
+  program, safety configuration, approvals, window, and nonce — any
+  substitution is a digest mismatch, not a policy violation.
+- **Arming is composed, not asserted** — single-use nonce-bound
+  execution leases (expiry prevents a start, never forces a stop), the
+  §24.5 lifecycle where a safety stop only ever settles into
+  containment, live preflight verdicts that block by name, and review
+  tiers A0–A5 where outside-envelope is prohibited rather than
+  escalated and high consequence means dual control.
+- **Learning stays inside the box** — a parameter proposal outside its
+  validated envelope raises; one inside still becomes a *draft* child
+  recipe version owing its approval gates. Twenty-five tests realize
+  the plan's acceptance tests 4, 18, 20–23, 27, 31–33 at contract
+  level (`tests/test_actuation_protocol.py`).
+
 The travel desk (A7) — time, people, and budget; the roster complete:
 
 - **The calendar record model** (`src/oolu/records/calendar.py`) — the
