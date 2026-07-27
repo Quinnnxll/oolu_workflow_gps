@@ -244,13 +244,59 @@ Exit gates (each a test in `tests/test_evidence_spine.py`):
   integrity; interrupted uploads resume without duplicates (Phase 1
   exit gates).
 
-### R2 — Registries over the durable layer
+### R2 — Registries over the durable layer (this branch)
 
-Absorbs: Phases 1–3's registry work. Deliver: machine/sensor,
-workcell/tool/fixture/frame, method, and standards registries on the
-durable schema; test-job digests; preflight wired to live registry
-state. Exit gates: acceptance tests 3, 17, 28; a changed frame
-calibration invalidates prior program authorization (27, end-to-end).
+Absorbs: Phases 1–3's registry work. The contracts get addresses:
+every registry rides OoLu's `DurableConnection` (SQLite locally, the
+same table contract PostgreSQL implements in production) and keeps
+the protocol idioms — named refusals, history never deleted, time
+injected.
+
+Deliver (landed in `src/oolu/registries/`):
+
+- Standards registry (`standards.py`): versioned editions with
+  status; currency is a query, registering a newer edition
+  supersedes the old in the same transaction, withdrawal is a
+  status — the structural fix for §2.1's citation rot.
+- Machine and sensor registry (`machines.py`): status walls
+  (quarantine/retire without deletion) and `find_instruments` —
+  selection by measurand, calibrated-range containment, and
+  achievable uncertainty, never by machine name; calibration
+  validity stays owned by R1's registry through a predicate seam.
+- Method registry (`methods.py`): the version lifecycle as a
+  transition whitelist (`developing → validated → approved`,
+  terminal `superseded`/`withdrawn`); only an approved version
+  authorizes.
+- Workcell registry (`workcells.py`): workcell versions with
+  commissioning status, tools with wear and inspection state,
+  fixtures, and coordinate-frame calibrations kept as history; the
+  live frame-graph digest computed over each frame's current
+  calibration; `release_check` (worn/failed/overdue tools,
+  unqualified cell) and `live_state` — registry truth plus edge
+  observation, composed for R0's preflight.
+- Authorized test jobs (`testjobs.py`): the §9 authorization digest
+  over exactly the plan's bound fields; a job citing an unapproved
+  method version is stored quarantined with a named reason, so the
+  attempt remains evidence.
+- Durable rights (`rights_store.py`): R1's rights contract persisted
+  with timestamped revocation, closing the seam promised there.
+
+Exit gates (each a test in `tests/test_registries.py`):
+
+- A test using an unauthorized method version is quarantined
+  (acceptance test 3).
+- Instruments are selected by range and uncertainty, never by
+  machine name; quarantine and expired calibration wall the query
+  (acceptance test 17, registry level).
+- A changed controller configuration invalidates the test-job
+  digest (acceptance test 4, test-job flavor).
+- A tool-wear limit or failed/overdue tool inspection blocks the
+  next job; an unqualified workcell blocks release (acceptance
+  test 28).
+- A coordinate-frame recalibration invalidates programs authorized
+  against the previous frame digest — end to end: armable before,
+  preflight-refused after, with both calibrations retained as
+  history (acceptance test 27).
 
 ### R3 — Simulation-only routing
 

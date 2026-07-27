@@ -4,6 +4,38 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The protocol registries (R2) — the contracts get addresses:
+
+- **Durable, on the house rails** (`src/oolu/registries/`) — every
+  registry rides the same `DurableConnection` as the rest of the
+  durable runtime and keeps the protocol idioms: refusals are named,
+  history is never deleted, time is injected.
+- **Currency is a query** — the standards registry holds versioned
+  editions with status; registering a newer edition supersedes the
+  old in the same transaction, withdrawal is a status, and no
+  document needs an edition year baked into prose again.
+- **Selection by capability, never by name** — `find_instruments`
+  answers "what measures this quantity over this range at this
+  uncertainty" with status walls (a quarantined machine's sensors
+  vanish from the query, not from history) and a calibration
+  predicate seam that keeps R1's registry the one source of
+  calibration truth.
+- **Only approved versions authorize** — the method lifecycle is a
+  transition whitelist; a test job citing an unapproved method
+  version is stored *quarantined* with a named reason (the attempt
+  itself remains evidence), and the §9 authorization digest binds
+  specimens, method, machine, sensors, controller configuration,
+  conditions, rights, approvals, and expiry.
+- **Preflight wired to registry truth** — workcell versions with
+  commissioning status, tools whose wear limits and failed or
+  overdue inspections block the next job by name, and
+  coordinate-frame calibrations kept as history: recalibrating one
+  frame changes the live frame-graph digest, so a job that armed
+  before can never arm again (acceptance test 27, end to end).
+  R1's rights contract also lands durably with timestamped
+  revocation. Ten tests realize acceptance tests 3, 4, 17, 27, 28
+  (`tests/test_registries.py`).
+
 The evidence and observation spine (R1) — how reality earns a grade:
 
 - **Signed ingress, immutable store** (`src/oolu/evidence/`) — raw
