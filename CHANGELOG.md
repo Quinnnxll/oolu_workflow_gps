@@ -4,6 +4,33 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The edge and the compiler (R4) — deterministic bytes, local law:
+
+- **The deterministic compiler** (`src/oolu/actuation_edge/`) — an
+  eligible R3 release in, a byte-stable signed program artifact out;
+  no text input or passthrough exists, an ineligible or foreign
+  release refuses before rendering, and the golden-program regression
+  suite (`tests/goldens/pilot_damper_load.txt`) holds the §32 damper
+  loop's reference bytes so any rendering change is a reviewable
+  event. The typed program IR enforces the raw-command wall again at
+  step birth — servo vocabulary cannot ride in via a parameter map.
+- **Bound, verified, armed** — the job binder derives every
+  digest-bound `ActuationJob` field from the released plan and
+  compiled program; the gateway verifies text digest, compiler
+  signature, and job binding before R0's arming gate; command and
+  evidence channels are structurally distinct identities; and durable
+  leases keep a spent lease spent across process restarts.
+- **Local law when the cloud can't** — cloud loss is recorded and
+  consulted nowhere in the step, deviation, or safety paths; the
+  independent safety controller trips with everything dark; lease
+  expiry mid-cycle yields the controller's validated completion and
+  blocks only the next start; commanded-versus-actual deviation
+  beyond its approved bound causes a local safe stop whose evidence
+  rides the signed bundle; restart after a safety stop refuses by
+  name; and the batch gate holds until the first piece's inspection
+  passes. Twelve tests realize Phase 7's five exit gates and
+  acceptance tests 19–26, 29, 31 (`tests/test_actuation_edge.py`).
+
 Simulation-only routing (R3) — a goal becomes a plan, never a command:
 
 - **The raw-command wall** (`src/oolu/actuation_routing/`) — an intent

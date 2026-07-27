@@ -1,0 +1,14 @@
+oolu-pilot/1
+PLAN da9a96f94a18e1a2676e4f8d27ccb9cf572509b4c581d5ee3f09479024470b00
+PARAM clamp_force_mn=12000
+PARAM profile_cycles=20
+STEP 1 VERIFY_IDENTITY workpiece=damper-42
+STEP 2 MOUNT_TOOL tool=gripper-40mm
+STEP 3 ACQUIRE_WORKPIECE workpiece=damper-42
+STEP 4 PLACE_IN_FIXTURE fixture=fixture-3
+STEP 5 CLAMP clamp_force_mn=12000
+STEP 6 EXECUTE_PROFILE profile=sine-2hz profile_cycles=20
+STEP 7 UNCLAMP
+STEP 8 TRANSFER_TO_INSPECTION station=cmm-1
+STEP 9 PARK
+END

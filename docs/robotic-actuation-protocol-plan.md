@@ -362,15 +362,71 @@ Exit gates (each a test in `tests/test_actuation_routing.py`):
   a failed or foreign simulation refuses without spending the
   bundle.
 
-### R4 — Edge, compiler, and one qualified workcell
+### R4 — Edge, compiler, and the qualified-workcell semantics (this branch)
 
-Absorbs: Phases 4 and 7. Deliver: edge gateway, deterministic
-compiler with golden-program regression suite (gap 2.2.4), signed
-program artifacts, the lease service over HTTP, evidence ingress,
-command/evidence channel separation, reduced-energy and first-piece
-modes, and the pilot cell (§32). This is the first stage requiring
-hardware and likely dedicated edge packages. Exit gates: Phase 7's
-gates plus acceptance tests 19–26, 29 against the pilot cell.
+Absorbs: Phases 4 and 7's logic. Built hardware-honest: everything a
+real cell will run lands as deterministic logic with the physical
+seams injected (a plant callable for actuals, a cloud-link flag, an
+independent safety controller object). What still needs a physical
+cell — real transports (OPC UA/MQTT ingress, the HTTP lease surface),
+vendor controller adapters behind `PilotDialect`'s `render` contract,
+and commissioning against real hardware — is the deployment tail of
+this stage, not new protocol.
+
+Deliver (landed in `src/oolu/actuation_edge/`):
+
+- Program IR (`program_ir.py`): typed, bounded steps about
+  workpieces and tools — the §32 damper loop spells in nine ops; the
+  raw-command wall is enforced again at IR birth, so servo
+  vocabulary cannot ride in through a parameter map.
+- The deterministic compiler (`compiler.py`, gap 2.2.4): an eligible
+  R3 release in, a byte-stable signed artifact out. No text input
+  and no passthrough exists; an ineligible or foreign release
+  refuses before rendering — approvals cannot be bypassed by
+  calling the compiler directly. The golden-program regression
+  suite (`tests/goldens/pilot_damper_load.txt`) holds the reference
+  bytes; a rendering change is a reviewable event.
+- The job binder (`jobs.py`): every digest-bound field of the R0
+  `ActuationJob` comes from the released plan and compiled program;
+  the caller adds only floor facts (workpieces, window, nonce) and
+  registry identities.
+- Durable leases (`leases.py`): R0's semantics persisted — a spent
+  lease stays spent across process restarts.
+- The gateway (`gateway.py`): program-artifact verification (text
+  digest, compiler signature, job binding) before R0's arming gate,
+  and command/evidence channel separation as structurally distinct
+  identities.
+- Local execution (`execution.py`): cloud loss is recorded and never
+  acted on; lease expiry mid-cycle yields the controller's validated
+  completion and blocks only the next start; per-step
+  commanded-versus-actual deviation beyond its bound causes a local
+  safe stop with immutable evidence in the signed bundle; restart
+  after any safety stop refuses by name; and the batch gate refuses
+  until the first piece's inspection passes. Execution modes
+  (dry-run, reduced-energy, first-piece, validated-repeat) ride the
+  evidence record.
+
+Exit gates (each a test in `tests/test_actuation_edge.py`):
+
+- The compiler is byte-deterministic and matches the golden; it
+  cannot be bypassed and raw vocabulary dies at IR birth (Phase 7
+  gate 1; acceptance test 19).
+- The full pilot walk — release → compile → bind → arm — succeeds,
+  and a wrong workpiece blocks arming (Phase 7 gate 2; acceptance
+  test 20).
+- A modified or forged program artifact fails the signed digest
+  check locally (acceptance test 21).
+- A spent lease stays spent across a restart; expiry refuses
+  (acceptance test 22).
+- Cloud loss changes nothing locally and the safety controller
+  trips with everything dark (acceptance tests 23–24; Phase 7
+  gates 3–4).
+- Lease expiry mid-cycle invokes validated completion, not a cloud
+  stop (acceptance test 25).
+- Deviation beyond bound holds locally with immutable evidence, and
+  automatic restart is prohibited (acceptance tests 26, 31).
+- A first piece cannot become a batch without inspection approval
+  (acceptance test 29; Phase 7 gate 5).
 
 ### R5 — Verified feedback and the science stack
 
