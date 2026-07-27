@@ -124,7 +124,11 @@ def test_the_authoring_seat_thinks_on_anthropic(rig):
     assert "temperature" not in body
 
 
-def test_chat_stays_conversational_no_thinking_default_sampling(rig):
+def test_chat_thinks_visibly_with_default_sampling(rig):
+    # The chat seat carries a modest thinking budget so a brain that CAN
+    # show its reasoning streams it into the live thinking bubble instead
+    # of leaving a canned ellipsis; sampling stays the provider default
+    # (thinking refuses a temperature beside it anyway).
     keyring, transport = rig
     keyring.store("t1", "anthropic", "sk-ant-0123456789")
     transport.script("anthropic.com", 200, _anthropic_reply())
@@ -133,7 +137,7 @@ def test_chat_stays_conversational_no_thinking_default_sampling(rig):
 
     body = transport.requests[-1]["body"]
     assert body["max_tokens"] == 4096
-    assert "thinking" not in body
+    assert body["thinking"] == {"type": "enabled", "budget_tokens": 1024}
     assert "temperature" not in body
 
 
