@@ -4,6 +4,34 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The evidence and observation spine (R1) — how reality earns a grade:
+
+- **Signed ingress, immutable store** (`src/oolu/evidence/`) — raw
+  evidence manifests with content-hashed chunks under a
+  domain-separated Merkle root, signed over the same canonical bytes
+  R0 pinned; only registered devices upload, verify-then-store has no
+  update and no delete, interrupted uploads resume idempotently, and
+  credential revocation blocks new uploads without touching history.
+- **Authentication never buys metrological validity** — the E0–E6
+  grade ladder is cumulative over separately established facts: a
+  perfect signature with an expired calibration stops at E1, and an
+  invalid signature stops at E0 no matter how calibrated the device.
+  Calibration checks fail by name (expired, revoked, out-of-range,
+  measurand mismatch), with expiry judged at test time and revocation
+  at check time.
+- **Grade at time of use** — consumers record the grade *and its
+  basis* as append-only reliance records; a later calibration
+  revocation flags every affected use for review but never rewrites
+  the decision record.
+- **Corrections are new artifacts** — calibration correction derives
+  a linked observation through an append-only lineage ledger that
+  reconstructs any artifact back to its raw chunks; a broken chain
+  raises by name, and raw evidence stays byte-identical.
+- **Rights refuse by name** — §16.1 permissions as separable flags;
+  `formula_discovery` never implies `model_weight_training`. Nineteen
+  tests realize the plan's acceptance tests 1, 2, 5, 6, 16 and the
+  Phase 1 exit gates (`tests/test_evidence_spine.py`).
+
 The robotic actuation protocol foundation (R0) — contracts before commands:
 
 - **The plan, reviewed and phased**

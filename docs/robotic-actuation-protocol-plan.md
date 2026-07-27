@@ -195,14 +195,54 @@ Exit gates (each is a test in `tests/test_actuation_protocol.py`):
   one inside still creates a new version requiring approval
   (acceptance tests 32, 33).
 
-### R1 — Evidence and observation spine
+### R1 — Evidence and observation spine (this branch)
 
 Absorbs: the rest of Phase 0, Phase 1's manifest slice, Phase 2's
-contracts. Deliver: raw evidence manifest with Merkle chunking,
-the observation contract with units and uncertainty, evidence grades
-E0–E6 as a typed ladder with grade-at-time-of-use, calibration
-records with expiry/revocation, rights flags reusing OoLu's grant
-machinery. Exit gates: acceptance tests 1, 2, 5, 6, 16.
+contracts. Like R0, a pure library — persistence and transport arrive
+with R2's registries and R4's edge.
+
+Deliver (landed in `src/oolu/evidence/`):
+
+- Raw evidence manifests (`manifest.py`): content-hashed chunks with
+  declared dropped-sample counts under a domain-separated Merkle
+  root; canonical signing bytes reusing R0's canonicalization.
+- Signed ingress (`ingress.py`): registered devices only; a
+  `SignatureVerifier` seam with a stdlib HMAC baseline (device
+  certificates arrive with R4 behind the same seam); verify-then-
+  store with no update and no delete; idempotent resume; credential
+  revocation blocks new uploads without touching history.
+- Calibration (`calibration.py`): records with validity windows,
+  timestamped revocation that never deletes, and named check
+  failures — expiry judged at test time, revocation at check time.
+- Evidence grades (`grades.py`): the E0–E6 ladder computed
+  cumulatively from separately established facts, and
+  grade-at-time-of-use: an append-only ledger of reliance records
+  whose bases are flagged for review on revocation, never rewritten.
+- Observations (`observation.py`): result with unit and uncertainty,
+  processing lineage as an append-only step ledger reconstructable
+  back to raw chunks, and calibration correction as the worked
+  example of corrections-as-new-artifacts.
+- Rights (`rights.py`): §16.1 permissions as named, separable flags
+  that refuse by name; `formula_discovery` never implies
+  `model_weight_training`. Durable wiring into OoLu's grant spine is
+  R2 work.
+
+Exit gates (each a test in `tests/test_evidence_spine.py`):
+
+- A valid device with an expired calibration cannot create E2
+  evidence; the ladder stops at E1 (acceptance test 1).
+- A calibrated device with an invalid signature cannot create E1
+  evidence — higher facts cannot skip lower rungs (acceptance
+  test 2).
+- Raw evidence remains unchanged after calibration correction; the
+  correction is a new linked artifact (acceptance test 5).
+- Every observation reconstructs its processing lineage to raw
+  chunks, and a broken chain raises by name (acceptance test 6).
+- Revoked device credentials block new uploads without deleting
+  historical evidence (acceptance test 16).
+- Unregistered devices cannot upload; a modified chunk fails
+  integrity; interrupted uploads resume without duplicates (Phase 1
+  exit gates).
 
 ### R2 — Registries over the durable layer
 
