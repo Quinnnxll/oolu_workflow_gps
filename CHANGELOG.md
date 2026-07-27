@@ -4,6 +4,35 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Simulation-only routing (R3) — a goal becomes a plan, never a command:
+
+- **The raw-command wall** (`src/oolu/actuation_routing/`) — an intent
+  whose desired-state predicate speaks servo-or-drive vocabulary
+  (joint targets, axis velocities, G-code, PWM) is rejected at the
+  routing boundary by name; models describe workpiece states, and no
+  module in the package can emit a machine command — the terminal
+  artifact is a release verdict eligible for R4's compiler.
+- **One contract for every machine** — a six-axis robot and a forming
+  press route through the same capability node; exclusions are named,
+  not silent (wrong family, unreachable state, irreversible effect
+  with no declared disposition path, stale safety case, unqualified
+  workcell via the R2 seam), and the §18.1 score returns its full
+  breakdown so every routing choice is auditable term by term.
+- **The simulator is equipment** — versioned qualification with a
+  validated check-family scope and revocation; a collision check from
+  a reachability-only simulator refuses by name, and a simulation
+  record that fails to name its exact workcell, tools, frame digest,
+  recipe, and envelope cannot support a release.
+- **Approval bundles on the house law** — digest-bound, durable,
+  spent exactly once: approval of digest A never releases digest B,
+  dual control means two distinct people, expired signatures are
+  dead, and prohibited tiers (A0/A5) cannot even open a bundle.
+  `build_plan` refuses out-of-envelope parameters at assembly, and
+  `ready_for_compilation` checks plan, qualified simulation, review
+  tier, and approvals together — refusals never spend the bundle.
+  Fourteen tests realize Phase 6's four exit gates and acceptance
+  tests 18 and 19 (`tests/test_actuation_routing.py`).
+
 The protocol registries (R2) — the contracts get addresses:
 
 - **Durable, on the house rails** (`src/oolu/registries/`) — every

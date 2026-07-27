@@ -240,6 +240,7 @@ class ActuationCapability(BaseModel):
     known_hazards: tuple[str, ...]
     reversibility: Reversibility
     verification_requirement_ids: tuple[str, ...]
+    required_tool_types: tuple[str, ...] = ()
     validated_operating_envelope_ids: tuple[str, ...] = ()
 
 

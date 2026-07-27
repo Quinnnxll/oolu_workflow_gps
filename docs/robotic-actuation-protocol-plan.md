@@ -298,15 +298,69 @@ Exit gates (each a test in `tests/test_registries.py`):
   preflight-refused after, with both calibrations retained as
   history (acceptance test 27).
 
-### R3 — Simulation-only routing
+### R3 — Simulation-only routing (this branch)
 
-Absorbs: Phases 5–6's routing. Deliver: measurement and actuation
-capability manifests as nodeplace nodes; the actuation node score;
-intent → plan → simulated route with review tiers wired into OoLu's
-approval inbox; simulator qualification records (gap 2.2.3). No
-physical command exists yet. Exit gates: Phase 6's gates — a physical
-goal routes to compatible nodes without any command being issued;
-every simulation names exact configuration versions.
+Absorbs: Phases 5–6's routing. A physical goal becomes a ranked set
+of compatible nodes, a digest-bound plan, a qualified simulation, and
+an approval bundle — and nothing more; no module in the package can
+emit a machine command.
+
+Deliver (landed in `src/oolu/actuation_routing/`):
+
+- Capability nodes (`nodes.py`): measurement and actuation nodes —
+  one contract for robots and specialized machines alike (Phase 6's
+  second gate), differing only in declared effects, constraints,
+  hazards, and registry bindings. Nodes carry routable facts; they
+  cannot bring their own scoring.
+- The router (`router.py`): the raw-command wall rejects
+  servo-or-drive vocabulary (joint targets, axis velocities, G-code,
+  PWM) at the boundary by name — acceptance test 19 at the routing
+  layer; hard exclusions with named reasons (wrong family,
+  unproducible desired state, incompatible input, irreversible
+  without disposition path, stale safety case, unqualified workcell
+  via a seam to R2); and the §18.1 score returned as a full
+  breakdown, term by term, so a routing choice is auditable.
+- Simulation (`simulation.py`): the simulator is equipment (review
+  gap 2.2.3) — versioned qualification with a validated check-family
+  scope, evidence refs, and revocation; simulation records must name
+  the exact workcell, tools, fixtures, frame-graph digest, recipe,
+  parameters, and envelope (Phase 6's third gate) or report the
+  missing binding by name.
+- Plan assembly (`planner.py`): `build_plan` binds a routed
+  candidate under containment — parameters inside the validated
+  envelope, recipe validated against that same envelope, disposition
+  paths mandatory for irreversible effects, qualified workcell — and
+  the plan digest (`oolu-actuation-plan/v1`) binds every choice;
+  `ready_for_compilation` is the terminal gate checking plan,
+  qualified simulation, review tier, and approvals together.
+- Approval bundles (`approvals.py`): durable and digest-bound on the
+  house law — approval of digest A never releases digest B, each
+  bundle spends exactly once, expired approvals are dead, dual
+  control means two distinct people (one person holding both roles
+  is one signature), and prohibited tiers (A0/A5) cannot even open a
+  bundle. Safety roles only; budget approval stays in the
+  marketplace's own flow.
+
+Exit gates (each a test in `tests/test_actuation_routing.py`):
+
+- A physical goal routes to compatible actuation nodes without any
+  command being issued; the decision is ids, scores, and named
+  exclusions (Phase 6 gates 1–2).
+- Raw servo/drive vocabulary is rejected at the API boundary by
+  name (acceptance test 19).
+- Every simulation identifies exact configuration versions, and an
+  unqualified or revoked simulator cannot support review (Phase 6
+  gate 3; gap 2.2.3).
+- Irreversible actions without declared disposition paths are
+  excluded from routing and refused at plan assembly (Phase 6
+  gate 4).
+- A high-consequence job waits for dual-control approval; the
+  bundle spends exactly once and binds one digest (acceptance
+  test 18).
+- The full walk — intent → route → plan → simulate → review →
+  approve → release — succeeds once and refuses a second release;
+  a failed or foreign simulation refuses without spending the
+  bundle.
 
 ### R4 — Edge, compiler, and one qualified workcell
 
