@@ -4589,7 +4589,7 @@ class GatewayApp:
                 display_name=peer,
                 history=history,
                 model=self._seat_actor(
-                    self._tenant_model(session.tenant_id),
+                    self._tenant_model(session.tenant_id, purpose="rep.draft"),
                     session.principal_id,
                 ),
             )
@@ -4930,8 +4930,10 @@ class GatewayApp:
             inbound_text=thread[-1].body,
             display_name=session.principal_id,
             history=history,
+            # The representative's own seat: drafts meter under rep.draft
+            # (not the conversation) and take that seat's effort profile.
             model=self._seat_actor(
-                    self._tenant_model(session.tenant_id),
+                    self._tenant_model(session.tenant_id, purpose="rep.draft"),
                     session.principal_id,
                 ),
             extra_context=extra_context,

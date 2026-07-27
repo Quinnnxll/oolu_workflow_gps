@@ -45,6 +45,7 @@ _ASSET_HEADERS = {
 # route the SSE snapshot serves over HTTP, so a client upgrades in place.
 _EVENTS_PATH = re.compile(r"^/v1/runs/(?P<run_id>[^/]+)/events$")
 
+
 def _frontend_headers(connect_src: tuple[str, ...] = ()) -> dict[str, str]:
     """The index's security headers. ``connect_src`` widens the CSP to the
     origins this install may call beyond itself — exactly the paired
@@ -324,7 +325,21 @@ class GatewayASGI:
         )
         threading.Thread(target=worker, daemon=True).start()
         while True:
-            kind, payload = await queue.get()
+            try:
+                kind, payload = await asyncio.wait_for(queue.get(), timeout=15.0)
+            except asyncio.TimeoutError:
+                # Heartbeat: an SSE comment keeps idle proxies from
+                # dropping the stream while a slow model thinks, and lets
+                # the client tell "still working" from "dead". Clients
+                # already skip non-``data:`` frames.
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": b": ping\n\n",
+                        "more_body": True,
+                    }
+                )
+                continue
             if kind == "frame":
                 await self._sse(send, payload)
             elif kind == "done":

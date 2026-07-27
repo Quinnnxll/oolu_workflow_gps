@@ -84,6 +84,7 @@ def chat_model_for(provider: str, tier: str) -> str:
     table = DEFAULT_MODELS.get(provider, {})
     return table.get(tier) or table.get("fast", "")
 
+
 # The purpose tag every chat consultation is metered under.
 CHAT_PURPOSE = "chat.turn"
 
@@ -137,6 +138,14 @@ def _anthropic_finish_reason(data: dict) -> str:
     return str(data.get("stop_reason") or "")
 
 
+def _anthropic_usage(usage: dict) -> dict:
+    """Anthropic's usage names mapped onto the meter's OpenAI-shaped ones."""
+    return {
+        "prompt_tokens": int((usage or {}).get("input_tokens", 0) or 0),
+        "completion_tokens": int((usage or {}).get("output_tokens", 0) or 0),
+    }
+
+
 def _context_chars(messages: list[dict]) -> int:
     """A cheap, tokenizer-free measure of how much context rode in — the
     honest proxy until real token counting arrives (plan Phase 2)."""
@@ -152,9 +161,7 @@ def _context_chars(messages: list[dict]) -> int:
 
 def _split_system(messages: list[dict]) -> tuple[str, list[dict]]:
     """Anthropic takes the system prompt as a parameter, not a message."""
-    system_parts = [
-        m.get("content", "") for m in messages if m.get("role") == "system"
-    ]
+    system_parts = [m.get("content", "") for m in messages if m.get("role") == "system"]
     rest = [m for m in messages if m.get("role") != "system"]
     return "\n\n".join(p for p in system_parts if p), rest
 
@@ -323,9 +330,7 @@ class ChatModelRouter:
         for _attempt in range(max(1, int(max_attempts))):
             reply = self.consult(transcript, tools=[spec], tool_choice=name)
             transcript.append(reply.as_message())
-            delivered = next(
-                (c for c in reply.tool_calls if c.name == name), None
-            )
+            delivered = next((c for c in reply.tool_calls if c.name == name), None)
             if delivered is None:
                 problems = [f"no {name} call was made"]
                 transcript.append(
@@ -448,10 +453,13 @@ class ChatModelRouter:
         """Yield the reply's text deltas as the model generates them.
 
         Real token streaming for the local brain (the product default) and
-        keyed OpenAI-shape providers; every other source (subscription,
-        Anthropic) yields the finished reply as a single chunk — the streaming
-        transport is identical, only the granularity differs, and callers that
-        forward ⟨think⟩ deltas still work either way."""
+        both keyed cloud providers. Anthropic's extended-thinking deltas
+        arrive wrapped in ``<think>…</think>`` framing, so callers that
+        split ⟨think⟩ reasoning (the chat's live thinking bubble) show the
+        model's actual reasoning instead of a canned ellipsis. Only the
+        hosted subscription proxy and the no-key path still answer in one
+        chunk; a stream that breaks before its first delta falls back to
+        the blocking reply rather than a dead bubble."""
         self._check_budget()
         source = self._source()
         if source == "local":
@@ -459,20 +467,30 @@ class ChatModelRouter:
             return
         if source != "subscription":
             for provider in self._order():
-                if provider != "openai":
-                    continue
                 try:
                     secret = self._keyring.secret_for(self._tenant, provider)
                 except KeyringError:
                     continue
                 if secret is None:
                     continue
+                streamer = (
+                    self._stream_anthropic
+                    if provider == "anthropic"
+                    else self._stream_openai
+                )
+                yielded = False
                 try:
-                    yield from self._stream_openai(provider, secret, messages)
+                    for delta in streamer(provider, secret, messages):
+                        yielded = True
+                        yield delta
                     return
-                except ProviderError:
-                    break  # fall through to the blocking reply
-        # Subscription/Anthropic/no-key: the full reply, in one chunk.
+                except (ProviderError, ModelUnavailable):
+                    if yielded:
+                        # A stream that broke mid-reply cannot be silently
+                        # replayed blocking — the caller already has half.
+                        raise
+                    break  # nothing sent yet: the blocking reply may answer
+        # Subscription/no-key (or a stream that never started): one chunk.
         yield self.reply(messages)
 
     def _stream_local(self, messages):  # pragma: no cover - needs a live server
@@ -500,6 +518,56 @@ class ChatModelRouter:
         if not "".join(parts):
             raise ModelUnavailable(f"local ({url}) returned an empty reply")
         self._record_stream(model_id, "local", usage, started)
+
+    def _stream_anthropic(self, provider, secret, messages):
+        """Live deltas from the Messages API, thinking wrapped as ⟨think⟩.
+
+        The extended-thinking channel is mapped into the same ``<think>``
+        framing local reasoning models emit, so one downstream contract
+        (chat's ``_split_reasoning``) serves every brain. Errors before the
+        first delta let ``reply_stream`` fall back to the blocking call."""
+        tier = self._tier()
+        model_id = chat_model_for(provider, tier)
+        effort = self._profile
+        system, rest = _split_system(messages)
+        started = time.monotonic()
+        usage: dict = {}
+        parts: list[str] = []
+        thinking_open = False
+        try:
+            events = self._adapter(provider, secret).messages_stream(
+                to_anthropic_messages(rest),
+                model=model_id,
+                max_tokens=effort.max_tokens,
+                system=system,
+                temperature=effort.temperature,
+                thinking_budget=effort.thinking_budget,
+            )
+            for kind, delta, event_usage in events:
+                if event_usage:
+                    usage = event_usage
+                if not delta:
+                    continue
+                if kind == "thinking":
+                    if not thinking_open:
+                        thinking_open = True
+                        yield "<think>"
+                    yield delta
+                    continue
+                if thinking_open:
+                    thinking_open = False
+                    yield "</think>"
+                parts.append(delta)
+                yield delta
+        except ProviderError:
+            raise
+        except Exception as exc:  # httpx errors surface untyped from stream()
+            raise ProviderError(f"{provider} stream failed: {exc}") from exc
+        if thinking_open:
+            yield "</think>"
+        if not "".join(parts):
+            raise ModelUnavailable(f"{provider} returned an empty reply")
+        self._record_stream(model_id, tier, _anthropic_usage(usage), started)
 
     def _stream_openai(self, provider, secret, messages):  # pragma: no cover - live
         tier = self._tier()
@@ -647,9 +715,7 @@ class ChatModelRouter:
         vault = SecretVault()
         ref = vault.put(secret, kind="api_key")
         cls = AnthropicAdapter if provider == "anthropic" else OpenAiAdapter
-        adapter = cls(
-            vault=vault, transport=self._transport_or_real(), api_key_ref=ref
-        )
+        adapter = cls(vault=vault, transport=self._transport_or_real(), api_key_ref=ref)
         self._adapters[cache_key] = adapter
         return adapter
 
@@ -815,9 +881,7 @@ class ChatModelRouter:
         acting user's own line, so a shared tenant still shows who drew
         what."""
         if self._subscription is not None:
-            self._subscription.record(
-                self._tenant, record, self._source(), self._actor
-            )
+            self._subscription.record(self._tenant, record, self._source(), self._actor)
 
 
 class RouterIntakeModel:

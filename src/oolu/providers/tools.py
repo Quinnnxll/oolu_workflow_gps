@@ -179,9 +179,7 @@ def _validate(schema: dict, value: Any, where: str, problems: list[str]) -> None
         # quietly accept true/false.
         wrong_bool = declared in ("integer", "number") and isinstance(value, bool)
         if wrong_bool or not isinstance(value, expected):
-            problems.append(
-                f"{where}: expected {declared}, got {type(value).__name__}"
-            )
+            problems.append(f"{where}: expected {declared}, got {type(value).__name__}")
             return
     if "enum" in schema and value not in schema["enum"]:
         allowed = ", ".join(repr(v) for v in schema["enum"])
@@ -267,7 +265,9 @@ def to_openai_messages(messages: list[dict]) -> list[dict]:
                 }
             )
         else:
-            wire.append({"role": message["role"], "content": message.get("content", "")})
+            wire.append(
+                {"role": message["role"], "content": message.get("content", "")}
+            )
     return wire
 
 
@@ -304,14 +304,24 @@ def to_anthropic_messages(messages: list[dict]) -> list[dict]:
                 "tool_use_id": message.get("tool_call_id", ""),
                 "content": message.get("content", ""),
             }
-            if wire and wire[-1]["role"] == "user" and isinstance(
-                wire[-1]["content"], list
+            if (
+                wire
+                and wire[-1]["role"] == "user"
+                and isinstance(wire[-1]["content"], list)
             ):
                 wire[-1]["content"].append(block)
             else:
                 wire.append({"role": "user", "content": [block]})
         else:
             wire.append({"role": role, "content": message.get("content", "")})
+    # The Messages API requires the first turn to be the user's. A window
+    # that begins with the account's own words (common in representative
+    # threads: the visible history starts with the user's last reply) is
+    # opened with a neutral user turn instead of a hard 400.
+    if wire and wire[0].get("role") == "assistant":
+        wire.insert(
+            0, {"role": "user", "content": "(conversation already in progress)"}
+        )
     return wire
 
 

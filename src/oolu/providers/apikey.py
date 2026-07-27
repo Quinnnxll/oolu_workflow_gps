@@ -58,6 +58,41 @@ def openai_sse_events(
             yield delta, usage
 
 
+def anthropic_sse_events(
+    lines: Iterator[str],
+) -> Iterator[tuple[str, str | None, dict | None]]:
+    """Parse Anthropic Messages SSE lines into (kind, delta, usage).
+
+    ``kind`` is ``"thinking"`` for extended-thinking deltas and ``"text"``
+    for reply text; usage arrives on ``message_start`` (input tokens) and
+    ``message_delta`` (output tokens) and is yielded merged-so-far. Pure
+    and transport-agnostic, like :func:`openai_sse_events`."""
+    usage: dict[str, Any] = {}
+    for line in lines:
+        text = (line or "").strip()
+        if not text.startswith("data:"):
+            continue
+        try:
+            data = json.loads(text[len("data:") :].strip())
+        except ValueError:
+            continue
+        event = data.get("type")
+        if event == "message_start":
+            usage.update((data.get("message") or {}).get("usage") or {})
+            yield "text", None, dict(usage)
+        elif event == "content_block_delta":
+            delta = data.get("delta") or {}
+            if delta.get("type") == "thinking_delta" and delta.get("thinking"):
+                yield "thinking", str(delta["thinking"]), None
+            elif delta.get("type") == "text_delta" and delta.get("text"):
+                yield "text", str(delta["text"]), None
+        elif event == "message_delta":
+            usage.update(data.get("usage") or {})
+            yield "text", None, dict(usage)
+        elif event == "message_stop":
+            return
+
+
 class ApiKeyProviderAdapter(BaseProviderAdapter):
     def __init__(
         self,
@@ -161,6 +196,9 @@ class OpenAiAdapter(ApiKeyProviderAdapter):
             extra["OpenAI-Organization"] = organization
         if project:
             extra["OpenAI-Project"] = project
+        # A model writing a long reply is not a stall: the generic 30s
+        # transport default is for short API calls, not generation.
+        kwargs.setdefault("request_timeout", 300.0)
         super().__init__(
             name="openai",
             vault=vault,
@@ -248,6 +286,9 @@ class AnthropicAdapter(ApiKeyProviderAdapter):
         gateway: bool = False,
         **kwargs,
     ):
+        # Same generation-shaped timeout as the OpenAI adapter: a slow
+        # long reply must not time out, retry, and die after ~90s.
+        kwargs.setdefault("request_timeout", 300.0)
         if gateway:
             # The managed gateway brokers the real key; callers present a gateway
             # bearer token instead of the raw Anthropic key.
@@ -307,7 +348,9 @@ class AnthropicAdapter(ApiKeyProviderAdapter):
             and (not tool_choice or tool_choice == "auto")
         )
         if thinking:
-            budget = min(int(thinking_budget), max(max_tokens // 2, _MIN_THINKING_BUDGET))
+            budget = min(
+                int(thinking_budget), max(max_tokens // 2, _MIN_THINKING_BUDGET)
+            )
             if budget >= _MIN_THINKING_BUDGET and budget < max_tokens:
                 body["thinking"] = {"type": "enabled", "budget_tokens": budget}
             else:
@@ -326,9 +369,7 @@ class AnthropicAdapter(ApiKeyProviderAdapter):
                     "cache_control": {"type": "ephemeral"},
                 }
             ]
-        wire_tools: list[dict[str, Any]] = [
-            spec.as_anthropic() for spec in tools or []
-        ]
+        wire_tools: list[dict[str, Any]] = [spec.as_anthropic() for spec in tools or []]
         # The provider's own web-search tool: the SEARCH runs on Anthropic's
         # servers inside this same API call — the machine here needs no web
         # access of its own, which is exactly what lets a keyed OoLu answer
@@ -354,4 +395,54 @@ class AnthropicAdapter(ApiKeyProviderAdapter):
             body,
             idempotency_key=idempotency_key,
             cost=cost,
+        )
+
+    def messages_stream(  # pragma: no cover - needs a live streaming server
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model: str,
+        max_tokens: int = 1024,
+        system: str | None = None,
+        temperature: float | None = None,
+        thinking_budget: int | None = None,
+    ) -> Iterator[tuple[str, str | None, dict | None]]:
+        """Stream a Messages call as (kind, delta, usage) triples.
+
+        The toolless streaming twin of :meth:`messages` — same body rules
+        (system as a top-level block, extended thinking where the seat asks
+        and the model speaks it), plus ``stream: true``. Thinking deltas
+        arrive tagged ``"thinking"`` so the caller can show the model's
+        reasoning live instead of a canned ellipsis."""
+        body: dict[str, Any] = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": messages,
+            "stream": True,
+        }
+        thinking = (
+            thinking_budget is not None
+            and thinking_budget >= _MIN_THINKING_BUDGET
+            and _anthropic_thinking_model(model)
+        )
+        if thinking:
+            budget = min(
+                int(thinking_budget), max(max_tokens // 2, _MIN_THINKING_BUDGET)
+            )
+            if budget >= _MIN_THINKING_BUDGET and budget < max_tokens:
+                body["thinking"] = {"type": "enabled", "budget_tokens": budget}
+            else:
+                thinking = False
+        if temperature is not None and not thinking:
+            body["temperature"] = float(temperature)
+        if system:
+            body["system"] = [
+                {
+                    "type": "text",
+                    "text": system,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        return anthropic_sse_events(
+            self.stream_call(method="POST", path="/messages", body=body)
         )

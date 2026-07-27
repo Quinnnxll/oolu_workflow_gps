@@ -100,11 +100,7 @@ def count_request_tokens(
                 json.dumps(call, ensure_ascii=False, default=str), model=model
             )
     for tool in tools:
-        spec = (
-            tool.as_openai()
-            if hasattr(tool, "as_openai")
-            else tool
-        )
+        spec = tool.as_openai() if hasattr(tool, "as_openai") else tool
         total += estimate_tokens(
             json.dumps(spec, ensure_ascii=False, default=str), model=model
         )

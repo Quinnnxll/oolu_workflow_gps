@@ -76,8 +76,11 @@ SEAT_PROFILES: dict[str, SeatProfile] = {
     # generous output, no standing thinking budget (its recalc loop
     # already escalates tiers on repeated failure).
     "plan.synthesize": SeatProfile(max_tokens=8192, temperature=0.2),
-    # Conversation: room to answer well, the provider's own sampling.
-    "chat.turn": SeatProfile(max_tokens=4096),
+    # Conversation: room to answer well, the provider's own sampling —
+    # plus a modest thinking budget, so a brain that CAN show its
+    # reasoning streams it into the chat's live thinking bubble instead
+    # of leaving the user a canned ellipsis.
+    "chat.turn": SeatProfile(max_tokens=4096, thinking_budget=1024),
     # Short structured advice: a brief or a route weight, not an essay.
     "plan.intake": SeatProfile(max_tokens=2048, temperature=0.2),
     "plan.route": SeatProfile(max_tokens=2048, temperature=0.2),

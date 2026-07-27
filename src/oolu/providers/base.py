@@ -125,6 +125,11 @@ class BaseProviderAdapter:
         rate_limiter: RateLimiter | None = None,
         budget: Budget | None = None,
         sleep: Callable[[float], None] | None = None,
+        # Per-request transport timeout. The transport's own 30s default
+        # suits short API calls; a model generating a long reply is not a
+        # stall, so the chat adapters raise this — otherwise every slow
+        # turn times out, retries, and dies after ~90s of silence.
+        request_timeout: float = 30.0,
     ):
         self._vault = vault
         self._transport = transport
@@ -132,6 +137,7 @@ class BaseProviderAdapter:
         self._retry = retry or RetryPolicy()
         self._rate_limiter = rate_limiter
         self._budget = budget
+        self._request_timeout = float(request_timeout)
         # None = the module's real backoff, resolved at call time so a
         # test can neutralize _default_backoff without touching callers.
         self._sleep = sleep
@@ -187,7 +193,11 @@ class BaseProviderAdapter:
         return result
 
     def stream_call(  # pragma: no cover - needs a live streaming server
-        self, *, method: str = "POST", path: str = "/", body: dict[str, Any] | None = None
+        self,
+        *,
+        method: str = "POST",
+        path: str = "/",
+        body: dict[str, Any] | None = None,
     ):
         """Yield the raw SSE lines of a streaming provider call.
 
@@ -213,7 +223,13 @@ class BaseProviderAdapter:
     ) -> dict[str, Any]:
         last_error: ProviderError | None = None
         for attempt in range(1, self._retry.max_attempts + 1):
-            response = self._transport.request(method, url, headers=headers, body=body)
+            response = self._transport.request(
+                method,
+                url,
+                headers=headers,
+                body=body,
+                timeout=self._request_timeout,
+            )
             # Record only non-sensitive metadata.
             self.audit.append(
                 {

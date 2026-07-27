@@ -49,9 +49,7 @@ class _DeadModel:
 
 
 def _engine(model=None, **kwargs) -> RepresentativeEngine:
-    return RepresentativeEngine(
-        RepresentativeStore(":memory:"), model=model, **kwargs
-    )
+    return RepresentativeEngine(RepresentativeStore(":memory:"), model=model, **kwargs)
 
 
 # --------------------------------------------------------------------------- #
@@ -137,7 +135,13 @@ def test_a_draft_is_grounded_in_the_users_own_replies():
     assert "alice" in system and "push to main" in system
     assert "engineer, keeps replies short" in system
     assert "Never agree to spend money" in system
-    assert messages[-1] == {"role": "user", "content": "what's your deploy process?"}
+    # The generation point is anchored: the inbound rides verbatim inside
+    # a final turn that names the sender and restates the drafting task —
+    # an assistant-tuned brain must not read the question as its own.
+    final = messages[-1]
+    assert final["role"] == "user"
+    assert "what's your deploy process?" in final["content"]
+    assert "Write alice's reply to bob" in final["content"]
     assert engine.pending("s1") == [draft]
 
 
@@ -166,9 +170,7 @@ def test_no_units_resolver_leaves_the_prompt_unchanged():
     parrot = _Parrot()
     engine = _engine(model=parrot)  # no units_note_for
     engine.configure("s1", mode="draft")
-    engine.draft(
-        "s1", conversation_id="bob", inbound_text="hi", display_name="alice"
-    )
+    engine.draft("s1", conversation_id="bob", inbound_text="hi", display_name="alice")
     assert "units" not in parrot.calls[0][0]["content"].lower()
     assert engine.status("s1")["drafts_pending"] == 1
 
@@ -177,7 +179,9 @@ def test_deciding_a_draft_records_the_outcome_and_feeds_memory():
     engine = _engine(model=_Parrot("on it"))
     engine.configure("s1", mode="draft")
     draft = engine.draft(
-        "s1", conversation_id="bob", inbound_text="can you review my PR?",
+        "s1",
+        conversation_id="bob",
+        inbound_text="can you review my PR?",
         display_name="alice",
     )
     decided = engine.decide("s1", draft.draft_id, action="edit", text="on it — today")
@@ -211,9 +215,7 @@ def test_the_engine_refuses_what_it_should():
         engine.decide("s2", draft.draft_id, action="send")
     # No model anywhere means a plain refusal, not a stack trace.
     with pytest.raises(ModelUnavailable):
-        _engine().draft(
-            "s1", conversation_id="b", inbound_text="hey", display_name="a"
-        )
+        _engine().draft("s1", conversation_id="b", inbound_text="hey", display_name="a")
 
 
 def test_erasing_a_scope_removes_the_whole_representative():
@@ -248,7 +250,10 @@ def test_the_fallback_drafts_when_on_stays_silent_always():
 
     def envelope(text="you around?"):
         return MessageEnvelope(
-            channel="telegram", conversation_id="c1", sender_id="peer", text=text,
+            channel="telegram",
+            conversation_id="c1",
+            sender_id="peer",
+            text=text,
             metadata={"reply_scope": "s1"},
         )
 
@@ -291,21 +296,31 @@ def test_the_representative_flow_end_to_end(tmp_path):
     alice, bob = ident.token("alice", "t1"), ident.token("bob", "t1")
 
     # Off by default; drafting while off is refused.
-    assert gateway.handle(
-        _req("GET", "/v1/representative", token=alice)
-    ).body["mode"] == "off"
+    assert (
+        gateway.handle(_req("GET", "/v1/representative", token=alice)).body["mode"]
+        == "off"
+    )
     refused = gateway.handle(
         _req("POST", "/v1/representative/drafts", token=alice, body={"peer": "bob"})
     )
-    assert refused.status == 409 and refused.body["error"]["code"] == "representative_off"
+    assert (
+        refused.status == 409 and refused.body["error"]["code"] == "representative_off"
+    )
 
     # Toggle on, with a persona note. Junk modes are refused.
-    assert gateway.handle(
-        _req("PUT", "/v1/representative", token=alice, body={"mode": "firehose"})
-    ).status == 400
+    assert (
+        gateway.handle(
+            _req("PUT", "/v1/representative", token=alice, body={"mode": "firehose"})
+        ).status
+        == 400
+    )
     configured = gateway.handle(
-        _req("PUT", "/v1/representative", token=alice,
-             body={"mode": "draft", "about": "keeps replies short"})
+        _req(
+            "PUT",
+            "/v1/representative",
+            token=alice,
+            body={"mode": "draft", "about": "keeps replies short"},
+        )
     )
     assert configured.status == 200 and configured.body["mode"] == "draft"
 
@@ -316,10 +331,17 @@ def test_the_representative_flow_end_to_end(tmp_path):
         ("bob", "alice", "nice — can you review my PR tomorrow?"),
     ):
         token = alice if sender == "alice" else bob
-        assert gateway.handle(
-            _req("POST", f"/v1/friends/{recipient}/messages", token=token,
-                 body={"text": text})
-        ).status == 201
+        assert (
+            gateway.handle(
+                _req(
+                    "POST",
+                    f"/v1/friends/{recipient}/messages",
+                    token=token,
+                    body={"text": text},
+                )
+            ).status
+            == 201
+        )
 
     drafted = gateway.handle(
         _req("POST", "/v1/representative/drafts", token=alice, body={"peer": "bob"})
@@ -328,44 +350,66 @@ def test_the_representative_flow_end_to_end(tmp_path):
     assert drafted.body["generated_text"] == "on it — will look today"
     assert drafted.body["status"] == "pending"
     # The thread was folded into memory on the way.
-    assert gateway.handle(
-        _req("GET", "/v1/representative", token=alice)
-    ).body["exchanges"] == 1
+    assert (
+        gateway.handle(_req("GET", "/v1/representative", token=alice)).body["exchanges"]
+        == 1
+    )
 
     # The inbox lists it; deciding "send" delivers to bob and spends it.
     [pending] = gateway.handle(
         _req("GET", "/v1/representative/drafts", token=alice)
     ).body["items"]
     decided = gateway.handle(
-        _req("POST", f"/v1/representative/drafts/{pending['draft_id']}",
-             token=alice, body={"action": "send"})
+        _req(
+            "POST",
+            f"/v1/representative/drafts/{pending['draft_id']}",
+            token=alice,
+            body={"action": "send"},
+        )
     )
     assert decided.status == 200 and decided.body["status"] == "sent"
     assert decided.body["delivered"]["message_id"]
-    thread = gateway.handle(
-        _req("GET", "/v1/friends/alice/messages", token=bob)
-    ).body["items"]
+    thread = gateway.handle(_req("GET", "/v1/friends/alice/messages", token=bob)).body[
+        "items"
+    ]
     assert thread[-1]["text"] == "on it — will look today"
     assert not thread[-1]["mine"]
 
     # Spent is spent; and now the last word is alice's — nothing to answer.
-    assert gateway.handle(
-        _req("POST", f"/v1/representative/drafts/{pending['draft_id']}",
-             token=alice, body={"action": "discard"})
-    ).status == 400
+    assert (
+        gateway.handle(
+            _req(
+                "POST",
+                f"/v1/representative/drafts/{pending['draft_id']}",
+                token=alice,
+                body={"action": "discard"},
+            )
+        ).status
+        == 400
+    )
     again = gateway.handle(
         _req("POST", "/v1/representative/drafts", token=alice, body={"peer": "bob"})
     )
     assert again.status == 409 and again.body["error"]["code"] == "nothing_to_answer"
 
     # Another account can't see or spend alice's drafts.
-    assert gateway.handle(
-        _req("GET", "/v1/representative/drafts", token=bob)
-    ).body["items"] == []
-    assert gateway.handle(
-        _req("POST", f"/v1/representative/drafts/{pending['draft_id']}",
-             token=bob, body={"action": "send"})
-    ).status == 404
+    assert (
+        gateway.handle(_req("GET", "/v1/representative/drafts", token=bob)).body[
+            "items"
+        ]
+        == []
+    )
+    assert (
+        gateway.handle(
+            _req(
+                "POST",
+                f"/v1/representative/drafts/{pending['draft_id']}",
+                token=bob,
+                body={"action": "send"},
+            )
+        ).status
+        == 404
+    )
     conn.close()
 
 
