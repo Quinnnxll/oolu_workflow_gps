@@ -428,13 +428,65 @@ Exit gates (each a test in `tests/test_actuation_edge.py`):
 - A first piece cannot become a batch without inspection approval
   (acceptance test 29; Phase 7 gate 5).
 
-### R5 — Verified feedback and the science stack
+### R5 — Verified feedback and the science stack (this branch)
 
-Absorbs: Phases 8, 10–13. Deliver: state-delta qualification,
-process-capability learning inside envelopes, dataset builder,
-formula discovery sandbox, replication and approval lifecycle,
-closed-loop experiment proposals. Exit gates: Phases 8 and 10–13's
-gates; acceptance tests 9–14, 30–35.
+Absorbs: Phases 8 and 10–13. The loop closes: execution evidence
+becomes qualified state deltas, deltas and observations become
+rights-checked datasets, datasets feed a formula sandbox whose
+candidates cannot crown themselves, and an approved model proposes
+the next experiment — which re-enters the protocol at the front door
+as an unauthorized intent.
+
+Deliver (landed in `src/oolu/science/`):
+
+- State-delta qualification (`state_delta.py`): a claimed change is
+  qualified only by independent inspection findings; the record
+  carries the job digest, program digest, traces, and inspection ids
+  so the backward trace is field-reading, not archaeology. Failure
+  disposition is a closed vocabulary — "rollback" refuses by name,
+  and undeclared paths refuse (acceptance test 30).
+- Safety validation (`safety_validation.py`): simulation, digital
+  twins, and risk scores are supporting evidence; validation demands
+  at least one physical test (acceptance test 34).
+- Capability learning (`capability_learning.py`): every outcome —
+  rejected parts, near misses, trips — enters the ledger under
+  `route_training` rights, lowers the routing signal, and stays
+  queryable; there is no success-only path (acceptance test 35).
+- The dataset builder (`dataset.py`): rights-checked per observation
+  (`formula_discovery`, acceptance test 9), grade/unit/method walls
+  and duplicate-specimen detection excluding by name, deterministic
+  content digests (same inputs, same digest), replication splits
+  across facilities (acceptance test 13), and shared-calibration
+  detection that defeats an independence claim before it is made
+  (acceptance test 14).
+- The formula sandbox (`formulas.py`): dimensional invalidity is
+  automatic rejection at the screen (acceptance test 10), rejected
+  candidates stay stored with reasons, every candidate declares
+  units, dimensions, uncertainty, applicability, and source dataset,
+  and the candidate status machine has no edge into "approved".
+- Promotion and the world-model registry (`worldmodel.py`): the one
+  door to approval demands an independent replication split (a
+  strong fit alone refuses — acceptance test 11), a passed holdout,
+  a validation dataset distinct from training, and three reviewer
+  roles none of whom is the discovery node (a formula cannot approve
+  itself). Versions are durable and immutable; challenged and
+  superseded versions remain fully retrievable (acceptance test 12);
+  the §22.1 use gate holds safety-critical use behind independent
+  validation and human review.
+- Closed-loop experiments (`experiment.py`): the §23 priority
+  arithmetic proposes the next test as a typed `ActionIntent` with
+  no authorization field to smuggle through; new evidence derives a
+  new draft candidate naming its parent — never a mutation.
+
+Exit gates (each a test in `tests/test_science_stack.py`): the
+Phase 8 and 10–13 gates and acceptance tests 9–14, 30, 34, 35 (32
+and 33 landed with R0's envelope contracts).
+
+All six stages are now landed in this repository. The remaining work
+to a physical pilot is R4's deployment tail — real transports,
+vendor controller adapters, and commissioning against the §32 cell —
+plus the app-layer surfaces (gateway HTTP APIs, the operator review
+UI) that expose these contracts to people.
 
 Rights distribution (Phase 9) and federation (Phase 14) ride OoLu's
 existing consent economy and cross-tenant work respectively, and

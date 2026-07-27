@@ -4,6 +4,42 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The science stack (R5) — the loop closes, and nothing crowns itself:
+
+- **State changes are earned, not claimed** (`src/oolu/science/`) — a
+  physical state delta qualifies only through independent inspection
+  findings, its lineage reads digest-deep to the job that made it,
+  and failure disposition is a closed vocabulary: "rollback" refuses
+  by name, undeclared paths refuse, and simulation alone can never
+  validate a safety function.
+- **Every outcome teaches** — rejected parts, near misses, and trips
+  enter the process-capability ledger under `route_training` rights,
+  lower the routing signal, and stay queryable; there is no
+  success-only ingestion path.
+- **Datasets are deterministic and honest about exclusion** —
+  rights-checked per observation (`formula_discovery`), walled by
+  grade, unit, method family, and duplicate specimens with named
+  reasons; the same inputs rebuild to the same content digest; two
+  labs make a replication split, and a calibration record shared
+  across facilities defeats the independence claim before it is made.
+- **Formulas cannot crown themselves** — dimensional invalidity is
+  automatic rejection at the screen, failed candidates stay stored,
+  the candidate status machine has no edge into "approved", and
+  promotion demands independent replication, a distinct validation
+  dataset, and three reviewer roles none of whom is the discovery
+  node. World-model versions are durable and immutable; challenged
+  and superseded versions remain fully retrievable, and the use gate
+  holds safety-critical use behind independent validation and human
+  review.
+- **The next experiment is an intent, not a command** — the §23
+  priority arithmetic proposes a typed `ActionIntent` with no
+  authorization field to smuggle through, and new evidence derives a
+  new draft candidate naming its parent. Fifteen tests realize the
+  Phase 8 and 10–13 gates and acceptance tests 9–14, 30, 34, 35
+  (`tests/test_science_stack.py`). With R5 the six-stage protocol
+  foundation (R0–R5) is complete in-repo — 95 tests across the six
+  suites.
+
 The edge and the compiler (R4) — deterministic bytes, local law:
 
 - **The deterministic compiler** (`src/oolu/actuation_edge/`) — an
