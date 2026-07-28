@@ -44,12 +44,8 @@ def ensure_default_local_model(
     if not ollama:
         return "no-ollama"
     try:
-        listed = run(
-            [ollama, "list"], capture_output=True, text=True, timeout=30.0
-        )
-        if listed.returncode == 0 and model.split(":")[0] in (
-            listed.stdout or ""
-        ):
+        listed = run([ollama, "list"], capture_output=True, text=True, timeout=30.0)
+        if listed.returncode == 0 and model.split(":")[0] in (listed.stdout or ""):
             return "present"
         pulled = run(
             [ollama, "pull", model],

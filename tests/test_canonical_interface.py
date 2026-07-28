@@ -151,7 +151,10 @@ def test_the_annex_round_trips_to_anthropic_verbatim():
 
     transcript = [reply.as_message()]
     wire = to_anthropic_messages(transcript)
-    blocks = wire[0]["content"]
+    # The Messages API requires a user turn first; an assistant-headed
+    # window is opened with a neutral one, and the annex follows intact.
+    assert wire[0]["role"] == "user"
+    blocks = wire[1]["content"]
     # Thoughts lead, verbatim — signature intact — then text, then the call.
     assert blocks[0] == {
         "type": "thinking",

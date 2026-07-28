@@ -111,5 +111,23 @@ def build_messages(
         role, content = entry.get("role"), entry.get("content")
         if role in ("user", "assistant") and isinstance(content, str) and content:
             messages.append({"role": role, "content": content})
-    messages.append({"role": "user", "content": inbound_text})
+    # The generation point is anchored, not bare: a strongly
+    # assistant-tuned brain (the Claude API path) reads a naked question
+    # as addressed to ITSELF and answers as an assistant — "I don't have
+    # the ability to join calls" — instead of drafting {name}'s reply.
+    # Naming the sender and restating the task in the final turn keeps
+    # the drafting frame exactly where the model is about to write.
+    sender = peer or "the peer"
+    name = card.display_name
+    messages.append(
+        {
+            "role": "user",
+            "content": (
+                f"{sender} just wrote:\n{inbound_text}\n\n"
+                f"Write {name}'s reply to {sender}, in {name}'s voice"
+                " (or the single NEED_INFO: line). Output only the reply"
+                " text."
+            ),
+        }
+    )
     return messages

@@ -168,6 +168,36 @@ multimedia on the shelf:
   member's signals. Old preference tables gain the snippet column by
   migration; old rows stand as genre history.
 
+The breathing light gets its feed, and the representative keeps its
+frame — two reported failures on the Claude API path, fixed:
+
+- **Live reasoning instead of a canned ellipsis** — the Anthropic path
+  never streamed (one blocking chunk, no ⟨think⟩ content), so the
+  chat's thinking bubble showed "…" for the whole turn; and the
+  transport's generic 30s timeout made long generations time out,
+  retry, and die after ~90s of silence — the "stuck there". Now the
+  Messages API streams (`messages_stream` + `anthropic_sse_events`),
+  extended-thinking deltas ride the same ⟨think⟩ framing local
+  reasoning models emit (one downstream contract for every brain), the
+  chat seat carries a modest thinking budget so Claude actually shows
+  its reasoning, both chat adapters carry generation-shaped 300s
+  timeouts, and the SSE chat stream heartbeats (`: ping`) so idle
+  proxies can't kill a thinking turn. A stream that breaks before its
+  first delta falls back to the blocking reply — never a dead bubble.
+- **The drafting frame is anchored at the generation point** — the
+  persona system prompt always rode the Claude wire (verified on the
+  wire), but the final turn was the peer's naked question, which a
+  strongly assistant-tuned brain answers AS ITSELF ("I don't have the
+  ability to join calls…"). The last turn now names the sender and
+  restates the task — "Write quinn's reply to jordan, in quinn's
+  voice" — exactly where the model starts writing. Also fixed on the
+  same path: a history window opening with the account's own words was
+  an Anthropic 400 (first message must be the user's — now opened with
+  a neutral user turn), and representative drafts now meter under
+  their own `rep.draft` seat instead of the conversation's.
+  Seven regression tests pin both behaviors
+  (`tests/test_reasoning_stream.py`).
+
 The science stack (R5) — the loop closes, and nothing crowns itself:
 
 - **State changes are earned, not claimed** (`src/oolu/science/`) — a
