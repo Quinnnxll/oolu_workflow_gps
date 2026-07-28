@@ -325,11 +325,13 @@ class PressDesk:
         stories=None,
         preferences=None,
         polls=None,
+        intake=None,
     ) -> None:
         self._store = store
         self._stories = stories  # newsroom.StoryStore | None
         self._preferences = preferences  # editions.PreferenceStore | None
         self._polls = polls  # polls.PollDesk | None
+        self._intake = intake  # intake.IntakeStore | None
 
     @property
     def store(self) -> ContributionStore:
@@ -346,6 +348,10 @@ class PressDesk:
     @property
     def polls(self):
         return self._polls
+
+    @property
+    def intake(self):
+        return self._intake
 
     def publish(
         self,

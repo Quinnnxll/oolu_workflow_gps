@@ -464,11 +464,34 @@ scorer; the bend is bounded (`SEMANTIC_PULL`), composes with the genre
 pull in the open, and the serendipity slice still holds the last slot.
 Taste rows ride the same erasure as every preference signal. (3)
 *Multimedia rides the contribution into the story*: upload straight
-from the device in the compose form (blob door first, inline fallback),
-the media-type table grown (webp/webm/quicktime/m4a/ogg/wav), and a
-story's payload names its lineage's attachments by reference — served
-through the press media door with true bytes (inline data-URL rows
-decoded), honestly absent once the author unpublishes.
+from the device (blob door first, inline fallback), the media-type
+table grown (webp/webm/quicktime/m4a/ogg/wav), and a story's payload
+names its lineage's attachments by reference — served through the
+press media door with true bytes (inline data-URL rows decoded),
+honestly absent once the author unpublishes.
+
+**Amended (A2.2)** — the contribute form is gone: the conversation IS
+the door (`press/intake.py`). A member drops whatever they have into
+the News thread — article-shaped text, a photo, a clip, a song (📎 on
+the composer; attachments ride the chat message as drawer refs through
+the same wall the publish door keeps) — and the DESK detects it, the
+way OoLu spots a buildable chore (the n8n growth-trigger law applied
+to publishing). The desk reviews in conversation: one gathering
+question when the piece is thin (what happened, where, when), a loud
+named refusal when the text would leak (dropped — fixed words arrive
+fresh, never folded onto leaky ones), the retelling credit named up
+front — then a standing publish offer that RENDERS the license terms.
+The member's plain "yes" on the very next message publishes through
+the same `PressDesk.publish` gate and the same audit voice as the
+manual door (which remains, API-only); a plain "no" drops it; anything
+else withdraws the offer — consent detached from the question it
+answered is not consent. Whether the piece is worth composing stays
+the RUBRIC's decision: the newsroom runs after publication and the
+desk reports honestly which way it went. Detection, titles, genres,
+and every desk sentence are deterministic functions of the material;
+the seat's model keeps the ordinary News conversation. One standing
+draft per member, durable (`press_intake`), spent atomically. Pinned
+by `tests/test_press_intake.py` end to end.
 
 Goal: News selects and composes stories from contributions only, to a
 typed editorial rubric, and delivers each member a personal edition.

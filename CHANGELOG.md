@@ -4,6 +4,35 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The conversational newsroom (A2.2) — the thread is the door:
+
+- **Nobody fills a form** (`src/oolu/press/intake.py`) — the "Write a
+  piece" form is gone. A member drops whatever they have into the
+  News thread — article-shaped text, a photo, a clip, a song — and
+  the desk DETECTS it, the way OoLu spots a buildable chore: raw
+  material diverts to the desk's own deterministic hand before the
+  seat's model ever speaks; ordinary conversation (a question is a
+  question) never diverts.
+- **Review is a conversation** — a thin piece earns ONE gathering
+  question (what happened, where, when) and the answer folds in
+  verbatim; text that would leak is refused with each leak named and
+  the draft dropped (fixed words arrive fresh, never folded onto
+  leaky ones); a retelling is offered honestly with the credit named
+  up front. Titles and genres derive from the material's own words.
+- **The offer is the consent surface** — the standing publish offer
+  renders the license terms, and the member's plain "yes" on the very
+  next message publishes through the same gate and audit voice as the
+  manual door (which remains, API-only); a plain "no" drops it;
+  anything else withdraws the offer. One durable draft per member
+  (`press_intake`), spent atomically — the growth-offer discipline.
+- **Worth composing is the rubric's call** — the newsroom runs right
+  after publication and the desk reports which way it went: composed
+  into a story (named), or on the shelf awaiting corroboration.
+- **Attachments ride the message** — 📎 on the News composer uploads
+  from the device (blob door first, inline fallback) and sends drawer
+  refs with the words, validated through the same wall the publish
+  door keeps — another member's file refuses loudly at the door.
+
 The personalized newsroom (A2.1) — the member's own semantics, and
 multimedia on the shelf:
 

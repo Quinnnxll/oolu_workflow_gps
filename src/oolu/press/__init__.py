@@ -34,6 +34,18 @@ from .editions import (
     edition_message,
     rank_edition,
 )
+from .intake import (
+    DROPPED,
+    GATHER_ASK,
+    GATHER_ASK_WORDS,
+    INTAKE_LICENSE,
+    IntakeDraft,
+    IntakeStore,
+    draft_from_material,
+    fold_answer,
+    looks_like_material,
+    review,
+)
 from .newsroom import LineageShare, Newsroom, Story, StoryStore
 from .personalize import (
     SEMANTIC_PULL,
@@ -54,10 +66,14 @@ from .standards import RUBRIC_VERSION, RubricBreakdown, score, select
 from .taxonomy import GENRES, TAXONOMY_VERSION, Genre, taxonomy_items
 
 __all__ = [
+    "DROPPED",
     "EDITION_LABEL",
     "EDITION_PULSE_GOAL",
     "EDITION_SIZE",
+    "GATHER_ASK",
+    "GATHER_ASK_WORDS",
     "GENRES",
+    "INTAKE_LICENSE",
     "K_FLOOR",
     "LICENSES",
     "MAX_BODY_CHARS",
@@ -71,6 +87,8 @@ __all__ = [
     "ContentContribution",
     "ContributionStore",
     "Genre",
+    "IntakeDraft",
+    "IntakeStore",
     "LineageShare",
     "MediaRef",
     "Newsroom",
@@ -86,9 +104,13 @@ __all__ = [
     "RubricBreakdown",
     "Story",
     "StoryStore",
+    "draft_from_material",
     "edition_message",
+    "fold_answer",
     "leak_report",
+    "looks_like_material",
     "rank_edition",
+    "review",
     "score",
     "select",
     "semantic_affinity",

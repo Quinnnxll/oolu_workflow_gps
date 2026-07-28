@@ -2586,18 +2586,6 @@ button.ghost {
   font-weight: 600;
 }
 
-.press-compose {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.press-genres {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
 .press-chip {
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -2616,20 +2604,18 @@ button.ghost {
   background: hsl(38 60% 38%);
 }
 
-.press-attach summary,
-.press-license summary {
-  cursor: pointer;
-}
-
-.press-file {
-  display: block;
-  padding: 2px 0 2px 12px;
-}
-
-.press-consent {
+/* Raw material waiting on the composer: removable chips, the desk
+   reviews words and attachments together on send. */
+.press-pending {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 12px;
+}
+
+.press-attach-btn {
+  font-size: 1.1em;
+  line-height: 1;
 }
 
 .press-card {

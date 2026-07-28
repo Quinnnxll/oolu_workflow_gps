@@ -45,10 +45,13 @@ ROSTER: tuple[AgentCard, ...] = (
         name="News",
         tagline="Stories from members, to magazine standard",
         scope=(
-            "I collect member contributions and compose them into "
-            "attributed stories — every piece credited by name and "
-            "photo, every selection explained. Publish in this thread, "
-            "read your edition here, and set a morning delivery."
+            "Drop whatever you have straight into this thread — a "
+            "written piece, a photo, a clip, a song — and I review it "
+            "with you: I may ask one question, then offer to publish it "
+            "under the members license, and only your plain yes "
+            "publishes. Members' pieces compose into attributed "
+            "stories — every piece credited by name and photo. Read "
+            "your edition here and set a morning delivery."
         ),
         ahead=(
             "Affiliate advertising with revenue shared back to "

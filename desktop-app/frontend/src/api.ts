@@ -1294,6 +1294,7 @@ export const api = {
     nodeId?: string,
     mood?: string,
     agent?: string,
+    fileIds?: string[],
   ) =>
     req<ChatTurnReply>("POST", "/v1/chat", {
       message,
@@ -1306,6 +1307,9 @@ export const api = {
       // A roster agent's turn rides the same door with its own tag; the
       // server answers through that agent's seat and thread.
       ...(agent ? { agent } : {}),
+      // Raw material for the News desk: drawer refs riding the message,
+      // so the desk reviews words and attachments together.
+      ...(fileIds && fileIds.length > 0 ? { file_ids: fileIds } : {}),
     }),
   // The streaming twin: the model's reasoning arrives live via onReasoning as
   // it thinks, and the finished turn is returned. Falls back to the blocking

@@ -747,6 +747,7 @@ def build_host_runtime(
     )
     from .press import (
         ContributionStore,
+        IntakeStore,
         PairwiseStore,
         PollDesk,
         PollStore,
@@ -1295,6 +1296,7 @@ def build_host_runtime(
             stories=StoryStore(conn),
             preferences=PreferenceStore(conn),
             polls=PollDesk(PollStore(conn), PairwiseStore(conn)),
+            intake=IntakeStore(conn),
         ),
         # Reminders: rows with a clock — the deterministic route for
         # "remind me", surfaced by the client's poll.

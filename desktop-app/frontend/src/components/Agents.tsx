@@ -10,7 +10,6 @@ import type {
   PollPair,
   PollVerdict,
   PressGenre,
-  PressLicense,
   RosterAgent,
   Story,
   TravelBrief,
@@ -671,24 +670,17 @@ function PressMedia({
   return null;
 }
 
-// The contribution spine's surface (A1): the shelf of live pieces and
-// the contribute form. Everything renders from the server's own words —
-// the taxonomy, the license terms — never hardcoded copies; a host from
-// before the press (404 on genres) renders nothing at all.
+// The contribution spine's surface (A1, amended): the shelf of live
+// pieces and the caller's edition. Everything renders from the server's
+// own words — the taxonomy, the bylines — never hardcoded copies; a
+// host from before the press (404 on genres) renders nothing at all.
+// There is NO contribute form: publishing happens in the conversation
+// below — the desk detects raw material, reviews it, and a plain yes
+// publishes (the OoLu build-a-node shape, applied to the press).
 export function PressPanel() {
   const tr = useT();
   const [genres, setGenres] = useState<PressGenre[] | null>(null);
-  const [license, setLicense] = useState<PressLicense | null>(null);
   const [shelf, setShelf] = useState<Contribution[]>([]);
-  const [writing, setWriting] = useState(false);
-  const [title, setTitle] = useState("");
-  const [body, setBody] = useState("");
-  const [picked, setPicked] = useState<string[]>([]);
-  const [consent, setConsent] = useState(false);
-  const [drawer, setDrawer] = useState<FileMeta[]>([]);
-  const [attached, setAttached] = useState<string[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
   // The newsroom (A2): the caller's edition, and whether it is theirs.
   const [stories, setStories] = useState<Story[]>([]);
   const [personalized, setPersonalized] = useState(false);
@@ -701,7 +693,7 @@ export function PressPanel() {
   const refreshShelf = () =>
     api
       .pressContributions()
-      .then(({ items }) => setShelf(items))
+      .then(({ items }) => setShelf(items ?? []))
       .catch(() => setShelf([]));
 
   const refreshStories = () =>
@@ -722,72 +714,13 @@ export function PressPanel() {
       .pressGenres()
       .then((meta) => {
         setGenres(meta.items);
-        setLicense(meta.licenses[0] ?? null);
         void refreshShelf();
         void refreshStories();
       })
       .catch(() => setGenres(null)); // no press on this host: no panel
   }, []);
 
-  // The drawer list loads when the form opens — attach is refs to YOUR
-  // files, never copies; the picker shows exactly what you own.
-  useEffect(() => {
-    if (!writing) return;
-    void api
-      .files()
-      .then(({ items }) => setDrawer(items ?? []))
-      .catch(() => setDrawer([]));
-  }, [writing]);
-
-  if (genres === null || license === null) return null;
-
-  function toggleGenre(key: string) {
-    setPicked((p) =>
-      p.includes(key)
-        ? p.filter((k) => k !== key)
-        : p.length < 3
-          ? [...p, key]
-          : p,
-    );
-  }
-
-  function toggleFile(fileId: string) {
-    setAttached((a) =>
-      a.includes(fileId)
-        ? a.filter((f) => f !== fileId)
-        : a.length < 6
-          ? [...a, fileId]
-          : a,
-    );
-  }
-
-  async function publish() {
-    if (busy || license === null) return;
-    setError("");
-    setBusy(true);
-    try {
-      const record = await api.pressPublish({
-        title,
-        body,
-        genres: picked,
-        license: license.key,
-        consent,
-        ...(attached.length > 0 ? { file_ids: attached } : {}),
-      });
-      setShelf((s) => [record, ...s]);
-      setWriting(false);
-      setTitle("");
-      setBody("");
-      setPicked([]);
-      setAttached([]);
-      setConsent(false);
-    } catch (e) {
-      // The gate's refusal IS the direction — shown verbatim.
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
+  if (genres === null) return null;
 
   async function feedback(story: Story, signal: "like" | "skip") {
     try {
@@ -801,42 +734,6 @@ export function PressPanel() {
       if (verdict.recorded) void refreshStories();
     } catch {
       /* the panel's next refresh tells the truth */
-    }
-  }
-
-  // Multimedia straight from the device: the blob door keeps a photo's
-  // or a clip's TRUE bytes; a host without a blob store still takes
-  // what fits inline. Saved files land in the drawer (yours, reusable)
-  // and attach to the piece being written.
-  async function uploadMedia() {
-    const picked = await pickLocalFiles();
-    if (picked.length === 0) return;
-    setError("");
-    for (const file of picked) {
-      try {
-        let saved: FileMeta;
-        try {
-          saved = await api.uploadFileBytes(file);
-        } catch {
-          const { content, mediaType } = await fileToDrawerContent(file);
-          saved = await api.createFile(
-            file.name,
-            content,
-            undefined,
-            "",
-            mediaType,
-          );
-        }
-        setDrawer((d) => [saved, ...d]);
-        setAttached((a) =>
-          a.includes(saved.file_id) || a.length >= 6
-            ? a
-            : [...a, saved.file_id],
-        );
-      } catch (e) {
-        // The refusal names the file — shown, never swallowed.
-        setError(e instanceof Error ? e.message : String(e));
-      }
     }
   }
 
@@ -948,97 +845,9 @@ export function PressPanel() {
 
       <div className="press-head">
         <span className="press-heading">{tr("press.contributions")}</span>
-        <button
-          className="ghost"
-          onClick={() => {
-            setError("");
-            setWriting((w) => !w);
-          }}
-        >
-          {writing ? tr("press.close") : tr("press.write")}
-        </button>
       </div>
 
-      {writing && (
-        <div className="press-compose">
-          <input
-            placeholder={tr("press.titlePh")}
-            value={title}
-            maxLength={120}
-            onChange={(e) => setTitle(e.target.value)}
-          />
-          <textarea
-            placeholder={tr("press.bodyPh")}
-            value={body}
-            rows={5}
-            onChange={(e) => setBody(e.target.value)}
-          />
-          <div className="press-genres">
-            {genres.map((g) => (
-              <button
-                key={g.key}
-                type="button"
-                title={g.description}
-                className={`press-chip${picked.includes(g.key) ? " on" : ""}`}
-                onClick={() => toggleGenre(g.key)}
-              >
-                {g.label}
-              </button>
-            ))}
-          </div>
-          {/* Multimedia rides along: photos, clips, sound — uploaded
-              from the device, or attached from the drawer as refs. */}
-          <div className="row">
-            <button
-              type="button"
-              className="ghost"
-              onClick={() => void uploadMedia()}
-            >
-              {tr("press.upload")}
-            </button>
-          </div>
-          {drawer.length > 0 && (
-            <details className="press-attach">
-              <summary>
-                {tr("press.attach")}
-                {attached.length > 0 ? ` (${attached.length})` : ""}
-              </summary>
-              {drawer.map((f) => (
-                <label key={f.file_id} className="press-file">
-                  <input
-                    type="checkbox"
-                    checked={attached.includes(f.file_id)}
-                    onChange={() => toggleFile(f.file_id)}
-                  />
-                  {f.name}
-                </label>
-              ))}
-            </details>
-          )}
-          {/* Consent renders the SERVER's license terms — the words the
-              record will actually stand under. */}
-          <details className="press-license">
-            <summary>{license.name}</summary>
-            <p className="muted">{license.terms}</p>
-          </details>
-          <label className="press-consent">
-            <input
-              type="checkbox"
-              checked={consent}
-              onChange={(e) => setConsent(e.target.checked)}
-            />
-            {tr("press.consent")}
-          </label>
-          <div className="row">
-            <button disabled={busy} onClick={() => void publish()}>
-              {busy ? "…" : tr("press.publish")}
-            </button>
-          </div>
-          {error && <div className="error">{error}</div>}
-        </div>
-      )}
-
-      {shelf.length === 0 && !writing && (
+      {shelf.length === 0 && (
         <div className="muted press-empty">{tr("press.empty")}</div>
       )}
       {shelf.map((c) => (
@@ -1061,9 +870,9 @@ export function PressPanel() {
           </div>
           <div className="press-title">{c.title}</div>
           <div className="press-body">{c.body}</div>
-          {c.media.length > 0 && (
+          {(c.media ?? []).length > 0 && (
             <div className="press-media-strip">
-              {c.media.map((m, index) => (
+              {(c.media ?? []).map((m, index) => (
                 <PressMedia
                   key={`${c.contribution_id}:${index}`}
                   contributionId={c.contribution_id}
@@ -1129,11 +938,57 @@ export function AgentThread({ agent }: { agent: RosterAgent }) {
       .catch(() => {});
   }, [agent.agent_id]);
 
+  // Attachments on the News thread: raw material for the desk — a
+  // photo, a clip, a song — uploaded from the device (the blob door
+  // keeps the true bytes; a host without one takes what fits inline)
+  // and sent WITH the message, so the desk reviews words and evidence
+  // together.
+  const [pending, setPending] = useState<{ id: string; name: string }[]>([]);
+
+  async function attach() {
+    const picked = await pickLocalFiles();
+    for (const file of picked) {
+      try {
+        let saved: FileMeta;
+        try {
+          saved = await api.uploadFileBytes(file);
+        } catch {
+          const { content, mediaType } = await fileToDrawerContent(file);
+          saved = await api.createFile(
+            file.name,
+            content,
+            undefined,
+            "",
+            mediaType,
+          );
+        }
+        setPending((p) =>
+          p.some((f) => f.id === saved.file_id) || p.length >= 6
+            ? p
+            : [...p, { id: saved.file_id, name: saved.name }],
+        );
+      } catch (e) {
+        setThread((t) => [
+          ...t,
+          {
+            kind: "assistant",
+            text: e instanceof Error ? e.message : tr("agent.sendFailed"),
+          },
+        ]);
+      }
+    }
+  }
+
   async function send() {
     const message = draft.trim();
-    if (!message || busy) return;
+    if ((!message && pending.length === 0) || busy) return;
+    const fileIds = pending.map((f) => f.id);
+    const shown =
+      message ||
+      pending.map((f) => f.name).join(", "); // a bare attachment still shows
     setDraft("");
-    setThread((t) => [...t, { kind: "user", text: message }]);
+    setPending([]);
+    setThread((t) => [...t, { kind: "user", text: shown }]);
     setBusy(true);
     try {
       const history = thread.map((m) => ({
@@ -1141,11 +996,12 @@ export function AgentThread({ agent }: { agent: RosterAgent }) {
         content: m.text,
       }));
       const turn = await api.chat(
-        message,
+        message || shown,
         history,
         undefined,
         undefined,
         agent.agent_id,
+        fileIds.length > 0 ? fileIds : undefined,
       );
       setThread((t) => [
         ...t,
@@ -1205,7 +1061,37 @@ export function AgentThread({ agent }: { agent: RosterAgent }) {
         )}
         <div ref={endRef} />
       </div>
+      {pending.length > 0 && (
+        <div className="press-pending">
+          {pending.map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              className="press-chip"
+              title={tr("press.detach")}
+              onClick={() =>
+                setPending((p) => p.filter((x) => x.id !== f.id))
+              }
+            >
+              {f.name} ✕
+            </button>
+          ))}
+        </div>
+      )}
       <div className="chat-composer">
+        {/* The News desk takes raw material: 📎 rides the message, and
+            the desk reviews words and attachments together. */}
+        {agent.agent_id === "news" && (
+          <button
+            type="button"
+            className="ghost press-attach-btn"
+            title={tr("press.upload")}
+            aria-label={tr("press.upload")}
+            onClick={() => void attach()}
+          >
+            📎
+          </button>
+        )}
         <textarea
           placeholder={tf("agent.message", { name: agent.name })}
           value={draft}

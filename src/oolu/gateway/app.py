@@ -2411,31 +2411,40 @@ class GatewayApp:
     ) -> Response:
         """One turn with a roster agent: the card's honest scope, spoken
         through the agent's OWN seat — metered and booked apart from the
-        OoLu conversation — and landed in the agent's OWN thread."""
+        OoLu conversation — and landed in the agent's OWN thread. The
+        News thread carries the desk's intake: raw material is detected
+        and reviewed BEFORE the model speaks — the desk's own hand, the
+        seat's ordinary voice for everything else."""
         card = agent_card(agent_id)
         if card is None:
             raise GatewayError(
                 400, "invalid_request", f"unknown agent: {agent_id}"
             )
-        # The seat is the office: the router is cached and metered per
-        # (tenant, purpose), and the actor stamp keeps a shared tenant's
-        # gauges per person — exactly the chat.turn discipline.
-        router = self._seat_actor(
-            self._tenant_model(session.tenant_id, purpose=card.seat),
-            session.principal_id,
-        )
-        turn_now = request.now or self._clock()
-        local_now = turn_now + timedelta(
-            minutes=_tz_minutes(body.get("tz_offset_minutes"))
-        )
-        time_note = (
-            f"Current time: {turn_now:%Y-%m-%d %H:%M} UTC; the user's "
-            f"local time is {local_now:%Y-%m-%d %H:%M}."
-        )
-        recent = [h for h in history if isinstance(h, dict)][-20:]
-        say, reasoning, source = agent_turn(
-            card, message, history=recent, model=router, context=time_note
-        )
+        served = None
+        if card.agent_id == "news":
+            served = self._news_intake_turn(session, body, message)
+        if served is not None:
+            say, reasoning, source = served
+        else:
+            # The seat is the office: the router is cached and metered per
+            # (tenant, purpose), and the actor stamp keeps a shared tenant's
+            # gauges per person — exactly the chat.turn discipline.
+            router = self._seat_actor(
+                self._tenant_model(session.tenant_id, purpose=card.seat),
+                session.principal_id,
+            )
+            turn_now = request.now or self._clock()
+            local_now = turn_now + timedelta(
+                minutes=_tz_minutes(body.get("tz_offset_minutes"))
+            )
+            time_note = (
+                f"Current time: {turn_now:%Y-%m-%d %H:%M} UTC; the user's "
+                f"local time is {local_now:%Y-%m-%d %H:%M}."
+            )
+            recent = [h for h in history if isinstance(h, dict)][-20:]
+            say, reasoning, source = agent_turn(
+                card, message, history=recent, model=router, context=time_note
+            )
         # The conversation survives the device, exactly like OoLu's —
         # tagged with the agent, so each thread stays its own.
         if self._assistant_history is not None:
@@ -2467,6 +2476,223 @@ class GatewayApp:
                 "agent": card.agent_id,
             },
         )
+
+    def _news_intake_turn(self, session, body, message):
+        """The News desk's hand on one thread message — or None when the
+        message is ordinary conversation (the seat's model answers).
+
+        The growth-offer discipline, applied to publishing:
+        - An OFFERED draft is answered by the very next message: a plain
+          yes publishes (the offer rendered the license terms — the yes
+          is the consent), a plain no drops it, anything else withdraws
+          the offer silently (fresh material starts a fresh review).
+        - A GATHERING draft takes the next message as the answer to the
+          desk's one question — folded in verbatim — unless it is a
+          question itself (the agent answers; the desk's question keeps
+          standing) or a plain no (dropped).
+        - With nothing standing, material is DETECTED: attached files at
+          any length, or article-shaped text past the floor.
+        """
+        press = self._press
+        if press is None or press.intake is None:
+            return None
+        from ..chat import consent_answer
+        from ..press import (
+            DROPPED,
+            draft_from_material,
+            fold_answer,
+            looks_like_material,
+            review,
+        )
+
+        intake = press.intake
+        file_ids = (body or {}).get("file_ids") or []
+        if not isinstance(file_ids, list):
+            raise GatewayError(400, "invalid_request", "file_ids must be a list")
+        # Attachments are validated at the door — a file that is not the
+        # caller's own refuses loudly NOW, not at publish time.
+        refs = self._drawer_refs(session, file_ids) if file_ids else []
+        answer = consent_answer(message)
+        standing = intake.get(
+            tenant=session.tenant_id, principal=session.principal_id
+        )
+
+        def _staged(staged, say):
+            # A dropped review (a leak) leaves NOTHING standing: fixed
+            # words arrive as fresh material, never folded onto leaky
+            # ones.
+            if staged.stage == "dropped":
+                intake.pop(
+                    tenant=session.tenant_id, principal=session.principal_id
+                )
+            else:
+                intake.put(staged)
+            return (say, None, "desk")
+
+        def _fresh_review():
+            draft = draft_from_material(
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+                message=message,
+                file_ids=tuple(r.file_id for r in refs),
+                media_types=tuple(r.media_type for r in refs),
+            )
+            staged, say = review(
+                draft,
+                live_texts=press.store.live_texts(tenant=session.tenant_id),
+                title_of=self._contribution_title(session),
+            )
+            return _staged(staged, say)
+
+        if standing is not None and standing.stage == "offered":
+            draft = intake.pop(
+                tenant=session.tenant_id, principal=session.principal_id
+            )
+            if draft is None:
+                return None  # spent concurrently; the conversation stands
+            if answer == "yes":
+                return self._intake_publish(session, draft)
+            if answer == "no":
+                return (DROPPED, None, "desk")
+            # Withdrawn — the newest material is the one on the table.
+            if looks_like_material(message, has_media=bool(refs)):
+                return _fresh_review()
+            return None
+        if standing is not None:  # gathering: the desk's question stands
+            if answer == "no":
+                intake.pop(
+                    tenant=session.tenant_id, principal=session.principal_id
+                )
+                return (DROPPED, None, "desk")
+            if message.strip().endswith("?"):
+                return None  # a question is a question; the draft stands
+            grown = fold_answer(standing, message)
+            if refs:
+                grown = grown.model_copy(
+                    update={
+                        "file_ids": (
+                            *grown.file_ids,
+                            *(r.file_id for r in refs),
+                        )
+                    }
+                )
+            staged, say = review(
+                grown,
+                live_texts=press.store.live_texts(tenant=session.tenant_id),
+                title_of=self._contribution_title(session),
+            )
+            return _staged(staged, say)
+        if looks_like_material(message, has_media=bool(refs)):
+            return _fresh_review()
+        return None
+
+    def _contribution_title(self, session):
+        """A title lookup for the intake's retelling credit — the
+        neighbor's own headline, or None when it is gone."""
+
+        def title_of(contribution_id: str) -> str | None:
+            record = self._press.store.get(
+                contribution_id, tenant=session.tenant_id
+            )
+            return record.title if record is not None else None
+
+        return title_of
+
+    def _intake_publish(self, session, draft):
+        """The consented publication: the same gate the manual door
+        walks, the same audit voice — then the newsroom judges the
+        shelf, because whether a piece is WORTH composing is the
+        rubric's decision, not the desk's mood."""
+        from ..press import INTAKE_LICENSE, Newsroom, PressError
+
+        press = self._press
+        media = self._drawer_refs(
+            session, list(draft.file_ids), missing="drop"
+        )
+        gone = len(draft.file_ids) - len(media)
+        try:
+            record = press.publish(
+                tenant=session.tenant_id,
+                author=session.principal_id,
+                title=draft.title,
+                body=draft.body,
+                genres=draft.genres,
+                license=INTAKE_LICENSE,
+                consent=True,  # the yes answered the offer's rendered terms
+                media=media,
+            )
+        except PressError as exc:
+            # The gate's refusal is the desk's words; the draft returns
+            # to gathering so fixed material can answer it.
+            press.intake.put(draft.model_copy(update={"stage": "gathering"}))
+            return (
+                f"I couldn't publish it: {exc} Fix that and send it "
+                "again — I never rewrite your words.",
+                None,
+                "desk",
+            )
+        self._durable.audit.append(
+            "press.contribution_published",
+            {
+                "contribution_id": record.contribution_id,
+                "author": record.author,
+                "genres": list(record.genres),
+                "license": record.license,
+                "similar_to": record.similar_to,
+            },
+        )
+        say = f"Published — “{record.title}” is on the shelf, credited to you."
+        if gone:
+            say += (
+                f" ({gone} attachment{'s' if gone != 1 else ''} "
+                f"{'were' if gone != 1 else 'was'} gone from your drawer "
+                "and left out.)"
+            )
+        if press.stories is None:
+            return (say, None, "desk")
+        model = self._seat_actor(
+            self._tenant_model(session.tenant_id, purpose="news.compose"),
+            session.principal_id,
+        )
+        composed = Newsroom(press.store, press.stories).run(
+            tenant=session.tenant_id, model=model
+        )
+        for story in composed:
+            self._durable.audit.append(
+                "press.story_composed",
+                {
+                    "story_id": story.story_id,
+                    "source": story.source,
+                    "rubric_version": story.rubric_version,
+                    "lineage": [
+                        {"contribution_id": s.contribution_id, "weight": s.weight}
+                        for s in story.lineage
+                    ],
+                },
+            )
+        mine = next(
+            (
+                s
+                for s in composed
+                if any(
+                    share.contribution_id == record.contribution_id
+                    for share in s.lineage
+                )
+            ),
+            None,
+        )
+        if mine is not None:
+            say += (
+                f" The newsroom judged it worth telling: “{mine.headline}” "
+                "is in the stories now."
+            )
+        else:
+            say += (
+                " It's on the shelf — the newsroom composes it into a "
+                "story as the rubric allows (freshness, corroboration, "
+                "depth)."
+            )
+        return (say, None, "desk")
 
     # ------------------------------------------------------------------ #
     # The byline: a published face and name, tenant-scoped.               #
@@ -2649,17 +2875,14 @@ class GatewayApp:
             200, {"items": [self._contribution_dict(r) for r in items]}
         )
 
-    def _press_publish(self, request, session, params) -> Response:
-        """The publication gate, walked in order — refusals are loud and
-        name the fix. Media rides as drawer REFS (never copies): each
-        named file must be the caller's own at publish time."""
-        press = self._require_press()
-        from ..press import MediaRef, PressError
+    def _drawer_refs(self, session, file_ids, *, missing="refuse"):
+        """Drawer files as press MediaRefs, the wall held at the door:
+        another account's file — or a node's — is indistinguishable from
+        a missing one. ``missing="refuse"`` is the loud 404 the publish
+        door keeps; ``missing="drop"`` leaves the gone ones out (the
+        intake's publish moment, where the reply names the drop)."""
+        from ..press import MediaRef
 
-        body = request.body or {}
-        file_ids = body.get("file_ids") or []
-        if not isinstance(file_ids, list):
-            raise GatewayError(400, "invalid_request", "file_ids must be a list")
         media: list[MediaRef] = []
         for file_id in file_ids:
             file = (
@@ -2667,14 +2890,14 @@ class GatewayApp:
                 if self._files is not None
                 else None
             )
-            # The drawer wall holds at the door: another account's file —
-            # or a node's — is indistinguishable from a missing one.
             if file is not None and file.node_id is None:
                 if file.owner not in ("", session.principal_id):
                     file = None
             elif file is not None:
                 file = None
             if file is None:
+                if missing == "drop":
+                    continue
                 raise GatewayError(
                     404, "not_found", f"no such file: {file_id}"
                 )
@@ -2686,6 +2909,20 @@ class GatewayApp:
                     name=file.name,
                 )
             )
+        return media
+
+    def _press_publish(self, request, session, params) -> Response:
+        """The publication gate, walked in order — refusals are loud and
+        name the fix. Media rides as drawer REFS (never copies): each
+        named file must be the caller's own at publish time."""
+        press = self._require_press()
+        from ..press import PressError
+
+        body = request.body or {}
+        file_ids = body.get("file_ids") or []
+        if not isinstance(file_ids, list):
+            raise GatewayError(400, "invalid_request", "file_ids must be a list")
+        media = self._drawer_refs(session, file_ids)
         try:
             record = press.publish(
                 tenant=session.tenant_id,
