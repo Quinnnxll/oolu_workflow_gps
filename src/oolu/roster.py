@@ -45,10 +45,13 @@ ROSTER: tuple[AgentCard, ...] = (
         name="News",
         tagline="Stories from members, to magazine standard",
         scope=(
-            "I collect member contributions and compose them into "
-            "attributed stories — every piece credited by name and "
-            "photo, every selection explained. Publish in this thread, "
-            "read your edition here, and set a morning delivery."
+            "Drop whatever you have straight into this thread — a "
+            "written piece, a photo, a clip, a song — and I review it "
+            "with you: I may ask one question, then offer to publish it "
+            "under the members license, and only your plain yes "
+            "publishes. Members' pieces compose into attributed "
+            "stories — every piece credited by name and photo. Read "
+            "your edition here and set a morning delivery."
         ),
         ahead=(
             "Affiliate advertising with revenue shared back to "
@@ -64,8 +67,13 @@ ROSTER: tuple[AgentCard, ...] = (
         scope=(
             "I offer pairs of member pieces to compare — vote first, "
             "then see the real numbers (once enough members voted). "
-            "Switch genres any time; with personalization on, your "
-            "votes also shape your News edition."
+            "Say “poll” for a pair, “genres” to pick a stream, or name "
+            "a genre. I am also the floor's social scientist: pairs are "
+            "designed to test standing hypotheses about how this "
+            "community reads, and when a pattern holds — or a genuine "
+            "debate opens — I report the field note here. Ask "
+            "“findings” any time. With personalization on, your votes "
+            "also shape your News edition."
         ),
         ahead=(
             "Affiliate advertising with revenue shared back to "
@@ -90,6 +98,25 @@ ROSTER: tuple[AgentCard, ...] = (
             "phase A7 of the agents-expansion plan."
         ),
         seat="explore.brief",
+    ),
+    AgentCard(
+        agent_id="market",
+        name="Market",
+        tagline="Buy, sell, and be found — under real approvals",
+        scope=(
+            "The whole marketplace lives in this thread as form blocks: "
+            "shop the shelf, open requests for quotes, decide approvals, "
+            "drive your orders, and sell — listings carry photos, clips, "
+            "and sound. I watch where your position meets the market's "
+            "demand and brief you here; say “list” any time for "
+            "everything you've created on the platform."
+        ),
+        ahead=(
+            "Financing and insurance partner products ride the same "
+            "typed offers; cross-market federation already answers "
+            "shop searches."
+        ),
+        seat="market.desk",
     ),
     AgentCard(
         agent_id="travel",

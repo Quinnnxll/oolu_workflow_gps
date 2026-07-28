@@ -3,6 +3,18 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { AgentThread } from "./Agents";
 import type { RosterAgent } from "../api";
 
+// The device picker can't open a real dialog under jsdom — the mock
+// hands the desk one picked photo, the way a member would.
+vi.mock("../device", () => ({
+  pickLocalFiles: vi.fn(async () => [
+    new File(["x"], "pier.jpg", { type: "image/jpeg" }),
+  ]),
+  fileToDrawerContent: vi.fn(async () => ({
+    content: "data:image/jpeg;base64,eA==",
+    mediaType: "image/jpeg",
+  })),
+}));
+
 // The press panel (A1): the shelf and the contribute form live at the
 // head of the News thread; everything renders from the server's own
 // words (taxonomy, license terms), and publishing walks the one door
@@ -14,7 +26,15 @@ let calls: { method: string; path: string; body: unknown }[];
 const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
   const u = new URL(String(input), "http://local.test");
   const method = init?.method ?? "GET";
-  const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+  // A raw-bytes body (the blob door's File) is not JSON — keep it as-is.
+  let body: unknown;
+  if (init?.body) {
+    try {
+      body = JSON.parse(String(init.body));
+    } catch {
+      body = init.body;
+    }
+  }
   calls.push({ method, path: u.pathname, body });
   const hit = routes[`${method} ${u.pathname}`] ?? { status: 200, body: {} };
   return {
@@ -22,6 +42,7 @@ const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
     status: hit.status,
     text: async () => JSON.stringify(hit.body),
     json: async () => hit.body,
+    blob: async () => new Blob([JSON.stringify(hit.body)]),
   } as Response;
 });
 
@@ -108,84 +129,73 @@ describe("PressPanel (inside the News thread)", () => {
     expect(screen.queryByText("Unpublish")).toBeNull();
   });
 
-  it("publishes through the one door with consent carried explicitly", async () => {
+  it("has no manual compose form — the conversation is the door", async () => {
     routes["GET /v1/press/genres"] = GENRES;
     routes["GET /v1/press/contributions"] = {
       status: 200,
       body: { items: [] },
     };
-    routes["GET /v1/files"] = { status: 200, body: { items: [] } };
-    routes["POST /v1/press/contributions"] = {
-      status: 201,
-      body: {
-        contribution_id: "c9",
-        author: "alice",
-        title: "Rain reached the valley",
-        body: "The terraces flooded with runoff.",
-        genres: ["local"],
-        license: "oolu-members-1",
-        media: [],
-        similar_to: null,
-        similarity: null,
-        taxonomy_version: 1,
-        created_at: "2026-07-12T10:00:00Z",
-        superseded_at: null,
-      },
-    };
     render(<AgentThread agent={NEWS} />);
-
-    fireEvent.click(await screen.findByText("Write a piece"));
-    // The consent line and the license terms are the server's own words.
-    expect(screen.getByText("OoLu members license v1")).toBeTruthy();
-    fireEvent.change(screen.getByPlaceholderText("Title"), {
-      target: { value: "Rain reached the valley" },
-    });
-    fireEvent.change(
-      screen.getByPlaceholderText("What happened? Write it as you saw it."),
-      { target: { value: "The terraces flooded with runoff." } },
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Around me" }));
-    fireEvent.click(
-      screen.getByLabelText(
-        "I've read the license and consent to publish under it",
-      ),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Publish" }));
-
-    expect(await screen.findByText("Rain reached the valley")).toBeTruthy();
-    const post = calls.find(
-      (c) => c.method === "POST" && c.path === "/v1/press/contributions",
-    );
-    expect(post?.body).toMatchObject({
-      title: "Rain reached the valley",
-      genres: ["local"],
-      license: "oolu-members-1",
-      consent: true,
-    });
+    expect(await screen.findByText("Contributions")).toBeTruthy();
+    // The desk detects material in the thread; nobody fills a form.
+    expect(screen.queryByText("Write a piece")).toBeNull();
+    expect(screen.queryByPlaceholderText("Title")).toBeNull();
   });
 
-  it("shows the gate's refusal verbatim as the direction", async () => {
+  it("sends raw material to the desk — words and attachments together", async () => {
     routes["GET /v1/press/genres"] = GENRES;
     routes["GET /v1/press/contributions"] = {
       status: 200,
       body: { items: [] },
     };
-    routes["GET /v1/files"] = { status: 200, body: { items: [] } };
-    routes["POST /v1/press/contributions"] = {
-      status: 400,
+    routes["POST /v1/files/upload"] = {
+      status: 201,
       body: {
-        error: {
-          code: "invalid_request",
-          message: "publishing this would leak an email address — remove it",
-        },
+        file_id: "f1",
+        name: "pier.jpg",
+        media_type: "image/jpeg",
+        size: 1,
+        created_at: "2026-07-12T09:00:00Z",
+        updated_at: "2026-07-12T09:00:00Z",
+      },
+    };
+    routes["POST /v1/chat"] = {
+      status: 200,
+      body: {
+        reply:
+          "Ready to publish: “The pier queues again” — filed under Around me.",
+        source: "desk",
+        actions: [],
+        agent: "news",
       },
     };
     render(<AgentThread agent={NEWS} />);
-    fireEvent.click(await screen.findByText("Write a piece"));
-    fireEvent.click(screen.getByRole("button", { name: "Publish" }));
-    expect(
-      await screen.findByText(/would leak an email address/),
-    ).toBeTruthy();
+
+    // 📎 uploads the photo and holds it as a removable chip.
+    fireEvent.click(
+      await screen.findByLabelText("Add photo, video, or audio"),
+    );
+    const chip = await screen.findByTitle("Remove attachment");
+    expect(chip.textContent).toContain("pier.jpg");
+
+    fireEvent.change(screen.getByPlaceholderText("Message News…"), {
+      target: { value: "The pier queued again this morning." },
+    });
+    fireEvent.click(screen.getByLabelText("Send"));
+
+    // The desk's review arrives as the thread's own reply...
+    expect(await screen.findByText(/Ready to publish/)).toBeTruthy();
+    // ...and the message carried the attachment refs for the desk.
+    const turn = calls.find(
+      (c) => c.method === "POST" && c.path === "/v1/chat",
+    );
+    expect(turn?.body).toMatchObject({
+      message: "The pier queued again this morning.",
+      agent: "news",
+      file_ids: ["f1"],
+    });
+    // The chip is spent with the send.
+    expect(screen.queryByTitle("Remove attachment")).toBeNull();
   });
 
   it("offers unpublish only on your own pieces", async () => {
@@ -224,7 +234,7 @@ describe("PressPanel (inside the News thread)", () => {
     expect(unpublish).toBeTruthy();
   });
 
-  it("renders stories with lineage bylines, reasons on demand, honest taps", async () => {
+  it("renders stories with lineage bylines, hidden scoring, emoji taps", async () => {
     routes["GET /v1/press/genres"] = GENRES;
     routes["GET /v1/press/contributions"] = { status: 200, body: { items: [] } };
     routes["GET /v1/press/stories"] = {
@@ -240,7 +250,6 @@ describe("PressPanel (inside the News thread)", () => {
               { contribution_id: "c1", author: "alice", weight: 0.6 },
               { contribution_id: "c2", author: "bob", weight: 0.4 },
             ],
-            breakdown: { selection: 0.57, inspiring: 0.7, rubric_version: 1 },
             rubric_version: 1,
             source: "desk",
             created_at: "2026-07-13T08:00:00Z",
@@ -260,18 +269,65 @@ describe("PressPanel (inside the News thread)", () => {
     // Both cited contributors' bylines render — the lineage speaks.
     expect(await screen.findByText("alice")).toBeTruthy();
     expect(await screen.findByText("bob")).toBeTruthy();
-    // The reasons on demand: the rubric's factor breakdown.
-    fireEvent.click(screen.getByText("Why this story"));
-    expect(screen.getByText(/selection: 0.57/)).toBeTruthy();
-    // A tap answers honestly when personalization is off.
-    fireEvent.click(screen.getByText("Like"));
+    // The scoring stays the house's own: no "why" panel renders.
+    expect(screen.queryByText("Why this story")).toBeNull();
+    // The taps speak emoji, the words stay for the screen reader — and
+    // a tap answers honestly when personalization is off.
+    fireEvent.click(screen.getByLabelText("Like"));
     expect(
       await screen.findByText("not recorded — personalization is off"),
     ).toBeTruthy();
+    expect(screen.getByLabelText("Skip").textContent).toContain("⏭");
     const tap = calls.find(
       (c) => c.method === "POST" && c.path === "/v1/press/stories/st1/feedback",
     );
     expect(tap?.body).toMatchObject({ signal: "like" });
+  });
+
+  it("renders a story's attached media through the press media door", async () => {
+    const createURL = vi.fn(() => "blob:media-1");
+    URL.createObjectURL = createURL as unknown as typeof URL.createObjectURL;
+    URL.revokeObjectURL = vi.fn() as unknown as typeof URL.revokeObjectURL;
+    routes["GET /v1/press/genres"] = GENRES;
+    routes["GET /v1/press/contributions"] = { status: 200, body: { items: [] } };
+    routes["GET /v1/press/stories"] = {
+      status: 200,
+      body: {
+        items: [
+          {
+            story_id: "st1",
+            headline: "The pier queues again",
+            prose: "Forty stalls returned.",
+            genres: ["local"],
+            lineage: [{ contribution_id: "c1", author: "alice", weight: 1 }],
+            rubric_version: 1,
+            source: "desk",
+            created_at: "2026-07-13T08:00:00Z",
+            media: [
+              {
+                contribution_id: "c1",
+                index: 0,
+                media_type: "image/jpeg",
+                name: "pier.jpg",
+              },
+            ],
+          },
+        ],
+        personalized: false,
+        edition_schedule: null,
+      },
+    };
+    render(<AgentThread agent={NEWS} />);
+
+    // The photo rides the lineage: fetched through the press media door
+    // (the bearer token travels with it) and shown as an object URL.
+    const img = await screen.findByAltText("pier.jpg");
+    expect(img.getAttribute("src")).toBe("blob:media-1");
+    const fetched = calls.find(
+      (c) =>
+        c.method === "GET" && c.path === "/v1/press/contributions/c1/media/0",
+    );
+    expect(fetched).toBeTruthy();
   });
 
   it("cranks the newsroom and toggles the morning edition", async () => {
@@ -306,27 +362,34 @@ describe("PressPanel (inside the News thread)", () => {
     expect(scheduled?.body).toMatchObject({ enabled: true });
   });
 
-  it("runs a poll: both bylines, vote once, the floor's honest reveal", async () => {
+  it("deals a poll as a message block: bylines, one vote, honest reveal", async () => {
     const POLL: RosterAgent = { ...NEWS, agent_id: "poll", name: "Poll" };
-    routes["GET /v1/press/genres"] = GENRES;
-    routes["GET /v1/press/polls/next"] = {
+    routes["POST /v1/chat"] = {
       status: 200,
       body: {
-        pair_id: "p1",
-        genre: "food",
-        left: {
-          contribution_id: "c1",
-          author: "alice",
-          title: "The steel kettle, tested",
-          excerpt: "Four minutes to a litre.",
+        reply: "Which one? Tap to vote.",
+        source: "desk",
+        agent: "poll",
+        block: {
+          kind: "poll",
+          pair: {
+            pair_id: "p1",
+            genre: "food",
+            left: {
+              contribution_id: "c1",
+              author: "alice",
+              title: "The steel kettle, tested",
+              excerpt: "Four minutes to a litre.",
+            },
+            right: {
+              contribution_id: "c2",
+              author: "bob",
+              title: "A week with the glass kettle",
+              excerpt: "Six minutes, but the lid feels solid.",
+            },
+            created_at: "2026-07-14T09:00:00Z",
+          },
         },
-        right: {
-          contribution_id: "c2",
-          author: "bob",
-          title: "A week with the glass kettle",
-          excerpt: "Six minutes, but the lid feels solid.",
-        },
-        created_at: "2026-07-14T09:00:00Z",
       },
     };
     routes["POST /v1/press/polls/p1/vote"] = {
@@ -342,7 +405,11 @@ describe("PressPanel (inside the News thread)", () => {
     };
     render(<AgentThread agent={POLL} />);
 
-    // Both sides render with their bylines.
+    // "poll" in the conversation deals the pair INTO the bubble.
+    fireEvent.change(screen.getByPlaceholderText("Message Poll…"), {
+      target: { value: "poll" },
+    });
+    fireEvent.click(screen.getByLabelText("Send"));
     expect(await screen.findByText("The steel kettle, tested")).toBeTruthy();
     expect(screen.getByText("A week with the glass kettle")).toBeTruthy();
     expect(await screen.findByText("alice")).toBeTruthy();
@@ -362,37 +429,29 @@ describe("PressPanel (inside the News thread)", () => {
     ).toBeTruthy();
   });
 
-  it("switches the poll stream by genre chip", async () => {
+  it("picks the stream through the genre chips block — the tap speaks", async () => {
     const POLL: RosterAgent = { ...NEWS, agent_id: "poll", name: "Poll" };
-    routes["GET /v1/press/genres"] = GENRES;
-    routes["GET /v1/press/polls/next"] = {
+    routes["POST /v1/chat"] = {
       status: 200,
       body: {
-        pair_id: "p2",
-        genre: "local",
-        left: {
-          contribution_id: "c1",
-          author: "alice",
-          title: "L",
-          excerpt: "l",
-        },
-        right: {
-          contribution_id: "c2",
-          author: "bob",
-          title: "R",
-          excerpt: "r",
-        },
-        created_at: "2026-07-14T09:00:00Z",
+        reply: "Pick a stream.",
+        source: "desk",
+        agent: "poll",
+        block: { kind: "genres", items: GENRES.body.items },
       },
     };
     render(<AgentThread agent={POLL} />);
-    await screen.findByText("L");
-    fireEvent.click(screen.getByRole("button", { name: "Food" }));
-    // The chip IS the stream: the next fetch names the genre.
-    const named = calls.filter(
-      (c) => c.method === "GET" && c.path === "/v1/press/polls/next",
+    fireEvent.change(screen.getByPlaceholderText("Message Poll…"), {
+      target: { value: "genres" },
+    });
+    fireEvent.click(screen.getByLabelText("Send"));
+    fireEvent.click(await screen.findByRole("button", { name: "Food" }));
+    // The tap SPEAKS: the label goes back through the conversation.
+    const spoken = calls.filter(
+      (c) => c.method === "POST" && c.path === "/v1/chat",
     );
-    expect(named.length).toBeGreaterThanOrEqual(2);
+    expect(spoken.length).toBe(2);
+    expect(spoken[1]?.body).toMatchObject({ message: "Food", agent: "poll" });
   });
 
   it("holds the ad slot behind the versioned consent, then labels it", async () => {
@@ -408,7 +467,6 @@ describe("PressPanel (inside the News thread)", () => {
             prose: "Forty stalls returned.",
             genres: ["local"],
             lineage: [{ contribution_id: "c1", author: "alice", weight: 1 }],
-            breakdown: { selection: 0.5 },
             rubric_version: 1,
             source: "desk",
             created_at: "2026-07-15T08:00:00Z",

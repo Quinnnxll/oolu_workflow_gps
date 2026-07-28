@@ -34,7 +34,25 @@ from .editions import (
     edition_message,
     rank_edition,
 )
+from .intake import (
+    DROPPED,
+    GATHER_ASK,
+    GATHER_ASK_WORDS,
+    INTAKE_LICENSE,
+    IntakeDraft,
+    IntakeStore,
+    draft_from_material,
+    fold_answer,
+    looks_like_material,
+    review,
+)
 from .newsroom import LineageShare, Newsroom, Story, StoryStore
+from .personalize import (
+    SEMANTIC_PULL,
+    Taste,
+    semantic_affinity,
+    taste_snippet,
+)
 from .polls import (
     K_FLOOR,
     PairwiseStore,
@@ -44,25 +62,45 @@ from .polls import (
     PollStore,
     comparable,
 )
+from .scientist import (
+    HYPOTHESES,
+    MIN_DECIDED,
+    Finding,
+    FindingStore,
+    judge,
+    strategist,
+)
 from .standards import RUBRIC_VERSION, RubricBreakdown, score, select
 from .taxonomy import GENRES, TAXONOMY_VERSION, Genre, taxonomy_items
 
 __all__ = [
+    "DROPPED",
     "EDITION_LABEL",
     "EDITION_PULSE_GOAL",
     "EDITION_SIZE",
+    "GATHER_ASK",
+    "GATHER_ASK_WORDS",
     "GENRES",
+    "HYPOTHESES",
+    "MIN_DECIDED",
+    "Finding",
+    "FindingStore",
+    "INTAKE_LICENSE",
     "K_FLOOR",
     "LICENSES",
     "MAX_BODY_CHARS",
     "MAX_MEDIA",
     "MAX_TITLE_CHARS",
     "RUBRIC_VERSION",
+    "SEMANTIC_PULL",
     "SIMILARITY_FLAG",
     "TAXONOMY_VERSION",
+    "Taste",
     "ContentContribution",
     "ContributionStore",
     "Genre",
+    "IntakeDraft",
+    "IntakeStore",
     "LineageShare",
     "MediaRef",
     "Newsroom",
@@ -78,10 +116,18 @@ __all__ = [
     "RubricBreakdown",
     "Story",
     "StoryStore",
+    "draft_from_material",
     "edition_message",
+    "fold_answer",
+    "judge",
     "leak_report",
+    "looks_like_material",
+    "strategist",
     "rank_edition",
+    "review",
     "score",
     "select",
+    "semantic_affinity",
+    "taste_snippet",
     "taxonomy_items",
 ]

@@ -4,6 +4,170 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Life books (L1) — one shared function, one private book per member:
+
+- **The architecture** (`src/oolu/lifebooks.py`) — the prebuilt
+  personal nodes (Invoice Scan, Cashflow, Stock, Automation,
+  Reminders, Tasks, Calendar) share ONE central registry owned by the
+  OoLu official account (`oolu-official`): members never own the
+  function, so there is nothing per-member to fork or leak through —
+  while each member's DATA is one private file per book in their own
+  Life/Files drawer, behind the drawer's memories gate. Nobody else
+  reads it: not the node, not an admin, not another member.
+- **The pointer is the command** — `books/<kind>.json` is the one
+  place a book ever lives; OoLu reads and writes through the pointer
+  reliably (typed rows `{at, label, value, note}`, deduplicated, so a
+  re-run never doubles a book).
+- **Everything documented, at one glance** — `GET /v1/life/books`
+  names every book with its pointer and count;
+  `POST /v1/life/books/import` pulls what the nodes already
+  documented (reminders, calendar events, standing automation
+  triggers) into the member's own books, idempotently.
+- **The data visualization conversation block** — "show cashflow" (or
+  chart/graph any book) in OoLu's own conversation answers with a
+  CHART BLOCK drawn in the bubble from the member's own book — clean
+  horizontal bars, pure CSS, deterministic, before any model spend;
+  `GET /v1/life/books/{kind}/chart` serves the same points anywhere.
+
+The explorer desk (A6.1) — closest products, real categories,
+decisions that end:
+
+- **One search for every surface** (`GET /v1/commerce/search`) — a
+  listing's unique id hits exactly; any words find the CLOSEST
+  existing products (the one retrieval scorer over title, category,
+  description), from OoLu, shop, request, and Explorer alike.
+- **Follow what exists** (`GET /v1/explorer/categories`) — the
+  followable categories are the ones real listings and open requests
+  actually carry, presented as a message block in the Explorer
+  thread; a chip's tap speaks "follow …" and lays the standing daily
+  brief.
+- **The lens is read, never a menu** (`explorer/decisions.py`) —
+  value/balanced/proven/measured is inferred: the member's own words
+  weigh first ("cheapest" → value, "lab numbers" → measured), their
+  last decided comparison's mode second, "balanced" third; the
+  compare door accepts ?instruction= and infers when no mode is
+  named.
+- **Comparisons are runtimes with deadlines** — one open comparison
+  per member (a new one supersedes; never a pile), lapsing on its own
+  after 48 hours (clamped to the 1–3 day band): say "decide" when
+  chosen, or let it expire — no decision paralysis, no system
+  overload. Product results arrive as message blocks naming the lens
+  and the deadline.
+
+The social scientist (A3.1) — the poll floor thinks on purpose:
+
+- **Hypotheses, not hunches** (`src/oolu/press/scientist.py`) — the
+  Poll agent holds standing typed conjectures over signals a pair's
+  two sides objectively differ in: evidence (media vs words alone),
+  depth (the fuller telling), freshness (the newer one). Nothing a
+  model invents; everything a member can check.
+- **Pairs are designed, not just dealt** — when the floor mines a new
+  pair, the strategist chooses among honestly comparable candidates
+  the one that DISCRIMINATES on the least-evidenced hypothesis, so
+  every vote is also a measurement; a floor with nothing
+  discriminating still deals — the fun never waits on the science.
+- **Findings worth sharing report themselves** — only decided,
+  k-anonymous comparisons enter the evidence; a clear pattern reads
+  like a news brief, a genuine split is named a debate worth having,
+  and in between the scientist keeps researching in silence. Each
+  verdict is reported ONCE into the Poll thread (the field note),
+  re-spoken only when fresh evidence flips it; "findings" reads the
+  standing notes any time.
+- **The poll and the genre picking are MESSAGE BLOCKS** — "poll"
+  deals a pair INTO the agent's bubble (vote there; the reveal keeps
+  the floor's honesty laws verbatim), "genres" drops the chips whose
+  tap speaks the pick back through the conversation, and naming a
+  genre in words deals from that stream. The static poll panel is
+  gone — the conversation is the floor.
+
+The market desk (M5) — the thread is the surface:
+
+- **Market joins the roster** — a new agent below OoLu (`market.desk`
+  seat), and its thread carries every marketplace function block as a
+  FORM BLOCK in the conversation: Shop, Requests, Approvals, Orders,
+  Sell — the same panes as the full-screen Market, the same one buy
+  path and act door; nothing shortcuts the spine's law.
+- **Multimedia rides the product** (`marketplace/catalog.py`) — a
+  listing carries photos, clips, and sound as drawer refs (the press
+  attachment discipline): the wall holds at the create door, and the
+  listing media door serves true bytes once published — a draft's
+  media is the seller's own only.
+- **The desk is proactive** (`marketplace/briefing.py`) — a
+  deterministic read of standing records names where the member's
+  position meets the market's demand: approvals waiting on them,
+  orders where they act next, open requests matching what they
+  actively sell, quotes ripening on their own requests, supply
+  arriving for theirs. The brief is pushed as the Market agent's OWN
+  thread message on a standing pulse (`market.desk_brief`, the
+  morning-edition shape), heads the thread's panel live, and answers
+  "brief" on demand — an empty brief is silence, never invented
+  urgency.
+- **The list-out** — `GET /v1/commerce/mine`, and "list" in the
+  thread: everything the member created on the platform — listings,
+  requests, orders, recurring obligations, delegations — grouped,
+  counted, and named. What a member made is never invisible.
+
+The conversational newsroom (A2.2) — the thread is the door:
+
+- **Nobody fills a form** (`src/oolu/press/intake.py`) — the "Write a
+  piece" form is gone. A member drops whatever they have into the
+  News thread — article-shaped text, a photo, a clip, a song — and
+  the desk DETECTS it, the way OoLu spots a buildable chore: raw
+  material diverts to the desk's own deterministic hand before the
+  seat's model ever speaks; ordinary conversation (a question is a
+  question) never diverts.
+- **Review is a conversation** — a thin piece earns ONE gathering
+  question (what happened, where, when) and the answer folds in
+  verbatim; text that would leak is refused with each leak named and
+  the draft dropped (fixed words arrive fresh, never folded onto
+  leaky ones); a retelling is offered honestly with the credit named
+  up front. Titles and genres derive from the material's own words.
+- **The offer is the consent surface** — the standing publish offer
+  renders the license terms, and the member's plain "yes" on the very
+  next message publishes through the same gate and audit voice as the
+  manual door (which remains, API-only); a plain "no" drops it;
+  anything else withdraws the offer. One durable draft per member
+  (`press_intake`), spent atomically — the growth-offer discipline.
+- **Worth composing is the rubric's call** — the newsroom runs right
+  after publication and the desk reports which way it went: composed
+  into a story (named), or on the shelf awaiting corroboration.
+- **Attachments ride the message** — 📎 on the News composer uploads
+  from the device (blob door first, inline fallback) and sends drawer
+  refs with the words, validated through the same wall the publish
+  door keeps — another member's file refuses loudly at the door.
+
+The personalized newsroom (A2.1) — the member's own semantics, and
+multimedia on the shelf:
+
+- **Multimedia rides the contribution** (`src/oolu/press/`, the News
+  surface) — photos, clips, and sound upload straight from the device
+  in the compose form: the blob door keeps the true bytes, a host
+  without a blob store takes what fits inline, and the media-type
+  table now names webp/webm/quicktime/m4a/ogg/wav. A story carries
+  its lineage's attachments by reference — the press media door
+  serves true bytes (an inline data-URL row decoded, never
+  base64-as-image), and a contribution the author unpublished
+  honestly drops out of the strip.
+- **The scoring is the house's own** — the rubric's factor breakdown
+  stays recorded (durable, versioned, on the audit trail) but no
+  longer rides the member-facing wire, and the "why this story"
+  panel is gone: the order speaks for itself.
+- **The member's own words bend the order**
+  (`src/oolu/press/personalize.py`) — under the one consent switch,
+  the edition is bent by semantic taste: what the member said in
+  their OoLu and News threads (their OWN turns only, attraction
+  only) and the words of what they tapped. Similarity is the one
+  retrieval scorer — deterministic, model-free — the bend is bounded
+  and composes with the genre pull in the open, and the serendipity
+  slice still holds the last slot.
+- **A tap adjusts the taste immediately** — the feedback buttons
+  speak emoji (👍 / ⏭, the words kept for the screen reader) and a
+  tap stores the story's own words next to the signal: liked texts
+  attract likes-alike, skipped texts repel, a verbatim tap speaks
+  decisively, and erasure empties the taste with the rest of the
+  member's signals. Old preference tables gain the snippet column by
+  migration; old rows stand as genre history.
+
 The science stack (R5) — the loop closes, and nothing crowns itself:
 
 - **State changes are earned, not claimed** (`src/oolu/science/`) — a

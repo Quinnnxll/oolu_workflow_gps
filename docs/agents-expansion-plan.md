@@ -449,6 +449,50 @@ provenance law, model contract + fallback, two-members-two-orderings,
 the serendipity property, the pulse fire end-to-end) and the story
 cases in `Agents.test.tsx`.
 
+**Amended (A2.1)** — three decisions revise the landed surface without
+touching the rubric or the lineage law. (1) *The scoring is the house's
+own*: the factor breakdown stays recorded and versioned but no longer
+rides the member-facing wire — the "reasons on demand" panel is gone;
+the order speaks for itself. (2) *Semantic taste joins genre affinity*
+(`press/personalize.py`): under the same one consent switch, the
+edition is additionally bent by the member's own semantics — the words
+of stories they tapped (👍 attracts likes-alike and stores the story's
+words next to the signal; ⏭ repels) and the member's OWN turns in
+their OoLu and News threads (attraction only — talking about a subject
+is interest, never a skip). Similarity is the one `retrieval.py`
+scorer; the bend is bounded (`SEMANTIC_PULL`), composes with the genre
+pull in the open, and the serendipity slice still holds the last slot.
+Taste rows ride the same erasure as every preference signal. (3)
+*Multimedia rides the contribution into the story*: upload straight
+from the device (blob door first, inline fallback), the media-type
+table grown (webp/webm/quicktime/m4a/ogg/wav), and a story's payload
+names its lineage's attachments by reference — served through the
+press media door with true bytes (inline data-URL rows decoded),
+honestly absent once the author unpublishes.
+
+**Amended (A2.2)** — the contribute form is gone: the conversation IS
+the door (`press/intake.py`). A member drops whatever they have into
+the News thread — article-shaped text, a photo, a clip, a song (📎 on
+the composer; attachments ride the chat message as drawer refs through
+the same wall the publish door keeps) — and the DESK detects it, the
+way OoLu spots a buildable chore (the n8n growth-trigger law applied
+to publishing). The desk reviews in conversation: one gathering
+question when the piece is thin (what happened, where, when), a loud
+named refusal when the text would leak (dropped — fixed words arrive
+fresh, never folded onto leaky ones), the retelling credit named up
+front — then a standing publish offer that RENDERS the license terms.
+The member's plain "yes" on the very next message publishes through
+the same `PressDesk.publish` gate and the same audit voice as the
+manual door (which remains, API-only); a plain "no" drops it; anything
+else withdraws the offer — consent detached from the question it
+answered is not consent. Whether the piece is worth composing stays
+the RUBRIC's decision: the newsroom runs after publication and the
+desk reports honestly which way it went. Detection, titles, genres,
+and every desk sentence are deterministic functions of the material;
+the seat's model keeps the ordinary News conversation. One standing
+draft per member, durable (`press_intake`), spent atomically. Pinned
+by `tests/test_press_intake.py` end to end.
+
 Goal: News selects and composes stories from contributions only, to a
 typed editorial rubric, and delivers each member a personal edition.
 
@@ -486,6 +530,20 @@ Goal Adherence:
       window catches up once and names the skipped count (pulse discipline).
 - [ ] The serendipity slice is present in every edition (property test).
 - [ ] Import scan holds.
+
+**Amended (A3.1) — the social scientist.** The Poll agent thinks and
+finds social patterns on purpose (`press/scientist.py`): standing typed
+hypotheses over signals a pair's sides objectively differ in (evidence,
+depth, freshness); the strategic deal serves the comparable pair that
+measures the least-evidenced hypothesis (`PollDesk(strategist=…)`);
+only decided, k-anonymous comparisons enter the evidence; a clear
+pattern or a genuine debate is reported ONCE per verdict into the Poll
+thread as a field note ("findings" reads them on demand), and anything
+in between keeps researching in silence. The poll and the genre picking
+now arrive as MESSAGE BLOCKS in the conversation (the roster turn's
+``block`` field): a pair to vote on in the bubble, genre chips whose
+tap speaks back — the static panel is gone. Pinned by
+`tests/test_poll_science.py`.
 
 ### A3 — the poll floor (fun on the surface, instruments underneath)
 

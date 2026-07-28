@@ -60,6 +60,37 @@ class PlanningOnlyOptimizer:
         )
 
 
+def _press_desk(conn):
+    """The one press wiring: shared stores, and the poll floor dealt by
+    the social scientist (the strategist reads the decided-evidence
+    book and serves the pair that measures the most)."""
+    from .press import (
+        ContributionStore,
+        IntakeStore,
+        PairwiseStore,
+        PollDesk,
+        PollStore,
+        PreferenceStore,
+        PressDesk,
+        StoryStore,
+        strategist,
+    )
+
+    contributions = ContributionStore(conn)
+    polls = PollStore(conn)
+    return PressDesk(
+        contributions,
+        stories=StoryStore(conn),
+        preferences=PreferenceStore(conn),
+        polls=PollDesk(
+            polls,
+            PairwiseStore(conn),
+            strategist=strategist(polls, contributions),
+        ),
+        intake=IntakeStore(conn),
+    )
+
+
 def build_cli_executor(
     *,
     workspace: str | Path,
@@ -745,15 +776,6 @@ def build_host_runtime(
         RegistryStore,
         WorkDesk,
     )
-    from .press import (
-        ContributionStore,
-        PairwiseStore,
-        PollDesk,
-        PollStore,
-        PreferenceStore,
-        PressDesk,
-        StoryStore,
-    )
     from .providers.keyring import ModelKeyring
     from .reminders import ReminderStore
     from .representative import (
@@ -1290,12 +1312,7 @@ def build_host_runtime(
         profile_photos=ProfilePhotoStore(conn),
         # The press: member contributions, the newsroom's stories, each
         # member's own (consented) ranking signals, and the poll floor.
-        press=PressDesk(
-            ContributionStore(conn),
-            stories=StoryStore(conn),
-            preferences=PreferenceStore(conn),
-            polls=PollDesk(PollStore(conn), PairwiseStore(conn)),
-        ),
+        press=_press_desk(conn),
         # Reminders: rows with a clock — the deterministic route for
         # "remind me", surfaced by the client's poll.
         reminders=ReminderStore(conn),

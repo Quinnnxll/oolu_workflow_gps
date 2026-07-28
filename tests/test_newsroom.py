@@ -1,14 +1,19 @@
 """The newsroom (A2): stories to magazine standard, pushed by preference.
 
-Exit gate (agents-expansion plan, phase A2): a story with no resolvable
-contribution lineage cannot publish; every published story records why
-it was selected (factor breakdown + rubric version) and the reasons
-render on demand; two members with different consented preferences get
-different edition orderings while a learning-off member gets the neutral
-edition; editions arrive on schedule as News's own thread messages with
-a missed window caught up once and the skipped count named; the
-serendipity slice is present under personalization (property test); and
-the import scan still holds over the grown press package.
+Exit gate (agents-expansion plan, phase A2, amended): a story with no
+resolvable contribution lineage cannot publish; every published story
+records why it was selected (factor breakdown + rubric version) but the
+scoring stays the house's own — it never rides the member-facing wire;
+the ranking is bent instead by the member's consented SEMANTICS: their
+taps (a 👍 stores the story's words and attracts likes-alike, a ⏭
+repels) and their own words in the OoLu and News threads; two members
+with different consented preferences get different edition orderings
+while a learning-off member gets the neutral edition; a story carries
+its lineage's attached media by reference; editions arrive on schedule
+as News's own thread messages with a missed window caught up once and
+the skipped count named; the serendipity slice is present under
+personalization (property test); and the import scan still holds over
+the grown press package.
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ from test_http_gateway import NOW as GATEWAY_NOW
 from test_http_gateway import _app, _req
 
 from oolu.durable.connection import DurableConnection
+from oolu.durable.files import UserFileStore
 from oolu.gateway import GatewayApp
 from oolu.identity import LocalAccountService, LocalUserStore
 from oolu.press import (
@@ -33,10 +39,12 @@ from oolu.press import (
     PressError,
     Story,
     StoryStore,
+    Taste,
     edition_message,
     rank_edition,
     score,
     select,
+    semantic_affinity,
 )
 from oolu.settings_node import SettingsNode, SettingsStore
 from oolu.social import AssistantHistoryStore
@@ -81,6 +89,12 @@ HARBOR_AGREE = (
 VALLEY = (
     "Three months dry, and this morning the terraces flooded with runoff "
     "after the storm finally reached the valley."
+)
+# Agrees with VALLEY inside the corroboration band, below the
+# near-duplicate flag — an independent voice, not a retelling.
+VALLEY_AGREE = (
+    "The storm reached the valley at last and the flooded terraces ran "
+    "with water after the long dry months."
 )
 
 
@@ -213,12 +227,12 @@ def test_a_contract_breaking_model_falls_back_to_the_desk(tmp_path):
 # --------------------------------------------------------------------------- #
 # Editions: consent bends, serendipity holds.                                  #
 # --------------------------------------------------------------------------- #
-def _story(story_id, genres, selection, at):
+def _story(story_id, genres, selection, at, prose="…"):
     return Story(
         story_id=story_id,
         tenant_id="t1",
         headline=story_id,
-        prose="…",
+        prose=prose,
         genres=tuple(genres),
         lineage=(
             LineageShare(contribution_id=f"c-{story_id}", author="a", weight=1.0),
@@ -252,6 +266,40 @@ def test_the_serendipity_slice_survives_a_strong_leaning():
     assert any(s.story_id == "s-out" for s in edition)
 
 
+def test_semantic_affinity_is_bounded_and_empty_taste_is_neutral():
+    text = "The pier reopened with forty stalls at dawn."
+    assert semantic_affinity(text, None) == 0.0
+    assert semantic_affinity(text, Taste()) == 0.0
+    # A verbatim like is full attraction; a verbatim skip full repulsion.
+    assert semantic_affinity(text, Taste(liked=(text,))) == 1.0
+    assert semantic_affinity(text, Taste(skipped=(text,))) == -1.0
+    # Spoken words attract, never repel — talking about a subject is
+    # interest.
+    spoken = Taste(spoken=("any news from the stalls on the pier?",))
+    assert 0.0 < semantic_affinity(text, spoken) <= 1.0
+
+
+def test_taste_bends_by_meaning_and_a_skip_repels():
+    kettle_prose = "A bench test of three kettles and the quiet one that won."
+    pier_prose = "The pier reopened with forty stalls and a queue at dawn."
+    stories = [
+        _story("s-pier", ("local",), 0.55, NOW, prose=pier_prose),
+        _story("s-kettle", ("local",), 0.5, NOW, prose=kettle_prose),
+    ]
+    # Same genre both — genre affinity has nothing to say. The liked
+    # story's WORDS pull its like-alike over the pier's higher rubric
+    # standing: meaning did the work.
+    liked = Taste(liked=(f"s-kettle\n{kettle_prose}",))
+    assert [
+        s.story_id for s in rank_edition(stories, taste=liked)
+    ][0] == "s-kettle"
+    # And a skipped story falls behind what it outscored.
+    skipped = Taste(skipped=(f"s-pier\n{pier_prose}",))
+    assert [
+        s.story_id for s in rank_edition(stories, taste=skipped)
+    ][-1] == "s-pier"
+
+
 def test_the_edition_message_names_the_skipped_count():
     story = _story("s1", ("local",), 0.5, NOW)
     message = edition_message([story], skipped=2)
@@ -267,13 +315,21 @@ def test_preferences_are_recorded_bounded_and_erasable(tmp_path):
         prefs.record(
             tenant="t1", principal="alice", signal="like",
             subject="story:s1", genres=("food",),
+            snippet="Kettles\nA bench test of three kettles.",
         )
     prefs.record(
         tenant="t1", principal="alice", signal="skip",
         subject="story:s2", genres=("sport",),
+        snippet="Derby\nThe derby ended level.",
     )
     affinity = prefs.genre_affinity(tenant="t1", principal="alice")
     assert affinity["food"] == 1.0 and affinity["sport"] == -1.0
+    # The taps' words read back as taste — and the caller's spoken words
+    # ride along untouched.
+    taste = prefs.taste(tenant="t1", principal="alice", spoken=("hi",))
+    assert taste.liked == ("Kettles\nA bench test of three kettles.",) * 3
+    assert taste.skipped == ("Derby\nThe derby ended level.",)
+    assert taste.spoken == ("hi",)
     with pytest.raises(ValueError, match="unknown signal"):
         prefs.record(
             tenant="t1", principal="alice", signal="love",
@@ -281,6 +337,39 @@ def test_preferences_are_recorded_bounded_and_erasable(tmp_path):
         )
     assert prefs.erase(tenant="t1", principal="alice") == 4
     assert prefs.genre_affinity(tenant="t1", principal="alice") == {}
+    # Erasure empties the taste too — nothing left to lean on.
+    assert not prefs.taste(tenant="t1", principal="alice")
+    conn.close()
+
+
+def test_a_prefs_table_from_before_taste_gains_the_snippet_column(tmp_path):
+    conn = DurableConnection(tmp_path / "old.db")
+    with conn.transaction() as db:
+        db.execute(
+            """CREATE TABLE press_preferences (
+                tenant_id TEXT NOT NULL,
+                principal TEXT NOT NULL,
+                signal TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                genres TEXT NOT NULL,
+                at TEXT NOT NULL
+            )"""
+        )
+        db.execute(
+            """INSERT INTO press_preferences VALUES
+               ('t1', 'a', 'like', 'story:s1', '["food"]',
+                '2026-01-01T00:00:00+00:00')"""
+        )
+    prefs = PreferenceStore(conn)
+    # The old row stands as genre history — with no words to lean on.
+    assert prefs.genre_affinity(tenant="t1", principal="a")["food"] == 1.0
+    assert prefs.taste(tenant="t1", principal="a").liked == ()
+    # New taps carry their words from here forward.
+    prefs.record(
+        tenant="t1", principal="a", signal="like",
+        subject="story:s2", snippet="words now",
+    )
+    assert prefs.taste(tenant="t1", principal="a").liked == ("words now",)
     conn.close()
 
 
@@ -291,7 +380,7 @@ def _host(tmp_path):
     app, conn, ident = _app(tmp_path)
     users = LocalUserStore(":memory:")
     accounts = LocalAccountService(users, ident.store, ident._signer)
-    for name in ("alice", "bob"):
+    for name in ("alice", "bob", "carol"):
         accounts.create_user(name, f"{name}-password-1", tenant="t1")
     press = PressDesk(
         ContributionStore(conn),
@@ -307,6 +396,7 @@ def _host(tmp_path):
         settings_node=SettingsNode(SettingsStore(conn)),
         assistant_history=AssistantHistoryStore(conn),
         press=press,
+        files=UserFileStore(conn),
     )
     return gateway, conn, ident
 
@@ -342,19 +432,22 @@ def _seed_and_compose(gateway, ident):
     return alice, bob
 
 
-def test_stories_consent_and_reasons_end_to_end(tmp_path):
+def test_stories_consent_and_hidden_scoring_end_to_end(tmp_path):
     gateway, conn, ident = _host(tmp_path)
     alice, bob = _seed_and_compose(gateway, ident)
 
-    # The neutral edition, and the reasons on demand.
+    # The neutral edition — and the scoring stays the house's own: the
+    # breakdown is recorded durably but never rides the member's wire.
     edition = gateway.handle(_req("GET", "/v1/press/stories", token=bob))
     assert edition.status == 200 and edition.body["personalized"] is False
     items = edition.body["items"]
     assert len(items) >= 2
+    assert all("breakdown" not in item for item in items)
     detail = gateway.handle(
         _req("GET", f"/v1/press/stories/{items[0]['story_id']}", token=bob)
     )
-    assert detail.body["breakdown"]["rubric_version"] == 1
+    assert "breakdown" not in detail.body
+    assert detail.body["rubric_version"] == 1
     assert detail.body["lineage"] and detail.body["lineage"][0]["weight"] > 0
 
     # Learning off: the tap is honestly NOT recorded.
@@ -404,6 +497,155 @@ def test_stories_consent_and_reasons_end_to_end(tmp_path):
     assert [i["story_id"] for i in neutral.body["items"]] != [
         i["story_id"] for i in bent.body["items"]
     ]
+    conn.close()
+
+
+def test_the_members_own_chat_words_bend_their_edition(tmp_path):
+    """No taps at all: what the member says to the News agent IS the
+    preference — their own turns attract; the assistant's never count."""
+    gateway, conn, ident = _host(tmp_path)
+    alice, bob, carol = (ident.token(n) for n in ("alice", "bob", "carol"))
+    for token, title, body, genres in (
+        (alice, "Harbor market reopened", HARBOR, ["local"]),
+        (bob, "Market back at the harbor", HARBOR_AGREE, ["local"]),
+        (alice, "Rain reached the valley", VALLEY, ["science"]),
+        (carol, "The valley storm arrived", VALLEY_AGREE, ["science"]),
+    ):
+        assert (
+            gateway.handle(
+                _req(
+                    "POST",
+                    "/v1/press/contributions",
+                    token=token,
+                    body={
+                        "title": title,
+                        "body": body,
+                        "genres": genres,
+                        "license": LICENSE,
+                        "consent": True,
+                    },
+                )
+            ).status
+            == 201
+        )
+    assert (
+        gateway.handle(
+            _req("POST", "/v1/press/newsroom/run", token=alice)
+        ).status
+        == 200
+    )
+
+    # Neutral first: both stories corroborated, the harbor leads.
+    neutral = gateway.handle(_req("GET", "/v1/press/stories", token=bob))
+    assert neutral.body["personalized"] is False
+    assert "Harbor" in neutral.body["items"][0]["headline"]
+
+    # Bob consents and keeps telling the News agent about the valley.
+    assert (
+        gateway.handle(
+            _req(
+                "PUT",
+                "/v1/settings",
+                token=bob,
+                body={"changes": {"press.personalize": True}},
+            )
+        ).status
+        == 200
+    )
+    history = AssistantHistoryStore(conn)
+    history.append(
+        tenant="t1",
+        principal="bob",
+        kind="user",
+        body=(
+            "Any more on the storm? I keep thinking about the flooded "
+            "terraces and the runoff reaching the valley after three "
+            "months dry."
+        ),
+        agent="news",
+    )
+    # The assistant's own words never count as the member's preference —
+    # were they gathered, this harbor retelling would out-pull the chat.
+    history.append(
+        tenant="t1", principal="bob", kind="assistant", body=HARBOR,
+        agent="news",
+    )
+
+    bent = gateway.handle(_req("GET", "/v1/press/stories", token=bob))
+    assert bent.body["personalized"] is True
+    assert "valley" in bent.body["items"][0]["headline"].lower()
+    # Alice never consented: her edition stands neutral.
+    still = gateway.handle(_req("GET", "/v1/press/stories", token=alice))
+    assert still.body["personalized"] is False
+    assert "Harbor" in still.body["items"][0]["headline"]
+    conn.close()
+
+
+def test_a_story_carries_its_lineage_media_by_reference(tmp_path):
+    """Multimedia rides the contribution into the story: the payload
+    names each attachment; the press media door serves its true bytes —
+    an inline data-URL row decoded, never base64-as-image."""
+    from base64 import b64encode
+
+    gateway, conn, ident = _host(tmp_path)
+    alice = ident.token("alice")
+    photo = b64encode(b"jpeg-bytes-here").decode()
+    created = gateway.handle(
+        _req(
+            "POST",
+            "/v1/files",
+            token=alice,
+            body={
+                "name": "pier.jpg",
+                "content": f"data:image/jpeg;base64,{photo}",
+                "media_type": "image/jpeg",
+            },
+        )
+    )
+    assert created.status == 201
+    file_id = created.body["file_id"]
+    published = gateway.handle(
+        _req(
+            "POST",
+            "/v1/press/contributions",
+            token=alice,
+            body={
+                "title": "Harbor market reopened",
+                "body": HARBOR,
+                "genres": ["local"],
+                "license": LICENSE,
+                "consent": True,
+                "file_ids": [file_id],
+            },
+        )
+    )
+    assert published.status == 201
+    assert (
+        gateway.handle(
+            _req("POST", "/v1/press/newsroom/run", token=alice)
+        ).status
+        == 200
+    )
+    edition = gateway.handle(_req("GET", "/v1/press/stories", token=alice))
+    [story] = edition.body["items"]
+    assert story["media"] == [
+        {
+            "contribution_id": published.body["contribution_id"],
+            "index": 0,
+            "media_type": "image/jpeg",
+            "name": "pier.jpg",
+        }
+    ]
+    served = gateway.handle(
+        _req(
+            "GET",
+            f"/v1/press/contributions/{published.body['contribution_id']}"
+            "/media/0",
+            token=alice,
+        )
+    )
+    assert served.status == 200
+    assert served.body == b"jpeg-bytes-here"
     conn.close()
 
 

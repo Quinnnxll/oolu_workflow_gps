@@ -163,9 +163,12 @@ SETTINGS_CATALOG: tuple[SettingField, ...] = (
         label="News personalization",
         kind=SettingKind.BOOL,
         default=False,  # learning is opt-in, off by default — the standing law
-        description="Rank your News editions by what you read and like. "
-        "While this is off you get the neutral edition and your taps are "
-        "not recorded; turning it off again stops future use immediately.",
+        description="Rank your News editions by what you read, like, and "
+        "say. With this on, your 👍/⏭ taps and your own messages in the "
+        "OoLu and News threads shape the order — read only to rank your "
+        "edition, never shared. While this is off you get the neutral "
+        "edition and nothing is gathered; turning it off again stops "
+        "future use immediately.",
     ),
     # --- account ---------------------------------------------------------
     SettingField(

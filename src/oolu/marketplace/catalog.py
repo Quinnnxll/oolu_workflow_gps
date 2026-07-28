@@ -33,6 +33,20 @@ _SCHEMA = """CREATE TABLE IF NOT EXISTS market_listings (
 )"""
 
 
+class ListingMedia(BaseModel):
+    """A product's attached media, by drawer reference — never a copy
+    (the press MediaRef discipline): photos, clips, or sound showing
+    the real thing. ``blob_ref`` is the content address when the file
+    is blob-backed, so the reference is self-verifying."""
+
+    model_config = ConfigDict(frozen=True)
+
+    file_id: str
+    blob_ref: str = ""
+    media_type: str = ""
+    name: str = ""
+
+
 class Listing(BaseModel):
     """One seller's standing fixed-price terms, versioned."""
 
@@ -57,6 +71,7 @@ class Listing(BaseModel):
     refund_terms: str = "30-day returns"
     fulfillment_terms: str = "standard shipping"
     refundable: bool = True
+    media: tuple[ListingMedia, ...] = ()
     status: str = "draft"  # draft | active | suspended
     version: int = Field(default=1, ge=1)
     created_at: datetime
@@ -157,6 +172,7 @@ class CatalogService:
         fulfillment_terms: str = "standard shipping",
         refundable: bool = True,
         list_price_micros: int | None = None,
+        media: tuple[ListingMedia, ...] | list[ListingMedia] = (),
     ) -> Listing:
         listing = Listing(
             listing_id=uuid4().hex,
@@ -173,6 +189,7 @@ class CatalogService:
             refund_terms=refund_terms,
             fulfillment_terms=fulfillment_terms,
             refundable=refundable,
+            media=tuple(media),
             created_at=now,
             updated_at=now,
         )
@@ -262,6 +279,7 @@ class CatalogService:
             "refund_terms",
             "fulfillment_terms",
             "refundable",
+            "media",
         }
         unknown = set(changes) - allowed
         if unknown:

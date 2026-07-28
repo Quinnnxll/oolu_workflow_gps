@@ -610,6 +610,33 @@ protocols integrate **behind the same policy engine and ledger**; a
 cross-market purchase is still a typed intent with a digest, and the
 platform's share is still a posting.
 
+### M5 — the market desk (the thread is the surface)
+
+**Status: LANDED** — the marketplace joins the roster below OoLu as the
+**Market agent** (`market.desk` seat), and its thread carries every
+function block as a FORM BLOCK in the conversation — Shop, Requests,
+Approvals, Orders, Sell (`MarketPanel`, sharing the full-screen
+Market's one buy path and one act door; nothing shortcuts the spine's
+law). **Multimedia rides the product**: a listing carries photos,
+clips, and sound as drawer refs (`catalog.ListingMedia`, the press
+attachment discipline — the wall held at the create door, true bytes
+served through `GET /v1/commerce/listings/{id}/media/{index}` once
+published; a draft's media is the seller's own only). **The desk is
+proactive** (`marketplace/briefing.py`): a deterministic read of
+standing records names where the member's position meets the market's
+demand — approvals waiting on them, orders where they act next (seller
+ships confirmed, buyer accepts delivered), open requests matching what
+they actively sell, quotes ripening on their own requests, supply
+arriving for their requests — pushed as the Market agent's OWN thread
+message on a standing pulse (`market.desk_brief`, the morning-edition
+shape; an empty brief is silence, never invented urgency), shown live
+at the thread's head, and answered on demand ("brief"). **The
+list-out** (`GET /v1/commerce/mine`, and "list" in the thread): every
+thing the member created on the platform — listings (media counts
+named), requests, orders, recurring obligations, delegations —
+grouped, counted, and named; what a member made is never invisible.
+Pinned by `tests/test_market_desk.py`.
+
 ---
 
 ## 6. Contract test suites (the gates, as code)

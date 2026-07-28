@@ -159,6 +159,22 @@ class RfqService:
             raise MarketNotFound("no such request for quotes")
         return RequestForQuote.model_validate_json(row["payload_json"])
 
+    def mine(self, *, tenant: str, buyer: str) -> list[RequestForQuote]:
+        """Everything THIS buyer opened, whatever state it reached — the
+        list-out's read, so what a member created is never invisible."""
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                "SELECT payload_json FROM market_rfqs"
+                " WHERE tenant = ? AND buyer = ?",
+                (tenant, buyer),
+            ).fetchall()
+        requests = [
+            RequestForQuote.model_validate_json(row["payload_json"])
+            for row in rows
+        ]
+        requests.sort(key=lambda r: (r.created_at.isoformat(), r.rfq_id))
+        return requests
+
     def open_requests(self, *, tenant: str, now: datetime) -> list[RequestForQuote]:
         """What sellers browse: every live request in the tenant."""
         with self._conn.lock:

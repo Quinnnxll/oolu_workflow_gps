@@ -6,7 +6,7 @@ Two laws govern this module:
    ``press.personalize`` off gets the NEUTRAL edition (pure rubric
    order) and their taps are never recorded — off by default, the
    ADR-0005 discipline. The consent check itself lives at the doors;
-   this module takes the affinity it is given, or None.
+   this module takes the affinity and taste it is given, or None.
 2. **The serendipity slice.** A personalized edition always reserves its
    last slot for the best story OUTSIDE the member's leaning — the
    bandit-exploration house pattern as an editorial rule, so preference
@@ -14,7 +14,9 @@ Two laws govern this module:
 
 The preference store is the generic signal table the plan promises A3
 will formalize into pairwise instruments; A2 writes the unary signals
-(like / read / skip) the feedback doors deliver.
+(like / read / skip) the feedback doors deliver. Each signal now also
+keeps the story's own words (``snippet``), so a tap adjusts the member's
+SEMANTIC taste (``personalize.py``), not just their genre leaning.
 """
 
 from __future__ import annotations
@@ -23,6 +25,14 @@ from datetime import UTC, datetime
 from typing import Callable
 
 from .newsroom import Story
+from .personalize import (
+    SEMANTIC_PULL,
+    SPOKEN_TEXTS,
+    TASTE_SNIPPET_CHARS,
+    TASTE_TEXTS,
+    Taste,
+    semantic_affinity,
+)
 
 # The pulse sentinel: a schedule with this goal fires the member's
 # edition instead of a workflow run (the MORNING_PULSE_GOAL pattern).
@@ -45,6 +55,7 @@ _PREFS_SCHEMA = """CREATE TABLE IF NOT EXISTS press_preferences (
     signal TEXT NOT NULL,
     subject TEXT NOT NULL,
     genres TEXT NOT NULL,
+    snippet TEXT NOT NULL DEFAULT '',
     at TEXT NOT NULL
 )"""
 
@@ -60,6 +71,23 @@ class PreferenceStore:
         self._clock = clock or (lambda: datetime.now(UTC))
         with self._conn.transaction() as db:
             db.execute(_PREFS_SCHEMA)
+        self._migrate_snippet_column()
+
+    def _migrate_snippet_column(self) -> None:
+        # Tables born before semantic taste lack the snippet column. The
+        # probe runs in its own transaction so a failed SELECT cannot
+        # poison the ALTER's; old rows keep '' — genre-only history.
+        try:
+            with self._conn.transaction() as db:
+                db.execute("SELECT snippet FROM press_preferences LIMIT 1")
+            return
+        except Exception:
+            pass
+        with self._conn.transaction() as db:
+            db.execute(
+                "ALTER TABLE press_preferences"
+                " ADD COLUMN snippet TEXT NOT NULL DEFAULT ''"
+            )
 
     def record(
         self,
@@ -69,6 +97,7 @@ class PreferenceStore:
         signal: str,
         subject: str,
         genres: tuple[str, ...] | list[str] = (),
+        snippet: str = "",
     ) -> None:
         if signal not in _SIGNAL_WEIGHT:
             known = ", ".join(sorted(_SIGNAL_WEIGHT))
@@ -78,14 +107,16 @@ class PreferenceStore:
         with self._conn.transaction() as db:
             db.execute(
                 """INSERT INTO press_preferences
-                     (tenant_id, principal, signal, subject, genres, at)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                     (tenant_id, principal, signal, subject, genres,
+                      snippet, at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (
                     tenant,
                     principal,
                     signal,
                     str(subject),
                     json.dumps(list(genres)),
+                    str(snippet or "")[:TASTE_SNIPPET_CHARS],
                     self._clock().isoformat(),
                 ),
             )
@@ -123,6 +154,31 @@ class PreferenceStore:
             for genre in totals
         }
 
+    def taste(
+        self,
+        *,
+        tenant: str,
+        principal: str,
+        spoken: tuple[str, ...] | list[str] = (),
+    ) -> Taste:
+        """The member's semantic taste: the words of what they liked and
+        skipped (their taps), plus what they said (``spoken`` — gathered
+        at the doors from their own chat turns, never here)."""
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                """SELECT signal, snippet FROM press_preferences
+                   WHERE tenant_id = ? AND principal = ? AND snippet != ''
+                   ORDER BY at DESC LIMIT ?""",
+                (tenant, principal, _AFFINITY_SCAN),
+            ).fetchall()
+        liked = [r["snippet"] for r in rows if r["signal"] == "like"]
+        skipped = [r["snippet"] for r in rows if r["signal"] == "skip"]
+        return Taste(
+            liked=tuple(liked[:TASTE_TEXTS]),
+            skipped=tuple(skipped[:TASTE_TEXTS]),
+            spoken=tuple(str(s) for s in spoken if str(s))[:SPOKEN_TEXTS],
+        )
+
 
 # --------------------------------------------------------------------------- #
 # Ranking.                                                                     #
@@ -139,36 +195,59 @@ def _affinity_of(story: Story, affinity: dict[str, float]) -> float:
     return sum(scores) / len(scores) if scores else 0.0
 
 
+def _story_text(story: Story) -> str:
+    return f"{story.headline}\n{story.prose}"
+
+
 def rank_edition(
     stories: list[Story],
     *,
     affinity: dict[str, float] | None = None,
+    taste: Taste | None = None,
     size: int = EDITION_SIZE,
 ) -> list[Story]:
     """The edition: neutral rubric order, bent (bounded) by consented
-    affinity — with the serendipity slice holding the last slot."""
+    genre affinity AND semantic taste — with the serendipity slice
+    holding the last slot. The bends compose in the open: each is its
+    own bounded term, neither can bury the rubric."""
     neutral = sorted(stories, key=_neutral_key, reverse=True)
-    if not affinity:
+    if not affinity and not taste:
         return neutral[: int(size)]
+
+    def _bend(story: Story) -> float:
+        bend = 1.0
+        if affinity:
+            bend += AFFINITY_PULL * _affinity_of(story, affinity)
+        if taste:
+            bend += SEMANTIC_PULL * semantic_affinity(
+                _story_text(story), taste
+            )
+        return bend
+
     ranked = sorted(
         stories,
         key=lambda s: (
-            float(s.breakdown.get("selection", 0.0))
-            * (1.0 + AFFINITY_PULL * _affinity_of(s, affinity)),
+            float(s.breakdown.get("selection", 0.0)) * _bend(s),
             s.created_at.isoformat(),
         ),
         reverse=True,
     )
     edition = ranked[: int(size)]
-    # The slice: the member's leaning (their positive genres) must not
-    # be the whole edition. If every chosen story leans in, the best
-    # story OUTSIDE the leaning takes the last slot.
-    leaning = {g for g, v in affinity.items() if v > 0}
-    if leaning and edition:
-        outside = [
-            s for s in neutral if not (set(s.genres) & leaning)
-        ]
-        if outside and all(set(s.genres) & leaning for s in edition):
+
+    # The slice: the member's leaning must not be the whole edition. A
+    # story leans in when it wears a positively-weighted genre or the
+    # member's taste is drawn to its words. If every chosen story leans
+    # in, the best story OUTSIDE the leaning takes the last slot.
+    leaning_genres = {g for g, v in (affinity or {}).items() if v > 0}
+
+    def _leans_in(story: Story) -> bool:
+        if leaning_genres and set(story.genres) & leaning_genres:
+            return True
+        return bool(taste) and semantic_affinity(_story_text(story), taste) > 0
+
+    if edition:
+        outside = [s for s in neutral if not _leans_in(s)]
+        if outside and all(_leans_in(s) for s in edition):
             edition = [*edition[:-1], outside[0]]
     return edition
 

@@ -546,8 +546,14 @@ _MEDIA_TYPES: dict[str, str] = {
     ".jpeg": "image/jpeg",
     ".png": "image/png",
     ".gif": "image/gif",
+    ".webp": "image/webp",
     ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".mov": "video/quicktime",
     ".mp3": "audio/mpeg",
+    ".m4a": "audio/mp4",
+    ".ogg": "audio/ogg",
+    ".wav": "audio/wav",
 }
 
 
@@ -922,6 +928,9 @@ class GatewayApp:
         self._assistant_history = assistant_history
         self._profile_photos = profile_photos
         self._press = press
+        # The poll floor's social scientist: reported findings, so a
+        # verdict speaks once (lazy — built on the first decided vote).
+        self._poll_findings = None
         self._ad_dividend = ad_dividend
         self._representative = representative
         self._reminders = reminders
@@ -1281,6 +1290,21 @@ class GatewayApp:
         r.add("GET", "/v1/commerce/catalog", self._commerce_catalog_browse)
         r.add("GET", "/v1/commerce/listings", self._commerce_listings_list)
         r.add("POST", "/v1/commerce/listings", self._commerce_listing_create)
+        # A published product's media, by reference — publication is the
+        # consent that crosses the drawer wall (the press media law).
+        r.add(
+            "GET",
+            "/v1/commerce/listings/{listing_id}/media/{index}",
+            self._commerce_listing_media,
+        )
+        # The desk: where the member's position meets the market's
+        # demand (the briefing), the standing brief schedule, and the
+        # list-out of everything they created on the platform.
+        r.add("GET", "/v1/commerce/desk", self._commerce_desk)
+        r.add(
+            "POST", "/v1/commerce/desk/schedule", self._commerce_desk_schedule
+        )
+        r.add("GET", "/v1/commerce/mine", self._commerce_mine)
         r.add(
             "POST",
             "/v1/commerce/listings/{listing_id}/publish",
@@ -1545,6 +1569,20 @@ class GatewayApp:
         r.add("POST", "/v1/adhouse/settle", self._adhouse_settle)
         # The explorer desk (A6): verified evidence, one comparison
         # matrix, deterministic best-buy briefs, followed interests.
+        # One search for every surface: OoLu, shop, request, Explorer —
+        # a unique listing id hits exactly; anything else finds the
+        # CLOSEST existing products (the one retrieval scorer).
+        r.add("GET", "/v1/commerce/search", self._commerce_search)
+        # Life books: the prebuilt nodes' one architecture — the shared
+        # function is the house's; each member's data is ONE private
+        # file per book in their own Life drawer, at a stable pointer.
+        r.add("GET", "/v1/life/books", self._life_books)
+        r.add("POST", "/v1/life/books/import", self._life_books_import)
+        r.add("GET", "/v1/life/books/{kind}", self._life_book_rows)
+        r.add("GET", "/v1/life/books/{kind}/chart", self._life_book_chart)
+        # What EXISTS to follow: the categories real listings and open
+        # requests actually carry — never an invented taxonomy.
+        r.add("GET", "/v1/explorer/categories", self._explorer_categories)
         r.add("GET", "/v1/explorer/compare", self._explorer_compare)
         r.add("GET", "/v1/explorer/reviews", self._explorer_reviews_list)
         r.add("POST", "/v1/explorer/reviews", self._explorer_review_create)
@@ -1983,6 +2021,39 @@ class GatewayApp:
             return self._roster_turn(
                 request, session, body, roster_agent, message, history
             )
+        # A book asked for by name ("show cashflow") answers as a CHART
+        # BLOCK from the member's own Life/Files — deterministic, before
+        # any model spend.
+        booked = self._book_command(session, message)
+        if booked is not None:
+            say, block = booked
+            if self._assistant_history is not None and not body.get("node_id"):
+                self._assistant_history.append(
+                    tenant=session.tenant_id,
+                    principal=session.principal_id,
+                    kind="user",
+                    body=message,
+                )
+                self._assistant_history.append(
+                    tenant=session.tenant_id,
+                    principal=session.principal_id,
+                    kind="assistant",
+                    body=say,
+                )
+            return json_response(
+                200,
+                {
+                    "reply": say,
+                    "source": "desk",
+                    "actions": [],
+                    "reasoning": None,
+                    "device": None,
+                    "copy": None,
+                    "run_id": None,
+                    "run": None,
+                    "block": block,
+                },
+            )
         # The assistant's hands: the caller's own files, tenant-bound —
         # and, inside a node's interact window, that node's own desk.
         tools = None
@@ -2405,31 +2476,55 @@ class GatewayApp:
     ) -> Response:
         """One turn with a roster agent: the card's honest scope, spoken
         through the agent's OWN seat — metered and booked apart from the
-        OoLu conversation — and landed in the agent's OWN thread."""
+        OoLu conversation — and landed in the agent's OWN thread. The
+        News thread carries the desk's intake: raw material is detected
+        and reviewed BEFORE the model speaks — the desk's own hand, the
+        seat's ordinary voice for everything else."""
         card = agent_card(agent_id)
         if card is None:
             raise GatewayError(
                 400, "invalid_request", f"unknown agent: {agent_id}"
             )
-        # The seat is the office: the router is cached and metered per
-        # (tenant, purpose), and the actor stamp keeps a shared tenant's
-        # gauges per person — exactly the chat.turn discipline.
-        router = self._seat_actor(
-            self._tenant_model(session.tenant_id, purpose=card.seat),
-            session.principal_id,
-        )
-        turn_now = request.now or self._clock()
-        local_now = turn_now + timedelta(
-            minutes=_tz_minutes(body.get("tz_offset_minutes"))
-        )
-        time_note = (
-            f"Current time: {turn_now:%Y-%m-%d %H:%M} UTC; the user's "
-            f"local time is {local_now:%Y-%m-%d %H:%M}."
-        )
-        recent = [h for h in history if isinstance(h, dict)][-20:]
-        say, reasoning, source = agent_turn(
-            card, message, history=recent, model=router, context=time_note
-        )
+        served = None
+        block = None
+        if card.agent_id == "news":
+            served = self._news_intake_turn(session, body, message)
+        elif card.agent_id == "market":
+            served = self._market_desk_turn(
+                session, message, request.now or self._clock()
+            )
+        elif card.agent_id == "poll":
+            served = self._poll_desk_turn(session, message)
+        elif card.agent_id == "explorer":
+            served = self._explorer_desk_turn(
+                session, message, request.now or self._clock()
+            )
+        if served is not None:
+            # A desk may answer with words alone, or words plus a BLOCK
+            # — a structured piece the client renders in the bubble (a
+            # poll pair to vote on, the genre chips to pick from).
+            say, reasoning, source, *rest = served
+            block = rest[0] if rest else None
+        else:
+            # The seat is the office: the router is cached and metered per
+            # (tenant, purpose), and the actor stamp keeps a shared tenant's
+            # gauges per person — exactly the chat.turn discipline.
+            router = self._seat_actor(
+                self._tenant_model(session.tenant_id, purpose=card.seat),
+                session.principal_id,
+            )
+            turn_now = request.now or self._clock()
+            local_now = turn_now + timedelta(
+                minutes=_tz_minutes(body.get("tz_offset_minutes"))
+            )
+            time_note = (
+                f"Current time: {turn_now:%Y-%m-%d %H:%M} UTC; the user's "
+                f"local time is {local_now:%Y-%m-%d %H:%M}."
+            )
+            recent = [h for h in history if isinstance(h, dict)][-20:]
+            say, reasoning, source = agent_turn(
+                card, message, history=recent, model=router, context=time_note
+            )
         # The conversation survives the device, exactly like OoLu's —
         # tagged with the agent, so each thread stays its own.
         if self._assistant_history is not None:
@@ -2459,6 +2554,801 @@ class GatewayApp:
                 "run_id": None,
                 "run": None,
                 "agent": card.agent_id,
+                "block": block,
+            },
+        )
+
+    # The Poll thread's deterministic asks — the social scientist's desk.
+    _POLL_PAIR_ASKS = frozenset(
+        {"poll", "next", "next pair", "another", "vote", "play"}
+    )
+    _POLL_GENRE_ASKS = frozenset(
+        {"genres", "genre", "streams", "switch genre", "pick a genre"}
+    )
+    _POLL_FINDING_ASKS = frozenset(
+        {
+            "findings",
+            "report",
+            "patterns",
+            "science",
+            "what did you learn",
+            "what have you learned",
+        }
+    )
+
+    def _poll_desk_turn(self, session, message):
+        """The Poll desk's hand on one thread message — or None for
+        ordinary conversation. The poll and the genre picking are
+        MESSAGE BLOCKS: a pair to vote on in the bubble, the genre
+        chips to tap; naming a genre in words deals from that stream.
+        "findings" reads the scientist's standing field notes."""
+        from ..press import GENRES, PressError, taxonomy_items
+
+        press = self._press
+        if press is None or press.polls is None:
+            return None
+        normal = re.sub(
+            r"\s+", " ", str(message or "").strip().casefold()
+        ).rstrip(".!?")
+        genre = None
+        if normal in GENRES:
+            genre = normal
+        else:
+            for item in taxonomy_items():
+                if normal == item["label"].casefold():
+                    genre = item["key"]
+                    break
+        if genre is None and normal not in self._POLL_PAIR_ASKS:
+            if normal in self._POLL_GENRE_ASKS:
+                return (
+                    "Pick a stream — or say “poll” and I choose by what "
+                    "the floor enjoys.",
+                    None,
+                    "desk",
+                    {"kind": "genres", "items": taxonomy_items()},
+                )
+            if normal in self._POLL_FINDING_ASKS:
+                findings = self._poll_science_judge(session)
+                if not findings:
+                    return (
+                        "Still researching — the floor needs more decided "
+                        "comparisons before any pattern is worth words. "
+                        "Every vote helps.",
+                        None,
+                        "desk",
+                    )
+                return (
+                    "\n\n".join(f.report() for f in findings),
+                    None,
+                    "desk",
+                )
+            return None
+        try:
+            pair = press.polls.next_pair(
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+                corpus=press.store.list(tenant=session.tenant_id, limit=500),
+                genre=genre,
+            )
+        except PressError as exc:
+            return (str(exc), None, "desk")
+        return (
+            "Which one? Tap to vote — the results follow your own choice, "
+            "and every decided comparison teaches the floor's science.",
+            None,
+            "desk",
+            {"kind": "poll", "pair": self._pair_dict(pair)},
+        )
+
+    def _news_intake_turn(self, session, body, message):
+        """The News desk's hand on one thread message — or None when the
+        message is ordinary conversation (the seat's model answers).
+
+        The growth-offer discipline, applied to publishing:
+        - An OFFERED draft is answered by the very next message: a plain
+          yes publishes (the offer rendered the license terms — the yes
+          is the consent), a plain no drops it, anything else withdraws
+          the offer silently (fresh material starts a fresh review).
+        - A GATHERING draft takes the next message as the answer to the
+          desk's one question — folded in verbatim — unless it is a
+          question itself (the agent answers; the desk's question keeps
+          standing) or a plain no (dropped).
+        - With nothing standing, material is DETECTED: attached files at
+          any length, or article-shaped text past the floor.
+        """
+        press = self._press
+        if press is None or press.intake is None:
+            return None
+        from ..chat import consent_answer
+        from ..press import (
+            DROPPED,
+            draft_from_material,
+            fold_answer,
+            looks_like_material,
+            review,
+        )
+
+        intake = press.intake
+        file_ids = (body or {}).get("file_ids") or []
+        if not isinstance(file_ids, list):
+            raise GatewayError(400, "invalid_request", "file_ids must be a list")
+        # Attachments are validated at the door — a file that is not the
+        # caller's own refuses loudly NOW, not at publish time.
+        refs = self._drawer_refs(session, file_ids) if file_ids else []
+        answer = consent_answer(message)
+        standing = intake.get(
+            tenant=session.tenant_id, principal=session.principal_id
+        )
+
+        def _staged(staged, say):
+            # A dropped review (a leak) leaves NOTHING standing: fixed
+            # words arrive as fresh material, never folded onto leaky
+            # ones.
+            if staged.stage == "dropped":
+                intake.pop(
+                    tenant=session.tenant_id, principal=session.principal_id
+                )
+            else:
+                intake.put(staged)
+            return (say, None, "desk")
+
+        def _fresh_review():
+            draft = draft_from_material(
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+                message=message,
+                file_ids=tuple(r.file_id for r in refs),
+                media_types=tuple(r.media_type for r in refs),
+            )
+            staged, say = review(
+                draft,
+                live_texts=press.store.live_texts(tenant=session.tenant_id),
+                title_of=self._contribution_title(session),
+            )
+            return _staged(staged, say)
+
+        if standing is not None and standing.stage == "offered":
+            draft = intake.pop(
+                tenant=session.tenant_id, principal=session.principal_id
+            )
+            if draft is None:
+                return None  # spent concurrently; the conversation stands
+            if answer == "yes":
+                return self._intake_publish(session, draft)
+            if answer == "no":
+                return (DROPPED, None, "desk")
+            # Withdrawn — the newest material is the one on the table.
+            if looks_like_material(message, has_media=bool(refs)):
+                return _fresh_review()
+            return None
+        if standing is not None:  # gathering: the desk's question stands
+            if answer == "no":
+                intake.pop(
+                    tenant=session.tenant_id, principal=session.principal_id
+                )
+                return (DROPPED, None, "desk")
+            if message.strip().endswith("?"):
+                return None  # a question is a question; the draft stands
+            grown = fold_answer(standing, message)
+            if refs:
+                grown = grown.model_copy(
+                    update={
+                        "file_ids": (
+                            *grown.file_ids,
+                            *(r.file_id for r in refs),
+                        )
+                    }
+                )
+            staged, say = review(
+                grown,
+                live_texts=press.store.live_texts(tenant=session.tenant_id),
+                title_of=self._contribution_title(session),
+            )
+            return _staged(staged, say)
+        if looks_like_material(message, has_media=bool(refs)):
+            return _fresh_review()
+        return None
+
+    def _contribution_title(self, session):
+        """A title lookup for the intake's retelling credit — the
+        neighbor's own headline, or None when it is gone."""
+
+        def title_of(contribution_id: str) -> str | None:
+            record = self._press.store.get(
+                contribution_id, tenant=session.tenant_id
+            )
+            return record.title if record is not None else None
+
+        return title_of
+
+    def _intake_publish(self, session, draft):
+        """The consented publication: the same gate the manual door
+        walks, the same audit voice — then the newsroom judges the
+        shelf, because whether a piece is WORTH composing is the
+        rubric's decision, not the desk's mood."""
+        from ..press import INTAKE_LICENSE, Newsroom, PressError
+
+        press = self._press
+        media = self._drawer_refs(
+            session, list(draft.file_ids), missing="drop"
+        )
+        gone = len(draft.file_ids) - len(media)
+        try:
+            record = press.publish(
+                tenant=session.tenant_id,
+                author=session.principal_id,
+                title=draft.title,
+                body=draft.body,
+                genres=draft.genres,
+                license=INTAKE_LICENSE,
+                consent=True,  # the yes answered the offer's rendered terms
+                media=media,
+            )
+        except PressError as exc:
+            # The gate's refusal is the desk's words; the draft returns
+            # to gathering so fixed material can answer it.
+            press.intake.put(draft.model_copy(update={"stage": "gathering"}))
+            return (
+                f"I couldn't publish it: {exc} Fix that and send it "
+                "again — I never rewrite your words.",
+                None,
+                "desk",
+            )
+        self._durable.audit.append(
+            "press.contribution_published",
+            {
+                "contribution_id": record.contribution_id,
+                "author": record.author,
+                "genres": list(record.genres),
+                "license": record.license,
+                "similar_to": record.similar_to,
+            },
+        )
+        say = f"Published — “{record.title}” is on the shelf, credited to you."
+        if gone:
+            say += (
+                f" ({gone} attachment{'s' if gone != 1 else ''} "
+                f"{'were' if gone != 1 else 'was'} gone from your drawer "
+                "and left out.)"
+            )
+        if press.stories is None:
+            return (say, None, "desk")
+        model = self._seat_actor(
+            self._tenant_model(session.tenant_id, purpose="news.compose"),
+            session.principal_id,
+        )
+        composed = Newsroom(press.store, press.stories).run(
+            tenant=session.tenant_id, model=model
+        )
+        for story in composed:
+            self._durable.audit.append(
+                "press.story_composed",
+                {
+                    "story_id": story.story_id,
+                    "source": story.source,
+                    "rubric_version": story.rubric_version,
+                    "lineage": [
+                        {"contribution_id": s.contribution_id, "weight": s.weight}
+                        for s in story.lineage
+                    ],
+                },
+            )
+        mine = next(
+            (
+                s
+                for s in composed
+                if any(
+                    share.contribution_id == record.contribution_id
+                    for share in s.lineage
+                )
+            ),
+            None,
+        )
+        if mine is not None:
+            say += (
+                f" The newsroom judged it worth telling: “{mine.headline}” "
+                "is in the stories now."
+            )
+        else:
+            say += (
+                " It's on the shelf — the newsroom composes it into a "
+                "story as the rubric allows (freshness, corroboration, "
+                "depth)."
+            )
+        return (say, None, "desk")
+
+    # The Market thread's own deterministic asks — narrow on purpose, so
+    # ordinary conversation always reaches the seat's model.
+    _MARKET_LIST_ASKS = frozenset(
+        {
+            "list",
+            "list out",
+            "list it out",
+            "mine",
+            "my things",
+            "what have i created",
+            "what did i create",
+            "what have i made",
+        }
+    )
+    _MARKET_BRIEF_ASKS = frozenset(
+        {"brief", "briefing", "desk", "what needs me", "what's waiting"}
+    )
+
+    def _market_desk_turn(self, session, message, now):
+        """The Market desk's hand on one thread message — or None when
+        the message is ordinary conversation. Two deterministic asks:
+        the LIST-OUT (everything the member created on the platform,
+        grouped and named) and the BRIEF (where their position meets
+        the market's demand, right now)."""
+        normal = re.sub(
+            r"\s+", " ", str(message or "").strip().casefold()
+        ).rstrip(".!?")
+        if normal in self._MARKET_LIST_ASKS:
+            return (self._market_mine_words(session), None, "desk")
+        if normal in self._MARKET_BRIEF_ASKS:
+            from ..marketplace import briefing_message
+
+            items = self._market_desk_items(session, now)
+            if not items:
+                return (
+                    "The desk sees nothing waiting on you — no approvals, "
+                    "no orders needing action, and no open request "
+                    "matching what you sell.",
+                    None,
+                    "desk",
+                )
+            return (briefing_message(items), None, "desk")
+        return None
+
+    def _market_mine_words(self, session) -> str:
+        """The list-out, in the desk's own words: counts and names per
+        group, bounded — the form blocks in this thread carry the rest."""
+        listings = self._commerce_catalog.store.for_seller(
+            tenant=session.tenant_id, seller=session.principal_id
+        )
+        rfqs = self._commerce_rfq.mine(
+            tenant=session.tenant_id, buyer=session.principal_id
+        )
+        orders = self._commerce_orders.orders.list_for(
+            tenant=session.tenant_id, principal=session.principal_id
+        )
+        recurring = self._commerce_recurring.list_for(
+            tenant=session.tenant_id, principal=session.principal_id
+        )
+        delegations = self._commerce.delegations.list_for(
+            tenant=session.tenant_id, principal=session.principal_id
+        )
+        cap = 8
+        lines = ["Created on this platform, by you:"]
+        lines.append(f"Listings ({len(listings)}):")
+        for x in listings[:cap]:
+            media = f", {len(x.media)} media" if x.media else ""
+            lines.append(f"  • “{x.title}” — {x.status}{media}")
+        lines.append(f"Requests for quotes ({len(rfqs)}):")
+        for r in rfqs[:cap]:
+            lines.append(
+                f"  • {r.specification.category} ×"
+                f"{r.specification.quantity} — {r.state}"
+            )
+        lines.append(f"Orders ({len(orders)}):")
+        for o in orders[:cap]:
+            role = (
+                "buying"
+                if o.record.buyer_principal == session.principal_id
+                else "selling"
+            )
+            lines.append(
+                f"  • {o.record.order_id[:8]} — {o.state} ({role})"
+            )
+        lines.append(f"Recurring obligations ({len(recurring)}):")
+        lines.append(f"Delegations ({len(delegations)}):")
+        lines.append(
+            "The form blocks in this thread carry every detail and door."
+        )
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------ #
+    # The explorer desk: closest products, followable categories, and     #
+    # comparisons that end.                                               #
+    # ------------------------------------------------------------------ #
+    def _comparisons(self):
+        if getattr(self, "_explorer_comparisons", None) is None:
+            from ..explorer import ComparisonStore
+
+            self._explorer_comparisons = ComparisonStore(self._durable.conn)
+        return self._explorer_comparisons
+
+    def _closest_listings(self, query: str, *, limit: int = 8) -> list:
+        """The CLOSEST existing products for any words — a unique
+        listing id hits exactly; text ranks the active shelf by the one
+        retrieval scorer over title, category, and description."""
+        from ..retrieval import score as similarity_score
+
+        query = str(query or "").strip()
+        exact = self._commerce_catalog.store.get(query)
+        if exact is not None and exact.status == "active":
+            return [exact]
+        scored = [
+            (
+                similarity_score(
+                    query,
+                    f"{x.title}\n{x.category}\n{x.description}",
+                ),
+                x,
+            )
+            for x in self._commerce_catalog.store.active()
+        ]
+        scored = [(s, x) for s, x in scored if s > 0.05]
+        scored.sort(key=lambda pair: (-pair[0], pair[1].listing_id))
+        return [x for _, x in scored[: int(limit)]]
+
+    # ------------------------------------------------------------------ #
+    # Life books: one shared function, one private book per member.       #
+    # ------------------------------------------------------------------ #
+    def _require_books(self):
+        if self._files is None:
+            raise GatewayError(404, "not_found", "this host keeps no drawer")
+        from .. import lifebooks
+
+        return lifebooks
+
+    def _life_books(self, request, session, params) -> Response:
+        """Every book at one glance: kind, title, the stable pointer,
+        and how many rows the member's own file holds."""
+        books = self._require_books()
+        return json_response(
+            200,
+            {
+                "official_owner": books.OFFICIAL_OWNER,
+                "items": [
+                    {
+                        "kind": b.kind,
+                        "title": b.title,
+                        "unit": b.unit,
+                        "pointer": books.pointer(b.kind),
+                        "rows": len(
+                            books.read_rows(
+                                self._files,
+                                tenant=session.tenant_id,
+                                owner=session.principal_id,
+                                kind=b.kind,
+                            )
+                        ),
+                    }
+                    for b in books.BOOKS.values()
+                ],
+            },
+        )
+
+    def _life_books_import(self, request, session, params) -> Response:
+        """Everything the prebuilt nodes documented, imported into the
+        member's OWN Life/Files books — reminders, calendar events, and
+        standing automation triggers today; idempotent by dedup."""
+        books = self._require_books()
+        now = request.now or self._clock()
+        imported: dict[str, int] = {}
+        if self._reminders is not None:
+            rows = [
+                {
+                    "at": r.due_at.isoformat(),
+                    "label": r.text[:120],
+                    "value": None,
+                    "note": "reminder",
+                }
+                for r in self._reminders.upcoming(
+                    tenant=session.tenant_id,
+                    principal=session.principal_id,
+                    now=now,
+                )
+            ]
+            imported["reminder"] = books.append_rows(
+                self._files,
+                tenant=session.tenant_id,
+                owner=session.principal_id,
+                kind="reminder",
+                rows=rows,
+            )
+        events = self._calendar.between(
+            tenant=session.tenant_id,
+            owner=session.principal_id,
+            start=now - timedelta(days=365),
+            end=now + timedelta(days=365),
+        )
+        imported["calendar"] = books.append_rows(
+            self._files,
+            tenant=session.tenant_id,
+            owner=session.principal_id,
+            kind="calendar",
+            rows=[
+                {
+                    "at": e.starts_at.isoformat(),
+                    "label": e.title[:120],
+                    "value": None,
+                    "note": e.source,
+                }
+                for e in events
+            ],
+        )
+        imported["automation"] = books.append_rows(
+            self._files,
+            tenant=session.tenant_id,
+            owner=session.principal_id,
+            kind="automation",
+            rows=[
+                {
+                    "at": "",
+                    "label": (s.label or s.goal)[:120],
+                    "value": None,
+                    "note": f"{s.cadence} trigger: {s.goal}"[:200],
+                }
+                for s in self._pulse.list_for(
+                    session.tenant_id, session.principal_id
+                )
+            ],
+        )
+        return json_response(200, {"imported": imported})
+
+    def _life_book_rows(self, request, session, params) -> Response:
+        books = self._require_books()
+        kind = params["kind"]
+        if kind not in books.BOOKS:
+            raise GatewayError(404, "not_found", f"no such book: {kind}")
+        return json_response(
+            200,
+            {
+                "kind": kind,
+                "pointer": books.pointer(kind),
+                "rows": books.read_rows(
+                    self._files,
+                    tenant=session.tenant_id,
+                    owner=session.principal_id,
+                    kind=kind,
+                ),
+            },
+        )
+
+    def _life_book_chart(self, request, session, params) -> Response:
+        books = self._require_books()
+        kind = params["kind"]
+        if kind not in books.BOOKS:
+            raise GatewayError(404, "not_found", f"no such book: {kind}")
+        rows = books.read_rows(
+            self._files,
+            tenant=session.tenant_id,
+            owner=session.principal_id,
+            kind=kind,
+        )
+        book = books.BOOKS[kind]
+        return json_response(
+            200,
+            {
+                "kind": kind,
+                "title": book.title,
+                "unit": book.unit,
+                "points": books.chart_points(kind, rows),
+            },
+        )
+
+    def _book_command(self, session, message):
+        """OoLu's own conversation shows a book on demand — "show
+        cashflow", "chart my stock" — as a CHART BLOCK in the bubble:
+        the member's data, drawn from their own book, never invented."""
+        if self._files is None:
+            return None
+        from .. import lifebooks
+
+        normal = re.sub(
+            r"\s+", " ", str(message or "").strip().casefold()
+        ).rstrip(".!?")
+        for verb in ("show", "chart", "graph"):
+            if normal.startswith(f"{verb} "):
+                asked = normal[len(verb) + 1 :].removeprefix("my ").strip()
+                key = asked.replace(" ", "_")
+                if key in lifebooks.BOOKS:
+                    rows = lifebooks.read_rows(
+                        self._files,
+                        tenant=session.tenant_id,
+                        owner=session.principal_id,
+                        kind=key,
+                    )
+                    book = lifebooks.BOOKS[key]
+                    if not rows:
+                        return (
+                            f"Your {book.title} book is empty — say "
+                            "nothing was lost: it fills as the node "
+                            "documents, and “import my books” pulls in "
+                            "what already exists.",
+                            None,
+                        )
+                    return (
+                        f"{book.title} — {len(rows)} row"
+                        f"{'s' if len(rows) != 1 else ''}, from your own "
+                        "Life/Files book.",
+                        {
+                            "kind": "chart",
+                            "title": book.title,
+                            "unit": book.unit,
+                            "points": lifebooks.chart_points(key, rows),
+                        },
+                    )
+        return None
+
+    def _commerce_search(self, request, session, params) -> Response:
+        query = str(request.query.get("q") or "").strip()
+        if not query:
+            raise GatewayError(400, "invalid_request", "q is required")
+        return json_response(
+            200,
+            {
+                "items": [
+                    x.model_dump(mode="json")
+                    for x in self._closest_listings(query)
+                ]
+            },
+        )
+
+    def _followable_categories(self, session, now) -> list[dict]:
+        from ..explorer import EXPLORER_BRIEF_PREFIX
+
+        categories = {
+            x.category
+            for x in self._commerce_catalog.store.active()
+            if x.category
+        } | {
+            r.specification.category
+            for r in self._commerce_rfq.open_requests(
+                tenant=session.tenant_id, now=now
+            )
+            if r.specification.category
+        }
+        followed = {
+            s.goal[len(EXPLORER_BRIEF_PREFIX) :].rsplit(":", 1)[0]
+            for s in self._pulse.list_for(
+                session.tenant_id, session.principal_id
+            )
+            if s.goal.startswith(EXPLORER_BRIEF_PREFIX)
+        }
+        return [
+            {"category": c, "followed": c in followed}
+            for c in sorted(categories)
+        ]
+
+    def _explorer_categories(self, request, session, params) -> Response:
+        return json_response(
+            200,
+            {
+                "items": self._followable_categories(
+                    session, request.now or self._clock()
+                )
+            },
+        )
+
+    _EXPLORER_CATEGORY_ASKS = frozenset(
+        {"categories", "follow", "interests", "what can i follow"}
+    )
+
+    def _explorer_desk_turn(self, session, message, now):
+        """The Explorer desk's hand on one thread message — or None for
+        ordinary conversation. The categories to follow arrive as a
+        MESSAGE BLOCK (a chip's tap speaks "follow …" back); "follow
+        {category}" lays the standing daily brief; any other words find
+        the CLOSEST existing products and open a comparison with an
+        inferred lens and a real deadline — decisions end, by design."""
+        from ..explorer import (
+            DECISION_TTL_HOURS,
+            EXPLORER_BRIEF_PREFIX,
+            infer_mode,
+        )
+
+        normal = re.sub(
+            r"\s+", " ", str(message or "").strip().casefold()
+        ).rstrip(".!?")
+        if normal in self._EXPLORER_CATEGORY_ASKS:
+            items = self._followable_categories(session, now)
+            if not items:
+                return (
+                    "Nothing exists to follow yet — categories appear as "
+                    "real listings and requests are created.",
+                    None,
+                    "desk",
+                )
+            return (
+                "These categories exist right now — tap one and I follow "
+                "it: the brief arrives here daily.",
+                None,
+                "desk",
+                {"kind": "categories", "items": items},
+            )
+        if normal.startswith("follow "):
+            category = normal[len("follow ") :].strip()
+            known = {
+                c["category"].casefold(): c["category"]
+                for c in self._followable_categories(session, now)
+            }
+            if category not in known:
+                return (
+                    f"No listing or request carries “{category}” yet — "
+                    "say “categories” to see what exists to follow.",
+                    None,
+                    "desk",
+                )
+            mode = infer_mode(
+                message,
+                last_mode=self._comparisons().last_decided_mode(
+                    tenant=session.tenant_id,
+                    principal=session.principal_id,
+                ),
+            )
+            goal = f"{EXPLORER_BRIEF_PREFIX}{known[category]}:{mode}"
+            if not any(
+                s.goal == goal
+                for s in self._pulse.list_for(
+                    session.tenant_id, session.principal_id
+                )
+            ):
+                self._pulse.add(
+                    session.tenant_id,
+                    session.principal_id,
+                    cadence="daily",
+                    at_minute=9 * 60,
+                    goal=goal,
+                    tz_offset_minutes=0,
+                    label=f"Explorer brief: {known[category]}",
+                    now=now,
+                )
+            return (
+                f"Following “{known[category]}” — the {mode} brief "
+                "arrives in this thread daily.",
+                None,
+                "desk",
+            )
+        if normal in ("decide", "decided", "done", "stop comparing"):
+            closed = self._comparisons().close(
+                tenant=session.tenant_id, principal=session.principal_id
+            )
+            return (
+                "Marked decided — the comparison is closed."
+                if closed
+                else "No comparison stands open.",
+                None,
+                "desk",
+            )
+        # Anything else with substance is a product search — but only
+        # when the shelf actually holds something close; a question the
+        # shelf cannot answer stays a conversation.
+        if len(normal) < 3:
+            return None
+        hits = self._closest_listings(message)
+        if not hits:
+            return None
+        comparisons = self._comparisons()
+        mode = infer_mode(
+            message,
+            last_mode=comparisons.last_decided_mode(
+                tenant=session.tenant_id, principal=session.principal_id
+            ),
+        )
+        opened = comparisons.open(
+            tenant=session.tenant_id,
+            principal=session.principal_id,
+            query=message,
+            mode=mode,
+            listing_ids=[x.listing_id for x in hits],
+        )
+        return (
+            f"The closest existing products, compared through your "
+            f"{mode} lens (read from your words and history — no menu). "
+            f"This comparison stays open {DECISION_TTL_HOURS} hours and "
+            "then lapses on its own: say “decide” when you've chosen, "
+            "or let it expire — no decision debt.",
+            None,
+            "desk",
+            {
+                "kind": "products",
+                "items": [x.model_dump(mode="json") for x in hits],
+                "mode": mode,
+                "expires_at": opened["expires_at"],
             },
         )
 
@@ -2643,17 +3533,14 @@ class GatewayApp:
             200, {"items": [self._contribution_dict(r) for r in items]}
         )
 
-    def _press_publish(self, request, session, params) -> Response:
-        """The publication gate, walked in order — refusals are loud and
-        name the fix. Media rides as drawer REFS (never copies): each
-        named file must be the caller's own at publish time."""
-        press = self._require_press()
-        from ..press import MediaRef, PressError
+    def _drawer_refs(self, session, file_ids, *, missing="refuse"):
+        """Drawer files as press MediaRefs, the wall held at the door:
+        another account's file — or a node's — is indistinguishable from
+        a missing one. ``missing="refuse"`` is the loud 404 the publish
+        door keeps; ``missing="drop"`` leaves the gone ones out (the
+        intake's publish moment, where the reply names the drop)."""
+        from ..press import MediaRef
 
-        body = request.body or {}
-        file_ids = body.get("file_ids") or []
-        if not isinstance(file_ids, list):
-            raise GatewayError(400, "invalid_request", "file_ids must be a list")
         media: list[MediaRef] = []
         for file_id in file_ids:
             file = (
@@ -2661,14 +3548,14 @@ class GatewayApp:
                 if self._files is not None
                 else None
             )
-            # The drawer wall holds at the door: another account's file —
-            # or a node's — is indistinguishable from a missing one.
             if file is not None and file.node_id is None:
                 if file.owner not in ("", session.principal_id):
                     file = None
             elif file is not None:
                 file = None
             if file is None:
+                if missing == "drop":
+                    continue
                 raise GatewayError(
                     404, "not_found", f"no such file: {file_id}"
                 )
@@ -2680,6 +3567,20 @@ class GatewayApp:
                     name=file.name,
                 )
             )
+        return media
+
+    def _press_publish(self, request, session, params) -> Response:
+        """The publication gate, walked in order — refusals are loud and
+        name the fix. Media rides as drawer REFS (never copies): each
+        named file must be the caller's own at publish time."""
+        press = self._require_press()
+        from ..press import PressError
+
+        body = request.body or {}
+        file_ids = body.get("file_ids") or []
+        if not isinstance(file_ids, list):
+            raise GatewayError(400, "invalid_request", "file_ids must be a list")
+        media = self._drawer_refs(session, file_ids)
         try:
             record = press.publish(
                 tenant=session.tenant_id,
@@ -2754,9 +3655,11 @@ class GatewayApp:
             )
         return press
 
-    @staticmethod
-    def _story_dict(story) -> dict:
-        return {
+    def _story_dict(self, story) -> dict:
+        # The rubric's factor breakdown stays recorded (durable, on the
+        # audit trail) but never renders to the member: the scoring is
+        # the house's own working — the order speaks for itself.
+        payload = {
             "story_id": story.story_id,
             "headline": story.headline,
             "prose": story.prose,
@@ -2771,11 +3674,32 @@ class GatewayApp:
                 }
                 for s in story.lineage
             ],
-            "breakdown": story.breakdown,  # why it was selected
             "rubric_version": story.rubric_version,
             "source": story.source,
             "created_at": story.created_at.isoformat(),
+            "media": [],
         }
+        # The lineage's attached media, addressable through the press
+        # media door — refs, never copies: a contribution the author has
+        # since unpublished honestly drops out of the strip.
+        press = self._press
+        if press is not None:
+            for share in story.lineage:
+                record = press.store.get(
+                    share.contribution_id, tenant=story.tenant_id
+                )
+                if record is None:
+                    continue
+                for index, ref in enumerate(record.media):
+                    payload["media"].append(
+                        {
+                            "contribution_id": record.contribution_id,
+                            "index": index,
+                            "media_type": ref.media_type,
+                            "name": ref.name,
+                        }
+                    )
+        return payload
 
     def _press_personalized(self, session) -> bool:
         """The consent switch, read where it is enforced: personalization
@@ -2786,6 +3710,32 @@ class GatewayApp:
             session.tenant_id, session.principal_id
         )
         return effective.get("press.personalize") is True
+
+    def _member_taste(self, session, press):
+        """The member's semantic taste: their taps (liked and skipped
+        story texts) plus their OWN words from the OoLu and News threads
+        — never the assistant's. Gathered only under the one consent
+        switch (the caller checks it); None when there is nothing to
+        lean on, so the edition stays honestly neutral."""
+        if press.preferences is None:
+            return None
+        spoken: list[str] = []
+        if self._assistant_history is not None:
+            for agent in ("oolu", "news"):
+                for turn in self._assistant_history.history(
+                    tenant=session.tenant_id,
+                    principal=session.principal_id,
+                    limit=100,
+                    agent=agent,
+                ):
+                    if turn["kind"] == "user" and turn["body"]:
+                        spoken.append(turn["body"])
+        taste = press.preferences.taste(
+            tenant=session.tenant_id,
+            principal=session.principal_id,
+            spoken=spoken,
+        )
+        return taste or None
 
     def _edition_schedule_row(self, session):
         from ..press import EDITION_PULSE_GOAL
@@ -2798,9 +3748,10 @@ class GatewayApp:
         return None
 
     def _press_stories(self, request, session, params) -> Response:
-        """The caller's edition: neutral rubric order for everyone;
-        affinity-bent (with the serendipity slice) only under the
-        member's own consent."""
+        """The caller's edition: neutral rubric order for everyone; bent
+        only under the member's own consent — by genre affinity AND by
+        semantic taste (their taps, and their own words in the OoLu and
+        News threads), with the serendipity slice standing."""
         from ..press import EDITION_SIZE, rank_edition
 
         press = self._require_newsroom()
@@ -2808,17 +3759,21 @@ class GatewayApp:
         stories = press.stories.list(tenant=session.tenant_id, limit=100)
         personalized = self._press_personalized(session)
         affinity = None
+        taste = None
         if personalized and press.preferences is not None:
             affinity = press.preferences.genre_affinity(
                 tenant=session.tenant_id, principal=session.principal_id
             )
-        edition = rank_edition(stories, affinity=affinity or None, size=size)
+            taste = self._member_taste(session, press)
+        edition = rank_edition(
+            stories, affinity=affinity or None, taste=taste, size=size
+        )
         schedule = self._edition_schedule_row(session)
         return json_response(
             200,
             {
                 "items": [self._story_dict(s) for s in edition],
-                "personalized": bool(affinity),
+                "personalized": bool(affinity) or taste is not None,
                 "edition_schedule": (
                     self._pulse_row(schedule, request.now or self._clock())
                     if schedule is not None
@@ -2838,7 +3793,11 @@ class GatewayApp:
 
     def _press_story_feedback(self, request, session, params) -> Response:
         """One tap, honestly handled: recorded only under the member's
-        own consent — and the answer says which it was."""
+        own consent — and the answer says which it was. The tap keeps
+        the story's own words next to the signal, so it adjusts the
+        member's SEMANTIC taste, not just their genre leaning."""
+        from ..press import taste_snippet
+
         press = self._require_newsroom()
         story = press.stories.get(
             params["story_id"], tenant=session.tenant_id
@@ -2860,6 +3819,7 @@ class GatewayApp:
             signal=signal,
             subject=f"story:{story.story_id}",
             genres=story.genres,
+            snippet=taste_snippet(story.headline, story.prose),
         )
         return json_response(200, {"recorded": True})
 
@@ -2970,6 +3930,7 @@ class GatewayApp:
             )
             stories = press.stories.list(tenant=schedule.tenant, limit=100)
             affinity = None
+            taste = None
             if (
                 self._press_personalized(session)
                 and press.preferences is not None
@@ -2977,7 +3938,10 @@ class GatewayApp:
                 affinity = press.preferences.genre_affinity(
                     tenant=schedule.tenant, principal=schedule.principal
                 )
-            edition = rank_edition(stories, affinity=affinity or None)
+                taste = self._member_taste(session, press)
+            edition = rank_edition(
+                stories, affinity=affinity or None, taste=taste
+            )
             message = edition_message(edition, skipped=skipped)
             if self._assistant_history is not None:
                 self._assistant_history.append(
@@ -3102,7 +4066,56 @@ class GatewayApp:
                     genres=(pair.genre,),
                 )
         verdict["learning"] = bool(learning)
+        # The vote just grew the evidence: the scientist re-judges the
+        # floor, and a NEW verdict (or a flipped one) is reported into
+        # the Poll thread — worth sharing, like a news brief or a
+        # debate statement; the same conclusion twice stays silent.
+        for report in self._poll_science_reports(session):
+            if self._assistant_history is not None:
+                self._assistant_history.append(
+                    tenant=session.tenant_id,
+                    principal=session.principal_id,
+                    kind="assistant",
+                    body=report,
+                    agent="poll",
+                )
         return json_response(200, verdict)
+
+    def _poll_findings_store(self):
+        if self._poll_findings is None:
+            from ..press import FindingStore
+
+            self._poll_findings = FindingStore(self._durable.conn)
+        return self._poll_findings
+
+    def _poll_science_judge(self, session):
+        """The floor judged now: findings worth words (pattern or
+        debate), over decided k-anonymous comparisons only."""
+        from ..press import judge
+
+        press = self._press
+        polls = press.polls.store
+        findings, _ = judge(
+            polls.all_pairs(tenant=session.tenant_id),
+            counts_of=lambda pid: polls.counts(pid, tenant=session.tenant_id),
+            contribution_of=lambda cid: press.store.get(
+                cid, tenant=session.tenant_id
+            ),
+        )
+        return findings
+
+    def _poll_science_reports(self, session) -> list[str]:
+        """The NEWLY newsworthy: findings whose verdict just opened or
+        flipped — each reported once, the field-note words."""
+        press = self._press
+        if press is None or press.polls is None:
+            return []
+        store = self._poll_findings_store()
+        reports: list[str] = []
+        for finding in self._poll_science_judge(session):
+            if store.note(tenant=session.tenant_id, finding=finding):
+                reports.append(finding.report())
+        return reports
 
     def _press_poll_stats(self, request, session, params) -> Response:
         press = self._require_polls()
@@ -3633,10 +4646,19 @@ class GatewayApp:
         eligible ones ranked by the named mode with the full factor
         breakdown. Deterministic end to end — and nothing sponsored is
         anywhere near these inputs (the import scan holds the wall)."""
-        from ..explorer import best_buy
+        from ..explorer import best_buy, infer_mode
 
         category = str(request.query.get("category") or "")
-        mode = str(request.query.get("mode") or "balanced")
+        # The lens is READ, never a menu: an explicit mode still wins
+        # (the API stays whole), but absent one the member's own words
+        # (?instruction=) weigh first, their last decided comparison's
+        # mode second, "balanced" third.
+        mode = str(request.query.get("mode") or "") or infer_mode(
+            str(request.query.get("instruction") or ""),
+            last_mode=self._comparisons().last_decided_mode(
+                tenant=session.tenant_id, principal=session.principal_id
+            ),
+        )
         rows = self._explorer_rows(session, category=category)
         try:
             brief = best_buy(rows, mode=mode)
@@ -4152,15 +5174,31 @@ class GatewayApp:
             raise GatewayError(
                 404, "not_found", "the referenced file is gone"
             )
+        return self._serve_drawer_bytes(file)
+
+    def _serve_drawer_bytes(self, file) -> Response:
+        """A drawer file's TRUE bytes, typed honestly, whichever shape it
+        is stored in — an inline row's data-URL content is decoded, so a
+        photo or clip renders the same as its blob-backed twin. Shared by
+        every published-media door (press attachments, listing media)."""
         try:
             data = self._files.read_bytes(file)
         except FileTooLargeError as exc:
             raise GatewayError(404, "not_found", str(exc)) from exc
-        return Response(
-            status=200,
-            body=data,
-            content_type=file.media_type or "application/octet-stream",
-        )
+        media_type = file.media_type or "application/octet-stream"
+        if not file.blob_ref and file.content.startswith("data:"):
+            from base64 import b64decode
+
+            header, _, encoded = file.content.partition(",")
+            if ";base64" in header:
+                try:
+                    data = b64decode(encoded)
+                    media_type = (
+                        header[len("data:") :].split(";")[0] or media_type
+                    )
+                except ValueError:
+                    pass  # served as stored — never a 500 over one bad row
+        return Response(status=200, body=data, content_type=media_type)
 
     # ------------------------------------------------------------------ #
     # Friends: people talking to people on the same host.                 #
@@ -11871,6 +12909,11 @@ class GatewayApp:
         if schedule.goal == EDITION_PULSE_GOAL:
             self._fire_edition(schedule, occurrence, skipped)
             return
+        from ..marketplace import MARKET_PULSE_GOAL
+
+        if schedule.goal == MARKET_PULSE_GOAL:
+            self._fire_market_brief(schedule, occurrence, skipped)
+            return
         from ..explorer import EXPLORER_BRIEF_PREFIX
 
         if schedule.goal.startswith(EXPLORER_BRIEF_PREFIX):
@@ -12557,7 +13600,24 @@ class GatewayApp:
         )
 
     def _commerce_listing_create(self, request, session, params) -> Response:
+        from ..marketplace import ListingMedia
+
         body = request.body or {}
+        # Multimedia on the product: drawer refs, never copies, the wall
+        # held at the door — photos, clips, or sound showing the real
+        # thing (the press attachment law, applied to the shelf).
+        file_ids = body.get("file_ids") or []
+        if not isinstance(file_ids, list):
+            raise GatewayError(400, "invalid_request", "file_ids must be a list")
+        media = [
+            ListingMedia(
+                file_id=ref.file_id,
+                blob_ref=ref.blob_ref,
+                media_type=ref.media_type,
+                name=ref.name,
+            )
+            for ref in self._drawer_refs(session, file_ids)
+        ]
         try:
             listing = self._commerce_catalog.create_draft(
                 tenant=session.tenant_id,
@@ -12581,10 +13641,247 @@ class GatewayApp:
                     if body.get("list_price_micros") is not None
                     else None
                 ),
+                media=tuple(media),
             )
         except (ValidationError, ValueError, TypeError) as exc:
             raise GatewayError(400, "invalid_request", str(exc)) from exc
         return json_response(201, listing.model_dump(mode="json"))
+
+    def _commerce_listing_media(self, request, session, params) -> Response:
+        """A listing's attached file, by reference — an ACTIVE listing is
+        the public shelf (publication is the consent that crosses the
+        drawer wall); a draft's media is the seller's own only."""
+        listing = self._commerce_catalog.store.get(params["listing_id"])
+        if listing is None or (
+            listing.status != "active"
+            and not (
+                listing.tenant_id == session.tenant_id
+                and listing.seller_principal == session.principal_id
+            )
+        ):
+            raise GatewayError(404, "not_found", "no such listing")
+        try:
+            ref = listing.media[int(params["index"])]
+        except (IndexError, ValueError):
+            raise GatewayError(404, "not_found", "no such attachment") from None
+        file = (
+            self._files.get(ref.file_id, tenant=listing.tenant_id)
+            if self._files is not None
+            else None
+        )
+        if file is None:
+            raise GatewayError(404, "not_found", "the referenced file is gone")
+        return self._serve_drawer_bytes(file)
+
+    # ------------------------------------------------------------------ #
+    # The market desk: position meets demand, and the list-out.           #
+    # ------------------------------------------------------------------ #
+    def _market_desk_items(self, session, now):
+        """The member's brief, gathered from the standing stores and
+        judged by the deterministic briefing — the gateway only fetches;
+        the matching lives in marketplace/briefing.py."""
+        from ..marketplace import desk_briefing
+
+        open_rfqs = self._commerce_rfq.open_requests(
+            tenant=session.tenant_id, now=now
+        )
+        quote_counts = {
+            r.rfq_id: len(
+                self._commerce_rfq.quotes(r.rfq_id, tenant=session.tenant_id)
+            )
+            for r in open_rfqs
+            if r.buyer_principal == session.principal_id
+        }
+        return desk_briefing(
+            principal=session.principal_id,
+            approvals=self._commerce.pending_approvals(
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+                now=now,
+            ),
+            orders=self._commerce_orders.orders.list_for(
+                tenant=session.tenant_id, principal=session.principal_id
+            ),
+            open_rfqs=open_rfqs,
+            my_listings=self._commerce_catalog.store.for_seller(
+                tenant=session.tenant_id, seller=session.principal_id
+            ),
+            active_listings=self._commerce_catalog.store.active(),
+            quote_counts=quote_counts,
+        )
+
+    def _market_brief_schedule_row(self, session):
+        from ..marketplace import MARKET_PULSE_GOAL
+
+        for schedule in self._pulse.list_for(
+            session.tenant_id, session.principal_id
+        ):
+            if schedule.goal == MARKET_PULSE_GOAL:
+                return schedule
+        return None
+
+    def _commerce_desk(self, request, session, params) -> Response:
+        """The desk brief on demand — the same items the pulse pushes —
+        and the standing brief schedule, named."""
+        now = request.now or self._clock()
+        items = self._market_desk_items(session, now)
+        schedule = self._market_brief_schedule_row(session)
+        return json_response(
+            200,
+            {
+                "items": [
+                    {"kind": i.kind, "ref": i.ref, "text": i.text}
+                    for i in items
+                ],
+                "brief_schedule": (
+                    self._pulse_row(schedule, now)
+                    if schedule is not None
+                    else None
+                ),
+            },
+        )
+
+    def _commerce_desk_schedule(self, request, session, params) -> Response:
+        """The member's desk-brief rhythm: one standing pulse schedule
+        with the market sentinel goal — created, retimed, or removed
+        through this one door (the morning-edition shape)."""
+        from ..marketplace import MARKET_BRIEF_LABEL, MARKET_PULSE_GOAL
+
+        body = request.body or {}
+        standing = self._market_brief_schedule_row(session)
+        if body.get("enabled") is False:
+            if standing is not None:
+                self._pulse.delete(
+                    standing.schedule_id,
+                    tenant=session.tenant_id,
+                    principal=session.principal_id,
+                )
+            return json_response(200, {"brief_schedule": None})
+        at_minute = int(body.get("at_minute", 9 * 60))
+        tz_offset = _tz_minutes(body.get("tz_offset_minutes"))
+        if standing is not None:
+            self._pulse.delete(
+                standing.schedule_id,
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+            )
+        try:
+            schedule = self._pulse.add(
+                session.tenant_id,
+                session.principal_id,
+                cadence="daily",
+                at_minute=at_minute,
+                goal=MARKET_PULSE_GOAL,
+                tz_offset_minutes=tz_offset,
+                label=MARKET_BRIEF_LABEL,
+                now=request.now or self._clock(),
+            )
+        except ValueError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(
+            200,
+            {
+                "brief_schedule": self._pulse_row(
+                    schedule, request.now or self._clock()
+                )
+            },
+        )
+
+    def _commerce_mine(self, request, session, params) -> Response:
+        """The list-out: everything the caller created on the platform,
+        grouped and named — listings, requests, orders, recurring
+        obligations, delegations. What a member made is never
+        invisible."""
+        listings = self._commerce_catalog.store.for_seller(
+            tenant=session.tenant_id, seller=session.principal_id
+        )
+        rfqs = self._commerce_rfq.mine(
+            tenant=session.tenant_id, buyer=session.principal_id
+        )
+        orders = self._commerce_orders.orders.list_for(
+            tenant=session.tenant_id, principal=session.principal_id
+        )
+        recurring = self._commerce_recurring.list_for(
+            tenant=session.tenant_id, principal=session.principal_id
+        )
+        delegations = self._commerce.delegations.list_for(
+            tenant=session.tenant_id, principal=session.principal_id
+        )
+        return json_response(
+            200,
+            {
+                "listings": [x.model_dump(mode="json") for x in listings],
+                "requests": [r.model_dump(mode="json") for r in rfqs],
+                "orders": [self._commerce_order_view(o) for o in orders],
+                "recurring": [r.model_dump(mode="json") for r in recurring],
+                "delegations": [
+                    d.model_dump(mode="json") for d in delegations
+                ],
+            },
+        )
+
+    def _fire_market_brief(self, schedule, occurrence: str, skipped: int) -> None:
+        """The desk brief fires: gather the member's items and land them
+        as the Market agent's OWN thread message, with a short reminder
+        ping. An empty brief is silence — the desk never invents
+        urgency. Failures are audited, never raised into the tick."""
+        from types import SimpleNamespace
+
+        from ..marketplace import briefing_message
+
+        session = SimpleNamespace(
+            tenant_id=schedule.tenant, principal_id=schedule.principal
+        )
+        try:
+            items = self._market_desk_items(session, self._clock())
+            if items and self._assistant_history is not None:
+                self._assistant_history.append(
+                    tenant=schedule.tenant,
+                    principal=schedule.principal,
+                    kind="assistant",
+                    body=briefing_message(items, skipped=skipped),
+                    agent="market",
+                )
+            if items and self._reminders is not None:
+                try:
+                    self._reminders.add(
+                        tenant=schedule.tenant,
+                        principal=schedule.principal,
+                        text=(
+                            f"The market desk sees {len(items)} "
+                            f"thing{'s' if len(items) != 1 else ''} for "
+                            "you — in the Market thread."
+                        )[:490],
+                        due_at=(self._clock() + timedelta(minutes=2)),
+                    )
+                except ValueError:
+                    pass  # a full reminder book is not a failed brief
+            self._durable.audit.append(
+                "pulse.fired",
+                {
+                    "schedule_id": schedule.schedule_id,
+                    "occurrence": occurrence,
+                    "run_id": "",
+                    "skipped": skipped,
+                    "tenant": schedule.tenant,
+                    "principal": schedule.principal,
+                    "goal": schedule.goal,
+                },
+            )
+        except Exception:  # noqa: BLE001 - the tick must keep serving
+            logging.getLogger("oolu.gateway").exception(
+                "market brief pulse failed for %s", schedule.schedule_id
+            )
+            self._durable.audit.append(
+                "pulse.fire_failed",
+                {
+                    "schedule_id": schedule.schedule_id,
+                    "occurrence": occurrence,
+                    "tenant": schedule.tenant,
+                    "principal": schedule.principal,
+                    "goal": schedule.goal,
+                },
+            )
 
     def _commerce_listing_publish(self, request, session, params) -> Response:
         try:

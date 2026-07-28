@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { accountScope, api, TERMINAL_PHASES } from "../api";
 import type { ChatAction, ChatHistoryTurn } from "../api";
 import { humanizeEvent, statusSentence } from "../humanize";
+import { ChartBlock } from "./Agents";
 import { conciseName } from "../naming";
 import { loadCompose, saveCompose, t, tf, useT } from "../ui";
 import type { TaskView, TimelineEvent } from "../types";
@@ -47,6 +48,14 @@ type Msg =
       actions?: ChatAction[];
       // The model's own thinking behind this reply, when it showed it.
       reasoning?: string;
+      // A book drawn in the bubble: the member's own Life/Files data
+      // as a chart — the data visualization conversation block.
+      block?: {
+        kind: "chart";
+        title: string;
+        unit: string;
+        points: { label: string; value: number }[];
+      } | null;
     }
   // The chat's own nudge about unfinished work — not a model turn, so it
   // never enters the history sent to the assistant. Each mentioned task
@@ -406,6 +415,7 @@ export function Chat({
             text: turn.reply,
             actions: turn.actions,
             reasoning: turn.reasoning || undefined,
+            block: turn.block?.kind === "chart" ? turn.block : null,
           },
         ];
         // OoLu asked for a device sense: the request lands as grant
@@ -655,6 +665,14 @@ export function Chat({
                 <Reasoning text={m.reasoning} />
               )}
               {m.text}
+              {/* The member's own book, drawn in the bubble. */}
+              {m.kind === "assistant" && m.block?.kind === "chart" && (
+                <ChartBlock
+                  title={m.block.title}
+                  unit={m.block.unit}
+                  points={m.block.points}
+                />
+              )}
               {m.kind === "assistant" && m.actions && m.actions.length > 0 && (
                 <div className="tool-chips">
                   {m.actions.map((a, j) => (
