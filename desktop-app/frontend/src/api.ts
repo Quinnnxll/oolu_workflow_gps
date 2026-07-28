@@ -567,6 +567,9 @@ export interface ChatTurnReply {
   // node's full ID they wanted in the clear. The client writes it; the ID
   // never has to be printed in the reply.
   copy?: string | null;
+  // A roster desk's structured piece, rendered in the bubble: a poll
+  // pair to vote on, or the genre chips whose tap speaks back.
+  block?: ChatTurnBlock | null;
   run_id: string | null;
 }
 
@@ -607,6 +610,12 @@ export interface PressGenre {
   label: string;
   description: string;
 }
+
+// A structured piece riding a roster agent's reply — the Poll desk's
+// pair to vote on, or the genre chips whose tap speaks back.
+export type ChatTurnBlock =
+  | { kind: "poll"; pair: PollPair }
+  | { kind: "genres"; items: PressGenre[] };
 
 export interface PressLicense {
   key: string;

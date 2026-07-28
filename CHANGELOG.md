@@ -4,6 +4,32 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The social scientist (A3.1) — the poll floor thinks on purpose:
+
+- **Hypotheses, not hunches** (`src/oolu/press/scientist.py`) — the
+  Poll agent holds standing typed conjectures over signals a pair's
+  two sides objectively differ in: evidence (media vs words alone),
+  depth (the fuller telling), freshness (the newer one). Nothing a
+  model invents; everything a member can check.
+- **Pairs are designed, not just dealt** — when the floor mines a new
+  pair, the strategist chooses among honestly comparable candidates
+  the one that DISCRIMINATES on the least-evidenced hypothesis, so
+  every vote is also a measurement; a floor with nothing
+  discriminating still deals — the fun never waits on the science.
+- **Findings worth sharing report themselves** — only decided,
+  k-anonymous comparisons enter the evidence; a clear pattern reads
+  like a news brief, a genuine split is named a debate worth having,
+  and in between the scientist keeps researching in silence. Each
+  verdict is reported ONCE into the Poll thread (the field note),
+  re-spoken only when fresh evidence flips it; "findings" reads the
+  standing notes any time.
+- **The poll and the genre picking are MESSAGE BLOCKS** — "poll"
+  deals a pair INTO the agent's bubble (vote there; the reveal keeps
+  the floor's honesty laws verbatim), "genres" drops the chips whose
+  tap speaks the pick back through the conversation, and naming a
+  genre in words deals from that stream. The static poll panel is
+  gone — the conversation is the floor.
+
 The market desk (M5) — the thread is the surface:
 
 - **Market joins the roster** — a new agent below OoLu (`market.desk`

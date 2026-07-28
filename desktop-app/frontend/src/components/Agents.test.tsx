@@ -362,27 +362,34 @@ describe("PressPanel (inside the News thread)", () => {
     expect(scheduled?.body).toMatchObject({ enabled: true });
   });
 
-  it("runs a poll: both bylines, vote once, the floor's honest reveal", async () => {
+  it("deals a poll as a message block: bylines, one vote, honest reveal", async () => {
     const POLL: RosterAgent = { ...NEWS, agent_id: "poll", name: "Poll" };
-    routes["GET /v1/press/genres"] = GENRES;
-    routes["GET /v1/press/polls/next"] = {
+    routes["POST /v1/chat"] = {
       status: 200,
       body: {
-        pair_id: "p1",
-        genre: "food",
-        left: {
-          contribution_id: "c1",
-          author: "alice",
-          title: "The steel kettle, tested",
-          excerpt: "Four minutes to a litre.",
+        reply: "Which one? Tap to vote.",
+        source: "desk",
+        agent: "poll",
+        block: {
+          kind: "poll",
+          pair: {
+            pair_id: "p1",
+            genre: "food",
+            left: {
+              contribution_id: "c1",
+              author: "alice",
+              title: "The steel kettle, tested",
+              excerpt: "Four minutes to a litre.",
+            },
+            right: {
+              contribution_id: "c2",
+              author: "bob",
+              title: "A week with the glass kettle",
+              excerpt: "Six minutes, but the lid feels solid.",
+            },
+            created_at: "2026-07-14T09:00:00Z",
+          },
         },
-        right: {
-          contribution_id: "c2",
-          author: "bob",
-          title: "A week with the glass kettle",
-          excerpt: "Six minutes, but the lid feels solid.",
-        },
-        created_at: "2026-07-14T09:00:00Z",
       },
     };
     routes["POST /v1/press/polls/p1/vote"] = {
@@ -398,7 +405,11 @@ describe("PressPanel (inside the News thread)", () => {
     };
     render(<AgentThread agent={POLL} />);
 
-    // Both sides render with their bylines.
+    // "poll" in the conversation deals the pair INTO the bubble.
+    fireEvent.change(screen.getByPlaceholderText("Message Poll…"), {
+      target: { value: "poll" },
+    });
+    fireEvent.click(screen.getByLabelText("Send"));
     expect(await screen.findByText("The steel kettle, tested")).toBeTruthy();
     expect(screen.getByText("A week with the glass kettle")).toBeTruthy();
     expect(await screen.findByText("alice")).toBeTruthy();
@@ -418,37 +429,29 @@ describe("PressPanel (inside the News thread)", () => {
     ).toBeTruthy();
   });
 
-  it("switches the poll stream by genre chip", async () => {
+  it("picks the stream through the genre chips block — the tap speaks", async () => {
     const POLL: RosterAgent = { ...NEWS, agent_id: "poll", name: "Poll" };
-    routes["GET /v1/press/genres"] = GENRES;
-    routes["GET /v1/press/polls/next"] = {
+    routes["POST /v1/chat"] = {
       status: 200,
       body: {
-        pair_id: "p2",
-        genre: "local",
-        left: {
-          contribution_id: "c1",
-          author: "alice",
-          title: "L",
-          excerpt: "l",
-        },
-        right: {
-          contribution_id: "c2",
-          author: "bob",
-          title: "R",
-          excerpt: "r",
-        },
-        created_at: "2026-07-14T09:00:00Z",
+        reply: "Pick a stream.",
+        source: "desk",
+        agent: "poll",
+        block: { kind: "genres", items: GENRES.body.items },
       },
     };
     render(<AgentThread agent={POLL} />);
-    await screen.findByText("L");
-    fireEvent.click(screen.getByRole("button", { name: "Food" }));
-    // The chip IS the stream: the next fetch names the genre.
-    const named = calls.filter(
-      (c) => c.method === "GET" && c.path === "/v1/press/polls/next",
+    fireEvent.change(screen.getByPlaceholderText("Message Poll…"), {
+      target: { value: "genres" },
+    });
+    fireEvent.click(screen.getByLabelText("Send"));
+    fireEvent.click(await screen.findByRole("button", { name: "Food" }));
+    // The tap SPEAKS: the label goes back through the conversation.
+    const spoken = calls.filter(
+      (c) => c.method === "POST" && c.path === "/v1/chat",
     );
-    expect(named.length).toBeGreaterThanOrEqual(2);
+    expect(spoken.length).toBe(2);
+    expect(spoken[1]?.body).toMatchObject({ message: "Food", agent: "poll" });
   });
 
   it("holds the ad slot behind the versioned consent, then labels it", async () => {

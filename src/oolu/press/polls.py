@@ -248,6 +248,17 @@ class PollStore:
             ).fetchone()
         return self._pair(row) if row is not None else None
 
+    def all_pairs(self, *, tenant: str, limit: int = 500) -> list[PollPair]:
+        """The whole floor, newest first — the scientist's evidence
+        read (pair rows only; votes stay behind ``counts``)."""
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                """SELECT * FROM poll_pairs WHERE tenant_id = ?
+                   ORDER BY created_at DESC, pair_id DESC LIMIT ?""",
+                (tenant, int(limit)),
+            ).fetchall()
+        return [self._pair(row) for row in rows]
+
     def pairs_for_genre(self, *, tenant: str, genre: str) -> list[PollPair]:
         with self._conn.lock:
             rows = self._conn.db.execute(
@@ -407,10 +418,14 @@ class PollDesk:
         pairwise: PairwiseStore | None = None,
         *,
         rng: random.Random | None = None,
+        strategist=None,  # Callable[[list[tuple]], tuple] — the scientist's
+        # deal (scientist.choose_pair, curried with the evidence book);
+        # None keeps the plain first-comparable deal.
     ) -> None:
         self._polls = polls
         self._pairwise = pairwise
         self._rng = rng or random.Random()
+        self._strategist = strategist
 
     @property
     def store(self) -> PollStore:
@@ -477,7 +492,12 @@ class PollDesk:
     def _mine(
         self, *, tenant: str, genre: str, records: list[ContentContribution]
     ) -> PollPair | None:
+        """Mint one new pair. With a strategist wired, ALL honestly
+        comparable candidates are gathered (bounded) and the scientist
+        chooses the pair that measures the most — the fun's honesty
+        (the comparable band, no re-mints) is unchanged either way."""
         existing = self._polls.paired_ids(tenant=tenant, genre=genre)
+        candidates: list[tuple[ContentContribution, ContentContribution]] = []
         for i, a in enumerate(records):
             for b in records[i + 1 :]:
                 key = frozenset((a.contribution_id, b.contribution_id))
@@ -485,15 +505,29 @@ class PollDesk:
                     continue
                 if not comparable(a, b):
                     continue
-                return PollPair(
-                    pair_id=str(uuid4()),
-                    tenant_id=tenant,
-                    genre=genre,
-                    left=_side(a),
-                    right=_side(b),
-                    created_at=self._polls.now(),
-                )
-        return None
+                if self._strategist is None:
+                    candidates.append((a, b))
+                    break  # the plain deal: first comparable wins
+                candidates.append((a, b))
+                if len(candidates) >= 40:
+                    break
+            if candidates and (self._strategist is None or len(candidates) >= 40):
+                break
+        if not candidates:
+            return None
+        a, b = (
+            self._strategist(candidates)
+            if self._strategist is not None
+            else candidates[0]
+        )
+        return PollPair(
+            pair_id=str(uuid4()),
+            tenant_id=tenant,
+            genre=genre,
+            left=_side(a),
+            right=_side(b),
+            created_at=self._polls.now(),
+        )
 
     # -- voting and revealing ------------------------------------------ #
     def vote(

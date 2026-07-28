@@ -928,6 +928,9 @@ class GatewayApp:
         self._assistant_history = assistant_history
         self._profile_photos = profile_photos
         self._press = press
+        # The poll floor's social scientist: reported findings, so a
+        # verdict speaks once (lazy — built on the first decided vote).
+        self._poll_findings = None
         self._ad_dividend = ad_dividend
         self._representative = representative
         self._reminders = reminders
@@ -2436,14 +2439,21 @@ class GatewayApp:
                 400, "invalid_request", f"unknown agent: {agent_id}"
             )
         served = None
+        block = None
         if card.agent_id == "news":
             served = self._news_intake_turn(session, body, message)
         elif card.agent_id == "market":
             served = self._market_desk_turn(
                 session, message, request.now or self._clock()
             )
+        elif card.agent_id == "poll":
+            served = self._poll_desk_turn(session, message)
         if served is not None:
-            say, reasoning, source = served
+            # A desk may answer with words alone, or words plus a BLOCK
+            # — a structured piece the client renders in the bubble (a
+            # poll pair to vote on, the genre chips to pick from).
+            say, reasoning, source, *rest = served
+            block = rest[0] if rest else None
         else:
             # The seat is the office: the router is cached and metered per
             # (tenant, purpose), and the actor stamp keeps a shared tenant's
@@ -2493,7 +2503,90 @@ class GatewayApp:
                 "run_id": None,
                 "run": None,
                 "agent": card.agent_id,
+                "block": block,
             },
+        )
+
+    # The Poll thread's deterministic asks — the social scientist's desk.
+    _POLL_PAIR_ASKS = frozenset(
+        {"poll", "next", "next pair", "another", "vote", "play"}
+    )
+    _POLL_GENRE_ASKS = frozenset(
+        {"genres", "genre", "streams", "switch genre", "pick a genre"}
+    )
+    _POLL_FINDING_ASKS = frozenset(
+        {
+            "findings",
+            "report",
+            "patterns",
+            "science",
+            "what did you learn",
+            "what have you learned",
+        }
+    )
+
+    def _poll_desk_turn(self, session, message):
+        """The Poll desk's hand on one thread message — or None for
+        ordinary conversation. The poll and the genre picking are
+        MESSAGE BLOCKS: a pair to vote on in the bubble, the genre
+        chips to tap; naming a genre in words deals from that stream.
+        "findings" reads the scientist's standing field notes."""
+        from ..press import GENRES, PressError, taxonomy_items
+
+        press = self._press
+        if press is None or press.polls is None:
+            return None
+        normal = re.sub(
+            r"\s+", " ", str(message or "").strip().casefold()
+        ).rstrip(".!?")
+        genre = None
+        if normal in GENRES:
+            genre = normal
+        else:
+            for item in taxonomy_items():
+                if normal == item["label"].casefold():
+                    genre = item["key"]
+                    break
+        if genre is None and normal not in self._POLL_PAIR_ASKS:
+            if normal in self._POLL_GENRE_ASKS:
+                return (
+                    "Pick a stream — or say “poll” and I choose by what "
+                    "the floor enjoys.",
+                    None,
+                    "desk",
+                    {"kind": "genres", "items": taxonomy_items()},
+                )
+            if normal in self._POLL_FINDING_ASKS:
+                findings = self._poll_science_judge(session)
+                if not findings:
+                    return (
+                        "Still researching — the floor needs more decided "
+                        "comparisons before any pattern is worth words. "
+                        "Every vote helps.",
+                        None,
+                        "desk",
+                    )
+                return (
+                    "\n\n".join(f.report() for f in findings),
+                    None,
+                    "desk",
+                )
+            return None
+        try:
+            pair = press.polls.next_pair(
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+                corpus=press.store.list(tenant=session.tenant_id, limit=500),
+                genre=genre,
+            )
+        except PressError as exc:
+            return (str(exc), None, "desk")
+        return (
+            "Which one? Tap to vote — the results follow your own choice, "
+            "and every decided comparison teaches the floor's science.",
+            None,
+            "desk",
+            {"kind": "poll", "pair": self._pair_dict(pair)},
         )
 
     def _news_intake_turn(self, session, body, message):
@@ -3518,7 +3611,56 @@ class GatewayApp:
                     genres=(pair.genre,),
                 )
         verdict["learning"] = bool(learning)
+        # The vote just grew the evidence: the scientist re-judges the
+        # floor, and a NEW verdict (or a flipped one) is reported into
+        # the Poll thread — worth sharing, like a news brief or a
+        # debate statement; the same conclusion twice stays silent.
+        for report in self._poll_science_reports(session):
+            if self._assistant_history is not None:
+                self._assistant_history.append(
+                    tenant=session.tenant_id,
+                    principal=session.principal_id,
+                    kind="assistant",
+                    body=report,
+                    agent="poll",
+                )
         return json_response(200, verdict)
+
+    def _poll_findings_store(self):
+        if self._poll_findings is None:
+            from ..press import FindingStore
+
+            self._poll_findings = FindingStore(self._durable.conn)
+        return self._poll_findings
+
+    def _poll_science_judge(self, session):
+        """The floor judged now: findings worth words (pattern or
+        debate), over decided k-anonymous comparisons only."""
+        from ..press import judge
+
+        press = self._press
+        polls = press.polls.store
+        findings, _ = judge(
+            polls.all_pairs(tenant=session.tenant_id),
+            counts_of=lambda pid: polls.counts(pid, tenant=session.tenant_id),
+            contribution_of=lambda cid: press.store.get(
+                cid, tenant=session.tenant_id
+            ),
+        )
+        return findings
+
+    def _poll_science_reports(self, session) -> list[str]:
+        """The NEWLY newsworthy: findings whose verdict just opened or
+        flipped — each reported once, the field-note words."""
+        press = self._press
+        if press is None or press.polls is None:
+            return []
+        store = self._poll_findings_store()
+        reports: list[str] = []
+        for finding in self._poll_science_judge(session):
+            if store.note(tenant=session.tenant_id, finding=finding):
+                reports.append(finding.report())
+        return reports
 
     def _press_poll_stats(self, request, session, params) -> Response:
         press = self._require_polls()

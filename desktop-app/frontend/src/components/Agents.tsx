@@ -27,10 +27,17 @@ import { MarketPanel } from "./Market";
 // the server's (per-account, per-agent); localStorage stays the warm
 // cache exactly like the OoLu chat.
 
+// A structured piece riding an agent's reply — rendered in the bubble:
+// a poll pair to vote on, or the genre chips to pick a stream from.
+type ChatBlock =
+  | { kind: "poll"; pair: PollPair }
+  | { kind: "genres"; items: PressGenre[] };
+
 type AgentMsg = {
   kind: "user" | "assistant";
   text: string;
   reasoning?: string | null;
+  block?: ChatBlock | null;
 };
 
 const cacheKey = (agent: string) => `oolu_agent_${agent}`;
@@ -158,49 +165,19 @@ export function AdSlot({
   );
 }
 
-// The poll floor's surface (A3): one pair at a time — two member pieces
-// side by side, each with its byline; tap to vote; the reveal follows
-// the server's honesty laws verbatim (vote first, floor second). The
-// genre chips ARE the stream switch; no chip = the server's exploration
-// pick.
-export function PollPanel() {
+// The poll, as a MESSAGE BLOCK (A3.1): the pair arrives in the Poll
+// agent's own bubble — two member pieces side by side, each with its
+// byline; tap to vote; the reveal follows the server's honesty laws
+// verbatim (vote first, floor second). Say "poll" for another, name a
+// genre, or tap a chip from the genres block.
+export function PollPairBlock({ pair }: { pair: PollPair }) {
   const tr = useT();
-  const [genres, setGenres] = useState<PressGenre[] | null>(null);
-  const [genre, setGenre] = useState<string | null>(null);
-  const [pair, setPair] = useState<PollPair | null>(null);
   const [verdict, setVerdict] = useState<PollVerdict | null>(null);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
 
-  async function nextPair(chosen: string | null) {
-    setBusy(true);
-    setVerdict(null);
-    setNote("");
-    try {
-      setPair(await api.pressPollNext(chosen ?? undefined));
-    } catch (e) {
-      setPair(null);
-      setNote(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  useEffect(() => {
-    void api
-      .pressGenres()
-      .then((meta) => {
-        setGenres(meta.items);
-        void nextPair(null);
-      })
-      .catch(() => setGenres(null)); // no press on this host: no panel
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  if (genres === null) return null;
-
   async function vote(choice: "left" | "right") {
-    if (!pair || busy) return;
+    if (busy) return;
     setBusy(true);
     try {
       setVerdict(await api.pressPollVote(pair.pair_id, choice));
@@ -211,65 +188,35 @@ export function PollPanel() {
     }
   }
 
-  function switchGenre(key: string) {
-    const next = genre === key ? null : key;
-    setGenre(next);
-    void nextPair(next);
-  }
-
   return (
-    <div className="press-panel poll">
-      <div className="press-head">
-        <span className="press-heading">{tr("poll.heading")}</span>
-      </div>
-      <div className="press-genres">
-        {genres.map((g) => (
+    <div className="poll-block">
+      <div className="poll-pair">
+        {(["left", "right"] as const).map((side) => (
           <button
-            key={g.key}
+            key={side}
             type="button"
-            title={g.description}
-            className={`press-chip${genre === g.key ? " on" : ""}`}
-            onClick={() => switchGenre(g.key)}
+            className={`poll-side${verdict?.choice === side ? " chosen" : ""}`}
+            disabled={busy || verdict?.voted === true}
+            onClick={() => void vote(side)}
           >
-            {g.label}
+            <span className="press-title">{pair[side].title}</span>
+            <span className="press-body">{pair[side].excerpt}</span>
+            <Byline username={pair[side].author} size={20} />
           </button>
         ))}
       </div>
-      {pair && (
-        <div className="poll-pair">
-          {(["left", "right"] as const).map((side) => (
-            <button
-              key={side}
-              type="button"
-              className={`poll-side${
-                verdict?.choice === side ? " chosen" : ""
-              }`}
-              disabled={busy || verdict?.voted === true}
-              onClick={() => void vote(side)}
-            >
-              <span className="press-title">{pair[side].title}</span>
-              <span className="press-body">{pair[side].excerpt}</span>
-              <Byline username={pair[side].author} size={20} />
-            </button>
-          ))}
-        </div>
-      )}
       {verdict && (
         <div className="poll-verdict">
           {verdict.revealed && verdict.counts && verdict.total ? (
-            <>
-              <span>
-                {tf("poll.result", {
-                  left: Math.round(
-                    (100 * verdict.counts.left) / verdict.total,
-                  ),
-                  right: Math.round(
-                    (100 * verdict.counts.right) / verdict.total,
-                  ),
-                  n: verdict.total,
-                })}
-              </span>
-            </>
+            <span>
+              {tf("poll.result", {
+                left: Math.round((100 * verdict.counts.left) / verdict.total),
+                right: Math.round(
+                  (100 * verdict.counts.right) / verdict.total,
+                ),
+                n: verdict.total,
+              })}
+            </span>
           ) : (
             // The server's honesty law, verbatim — "not enough votes
             // yet" and nothing noisier.
@@ -282,16 +229,34 @@ export function PollPanel() {
       )}
       {note && <div className="muted press-empty">{note}</div>}
       {/* The magazine rule: the ad lives BETWEEN the content, labeled. */}
-      {pair && <AdSlot surface="poll" content={pair.pair_id} />}
-      <div className="row">
+      <AdSlot surface="poll" content={pair.pair_id} />
+    </div>
+  );
+}
+
+// The genre picking, as a message block: tapping a chip SPEAKS — the
+// pick goes back through the conversation, and the desk deals from
+// that stream.
+export function GenreChipsBlock({
+  items,
+  onPick,
+}: {
+  items: PressGenre[];
+  onPick: (label: string) => void;
+}) {
+  return (
+    <div className="press-genres">
+      {items.map((g) => (
         <button
-          className="ghost"
-          disabled={busy}
-          onClick={() => void nextPair(genre)}
+          key={g.key}
+          type="button"
+          title={g.description}
+          className="press-chip"
+          onClick={() => onPick(g.label)}
         >
-          {tr("poll.next")}
+          {g.label}
         </button>
-      </div>
+      ))}
     </div>
   );
 }
@@ -980,14 +945,14 @@ export function AgentThread({ agent }: { agent: RosterAgent }) {
     }
   }
 
-  async function send() {
-    const message = draft.trim();
+  async function send(spoken?: string) {
+    const message = (spoken ?? draft).trim();
     if ((!message && pending.length === 0) || busy) return;
     const fileIds = pending.map((f) => f.id);
     const shown =
       message ||
       pending.map((f) => f.name).join(", "); // a bare attachment still shows
-    setDraft("");
+    if (spoken === undefined) setDraft("");
     setPending([]);
     setThread((t) => [...t, { kind: "user", text: shown }]);
     setBusy(true);
@@ -1006,7 +971,12 @@ export function AgentThread({ agent }: { agent: RosterAgent }) {
       );
       setThread((t) => [
         ...t,
-        { kind: "assistant", text: turn.reply, reasoning: turn.reasoning },
+        {
+          kind: "assistant",
+          text: turn.reply,
+          reasoning: turn.reasoning,
+          block: (turn.block as ChatBlock | null | undefined) ?? null,
+        },
       ]);
     } catch (e) {
       setThread((t) => [
@@ -1035,8 +1005,9 @@ export function AgentThread({ agent }: { agent: RosterAgent }) {
             contribution shelf and the contribute form — in-thread, the
             inlineBlock pattern, never a window popping on top. */}
         {agent.agent_id === "news" && <PressPanel />}
-        {/* The poll floor (A3) heads the Poll thread the same way. */}
-        {agent.agent_id === "poll" && <PollPanel />}
+        {/* The poll floor (A3.1) lives IN the conversation: pairs and
+            genre chips arrive as message blocks; nothing heads the
+            thread. */}
         {/* The marketplace: every function block as a form block IN
             this conversation — shop, requests, approvals, orders,
             sell — plus the brief and the list-out. */}
@@ -1056,6 +1027,17 @@ export function AgentThread({ agent }: { agent: RosterAgent }) {
         {thread.map((m, i) => (
           <div key={i} className={`bubble ${m.kind}`}>
             {m.text}
+            {/* The block in the bubble: the poll to vote on, the genre
+                chips whose tap speaks back into the conversation. */}
+            {m.block?.kind === "poll" && (
+              <PollPairBlock pair={m.block.pair} />
+            )}
+            {m.block?.kind === "genres" && (
+              <GenreChipsBlock
+                items={m.block.items}
+                onPick={(label) => void send(label)}
+              />
+            )}
           </div>
         ))}
         {busy && (

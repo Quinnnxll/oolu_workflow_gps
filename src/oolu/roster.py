@@ -67,8 +67,13 @@ ROSTER: tuple[AgentCard, ...] = (
         scope=(
             "I offer pairs of member pieces to compare — vote first, "
             "then see the real numbers (once enough members voted). "
-            "Switch genres any time; with personalization on, your "
-            "votes also shape your News edition."
+            "Say “poll” for a pair, “genres” to pick a stream, or name "
+            "a genre. I am also the floor's social scientist: pairs are "
+            "designed to test standing hypotheses about how this "
+            "community reads, and when a pattern holds — or a genuine "
+            "debate opens — I report the field note here. Ask "
+            "“findings” any time. With personalization on, your votes "
+            "also shape your News edition."
         ),
         ahead=(
             "Affiliate advertising with revenue shared back to "

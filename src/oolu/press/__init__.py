@@ -62,6 +62,14 @@ from .polls import (
     PollStore,
     comparable,
 )
+from .scientist import (
+    HYPOTHESES,
+    MIN_DECIDED,
+    Finding,
+    FindingStore,
+    judge,
+    strategist,
+)
 from .standards import RUBRIC_VERSION, RubricBreakdown, score, select
 from .taxonomy import GENRES, TAXONOMY_VERSION, Genre, taxonomy_items
 
@@ -73,6 +81,10 @@ __all__ = [
     "GATHER_ASK",
     "GATHER_ASK_WORDS",
     "GENRES",
+    "HYPOTHESES",
+    "MIN_DECIDED",
+    "Finding",
+    "FindingStore",
     "INTAKE_LICENSE",
     "K_FLOOR",
     "LICENSES",
@@ -107,8 +119,10 @@ __all__ = [
     "draft_from_material",
     "edition_message",
     "fold_answer",
+    "judge",
     "leak_report",
     "looks_like_material",
+    "strategist",
     "rank_edition",
     "review",
     "score",

@@ -307,18 +307,6 @@ const STRINGS: Record<string, Entry> = {
     fr: "non enregistré — la personnalisation est désactivée",
   },
   // The poll floor (A3).
-  "poll.heading": {
-    en: "Which one? Tap to vote",
-    zh: "哪一个？点一下投票",
-    es: "¿Cuál? Toca para votar",
-    fr: "Lequel ? Touchez pour voter",
-  },
-  "poll.next": {
-    en: "Next pair",
-    zh: "下一对",
-    es: "Siguiente par",
-    fr: "Paire suivante",
-  },
   "poll.result": {
     en: "{left}% vs {right}% · {n} votes",
     zh: "{left}% 对 {right}% · {n} 票",
@@ -3263,8 +3251,6 @@ const ZH_HANT: Record<string, string> = {
   "press.skip": "略過",
   "press.noted": "已記錄",
   "press.notRecorded": "未記錄——個人化未開啟",
-  "poll.heading": "哪一個？點一下投票",
-  "poll.next": "下一對",
   "poll.result": "{left}% 對 {right}% · {n} 票",
   "ads.consentTitle": "贊助內容——由你決定",
   "ads.consentBody":

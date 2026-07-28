@@ -531,6 +531,20 @@ Goal Adherence:
 - [ ] The serendipity slice is present in every edition (property test).
 - [ ] Import scan holds.
 
+**Amended (A3.1) — the social scientist.** The Poll agent thinks and
+finds social patterns on purpose (`press/scientist.py`): standing typed
+hypotheses over signals a pair's sides objectively differ in (evidence,
+depth, freshness); the strategic deal serves the comparable pair that
+measures the least-evidenced hypothesis (`PollDesk(strategist=…)`);
+only decided, k-anonymous comparisons enter the evidence; a clear
+pattern or a genuine debate is reported ONCE per verdict into the Poll
+thread as a field note ("findings" reads them on demand), and anything
+in between keeps researching in silence. The poll and the genre picking
+now arrive as MESSAGE BLOCKS in the conversation (the roster turn's
+``block`` field): a pair to vote on in the bubble, genre chips whose
+tap speaks back — the static panel is gone. Pinned by
+`tests/test_poll_science.py`.
+
 ### A3 — the poll floor (fun on the surface, instruments underneath)
 
 **Status: LANDED** — `press/polls.py`: comparable-pair mining on the
