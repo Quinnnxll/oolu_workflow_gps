@@ -16,6 +16,7 @@ import type {
   TravelBrief,
 } from "../api";
 import { identityHue } from "../avatar";
+import { fileToDrawerContent, pickLocalFiles } from "../device";
 import { loadCompose, saveCompose, tf, useT } from "../ui";
 import { Byline } from "./Byline";
 
@@ -631,6 +632,45 @@ export function TravelPanel() {
   );
 }
 
+// One attached piece of media, fetched with the bearer token and shown
+// by its true type: a photo inline, a clip or a sound with controls.
+// A reference whose file is gone (refs, never copies) renders nothing —
+// honestly absent, never a broken box.
+function PressMedia({
+  contributionId,
+  index,
+  mediaType,
+  name,
+}: {
+  contributionId: string;
+  index: number;
+  mediaType: string;
+  name: string;
+}) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let held: string | null = null;
+    void api.pressMediaUrl(contributionId, index).then((u) => {
+      held = u;
+      setUrl(u);
+    });
+    return () => {
+      if (held) URL.revokeObjectURL(held);
+    };
+  }, [contributionId, index]);
+  if (!url) return null;
+  if (mediaType.startsWith("image/")) {
+    return <img className="press-media" src={url} alt={name} />;
+  }
+  if (mediaType.startsWith("video/")) {
+    return <video className="press-media" src={url} controls title={name} />;
+  }
+  if (mediaType.startsWith("audio/")) {
+    return <audio className="press-media" src={url} controls title={name} />;
+  }
+  return null;
+}
+
 // The contribution spine's surface (A1): the shelf of live pieces and
 // the contribute form. Everything renders from the server's own words —
 // the taxonomy, the license terms — never hardcoded copies; a host from
@@ -764,6 +804,42 @@ export function PressPanel() {
     }
   }
 
+  // Multimedia straight from the device: the blob door keeps a photo's
+  // or a clip's TRUE bytes; a host without a blob store still takes
+  // what fits inline. Saved files land in the drawer (yours, reusable)
+  // and attach to the piece being written.
+  async function uploadMedia() {
+    const picked = await pickLocalFiles();
+    if (picked.length === 0) return;
+    setError("");
+    for (const file of picked) {
+      try {
+        let saved: FileMeta;
+        try {
+          saved = await api.uploadFileBytes(file);
+        } catch {
+          const { content, mediaType } = await fileToDrawerContent(file);
+          saved = await api.createFile(
+            file.name,
+            content,
+            undefined,
+            "",
+            mediaType,
+          );
+        }
+        setDrawer((d) => [saved, ...d]);
+        setAttached((a) =>
+          a.includes(saved.file_id) || a.length >= 6
+            ? a
+            : [...a, saved.file_id],
+        );
+      } catch (e) {
+        // The refusal names the file — shown, never swallowed.
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    }
+  }
+
   return (
     <div className="press-panel">
       {newsroom && (
@@ -808,6 +884,21 @@ export function PressPanel() {
             <div key={story.story_id} className="press-card story">
               <div className="press-title">{story.headline}</div>
               <div className="press-body">{story.prose}</div>
+              {/* The lineage's attached media — photos, clips, sound —
+                  by reference through the press media door. */}
+              {(story.media ?? []).length > 0 && (
+                <div className="press-media-strip">
+                  {(story.media ?? []).map((m) => (
+                    <PressMedia
+                      key={`${m.contribution_id}:${m.index}`}
+                      contributionId={m.contribution_id}
+                      index={m.index}
+                      mediaType={m.media_type}
+                      name={m.name}
+                    />
+                  ))}
+                </div>
+              )}
               {/* Every cited contributor's byline — the attribution the
                   lineage recorded at composition time. */}
               <div className="press-bylines">
@@ -823,31 +914,29 @@ export function PressPanel() {
                     {genres.find((g) => g.key === key)?.label ?? key}
                   </span>
                 ))}
+                {/* The taps speak emoji; the words stay for the screen
+                    reader. A tap adjusts the member's semantic taste —
+                    under their own consent, immediately. */}
                 <button
-                  className="linklike"
+                  className="linklike press-tap"
+                  title={tr("press.like")}
+                  aria-label={tr("press.like")}
                   onClick={() => void feedback(story, "like")}
                 >
-                  {tr("press.like")}
+                  👍
                 </button>
                 <button
-                  className="linklike"
+                  className="linklike press-tap"
+                  title={tr("press.skip")}
+                  aria-label={tr("press.skip")}
                   onClick={() => void feedback(story, "skip")}
                 >
-                  {tr("press.skip")}
+                  ⏭️
                 </button>
                 {noted[story.story_id] && (
                   <span className="muted">{noted[story.story_id]}</span>
                 )}
               </div>
-              {/* The reasons, on demand: the rubric's factor breakdown. */}
-              <details className="press-why">
-                <summary>{tr("press.why")}</summary>
-                <div className="muted">
-                  {Object.entries(story.breakdown)
-                    .map(([factor, value]) => `${factor}: ${value}`)
-                    .join(" · ")}
-                </div>
-              </details>
             </div>
           ))}
           {/* The ad between the stories — never inside the prose. */}
@@ -896,6 +985,17 @@ export function PressPanel() {
                 {g.label}
               </button>
             ))}
+          </div>
+          {/* Multimedia rides along: photos, clips, sound — uploaded
+              from the device, or attached from the drawer as refs. */}
+          <div className="row">
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => void uploadMedia()}
+            >
+              {tr("press.upload")}
+            </button>
           </div>
           {drawer.length > 0 && (
             <details className="press-attach">
@@ -961,6 +1061,19 @@ export function PressPanel() {
           </div>
           <div className="press-title">{c.title}</div>
           <div className="press-body">{c.body}</div>
+          {c.media.length > 0 && (
+            <div className="press-media-strip">
+              {c.media.map((m, index) => (
+                <PressMedia
+                  key={`${c.contribution_id}:${index}`}
+                  contributionId={c.contribution_id}
+                  index={index}
+                  mediaType={m.media_type}
+                  name={m.name}
+                />
+              ))}
+            </div>
+          )}
           <div className="press-meta">
             {c.genres.map((key) => (
               <span key={key} className="press-chip on">

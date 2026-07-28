@@ -239,6 +239,12 @@ const STRINGS: Record<string, Entry> = {
     es: "Adjuntar desde Archivos",
     fr: "Joindre depuis Fichiers",
   },
+  "press.upload": {
+    en: "Add photo, video, or audio",
+    zh: "添加照片、视频或音频",
+    es: "Añadir foto, vídeo o audio",
+    fr: "Ajouter une photo, une vidéo ou un son",
+  },
   "press.consent": {
     en: "I've read the license and consent to publish under it",
     zh: "我已阅读许可条款，同意据此发布",
@@ -335,12 +341,6 @@ const STRINGS: Record<string, Entry> = {
     zh: "未记录——个性化未开启",
     es: "no registrado: la personalización está desactivada",
     fr: "non enregistré — la personnalisation est désactivée",
-  },
-  "press.why": {
-    en: "Why this story",
-    zh: "为什么选它",
-    es: "Por qué esta historia",
-    fr: "Pourquoi cet article",
   },
   // The poll floor (A3).
   "poll.heading": {
@@ -3288,6 +3288,7 @@ const ZH_HANT: Record<string, string> = {
   "press.titlePh": "標題",
   "press.bodyPh": "發生了什麼？照你看到的寫下來。",
   "press.attach": "從檔案附加",
+  "press.upload": "新增照片、影片或音訊",
   "press.consent": "我已閱讀授權條款，同意據此發布",
   "press.publish": "發布",
   "press.unpublish": "撤下",
@@ -3304,7 +3305,6 @@ const ZH_HANT: Record<string, string> = {
   "press.skip": "略過",
   "press.noted": "已記錄",
   "press.notRecorded": "未記錄——個人化未開啟",
-  "press.why": "為什麼選它",
   "poll.heading": "哪一個？點一下投票",
   "poll.next": "下一對",
   "poll.result": "{left}% 對 {right}% · {n} 票",

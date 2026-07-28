@@ -22,6 +22,7 @@ const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
     status: hit.status,
     text: async () => JSON.stringify(hit.body),
     json: async () => hit.body,
+    blob: async () => new Blob([JSON.stringify(hit.body)]),
   } as Response;
 });
 
@@ -224,7 +225,7 @@ describe("PressPanel (inside the News thread)", () => {
     expect(unpublish).toBeTruthy();
   });
 
-  it("renders stories with lineage bylines, reasons on demand, honest taps", async () => {
+  it("renders stories with lineage bylines, hidden scoring, emoji taps", async () => {
     routes["GET /v1/press/genres"] = GENRES;
     routes["GET /v1/press/contributions"] = { status: 200, body: { items: [] } };
     routes["GET /v1/press/stories"] = {
@@ -240,7 +241,6 @@ describe("PressPanel (inside the News thread)", () => {
               { contribution_id: "c1", author: "alice", weight: 0.6 },
               { contribution_id: "c2", author: "bob", weight: 0.4 },
             ],
-            breakdown: { selection: 0.57, inspiring: 0.7, rubric_version: 1 },
             rubric_version: 1,
             source: "desk",
             created_at: "2026-07-13T08:00:00Z",
@@ -260,18 +260,65 @@ describe("PressPanel (inside the News thread)", () => {
     // Both cited contributors' bylines render — the lineage speaks.
     expect(await screen.findByText("alice")).toBeTruthy();
     expect(await screen.findByText("bob")).toBeTruthy();
-    // The reasons on demand: the rubric's factor breakdown.
-    fireEvent.click(screen.getByText("Why this story"));
-    expect(screen.getByText(/selection: 0.57/)).toBeTruthy();
-    // A tap answers honestly when personalization is off.
-    fireEvent.click(screen.getByText("Like"));
+    // The scoring stays the house's own: no "why" panel renders.
+    expect(screen.queryByText("Why this story")).toBeNull();
+    // The taps speak emoji, the words stay for the screen reader — and
+    // a tap answers honestly when personalization is off.
+    fireEvent.click(screen.getByLabelText("Like"));
     expect(
       await screen.findByText("not recorded — personalization is off"),
     ).toBeTruthy();
+    expect(screen.getByLabelText("Skip").textContent).toContain("⏭");
     const tap = calls.find(
       (c) => c.method === "POST" && c.path === "/v1/press/stories/st1/feedback",
     );
     expect(tap?.body).toMatchObject({ signal: "like" });
+  });
+
+  it("renders a story's attached media through the press media door", async () => {
+    const createURL = vi.fn(() => "blob:media-1");
+    URL.createObjectURL = createURL as unknown as typeof URL.createObjectURL;
+    URL.revokeObjectURL = vi.fn() as unknown as typeof URL.revokeObjectURL;
+    routes["GET /v1/press/genres"] = GENRES;
+    routes["GET /v1/press/contributions"] = { status: 200, body: { items: [] } };
+    routes["GET /v1/press/stories"] = {
+      status: 200,
+      body: {
+        items: [
+          {
+            story_id: "st1",
+            headline: "The pier queues again",
+            prose: "Forty stalls returned.",
+            genres: ["local"],
+            lineage: [{ contribution_id: "c1", author: "alice", weight: 1 }],
+            rubric_version: 1,
+            source: "desk",
+            created_at: "2026-07-13T08:00:00Z",
+            media: [
+              {
+                contribution_id: "c1",
+                index: 0,
+                media_type: "image/jpeg",
+                name: "pier.jpg",
+              },
+            ],
+          },
+        ],
+        personalized: false,
+        edition_schedule: null,
+      },
+    };
+    render(<AgentThread agent={NEWS} />);
+
+    // The photo rides the lineage: fetched through the press media door
+    // (the bearer token travels with it) and shown as an object URL.
+    const img = await screen.findByAltText("pier.jpg");
+    expect(img.getAttribute("src")).toBe("blob:media-1");
+    const fetched = calls.find(
+      (c) =>
+        c.method === "GET" && c.path === "/v1/press/contributions/c1/media/0",
+    );
+    expect(fetched).toBeTruthy();
   });
 
   it("cranks the newsroom and toggles the morning edition", async () => {
@@ -408,7 +455,6 @@ describe("PressPanel (inside the News thread)", () => {
             prose: "Forty stalls returned.",
             genres: ["local"],
             lineage: [{ contribution_id: "c1", author: "alice", weight: 1 }],
-            breakdown: { selection: 0.5 },
             rubric_version: 1,
             source: "desk",
             created_at: "2026-07-15T08:00:00Z",

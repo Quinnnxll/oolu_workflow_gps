@@ -449,6 +449,27 @@ provenance law, model contract + fallback, two-members-two-orderings,
 the serendipity property, the pulse fire end-to-end) and the story
 cases in `Agents.test.tsx`.
 
+**Amended (A2.1)** — three decisions revise the landed surface without
+touching the rubric or the lineage law. (1) *The scoring is the house's
+own*: the factor breakdown stays recorded and versioned but no longer
+rides the member-facing wire — the "reasons on demand" panel is gone;
+the order speaks for itself. (2) *Semantic taste joins genre affinity*
+(`press/personalize.py`): under the same one consent switch, the
+edition is additionally bent by the member's own semantics — the words
+of stories they tapped (👍 attracts likes-alike and stores the story's
+words next to the signal; ⏭ repels) and the member's OWN turns in
+their OoLu and News threads (attraction only — talking about a subject
+is interest, never a skip). Similarity is the one `retrieval.py`
+scorer; the bend is bounded (`SEMANTIC_PULL`), composes with the genre
+pull in the open, and the serendipity slice still holds the last slot.
+Taste rows ride the same erasure as every preference signal. (3)
+*Multimedia rides the contribution into the story*: upload straight
+from the device in the compose form (blob door first, inline fallback),
+the media-type table grown (webp/webm/quicktime/m4a/ogg/wav), and a
+story's payload names its lineage's attachments by reference — served
+through the press media door with true bytes (inline data-URL rows
+decoded), honestly absent once the author unpublishes.
+
 Goal: News selects and composes stories from contributions only, to a
 typed editorial rubric, and delivers each member a personal edition.
 

@@ -546,8 +546,14 @@ _MEDIA_TYPES: dict[str, str] = {
     ".jpeg": "image/jpeg",
     ".png": "image/png",
     ".gif": "image/gif",
+    ".webp": "image/webp",
     ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".mov": "video/quicktime",
     ".mp3": "audio/mpeg",
+    ".m4a": "audio/mp4",
+    ".ogg": "audio/ogg",
+    ".wav": "audio/wav",
 }
 
 
@@ -2754,9 +2760,11 @@ class GatewayApp:
             )
         return press
 
-    @staticmethod
-    def _story_dict(story) -> dict:
-        return {
+    def _story_dict(self, story) -> dict:
+        # The rubric's factor breakdown stays recorded (durable, on the
+        # audit trail) but never renders to the member: the scoring is
+        # the house's own working — the order speaks for itself.
+        payload = {
             "story_id": story.story_id,
             "headline": story.headline,
             "prose": story.prose,
@@ -2771,11 +2779,32 @@ class GatewayApp:
                 }
                 for s in story.lineage
             ],
-            "breakdown": story.breakdown,  # why it was selected
             "rubric_version": story.rubric_version,
             "source": story.source,
             "created_at": story.created_at.isoformat(),
+            "media": [],
         }
+        # The lineage's attached media, addressable through the press
+        # media door — refs, never copies: a contribution the author has
+        # since unpublished honestly drops out of the strip.
+        press = self._press
+        if press is not None:
+            for share in story.lineage:
+                record = press.store.get(
+                    share.contribution_id, tenant=story.tenant_id
+                )
+                if record is None:
+                    continue
+                for index, ref in enumerate(record.media):
+                    payload["media"].append(
+                        {
+                            "contribution_id": record.contribution_id,
+                            "index": index,
+                            "media_type": ref.media_type,
+                            "name": ref.name,
+                        }
+                    )
+        return payload
 
     def _press_personalized(self, session) -> bool:
         """The consent switch, read where it is enforced: personalization
@@ -2786,6 +2815,32 @@ class GatewayApp:
             session.tenant_id, session.principal_id
         )
         return effective.get("press.personalize") is True
+
+    def _member_taste(self, session, press):
+        """The member's semantic taste: their taps (liked and skipped
+        story texts) plus their OWN words from the OoLu and News threads
+        — never the assistant's. Gathered only under the one consent
+        switch (the caller checks it); None when there is nothing to
+        lean on, so the edition stays honestly neutral."""
+        if press.preferences is None:
+            return None
+        spoken: list[str] = []
+        if self._assistant_history is not None:
+            for agent in ("oolu", "news"):
+                for turn in self._assistant_history.history(
+                    tenant=session.tenant_id,
+                    principal=session.principal_id,
+                    limit=100,
+                    agent=agent,
+                ):
+                    if turn["kind"] == "user" and turn["body"]:
+                        spoken.append(turn["body"])
+        taste = press.preferences.taste(
+            tenant=session.tenant_id,
+            principal=session.principal_id,
+            spoken=spoken,
+        )
+        return taste or None
 
     def _edition_schedule_row(self, session):
         from ..press import EDITION_PULSE_GOAL
@@ -2798,9 +2853,10 @@ class GatewayApp:
         return None
 
     def _press_stories(self, request, session, params) -> Response:
-        """The caller's edition: neutral rubric order for everyone;
-        affinity-bent (with the serendipity slice) only under the
-        member's own consent."""
+        """The caller's edition: neutral rubric order for everyone; bent
+        only under the member's own consent — by genre affinity AND by
+        semantic taste (their taps, and their own words in the OoLu and
+        News threads), with the serendipity slice standing."""
         from ..press import EDITION_SIZE, rank_edition
 
         press = self._require_newsroom()
@@ -2808,17 +2864,21 @@ class GatewayApp:
         stories = press.stories.list(tenant=session.tenant_id, limit=100)
         personalized = self._press_personalized(session)
         affinity = None
+        taste = None
         if personalized and press.preferences is not None:
             affinity = press.preferences.genre_affinity(
                 tenant=session.tenant_id, principal=session.principal_id
             )
-        edition = rank_edition(stories, affinity=affinity or None, size=size)
+            taste = self._member_taste(session, press)
+        edition = rank_edition(
+            stories, affinity=affinity or None, taste=taste, size=size
+        )
         schedule = self._edition_schedule_row(session)
         return json_response(
             200,
             {
                 "items": [self._story_dict(s) for s in edition],
-                "personalized": bool(affinity),
+                "personalized": bool(affinity) or taste is not None,
                 "edition_schedule": (
                     self._pulse_row(schedule, request.now or self._clock())
                     if schedule is not None
@@ -2838,7 +2898,11 @@ class GatewayApp:
 
     def _press_story_feedback(self, request, session, params) -> Response:
         """One tap, honestly handled: recorded only under the member's
-        own consent — and the answer says which it was."""
+        own consent — and the answer says which it was. The tap keeps
+        the story's own words next to the signal, so it adjusts the
+        member's SEMANTIC taste, not just their genre leaning."""
+        from ..press import taste_snippet
+
         press = self._require_newsroom()
         story = press.stories.get(
             params["story_id"], tenant=session.tenant_id
@@ -2860,6 +2924,7 @@ class GatewayApp:
             signal=signal,
             subject=f"story:{story.story_id}",
             genres=story.genres,
+            snippet=taste_snippet(story.headline, story.prose),
         )
         return json_response(200, {"recorded": True})
 
@@ -2970,6 +3035,7 @@ class GatewayApp:
             )
             stories = press.stories.list(tenant=schedule.tenant, limit=100)
             affinity = None
+            taste = None
             if (
                 self._press_personalized(session)
                 and press.preferences is not None
@@ -2977,7 +3043,10 @@ class GatewayApp:
                 affinity = press.preferences.genre_affinity(
                     tenant=schedule.tenant, principal=schedule.principal
                 )
-            edition = rank_edition(stories, affinity=affinity or None)
+                taste = self._member_taste(session, press)
+            edition = rank_edition(
+                stories, affinity=affinity or None, taste=taste
+            )
             message = edition_message(edition, skipped=skipped)
             if self._assistant_history is not None:
                 self._assistant_history.append(
@@ -4156,11 +4225,23 @@ class GatewayApp:
             data = self._files.read_bytes(file)
         except FileTooLargeError as exc:
             raise GatewayError(404, "not_found", str(exc)) from exc
-        return Response(
-            status=200,
-            body=data,
-            content_type=file.media_type or "application/octet-stream",
-        )
+        media_type = file.media_type or "application/octet-stream"
+        # An inline drawer row keeps binary content as a data URL; this
+        # door serves the TRUE bytes either way, typed honestly — a
+        # photo or clip renders the same whichever shape it is stored in.
+        if not file.blob_ref and file.content.startswith("data:"):
+            from base64 import b64decode
+
+            header, _, encoded = file.content.partition(",")
+            if ";base64" in header:
+                try:
+                    data = b64decode(encoded)
+                    media_type = (
+                        header[len("data:") :].split(";")[0] or media_type
+                    )
+                except ValueError:
+                    pass  # served as stored — never a 500 over one bad row
+        return Response(status=200, body=data, content_type=media_type)
 
     # ------------------------------------------------------------------ #
     # Friends: people talking to people on the same host.                 #

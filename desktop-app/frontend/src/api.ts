@@ -633,12 +633,20 @@ export interface Contribution {
 }
 
 // A composed story (A2): every cited contributor in the lineage with the
-// weight recorded at composition time, and the rubric's factor breakdown
-// — why it was selected, renderable on demand.
+// weight recorded at composition time. The rubric's factor breakdown
+// stays the house's own working — it never rides the wire; the lineage's
+// attached media does, addressable through the press media door.
 export interface StoryLineage {
   contribution_id: string;
   author: string;
   weight: number;
+}
+
+export interface PressMediaRef {
+  contribution_id: string;
+  index: number;
+  media_type: string;
+  name: string;
 }
 
 export interface Story {
@@ -647,10 +655,10 @@ export interface Story {
   prose: string;
   genres: string[];
   lineage: StoryLineage[];
-  breakdown: Record<string, number>;
   rubric_version: number;
   source: string; // "model" (the seat composed) | "desk" (verbatim, credited)
   created_at: string;
+  media?: PressMediaRef[];
 }
 
 export interface EditionSchedule {
@@ -1454,6 +1462,29 @@ export const api = {
       "POST",
       `/v1/press/contributions/${encodeURIComponent(contributionId)}/unpublish`,
     ),
+  // A published attachment's bytes as an object URL the media tags can
+  // show (fetch carries the bearer token — a plain src cannot). Null
+  // when the referenced file is honestly gone (refs, never copies).
+  pressMediaUrl: async (
+    contributionId: string,
+    index: number,
+  ): Promise<string | null> => {
+    const headers: Record<string, string> = {};
+    const token = apiToken();
+    if (token) headers["Authorization"] = "Bearer " + token;
+    try {
+      const res = await fetch(
+        BASE() +
+          `/v1/press/contributions/${encodeURIComponent(contributionId)}` +
+          `/media/${index}`,
+        { headers },
+      );
+      if (!res.ok) return null;
+      return URL.createObjectURL(await res.blob());
+    } catch {
+      return null;
+    }
+  },
   // The newsroom (A2): the caller's edition — neutral for everyone,
   // affinity-bent only under their own consent; the server says which.
   pressStories: () =>

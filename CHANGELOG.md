@@ -4,6 +4,38 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The personalized newsroom (A2.1) — the member's own semantics, and
+multimedia on the shelf:
+
+- **Multimedia rides the contribution** (`src/oolu/press/`, the News
+  surface) — photos, clips, and sound upload straight from the device
+  in the compose form: the blob door keeps the true bytes, a host
+  without a blob store takes what fits inline, and the media-type
+  table now names webp/webm/quicktime/m4a/ogg/wav. A story carries
+  its lineage's attachments by reference — the press media door
+  serves true bytes (an inline data-URL row decoded, never
+  base64-as-image), and a contribution the author unpublished
+  honestly drops out of the strip.
+- **The scoring is the house's own** — the rubric's factor breakdown
+  stays recorded (durable, versioned, on the audit trail) but no
+  longer rides the member-facing wire, and the "why this story"
+  panel is gone: the order speaks for itself.
+- **The member's own words bend the order**
+  (`src/oolu/press/personalize.py`) — under the one consent switch,
+  the edition is bent by semantic taste: what the member said in
+  their OoLu and News threads (their OWN turns only, attraction
+  only) and the words of what they tapped. Similarity is the one
+  retrieval scorer — deterministic, model-free — the bend is bounded
+  and composes with the genre pull in the open, and the serendipity
+  slice still holds the last slot.
+- **A tap adjusts the taste immediately** — the feedback buttons
+  speak emoji (👍 / ⏭, the words kept for the screen reader) and a
+  tap stores the story's own words next to the signal: liked texts
+  attract likes-alike, skipped texts repel, a verbatim tap speaks
+  decisively, and erasure empties the taste with the rest of the
+  member's signals. Old preference tables gain the snippet column by
+  migration; old rows stand as genre history.
+
 The science stack (R5) — the loop closes, and nothing crowns itself:
 
 - **State changes are earned, not claimed** (`src/oolu/science/`) — a

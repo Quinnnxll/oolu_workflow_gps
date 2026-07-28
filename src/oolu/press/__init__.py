@@ -35,6 +35,12 @@ from .editions import (
     rank_edition,
 )
 from .newsroom import LineageShare, Newsroom, Story, StoryStore
+from .personalize import (
+    SEMANTIC_PULL,
+    Taste,
+    semantic_affinity,
+    taste_snippet,
+)
 from .polls import (
     K_FLOOR,
     PairwiseStore,
@@ -58,8 +64,10 @@ __all__ = [
     "MAX_MEDIA",
     "MAX_TITLE_CHARS",
     "RUBRIC_VERSION",
+    "SEMANTIC_PULL",
     "SIMILARITY_FLAG",
     "TAXONOMY_VERSION",
+    "Taste",
     "ContentContribution",
     "ContributionStore",
     "Genre",
@@ -83,5 +91,7 @@ __all__ = [
     "rank_edition",
     "score",
     "select",
+    "semantic_affinity",
+    "taste_snippet",
     "taxonomy_items",
 ]

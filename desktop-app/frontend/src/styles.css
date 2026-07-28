@@ -2677,6 +2677,37 @@ button.ghost {
   font-size: 0.85em;
 }
 
+/* Attached multimedia on a piece or a story: photos inline, clips and
+   sound with their controls — bounded, never a layout takeover. */
+.press-media-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.press-media-strip img.press-media {
+  max-width: 100%;
+  max-height: 240px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.press-media-strip video.press-media {
+  max-width: 100%;
+  max-height: 240px;
+  border-radius: 8px;
+}
+
+.press-media-strip audio.press-media {
+  width: 100%;
+}
+
+/* The taps speak emoji — a touch larger than the words they replaced. */
+.press-tap {
+  font-size: 1.15em;
+  line-height: 1;
+}
+
 /* ---- the poll floor (agents-expansion A3) ------------------------------- */
 .poll-pair {
   display: grid;
