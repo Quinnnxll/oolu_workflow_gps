@@ -4,6 +4,31 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Life books (L1) — one shared function, one private book per member:
+
+- **The architecture** (`src/oolu/lifebooks.py`) — the prebuilt
+  personal nodes (Invoice Scan, Cashflow, Stock, Automation,
+  Reminders, Tasks, Calendar) share ONE central registry owned by the
+  OoLu official account (`oolu-official`): members never own the
+  function, so there is nothing per-member to fork or leak through —
+  while each member's DATA is one private file per book in their own
+  Life/Files drawer, behind the drawer's memories gate. Nobody else
+  reads it: not the node, not an admin, not another member.
+- **The pointer is the command** — `books/<kind>.json` is the one
+  place a book ever lives; OoLu reads and writes through the pointer
+  reliably (typed rows `{at, label, value, note}`, deduplicated, so a
+  re-run never doubles a book).
+- **Everything documented, at one glance** — `GET /v1/life/books`
+  names every book with its pointer and count;
+  `POST /v1/life/books/import` pulls what the nodes already
+  documented (reminders, calendar events, standing automation
+  triggers) into the member's own books, idempotently.
+- **The data visualization conversation block** — "show cashflow" (or
+  chart/graph any book) in OoLu's own conversation answers with a
+  CHART BLOCK drawn in the bubble from the member's own book — clean
+  horizontal bars, pure CSS, deterministic, before any model spend;
+  `GET /v1/life/books/{kind}/chart` serves the same points anywhere.
+
 The explorer desk (A6.1) — closest products, real categories,
 decisions that end:
 

@@ -2694,6 +2694,50 @@ button.ghost {
   line-height: 1;
 }
 
+/* The data visualization conversation block: the member's own book as
+   clean horizontal bars — the widest bar is the scale. */
+.chart-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  min-width: 240px;
+}
+
+.chart-title {
+  font-weight: 600;
+}
+
+.chart-row {
+  display: grid;
+  grid-template-columns: 88px 1fr auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.chart-label {
+  font-size: 0.8em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chart-bar {
+  height: 12px;
+  border-radius: 6px;
+  background: hsl(210 55% 48%);
+  min-width: 2px;
+}
+
+.chart-bar.neg {
+  background: hsl(8 60% 48%);
+}
+
+.chart-value {
+  font-size: 0.8em;
+  font-variant-numeric: tabular-nums;
+}
+
 /* The Market thread's form blocks: the whole marketplace as collapsible
    sections IN the conversation — the press-shelf pattern, grown. */
 .market-panel {

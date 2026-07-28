@@ -618,6 +618,12 @@ export type ChatTurnBlock =
   | { kind: "genres"; items: PressGenre[] }
   | { kind: "categories"; items: { category: string; followed: boolean }[] }
   | {
+      kind: "chart";
+      title: string;
+      unit: string;
+      points: { label: string; value: number }[];
+    }
+  | {
       kind: "products";
       items: CommerceListing[];
       mode: string;

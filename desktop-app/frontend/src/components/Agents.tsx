@@ -36,6 +36,12 @@ type ChatBlock =
   | { kind: "genres"; items: PressGenre[] }
   | { kind: "categories"; items: { category: string; followed: boolean }[] }
   | {
+      kind: "chart";
+      title: string;
+      unit: string;
+      points: { label: string; value: number }[];
+    }
+  | {
       kind: "products";
       items: {
         listing_id: string;
@@ -245,6 +251,43 @@ export function PollPairBlock({ pair }: { pair: PollPair }) {
       {note && <div className="muted press-empty">{note}</div>}
       {/* The magazine rule: the ad lives BETWEEN the content, labeled. */}
       <AdSlot surface="poll" content={pair.pair_id} />
+    </div>
+  );
+}
+
+// The data visualization panel, as a conversation block: the member's
+// own book drawn as clean horizontal bars — pure CSS, no library, the
+// widest bar is the scale. Shared by OoLu's chat and the agent threads.
+export function ChartBlock({
+  title,
+  unit,
+  points,
+}: {
+  title: string;
+  unit: string;
+  points: { label: string; value: number }[];
+}) {
+  const top = Math.max(...points.map((p) => Math.abs(p.value)), 1);
+  return (
+    <div className="chart-block">
+      <div className="chart-title">
+        {title}
+        {unit ? <span className="muted"> · {unit}</span> : null}
+      </div>
+      {points.map((p, i) => (
+        <div key={`${p.label}:${i}`} className="chart-row">
+          <span className="chart-label" title={p.label}>
+            {p.label}
+          </span>
+          <span
+            className={`chart-bar${p.value < 0 ? " neg" : ""}`}
+            style={{ width: `${(Math.abs(p.value) / top) * 100}%` }}
+          />
+          <span className="chart-value">
+            {Number.isInteger(p.value) ? p.value : p.value.toFixed(2)}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -1051,6 +1094,13 @@ export function AgentThread({ agent }: { agent: RosterAgent }) {
               <GenreChipsBlock
                 items={m.block.items}
                 onPick={(label) => void send(label)}
+              />
+            )}
+            {m.block?.kind === "chart" && (
+              <ChartBlock
+                title={m.block.title}
+                unit={m.block.unit}
+                points={m.block.points}
               />
             )}
             {/* The Explorer's followable categories: the tap SPEAKS. */}

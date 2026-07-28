@@ -1573,6 +1573,13 @@ class GatewayApp:
         # a unique listing id hits exactly; anything else finds the
         # CLOSEST existing products (the one retrieval scorer).
         r.add("GET", "/v1/commerce/search", self._commerce_search)
+        # Life books: the prebuilt nodes' one architecture — the shared
+        # function is the house's; each member's data is ONE private
+        # file per book in their own Life drawer, at a stable pointer.
+        r.add("GET", "/v1/life/books", self._life_books)
+        r.add("POST", "/v1/life/books/import", self._life_books_import)
+        r.add("GET", "/v1/life/books/{kind}", self._life_book_rows)
+        r.add("GET", "/v1/life/books/{kind}/chart", self._life_book_chart)
         # What EXISTS to follow: the categories real listings and open
         # requests actually carry — never an invented taxonomy.
         r.add("GET", "/v1/explorer/categories", self._explorer_categories)
@@ -2013,6 +2020,39 @@ class GatewayApp:
         if roster_agent and roster_agent != "oolu":
             return self._roster_turn(
                 request, session, body, roster_agent, message, history
+            )
+        # A book asked for by name ("show cashflow") answers as a CHART
+        # BLOCK from the member's own Life/Files — deterministic, before
+        # any model spend.
+        booked = self._book_command(session, message)
+        if booked is not None:
+            say, block = booked
+            if self._assistant_history is not None and not body.get("node_id"):
+                self._assistant_history.append(
+                    tenant=session.tenant_id,
+                    principal=session.principal_id,
+                    kind="user",
+                    body=message,
+                )
+                self._assistant_history.append(
+                    tenant=session.tenant_id,
+                    principal=session.principal_id,
+                    kind="assistant",
+                    body=say,
+                )
+            return json_response(
+                200,
+                {
+                    "reply": say,
+                    "source": "desk",
+                    "actions": [],
+                    "reasoning": None,
+                    "device": None,
+                    "copy": None,
+                    "run_id": None,
+                    "run": None,
+                    "block": block,
+                },
             )
         # The assistant's hands: the caller's own files, tenant-bound —
         # and, inside a node's interact window, that node's own desk.
@@ -2942,6 +2982,197 @@ class GatewayApp:
         scored = [(s, x) for s, x in scored if s > 0.05]
         scored.sort(key=lambda pair: (-pair[0], pair[1].listing_id))
         return [x for _, x in scored[: int(limit)]]
+
+    # ------------------------------------------------------------------ #
+    # Life books: one shared function, one private book per member.       #
+    # ------------------------------------------------------------------ #
+    def _require_books(self):
+        if self._files is None:
+            raise GatewayError(404, "not_found", "this host keeps no drawer")
+        from .. import lifebooks
+
+        return lifebooks
+
+    def _life_books(self, request, session, params) -> Response:
+        """Every book at one glance: kind, title, the stable pointer,
+        and how many rows the member's own file holds."""
+        books = self._require_books()
+        return json_response(
+            200,
+            {
+                "official_owner": books.OFFICIAL_OWNER,
+                "items": [
+                    {
+                        "kind": b.kind,
+                        "title": b.title,
+                        "unit": b.unit,
+                        "pointer": books.pointer(b.kind),
+                        "rows": len(
+                            books.read_rows(
+                                self._files,
+                                tenant=session.tenant_id,
+                                owner=session.principal_id,
+                                kind=b.kind,
+                            )
+                        ),
+                    }
+                    for b in books.BOOKS.values()
+                ],
+            },
+        )
+
+    def _life_books_import(self, request, session, params) -> Response:
+        """Everything the prebuilt nodes documented, imported into the
+        member's OWN Life/Files books — reminders, calendar events, and
+        standing automation triggers today; idempotent by dedup."""
+        books = self._require_books()
+        now = request.now or self._clock()
+        imported: dict[str, int] = {}
+        if self._reminders is not None:
+            rows = [
+                {
+                    "at": r.due_at.isoformat(),
+                    "label": r.text[:120],
+                    "value": None,
+                    "note": "reminder",
+                }
+                for r in self._reminders.upcoming(
+                    tenant=session.tenant_id,
+                    principal=session.principal_id,
+                    now=now,
+                )
+            ]
+            imported["reminder"] = books.append_rows(
+                self._files,
+                tenant=session.tenant_id,
+                owner=session.principal_id,
+                kind="reminder",
+                rows=rows,
+            )
+        events = self._calendar.between(
+            tenant=session.tenant_id,
+            owner=session.principal_id,
+            start=now - timedelta(days=365),
+            end=now + timedelta(days=365),
+        )
+        imported["calendar"] = books.append_rows(
+            self._files,
+            tenant=session.tenant_id,
+            owner=session.principal_id,
+            kind="calendar",
+            rows=[
+                {
+                    "at": e.starts_at.isoformat(),
+                    "label": e.title[:120],
+                    "value": None,
+                    "note": e.source,
+                }
+                for e in events
+            ],
+        )
+        imported["automation"] = books.append_rows(
+            self._files,
+            tenant=session.tenant_id,
+            owner=session.principal_id,
+            kind="automation",
+            rows=[
+                {
+                    "at": "",
+                    "label": (s.label or s.goal)[:120],
+                    "value": None,
+                    "note": f"{s.cadence} trigger: {s.goal}"[:200],
+                }
+                for s in self._pulse.list_for(
+                    session.tenant_id, session.principal_id
+                )
+            ],
+        )
+        return json_response(200, {"imported": imported})
+
+    def _life_book_rows(self, request, session, params) -> Response:
+        books = self._require_books()
+        kind = params["kind"]
+        if kind not in books.BOOKS:
+            raise GatewayError(404, "not_found", f"no such book: {kind}")
+        return json_response(
+            200,
+            {
+                "kind": kind,
+                "pointer": books.pointer(kind),
+                "rows": books.read_rows(
+                    self._files,
+                    tenant=session.tenant_id,
+                    owner=session.principal_id,
+                    kind=kind,
+                ),
+            },
+        )
+
+    def _life_book_chart(self, request, session, params) -> Response:
+        books = self._require_books()
+        kind = params["kind"]
+        if kind not in books.BOOKS:
+            raise GatewayError(404, "not_found", f"no such book: {kind}")
+        rows = books.read_rows(
+            self._files,
+            tenant=session.tenant_id,
+            owner=session.principal_id,
+            kind=kind,
+        )
+        book = books.BOOKS[kind]
+        return json_response(
+            200,
+            {
+                "kind": kind,
+                "title": book.title,
+                "unit": book.unit,
+                "points": books.chart_points(kind, rows),
+            },
+        )
+
+    def _book_command(self, session, message):
+        """OoLu's own conversation shows a book on demand — "show
+        cashflow", "chart my stock" — as a CHART BLOCK in the bubble:
+        the member's data, drawn from their own book, never invented."""
+        if self._files is None:
+            return None
+        from .. import lifebooks
+
+        normal = re.sub(
+            r"\s+", " ", str(message or "").strip().casefold()
+        ).rstrip(".!?")
+        for verb in ("show", "chart", "graph"):
+            if normal.startswith(f"{verb} "):
+                asked = normal[len(verb) + 1 :].removeprefix("my ").strip()
+                key = asked.replace(" ", "_")
+                if key in lifebooks.BOOKS:
+                    rows = lifebooks.read_rows(
+                        self._files,
+                        tenant=session.tenant_id,
+                        owner=session.principal_id,
+                        kind=key,
+                    )
+                    book = lifebooks.BOOKS[key]
+                    if not rows:
+                        return (
+                            f"Your {book.title} book is empty — say "
+                            "nothing was lost: it fills as the node "
+                            "documents, and “import my books” pulls in "
+                            "what already exists.",
+                            None,
+                        )
+                    return (
+                        f"{book.title} — {len(rows)} row"
+                        f"{'s' if len(rows) != 1 else ''}, from your own "
+                        "Life/Files book.",
+                        {
+                            "kind": "chart",
+                            "title": book.title,
+                            "unit": book.unit,
+                            "points": lifebooks.chart_points(key, rows),
+                        },
+                    )
+        return None
 
     def _commerce_search(self, request, session, params) -> Response:
         query = str(request.query.get("q") or "").strip()
