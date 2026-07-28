@@ -11,7 +11,14 @@ acceptance, refunds as compensating transactions), and the double-entry
 ledger postings that make the platform's take a ledger fact.
 """
 
-from .catalog import CatalogService, CatalogStore, Listing
+from .briefing import (
+    MARKET_BRIEF_LABEL,
+    MARKET_PULSE_GOAL,
+    DeskItem,
+    briefing_message,
+    desk_briefing,
+)
+from .catalog import CatalogService, CatalogStore, Listing, ListingMedia
 from .delegation import AgentDelegation, DelegationStore, delegation_gaps
 from .digest import DIGEST_FIELDS, intent_digest
 from .errors import (
@@ -125,7 +132,13 @@ __all__ = [
     "IntentExpired",
     "IntentStore",
     "Listing",
+    "ListingMedia",
     "ListingUnavailable",
+    "MARKET_BRIEF_LABEL",
+    "MARKET_PULSE_GOAL",
+    "DeskItem",
+    "briefing_message",
+    "desk_briefing",
     "MarketNotFound",
     "MarketplaceError",
     "MarketplaceSpine",

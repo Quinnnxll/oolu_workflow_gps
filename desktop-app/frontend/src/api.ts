@@ -1144,6 +1144,12 @@ export interface CommerceRecurring {
   category: string;
 }
 
+export interface CommerceListingMedia {
+  file_id: string;
+  media_type: string;
+  name: string;
+}
+
 export interface CommerceListing {
   listing_id: string;
   seller_principal: string;
@@ -1157,8 +1163,17 @@ export interface CommerceListing {
   refund_terms: string;
   fulfillment_terms: string;
   refundable: boolean;
+  media?: CommerceListingMedia[];
   status: "draft" | "active" | "suspended";
   version: number;
+}
+
+// The market desk: where the member's position meets the market's
+// demand (the briefing), and the list-out of everything they created.
+export interface CommerceDeskItem {
+  kind: "approval" | "order" | "quote_wanted" | "award_wanted" | "supply";
+  ref: string;
+  text: string;
 }
 
 export interface CommerceVerdict {
@@ -2190,9 +2205,62 @@ export const api = {
     quantity_available: number;
     category?: string;
     description?: string;
+    // Multimedia on the product: drawer refs riding the draft.
+    file_ids?: string[];
   }) => req<CommerceListing>("POST", "/v1/commerce/listings", body),
   commerceListingPublish: (listingId: string) =>
     req<CommerceListing>("POST", `/v1/commerce/listings/${listingId}/publish`),
+  // A listing attachment's bytes as an object URL (the bearer token
+  // travels with the fetch). Null when the referenced file is gone.
+  commerceListingMediaUrl: async (
+    listingId: string,
+    index: number,
+  ): Promise<string | null> => {
+    const headers: Record<string, string> = {};
+    const token = apiToken();
+    if (token) headers["Authorization"] = "Bearer " + token;
+    try {
+      const res = await fetch(
+        BASE() +
+          `/v1/commerce/listings/${encodeURIComponent(listingId)}` +
+          `/media/${index}`,
+        { headers },
+      );
+      if (!res.ok) return null;
+      return URL.createObjectURL(await res.blob());
+    } catch {
+      return null;
+    }
+  },
+  // The market desk: the briefing (position meets demand), its standing
+  // schedule, and the list-out of everything the caller created.
+  commerceDesk: () =>
+    req<{
+      items: CommerceDeskItem[];
+      brief_schedule: EditionSchedule | null;
+    }>("GET", "/v1/commerce/desk"),
+  commerceDeskSchedule: (payload: {
+    enabled?: boolean;
+    at_minute?: number;
+    tz_offset_minutes?: number;
+  }) =>
+    req<{ brief_schedule: EditionSchedule | null }>(
+      "POST",
+      "/v1/commerce/desk/schedule",
+      {
+        ...payload,
+        tz_offset_minutes:
+          payload.tz_offset_minutes ?? (-new Date().getTimezoneOffset() || 0),
+      },
+    ),
+  commerceMine: () =>
+    req<{
+      listings: CommerceListing[];
+      requests: CommerceRfq[];
+      orders: CommerceOrder[];
+      recurring: CommerceRecurring[];
+      delegations: Record<string, unknown>[];
+    }>("GET", "/v1/commerce/mine"),
   sellerKyc: () => req<SellerKycView>("GET", "/v1/commerce/seller/kyc"),
   sellerKycApply: (body: {
     legal_name: string;

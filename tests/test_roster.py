@@ -37,10 +37,11 @@ NOW = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
 # --------------------------------------------------------------------------- #
 # The registry: cards and seats, one vocabulary.                               #
 # --------------------------------------------------------------------------- #
-def test_the_roster_lists_the_four_agents_in_order():
-    assert [c.agent_id for c in ROSTER] == ["news", "poll", "explorer", "travel"]
+def test_the_roster_lists_the_agents_in_order():
+    order = ["news", "poll", "explorer", "market", "travel"]
+    assert [c.agent_id for c in ROSTER] == order
     items = roster_items()
-    assert [i["agent_id"] for i in items] == ["news", "poll", "explorer", "travel"]
+    assert [i["agent_id"] for i in items] == order
     for item in items:
         # A card without an honest scope (or a named future) cannot ship.
         assert item["name"] and item["tagline"]
@@ -268,6 +269,7 @@ def test_the_roster_door_lists_the_agents(tmp_path):
         "news",
         "poll",
         "explorer",
+        "market",
         "travel",
     ]
     conn.close()

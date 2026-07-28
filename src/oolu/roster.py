@@ -95,6 +95,25 @@ ROSTER: tuple[AgentCard, ...] = (
         seat="explore.brief",
     ),
     AgentCard(
+        agent_id="market",
+        name="Market",
+        tagline="Buy, sell, and be found — under real approvals",
+        scope=(
+            "The whole marketplace lives in this thread as form blocks: "
+            "shop the shelf, open requests for quotes, decide approvals, "
+            "drive your orders, and sell — listings carry photos, clips, "
+            "and sound. I watch where your position meets the market's "
+            "demand and brief you here; say “list” any time for "
+            "everything you've created on the platform."
+        ),
+        ahead=(
+            "Financing and insurance partner products ride the same "
+            "typed offers; cross-market federation already answers "
+            "shop searches."
+        ),
+        seat="market.desk",
+    ),
+    AgentCard(
         agent_id="travel",
         name="Travel Plan",
         tagline="Trips under real constraints",

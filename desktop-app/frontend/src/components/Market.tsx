@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, session } from "../api";
 import type {
   CommerceApproval,
+  CommerceDeskItem,
   CommerceIntent,
   CommerceInvoice,
   CommerceLedgerTxn,
@@ -14,8 +15,10 @@ import type {
   CommerceRfq,
   CommerceSalesPolicy,
   CommerceSourced,
+  FileMeta,
   SellerKycView,
 } from "../api";
+import { fileToDrawerContent, pickLocalFiles } from "../device";
 
 // The market surface (marketplace-build-plan M1+M2): buying walks the
 // spine's law — offer → intent → verdict → (approval) → order — and this
@@ -44,10 +47,67 @@ function offerTotal(offer: CommerceOffer): number {
   return offer.subtotal_micros + offer.tax_estimate_micros + offer.fees_micros;
 }
 
+// One product attachment, fetched with the bearer token and shown by its
+// true type — the press media strip's discipline, on the shelf.
+function ListingMediaItem({
+  listingId,
+  index,
+  mediaType,
+  name,
+}: {
+  listingId: string;
+  index: number;
+  mediaType: string;
+  name: string;
+}) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let held: string | null = null;
+    void api.commerceListingMediaUrl(listingId, index).then((u) => {
+      held = u;
+      setUrl(u);
+    });
+    return () => {
+      if (held) URL.revokeObjectURL(held);
+    };
+  }, [listingId, index]);
+  if (!url) return null;
+  if (mediaType.startsWith("image/")) {
+    return <img className="press-media" src={url} alt={name} />;
+  }
+  if (mediaType.startsWith("video/")) {
+    return <video className="press-media" src={url} controls title={name} />;
+  }
+  if (mediaType.startsWith("audio/")) {
+    return <audio className="press-media" src={url} controls title={name} />;
+  }
+  return null;
+}
+
+function ListingMediaStrip({ listing }: { listing: CommerceListing }) {
+  const media = listing.media ?? [];
+  if (media.length === 0) return null;
+  return (
+    <div className="press-media-strip">
+      {media.map((m, index) => (
+        <ListingMediaItem
+          key={`${listing.listing_id}:${index}`}
+          listingId={listing.listing_id}
+          index={index}
+          mediaType={m.media_type}
+          name={m.name}
+        />
+      ))}
+    </div>
+  );
+}
+
 type Tab = "shop" | "requests" | "approvals" | "orders" | "sell";
 
-export function Market() {
-  const [tab, setTab] = useState<Tab>("shop");
+// The market's shared hands — one refresh, one act, one buy path —
+// used by BOTH surfaces: the full-screen Market and the MarketPanel
+// living in the Market agent's thread.
+function useMarketDesk() {
   const [catalog, setCatalog] = useState<CommerceListing[]>([]);
   const [approvals, setApprovals] = useState<CommerceApproval[]>([]);
   const [ready, setReady] = useState<CommerceIntent[]>([]);
@@ -121,6 +181,37 @@ export function Market() {
       }),
     [act, buyOffer],
   );
+
+  return {
+    catalog,
+    approvals,
+    ready,
+    orders,
+    obligations,
+    notice,
+    error,
+    refresh,
+    act,
+    buyOffer,
+    buy,
+  };
+}
+
+export function Market() {
+  const [tab, setTab] = useState<Tab>("shop");
+  const {
+    catalog,
+    approvals,
+    ready,
+    orders,
+    obligations,
+    notice,
+    error,
+    refresh,
+    act,
+    buyOffer,
+    buy,
+  } = useMarketDesk();
 
   return (
     <div className="market">
@@ -264,6 +355,9 @@ function Shop({
         <div className="order-card" key={listing.listing_id}>
           <strong>{listing.title}</strong>
           {listing.description && <p className="muted">{listing.description}</p>}
+          {/* The product's own media — photos, clips, sound — by
+              reference through the listing media door. */}
+          <ListingMediaStrip listing={listing} />
           <p>
             {money(listing.unit_price_micros, listing.currency)}
             <span className="muted"> · {listing.quantity_available} available</span>
@@ -932,6 +1026,37 @@ export function SellPane({ onChanged }: { onChanged: () => void }) {
   const [title, setTitle] = useState("");
   const [price, setPrice] = useState("");
   const [quantity, setQuantity] = useState("");
+  // Product media waiting on the draft: uploaded from the device (the
+  // blob door keeps true bytes; inline fallback), removable until saved.
+  const [media, setMedia] = useState<{ id: string; name: string }[]>([]);
+
+  async function addMedia() {
+    const picked = await pickLocalFiles();
+    for (const file of picked) {
+      try {
+        let saved: FileMeta;
+        try {
+          saved = await api.uploadFileBytes(file);
+        } catch {
+          const { content, mediaType } = await fileToDrawerContent(file);
+          saved = await api.createFile(
+            file.name,
+            content,
+            undefined,
+            "",
+            mediaType,
+          );
+        }
+        setMedia((m) =>
+          m.some((f) => f.id === saved.file_id) || m.length >= 6
+            ? m
+            : [...m, { id: saved.file_id, name: saved.name }],
+        );
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    }
+  }
 
   const refresh = useCallback(async () => {
     const [status, mine, sales] = await Promise.all([
@@ -1069,6 +1194,29 @@ export function SellPane({ onChanged }: { onChanged: () => void }) {
           Quantity
           <input value={quantity} onChange={(e) => setQuantity(e.target.value)} />
         </label>
+        {/* Multimedia on the product: photos, clips, or sound showing
+            the real thing — uploaded from the device, riding the draft
+            as drawer refs (the press attachment law, on the shelf). */}
+        <button type="button" className="ghost" onClick={() => void addMedia()}>
+          Add photo, video, or audio
+        </button>
+        {media.length > 0 && (
+          <p className="muted">
+            {media.map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                className="chip"
+                title="Remove attachment"
+                onClick={() =>
+                  setMedia((m) => m.filter((x) => x.id !== f.id))
+                }
+              >
+                {f.name} ✕
+              </button>
+            ))}
+          </p>
+        )}
         <button
           onClick={() =>
             run(async () => {
@@ -1076,7 +1224,11 @@ export function SellPane({ onChanged }: { onChanged: () => void }) {
                 title,
                 unit_price_micros: Math.round(Number(price) * 1_000_000),
                 quantity_available: Number(quantity) || 0,
+                ...(media.length > 0
+                  ? { file_ids: media.map((f) => f.id) }
+                  : {}),
               });
+              setMedia([]);
               return "draft saved";
             })
           }
@@ -1087,6 +1239,7 @@ export function SellPane({ onChanged }: { onChanged: () => void }) {
       {listings.map((listing) => (
         <div className="order-card" key={listing.listing_id}>
           <strong>{listing.title}</strong> <span className="chip">{listing.status}</span>
+          <ListingMediaStrip listing={listing} />
           <p>
             {money(listing.unit_price_micros, listing.currency)}
             <span className="muted">
@@ -1112,6 +1265,188 @@ export function SellPane({ onChanged }: { onChanged: () => void }) {
       ))}
       {notice && <p className="hint">{notice}</p>}
       {error && <p className="error">{error}</p>}
+    </div>
+  );
+}
+
+// The Market agent's thread surface: every marketplace function block,
+// as form blocks IN the conversation — the way the press shelf heads
+// the News thread. The brief comes first (where the member's position
+// meets the market's demand — the same items the pulse pushes), then
+// the five doors, then the list-out of everything they created here.
+export function MarketPanel() {
+  const {
+    catalog,
+    approvals,
+    ready,
+    orders,
+    obligations,
+    notice,
+    error,
+    refresh,
+    act,
+    buyOffer,
+    buy,
+  } = useMarketDesk();
+  const [desk, setDesk] = useState<CommerceDeskItem[] | null>(null);
+  const [briefOn, setBriefOn] = useState(false);
+  const [mine, setMine] = useState<{
+    listings: CommerceListing[];
+    requests: CommerceRfq[];
+    orders: CommerceOrder[];
+  } | null>(null);
+
+  const refreshDesk = useCallback(() => {
+    void api
+      .commerceDesk()
+      .then(({ items, brief_schedule }) => {
+        setDesk(items ?? []);
+        setBriefOn(brief_schedule !== null && brief_schedule !== undefined);
+      })
+      .catch(() => setDesk(null)); // a pre-desk host: no brief block
+    void api
+      .commerceMine()
+      .then((created) => setMine(created))
+      .catch(() => setMine(null));
+  }, []);
+
+  useEffect(() => {
+    refreshDesk();
+  }, [refreshDesk]);
+
+  return (
+    <div className="market market-panel">
+      {/* The brief: pushed to this thread on the standing schedule, and
+          shown live here — counts and names, never invented urgency. */}
+      {desk !== null && (
+        <div className="order-card">
+          <strong>Where you meet the market</strong>
+          <button
+            className={`ghost${briefOn ? " on" : ""}`}
+            title="Push this brief to this thread every day."
+            onClick={() =>
+              void api
+                .commerceDeskSchedule({ enabled: !briefOn })
+                .then(({ brief_schedule }) =>
+                  setBriefOn(brief_schedule !== null),
+                )
+                .catch(() => {})
+            }
+          >
+            {briefOn ? "Daily brief ✓" : "Daily brief"}
+          </button>
+          {desk.length === 0 && (
+            <p className="muted">
+              Nothing waits on you — no approvals, no orders needing
+              action, no open request matching what you sell.
+            </p>
+          )}
+          <ul>
+            {desk.map((item, i) => (
+              <li key={`${item.kind}:${item.ref}:${i}`}>{item.text}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {notice && <p className="hint">{notice}</p>}
+      {error && <p className="error">{error}</p>}
+      <details className="market-block" open>
+        <summary>
+          Approvals
+          {approvals.length + ready.length ? (
+            <span className="badge">{approvals.length + ready.length}</span>
+          ) : null}
+        </summary>
+        <ApprovalsPane
+          approvals={approvals}
+          ready={ready}
+          onDecide={(id, approve) =>
+            act(async () => {
+              const decided = await api.commerceDecide(id, approve);
+              return approve ? `approved — state ${decided.state}` : "declined";
+            })
+          }
+          onPlace={(id) =>
+            act(async () => {
+              const order = await api.commerceOrderPlace(id);
+              return `order placed (${order.state})`;
+            })
+          }
+        />
+      </details>
+      <details className="market-block">
+        <summary>Shop</summary>
+        <Shop
+          catalog={catalog}
+          onBuy={buy}
+          onBuyOffer={(offer, category) => act(() => buyOffer(offer, category))}
+        />
+      </details>
+      <details className="market-block">
+        <summary>Requests</summary>
+        <RequestsPane
+          onAwardBuy={(offer, category) => act(() => buyOffer(offer, category))}
+        />
+      </details>
+      <details className="market-block">
+        <summary>
+          Orders
+          {orders.length ? <span className="badge">{orders.length}</span> : null}
+        </summary>
+        <OrdersPane orders={orders} obligations={obligations} act={act} />
+      </details>
+      <details className="market-block">
+        <summary>Sell</summary>
+        <SellPane
+          onChanged={() => {
+            void refresh();
+            refreshDesk();
+          }}
+        />
+      </details>
+      {/* The list-out: everything the member created on the platform,
+          grouped and named — never invisible. */}
+      {mine !== null && (
+        <details className="market-block">
+          <summary>Created here</summary>
+          <div className="market-grid">
+            <div className="order-card">
+              <strong>Listings ({mine.listings.length})</strong>
+              <ul>
+                {mine.listings.map((x) => (
+                  <li key={x.listing_id}>
+                    “{x.title}” — {x.status}
+                    {(x.media ?? []).length > 0
+                      ? ` · ${(x.media ?? []).length} media`
+                      : ""}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className="order-card">
+              <strong>Requests ({mine.requests.length})</strong>
+              <ul>
+                {mine.requests.map((r) => (
+                  <li key={r.rfq_id}>
+                    {r.specification.category} ×{r.specification.quantity} —{" "}
+                    {r.state}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className="order-card">
+              <strong>Orders ({mine.orders.length})</strong>
+              <ul>
+                {mine.orders.map((o) => (
+                  <li key={o.order.order_id}>
+                    {o.order.order_id.slice(0, 8)} — {o.state}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </details>
+      )}
     </div>
   );
 }

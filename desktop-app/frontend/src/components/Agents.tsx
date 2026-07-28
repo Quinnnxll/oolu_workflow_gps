@@ -18,6 +18,7 @@ import { identityHue } from "../avatar";
 import { fileToDrawerContent, pickLocalFiles } from "../device";
 import { loadCompose, saveCompose, tf, useT } from "../ui";
 import { Byline } from "./Byline";
+import { MarketPanel } from "./Market";
 
 // A roster agent's conversation (agents-expansion plan A0): the same
 // messenger shape as the OoLu chat, deliberately leaner — words only. No
@@ -1036,6 +1037,10 @@ export function AgentThread({ agent }: { agent: RosterAgent }) {
         {agent.agent_id === "news" && <PressPanel />}
         {/* The poll floor (A3) heads the Poll thread the same way. */}
         {agent.agent_id === "poll" && <PollPanel />}
+        {/* The marketplace: every function block as a form block IN
+            this conversation — shop, requests, approvals, orders,
+            sell — plus the brief and the list-out. */}
+        {agent.agent_id === "market" && <MarketPanel />}
         {/* And the explorer desk (A6) heads the Explorer thread. */}
         {agent.agent_id === "explorer" && <ExplorerPanel />}
         {/* The travel desk (A7) heads the Travel Plan thread. */}

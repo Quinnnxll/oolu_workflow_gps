@@ -217,6 +217,15 @@ SEATS: dict[str, Seat] = {
             ),
             audited=False,
         ),
+        Seat(
+            purpose="market.desk",
+            charge=(
+                "converse about the member's own marketplace standing — "
+                "listings, requests, approvals, orders; never invent a "
+                "price, a demand signal, or an order state"
+            ),
+            audited=False,
+        ),
     )
 }
 

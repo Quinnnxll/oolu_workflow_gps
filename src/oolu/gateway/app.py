@@ -1287,6 +1287,21 @@ class GatewayApp:
         r.add("GET", "/v1/commerce/catalog", self._commerce_catalog_browse)
         r.add("GET", "/v1/commerce/listings", self._commerce_listings_list)
         r.add("POST", "/v1/commerce/listings", self._commerce_listing_create)
+        # A published product's media, by reference — publication is the
+        # consent that crosses the drawer wall (the press media law).
+        r.add(
+            "GET",
+            "/v1/commerce/listings/{listing_id}/media/{index}",
+            self._commerce_listing_media,
+        )
+        # The desk: where the member's position meets the market's
+        # demand (the briefing), the standing brief schedule, and the
+        # list-out of everything they created on the platform.
+        r.add("GET", "/v1/commerce/desk", self._commerce_desk)
+        r.add(
+            "POST", "/v1/commerce/desk/schedule", self._commerce_desk_schedule
+        )
+        r.add("GET", "/v1/commerce/mine", self._commerce_mine)
         r.add(
             "POST",
             "/v1/commerce/listings/{listing_id}/publish",
@@ -2423,6 +2438,10 @@ class GatewayApp:
         served = None
         if card.agent_id == "news":
             served = self._news_intake_turn(session, body, message)
+        elif card.agent_id == "market":
+            served = self._market_desk_turn(
+                session, message, request.now or self._clock()
+            )
         if served is not None:
             say, reasoning, source = served
         else:
@@ -2693,6 +2712,97 @@ class GatewayApp:
                 "depth)."
             )
         return (say, None, "desk")
+
+    # The Market thread's own deterministic asks — narrow on purpose, so
+    # ordinary conversation always reaches the seat's model.
+    _MARKET_LIST_ASKS = frozenset(
+        {
+            "list",
+            "list out",
+            "list it out",
+            "mine",
+            "my things",
+            "what have i created",
+            "what did i create",
+            "what have i made",
+        }
+    )
+    _MARKET_BRIEF_ASKS = frozenset(
+        {"brief", "briefing", "desk", "what needs me", "what's waiting"}
+    )
+
+    def _market_desk_turn(self, session, message, now):
+        """The Market desk's hand on one thread message — or None when
+        the message is ordinary conversation. Two deterministic asks:
+        the LIST-OUT (everything the member created on the platform,
+        grouped and named) and the BRIEF (where their position meets
+        the market's demand, right now)."""
+        normal = re.sub(
+            r"\s+", " ", str(message or "").strip().casefold()
+        ).rstrip(".!?")
+        if normal in self._MARKET_LIST_ASKS:
+            return (self._market_mine_words(session), None, "desk")
+        if normal in self._MARKET_BRIEF_ASKS:
+            from ..marketplace import briefing_message
+
+            items = self._market_desk_items(session, now)
+            if not items:
+                return (
+                    "The desk sees nothing waiting on you — no approvals, "
+                    "no orders needing action, and no open request "
+                    "matching what you sell.",
+                    None,
+                    "desk",
+                )
+            return (briefing_message(items), None, "desk")
+        return None
+
+    def _market_mine_words(self, session) -> str:
+        """The list-out, in the desk's own words: counts and names per
+        group, bounded — the form blocks in this thread carry the rest."""
+        listings = self._commerce_catalog.store.for_seller(
+            tenant=session.tenant_id, seller=session.principal_id
+        )
+        rfqs = self._commerce_rfq.mine(
+            tenant=session.tenant_id, buyer=session.principal_id
+        )
+        orders = self._commerce_orders.orders.list_for(
+            tenant=session.tenant_id, principal=session.principal_id
+        )
+        recurring = self._commerce_recurring.list_for(
+            tenant=session.tenant_id, principal=session.principal_id
+        )
+        delegations = self._commerce.delegations.list_for(
+            tenant=session.tenant_id, principal=session.principal_id
+        )
+        cap = 8
+        lines = ["Created on this platform, by you:"]
+        lines.append(f"Listings ({len(listings)}):")
+        for x in listings[:cap]:
+            media = f", {len(x.media)} media" if x.media else ""
+            lines.append(f"  • “{x.title}” — {x.status}{media}")
+        lines.append(f"Requests for quotes ({len(rfqs)}):")
+        for r in rfqs[:cap]:
+            lines.append(
+                f"  • {r.specification.category} ×"
+                f"{r.specification.quantity} — {r.state}"
+            )
+        lines.append(f"Orders ({len(orders)}):")
+        for o in orders[:cap]:
+            role = (
+                "buying"
+                if o.record.buyer_principal == session.principal_id
+                else "selling"
+            )
+            lines.append(
+                f"  • {o.record.order_id[:8]} — {o.state} ({role})"
+            )
+        lines.append(f"Recurring obligations ({len(recurring)}):")
+        lines.append(f"Delegations ({len(delegations)}):")
+        lines.append(
+            "The form blocks in this thread carry every detail and door."
+        )
+        return "\n".join(lines)
 
     # ------------------------------------------------------------------ #
     # The byline: a published face and name, tenant-scoped.               #
@@ -4458,14 +4568,18 @@ class GatewayApp:
             raise GatewayError(
                 404, "not_found", "the referenced file is gone"
             )
+        return self._serve_drawer_bytes(file)
+
+    def _serve_drawer_bytes(self, file) -> Response:
+        """A drawer file's TRUE bytes, typed honestly, whichever shape it
+        is stored in — an inline row's data-URL content is decoded, so a
+        photo or clip renders the same as its blob-backed twin. Shared by
+        every published-media door (press attachments, listing media)."""
         try:
             data = self._files.read_bytes(file)
         except FileTooLargeError as exc:
             raise GatewayError(404, "not_found", str(exc)) from exc
         media_type = file.media_type or "application/octet-stream"
-        # An inline drawer row keeps binary content as a data URL; this
-        # door serves the TRUE bytes either way, typed honestly — a
-        # photo or clip renders the same whichever shape it is stored in.
         if not file.blob_ref and file.content.startswith("data:"):
             from base64 import b64decode
 
@@ -12189,6 +12303,11 @@ class GatewayApp:
         if schedule.goal == EDITION_PULSE_GOAL:
             self._fire_edition(schedule, occurrence, skipped)
             return
+        from ..marketplace import MARKET_PULSE_GOAL
+
+        if schedule.goal == MARKET_PULSE_GOAL:
+            self._fire_market_brief(schedule, occurrence, skipped)
+            return
         from ..explorer import EXPLORER_BRIEF_PREFIX
 
         if schedule.goal.startswith(EXPLORER_BRIEF_PREFIX):
@@ -12875,7 +12994,24 @@ class GatewayApp:
         )
 
     def _commerce_listing_create(self, request, session, params) -> Response:
+        from ..marketplace import ListingMedia
+
         body = request.body or {}
+        # Multimedia on the product: drawer refs, never copies, the wall
+        # held at the door — photos, clips, or sound showing the real
+        # thing (the press attachment law, applied to the shelf).
+        file_ids = body.get("file_ids") or []
+        if not isinstance(file_ids, list):
+            raise GatewayError(400, "invalid_request", "file_ids must be a list")
+        media = [
+            ListingMedia(
+                file_id=ref.file_id,
+                blob_ref=ref.blob_ref,
+                media_type=ref.media_type,
+                name=ref.name,
+            )
+            for ref in self._drawer_refs(session, file_ids)
+        ]
         try:
             listing = self._commerce_catalog.create_draft(
                 tenant=session.tenant_id,
@@ -12899,10 +13035,247 @@ class GatewayApp:
                     if body.get("list_price_micros") is not None
                     else None
                 ),
+                media=tuple(media),
             )
         except (ValidationError, ValueError, TypeError) as exc:
             raise GatewayError(400, "invalid_request", str(exc)) from exc
         return json_response(201, listing.model_dump(mode="json"))
+
+    def _commerce_listing_media(self, request, session, params) -> Response:
+        """A listing's attached file, by reference — an ACTIVE listing is
+        the public shelf (publication is the consent that crosses the
+        drawer wall); a draft's media is the seller's own only."""
+        listing = self._commerce_catalog.store.get(params["listing_id"])
+        if listing is None or (
+            listing.status != "active"
+            and not (
+                listing.tenant_id == session.tenant_id
+                and listing.seller_principal == session.principal_id
+            )
+        ):
+            raise GatewayError(404, "not_found", "no such listing")
+        try:
+            ref = listing.media[int(params["index"])]
+        except (IndexError, ValueError):
+            raise GatewayError(404, "not_found", "no such attachment") from None
+        file = (
+            self._files.get(ref.file_id, tenant=listing.tenant_id)
+            if self._files is not None
+            else None
+        )
+        if file is None:
+            raise GatewayError(404, "not_found", "the referenced file is gone")
+        return self._serve_drawer_bytes(file)
+
+    # ------------------------------------------------------------------ #
+    # The market desk: position meets demand, and the list-out.           #
+    # ------------------------------------------------------------------ #
+    def _market_desk_items(self, session, now):
+        """The member's brief, gathered from the standing stores and
+        judged by the deterministic briefing — the gateway only fetches;
+        the matching lives in marketplace/briefing.py."""
+        from ..marketplace import desk_briefing
+
+        open_rfqs = self._commerce_rfq.open_requests(
+            tenant=session.tenant_id, now=now
+        )
+        quote_counts = {
+            r.rfq_id: len(
+                self._commerce_rfq.quotes(r.rfq_id, tenant=session.tenant_id)
+            )
+            for r in open_rfqs
+            if r.buyer_principal == session.principal_id
+        }
+        return desk_briefing(
+            principal=session.principal_id,
+            approvals=self._commerce.pending_approvals(
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+                now=now,
+            ),
+            orders=self._commerce_orders.orders.list_for(
+                tenant=session.tenant_id, principal=session.principal_id
+            ),
+            open_rfqs=open_rfqs,
+            my_listings=self._commerce_catalog.store.for_seller(
+                tenant=session.tenant_id, seller=session.principal_id
+            ),
+            active_listings=self._commerce_catalog.store.active(),
+            quote_counts=quote_counts,
+        )
+
+    def _market_brief_schedule_row(self, session):
+        from ..marketplace import MARKET_PULSE_GOAL
+
+        for schedule in self._pulse.list_for(
+            session.tenant_id, session.principal_id
+        ):
+            if schedule.goal == MARKET_PULSE_GOAL:
+                return schedule
+        return None
+
+    def _commerce_desk(self, request, session, params) -> Response:
+        """The desk brief on demand — the same items the pulse pushes —
+        and the standing brief schedule, named."""
+        now = request.now or self._clock()
+        items = self._market_desk_items(session, now)
+        schedule = self._market_brief_schedule_row(session)
+        return json_response(
+            200,
+            {
+                "items": [
+                    {"kind": i.kind, "ref": i.ref, "text": i.text}
+                    for i in items
+                ],
+                "brief_schedule": (
+                    self._pulse_row(schedule, now)
+                    if schedule is not None
+                    else None
+                ),
+            },
+        )
+
+    def _commerce_desk_schedule(self, request, session, params) -> Response:
+        """The member's desk-brief rhythm: one standing pulse schedule
+        with the market sentinel goal — created, retimed, or removed
+        through this one door (the morning-edition shape)."""
+        from ..marketplace import MARKET_BRIEF_LABEL, MARKET_PULSE_GOAL
+
+        body = request.body or {}
+        standing = self._market_brief_schedule_row(session)
+        if body.get("enabled") is False:
+            if standing is not None:
+                self._pulse.delete(
+                    standing.schedule_id,
+                    tenant=session.tenant_id,
+                    principal=session.principal_id,
+                )
+            return json_response(200, {"brief_schedule": None})
+        at_minute = int(body.get("at_minute", 9 * 60))
+        tz_offset = _tz_minutes(body.get("tz_offset_minutes"))
+        if standing is not None:
+            self._pulse.delete(
+                standing.schedule_id,
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+            )
+        try:
+            schedule = self._pulse.add(
+                session.tenant_id,
+                session.principal_id,
+                cadence="daily",
+                at_minute=at_minute,
+                goal=MARKET_PULSE_GOAL,
+                tz_offset_minutes=tz_offset,
+                label=MARKET_BRIEF_LABEL,
+                now=request.now or self._clock(),
+            )
+        except ValueError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        return json_response(
+            200,
+            {
+                "brief_schedule": self._pulse_row(
+                    schedule, request.now or self._clock()
+                )
+            },
+        )
+
+    def _commerce_mine(self, request, session, params) -> Response:
+        """The list-out: everything the caller created on the platform,
+        grouped and named — listings, requests, orders, recurring
+        obligations, delegations. What a member made is never
+        invisible."""
+        listings = self._commerce_catalog.store.for_seller(
+            tenant=session.tenant_id, seller=session.principal_id
+        )
+        rfqs = self._commerce_rfq.mine(
+            tenant=session.tenant_id, buyer=session.principal_id
+        )
+        orders = self._commerce_orders.orders.list_for(
+            tenant=session.tenant_id, principal=session.principal_id
+        )
+        recurring = self._commerce_recurring.list_for(
+            tenant=session.tenant_id, principal=session.principal_id
+        )
+        delegations = self._commerce.delegations.list_for(
+            tenant=session.tenant_id, principal=session.principal_id
+        )
+        return json_response(
+            200,
+            {
+                "listings": [x.model_dump(mode="json") for x in listings],
+                "requests": [r.model_dump(mode="json") for r in rfqs],
+                "orders": [self._commerce_order_view(o) for o in orders],
+                "recurring": [r.model_dump(mode="json") for r in recurring],
+                "delegations": [
+                    d.model_dump(mode="json") for d in delegations
+                ],
+            },
+        )
+
+    def _fire_market_brief(self, schedule, occurrence: str, skipped: int) -> None:
+        """The desk brief fires: gather the member's items and land them
+        as the Market agent's OWN thread message, with a short reminder
+        ping. An empty brief is silence — the desk never invents
+        urgency. Failures are audited, never raised into the tick."""
+        from types import SimpleNamespace
+
+        from ..marketplace import briefing_message
+
+        session = SimpleNamespace(
+            tenant_id=schedule.tenant, principal_id=schedule.principal
+        )
+        try:
+            items = self._market_desk_items(session, self._clock())
+            if items and self._assistant_history is not None:
+                self._assistant_history.append(
+                    tenant=schedule.tenant,
+                    principal=schedule.principal,
+                    kind="assistant",
+                    body=briefing_message(items, skipped=skipped),
+                    agent="market",
+                )
+            if items and self._reminders is not None:
+                try:
+                    self._reminders.add(
+                        tenant=schedule.tenant,
+                        principal=schedule.principal,
+                        text=(
+                            f"The market desk sees {len(items)} "
+                            f"thing{'s' if len(items) != 1 else ''} for "
+                            "you — in the Market thread."
+                        )[:490],
+                        due_at=(self._clock() + timedelta(minutes=2)),
+                    )
+                except ValueError:
+                    pass  # a full reminder book is not a failed brief
+            self._durable.audit.append(
+                "pulse.fired",
+                {
+                    "schedule_id": schedule.schedule_id,
+                    "occurrence": occurrence,
+                    "run_id": "",
+                    "skipped": skipped,
+                    "tenant": schedule.tenant,
+                    "principal": schedule.principal,
+                    "goal": schedule.goal,
+                },
+            )
+        except Exception:  # noqa: BLE001 - the tick must keep serving
+            logging.getLogger("oolu.gateway").exception(
+                "market brief pulse failed for %s", schedule.schedule_id
+            )
+            self._durable.audit.append(
+                "pulse.fire_failed",
+                {
+                    "schedule_id": schedule.schedule_id,
+                    "occurrence": occurrence,
+                    "tenant": schedule.tenant,
+                    "principal": schedule.principal,
+                    "goal": schedule.goal,
+                },
+            )
 
     def _commerce_listing_publish(self, request, session, params) -> Response:
         try:

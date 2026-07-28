@@ -4,6 +4,33 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The market desk (M5) — the thread is the surface:
+
+- **Market joins the roster** — a new agent below OoLu (`market.desk`
+  seat), and its thread carries every marketplace function block as a
+  FORM BLOCK in the conversation: Shop, Requests, Approvals, Orders,
+  Sell — the same panes as the full-screen Market, the same one buy
+  path and act door; nothing shortcuts the spine's law.
+- **Multimedia rides the product** (`marketplace/catalog.py`) — a
+  listing carries photos, clips, and sound as drawer refs (the press
+  attachment discipline): the wall holds at the create door, and the
+  listing media door serves true bytes once published — a draft's
+  media is the seller's own only.
+- **The desk is proactive** (`marketplace/briefing.py`) — a
+  deterministic read of standing records names where the member's
+  position meets the market's demand: approvals waiting on them,
+  orders where they act next, open requests matching what they
+  actively sell, quotes ripening on their own requests, supply
+  arriving for theirs. The brief is pushed as the Market agent's OWN
+  thread message on a standing pulse (`market.desk_brief`, the
+  morning-edition shape), heads the thread's panel live, and answers
+  "brief" on demand — an empty brief is silence, never invented
+  urgency.
+- **The list-out** — `GET /v1/commerce/mine`, and "list" in the
+  thread: everything the member created on the platform — listings,
+  requests, orders, recurring obligations, delegations — grouped,
+  counted, and named. What a member made is never invisible.
+
 The conversational newsroom (A2.2) — the thread is the door:
 
 - **Nobody fills a form** (`src/oolu/press/intake.py`) — the "Write a
