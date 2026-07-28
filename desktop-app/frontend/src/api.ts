@@ -615,7 +615,14 @@ export interface PressGenre {
 // pair to vote on, or the genre chips whose tap speaks back.
 export type ChatTurnBlock =
   | { kind: "poll"; pair: PollPair }
-  | { kind: "genres"; items: PressGenre[] };
+  | { kind: "genres"; items: PressGenre[] }
+  | { kind: "categories"; items: { category: string; followed: boolean }[] }
+  | {
+      kind: "products";
+      items: CommerceListing[];
+      mode: string;
+      expires_at: string;
+    };
 
 export interface PressLicense {
   key: string;

@@ -22,6 +22,11 @@ policy ladder → approval → order.
 
 from .bestbuy import BRIEF_MODES, BestBuyBrief, best_buy
 from .comparisons import ComparisonRow, ComparisonSet, build_rows, discount_fact
+from .decisions import (
+    DECISION_TTL_HOURS,
+    ComparisonStore,
+    infer_mode,
+)
 from .evidence import (
     EXPLORER_BRIEF_PREFIX,
     REVIEW_FINISHED_STATES,
@@ -45,6 +50,9 @@ from .travel import (
 )
 
 __all__ = [
+    "DECISION_TTL_HOURS",
+    "ComparisonStore",
+    "infer_mode",
     "BRIEF_MODES",
     "BestBuyBrief",
     "ComparisonRow",

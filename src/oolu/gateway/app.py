@@ -1569,6 +1569,13 @@ class GatewayApp:
         r.add("POST", "/v1/adhouse/settle", self._adhouse_settle)
         # The explorer desk (A6): verified evidence, one comparison
         # matrix, deterministic best-buy briefs, followed interests.
+        # One search for every surface: OoLu, shop, request, Explorer —
+        # a unique listing id hits exactly; anything else finds the
+        # CLOSEST existing products (the one retrieval scorer).
+        r.add("GET", "/v1/commerce/search", self._commerce_search)
+        # What EXISTS to follow: the categories real listings and open
+        # requests actually carry — never an invented taxonomy.
+        r.add("GET", "/v1/explorer/categories", self._explorer_categories)
         r.add("GET", "/v1/explorer/compare", self._explorer_compare)
         r.add("GET", "/v1/explorer/reviews", self._explorer_reviews_list)
         r.add("POST", "/v1/explorer/reviews", self._explorer_review_create)
@@ -2448,6 +2455,10 @@ class GatewayApp:
             )
         elif card.agent_id == "poll":
             served = self._poll_desk_turn(session, message)
+        elif card.agent_id == "explorer":
+            served = self._explorer_desk_turn(
+                session, message, request.now or self._clock()
+            )
         if served is not None:
             # A desk may answer with words alone, or words plus a BLOCK
             # — a structured piece the client renders in the bubble (a
@@ -2896,6 +2907,219 @@ class GatewayApp:
             "The form blocks in this thread carry every detail and door."
         )
         return "\n".join(lines)
+
+    # ------------------------------------------------------------------ #
+    # The explorer desk: closest products, followable categories, and     #
+    # comparisons that end.                                               #
+    # ------------------------------------------------------------------ #
+    def _comparisons(self):
+        if getattr(self, "_explorer_comparisons", None) is None:
+            from ..explorer import ComparisonStore
+
+            self._explorer_comparisons = ComparisonStore(self._durable.conn)
+        return self._explorer_comparisons
+
+    def _closest_listings(self, query: str, *, limit: int = 8) -> list:
+        """The CLOSEST existing products for any words — a unique
+        listing id hits exactly; text ranks the active shelf by the one
+        retrieval scorer over title, category, and description."""
+        from ..retrieval import score as similarity_score
+
+        query = str(query or "").strip()
+        exact = self._commerce_catalog.store.get(query)
+        if exact is not None and exact.status == "active":
+            return [exact]
+        scored = [
+            (
+                similarity_score(
+                    query,
+                    f"{x.title}\n{x.category}\n{x.description}",
+                ),
+                x,
+            )
+            for x in self._commerce_catalog.store.active()
+        ]
+        scored = [(s, x) for s, x in scored if s > 0.05]
+        scored.sort(key=lambda pair: (-pair[0], pair[1].listing_id))
+        return [x for _, x in scored[: int(limit)]]
+
+    def _commerce_search(self, request, session, params) -> Response:
+        query = str(request.query.get("q") or "").strip()
+        if not query:
+            raise GatewayError(400, "invalid_request", "q is required")
+        return json_response(
+            200,
+            {
+                "items": [
+                    x.model_dump(mode="json")
+                    for x in self._closest_listings(query)
+                ]
+            },
+        )
+
+    def _followable_categories(self, session, now) -> list[dict]:
+        from ..explorer import EXPLORER_BRIEF_PREFIX
+
+        categories = {
+            x.category
+            for x in self._commerce_catalog.store.active()
+            if x.category
+        } | {
+            r.specification.category
+            for r in self._commerce_rfq.open_requests(
+                tenant=session.tenant_id, now=now
+            )
+            if r.specification.category
+        }
+        followed = {
+            s.goal[len(EXPLORER_BRIEF_PREFIX) :].rsplit(":", 1)[0]
+            for s in self._pulse.list_for(
+                session.tenant_id, session.principal_id
+            )
+            if s.goal.startswith(EXPLORER_BRIEF_PREFIX)
+        }
+        return [
+            {"category": c, "followed": c in followed}
+            for c in sorted(categories)
+        ]
+
+    def _explorer_categories(self, request, session, params) -> Response:
+        return json_response(
+            200,
+            {
+                "items": self._followable_categories(
+                    session, request.now or self._clock()
+                )
+            },
+        )
+
+    _EXPLORER_CATEGORY_ASKS = frozenset(
+        {"categories", "follow", "interests", "what can i follow"}
+    )
+
+    def _explorer_desk_turn(self, session, message, now):
+        """The Explorer desk's hand on one thread message — or None for
+        ordinary conversation. The categories to follow arrive as a
+        MESSAGE BLOCK (a chip's tap speaks "follow …" back); "follow
+        {category}" lays the standing daily brief; any other words find
+        the CLOSEST existing products and open a comparison with an
+        inferred lens and a real deadline — decisions end, by design."""
+        from ..explorer import (
+            DECISION_TTL_HOURS,
+            EXPLORER_BRIEF_PREFIX,
+            infer_mode,
+        )
+
+        normal = re.sub(
+            r"\s+", " ", str(message or "").strip().casefold()
+        ).rstrip(".!?")
+        if normal in self._EXPLORER_CATEGORY_ASKS:
+            items = self._followable_categories(session, now)
+            if not items:
+                return (
+                    "Nothing exists to follow yet — categories appear as "
+                    "real listings and requests are created.",
+                    None,
+                    "desk",
+                )
+            return (
+                "These categories exist right now — tap one and I follow "
+                "it: the brief arrives here daily.",
+                None,
+                "desk",
+                {"kind": "categories", "items": items},
+            )
+        if normal.startswith("follow "):
+            category = normal[len("follow ") :].strip()
+            known = {
+                c["category"].casefold(): c["category"]
+                for c in self._followable_categories(session, now)
+            }
+            if category not in known:
+                return (
+                    f"No listing or request carries “{category}” yet — "
+                    "say “categories” to see what exists to follow.",
+                    None,
+                    "desk",
+                )
+            mode = infer_mode(
+                message,
+                last_mode=self._comparisons().last_decided_mode(
+                    tenant=session.tenant_id,
+                    principal=session.principal_id,
+                ),
+            )
+            goal = f"{EXPLORER_BRIEF_PREFIX}{known[category]}:{mode}"
+            if not any(
+                s.goal == goal
+                for s in self._pulse.list_for(
+                    session.tenant_id, session.principal_id
+                )
+            ):
+                self._pulse.add(
+                    session.tenant_id,
+                    session.principal_id,
+                    cadence="daily",
+                    at_minute=9 * 60,
+                    goal=goal,
+                    tz_offset_minutes=0,
+                    label=f"Explorer brief: {known[category]}",
+                    now=now,
+                )
+            return (
+                f"Following “{known[category]}” — the {mode} brief "
+                "arrives in this thread daily.",
+                None,
+                "desk",
+            )
+        if normal in ("decide", "decided", "done", "stop comparing"):
+            closed = self._comparisons().close(
+                tenant=session.tenant_id, principal=session.principal_id
+            )
+            return (
+                "Marked decided — the comparison is closed."
+                if closed
+                else "No comparison stands open.",
+                None,
+                "desk",
+            )
+        # Anything else with substance is a product search — but only
+        # when the shelf actually holds something close; a question the
+        # shelf cannot answer stays a conversation.
+        if len(normal) < 3:
+            return None
+        hits = self._closest_listings(message)
+        if not hits:
+            return None
+        comparisons = self._comparisons()
+        mode = infer_mode(
+            message,
+            last_mode=comparisons.last_decided_mode(
+                tenant=session.tenant_id, principal=session.principal_id
+            ),
+        )
+        opened = comparisons.open(
+            tenant=session.tenant_id,
+            principal=session.principal_id,
+            query=message,
+            mode=mode,
+            listing_ids=[x.listing_id for x in hits],
+        )
+        return (
+            f"The closest existing products, compared through your "
+            f"{mode} lens (read from your words and history — no menu). "
+            f"This comparison stays open {DECISION_TTL_HOURS} hours and "
+            "then lapses on its own: say “decide” when you've chosen, "
+            "or let it expire — no decision debt.",
+            None,
+            "desk",
+            {
+                "kind": "products",
+                "items": [x.model_dump(mode="json") for x in hits],
+                "mode": mode,
+                "expires_at": opened["expires_at"],
+            },
+        )
 
     # ------------------------------------------------------------------ #
     # The byline: a published face and name, tenant-scoped.               #
@@ -4191,10 +4415,19 @@ class GatewayApp:
         eligible ones ranked by the named mode with the full factor
         breakdown. Deterministic end to end — and nothing sponsored is
         anywhere near these inputs (the import scan holds the wall)."""
-        from ..explorer import best_buy
+        from ..explorer import best_buy, infer_mode
 
         category = str(request.query.get("category") or "")
-        mode = str(request.query.get("mode") or "balanced")
+        # The lens is READ, never a menu: an explicit mode still wins
+        # (the API stays whole), but absent one the member's own words
+        # (?instruction=) weigh first, their last decided comparison's
+        # mode second, "balanced" third.
+        mode = str(request.query.get("mode") or "") or infer_mode(
+            str(request.query.get("instruction") or ""),
+            last_mode=self._comparisons().last_decided_mode(
+                tenant=session.tenant_id, principal=session.principal_id
+            ),
+        )
         rows = self._explorer_rows(session, category=category)
         try:
             brief = best_buy(rows, mode=mode)

@@ -4,6 +4,31 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The explorer desk (A6.1) — closest products, real categories,
+decisions that end:
+
+- **One search for every surface** (`GET /v1/commerce/search`) — a
+  listing's unique id hits exactly; any words find the CLOSEST
+  existing products (the one retrieval scorer over title, category,
+  description), from OoLu, shop, request, and Explorer alike.
+- **Follow what exists** (`GET /v1/explorer/categories`) — the
+  followable categories are the ones real listings and open requests
+  actually carry, presented as a message block in the Explorer
+  thread; a chip's tap speaks "follow …" and lays the standing daily
+  brief.
+- **The lens is read, never a menu** (`explorer/decisions.py`) —
+  value/balanced/proven/measured is inferred: the member's own words
+  weigh first ("cheapest" → value, "lab numbers" → measured), their
+  last decided comparison's mode second, "balanced" third; the
+  compare door accepts ?instruction= and infers when no mode is
+  named.
+- **Comparisons are runtimes with deadlines** — one open comparison
+  per member (a new one supersedes; never a pile), lapsing on its own
+  after 48 hours (clamped to the 1–3 day band): say "decide" when
+  chosen, or let it expire — no decision paralysis, no system
+  overload. Product results arrive as message blocks naming the lens
+  and the deadline.
+
 The social scientist (A3.1) — the poll floor thinks on purpose:
 
 - **Hypotheses, not hunches** (`src/oolu/press/scientist.py`) — the

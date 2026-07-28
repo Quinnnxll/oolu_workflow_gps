@@ -28,10 +28,25 @@ import { MarketPanel } from "./Market";
 // cache exactly like the OoLu chat.
 
 // A structured piece riding an agent's reply — rendered in the bubble:
-// a poll pair to vote on, or the genre chips to pick a stream from.
+// a poll pair to vote on, genre chips, the Explorer's followable
+// categories (a tap speaks "follow …"), or the closest products with
+// the comparison's own deadline.
 type ChatBlock =
   | { kind: "poll"; pair: PollPair }
-  | { kind: "genres"; items: PressGenre[] };
+  | { kind: "genres"; items: PressGenre[] }
+  | { kind: "categories"; items: { category: string; followed: boolean }[] }
+  | {
+      kind: "products";
+      items: {
+        listing_id: string;
+        title: string;
+        unit_price_micros: number;
+        currency: string;
+        category: string;
+      }[];
+      mode: string;
+      expires_at: string;
+    };
 
 type AgentMsg = {
   kind: "user" | "assistant";
@@ -1037,6 +1052,42 @@ export function AgentThread({ agent }: { agent: RosterAgent }) {
                 items={m.block.items}
                 onPick={(label) => void send(label)}
               />
+            )}
+            {/* The Explorer's followable categories: the tap SPEAKS. */}
+            {m.block?.kind === "categories" && (
+              <div className="press-genres">
+                {m.block.items.map((c) => (
+                  <button
+                    key={c.category}
+                    type="button"
+                    className={`press-chip${c.followed ? " on" : ""}`}
+                    onClick={() => void send(`follow ${c.category}`)}
+                  >
+                    {c.category}
+                    {c.followed ? " ✓" : ""}
+                  </button>
+                ))}
+              </div>
+            )}
+            {/* The closest products, under the inferred lens — with the
+                comparison's own honest deadline. */}
+            {m.block?.kind === "products" && (
+              <div className="press-media-strip products-block">
+                {m.block.items.map((x) => (
+                  <div key={x.listing_id} className="press-card">
+                    <span className="press-title">{x.title}</span>
+                    <span className="muted">
+                      {(x.unit_price_micros / 1_000_000).toFixed(2)}{" "}
+                      {x.currency}
+                      {x.category ? ` · ${x.category}` : ""}
+                    </span>
+                  </div>
+                ))}
+                <span className="muted">
+                  {m.block.mode} · until{" "}
+                  {m.block.expires_at.slice(0, 16).replace("T", " ")}
+                </span>
+              </div>
             )}
           </div>
         ))}
