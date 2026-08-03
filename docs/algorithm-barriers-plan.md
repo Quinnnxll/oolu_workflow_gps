@@ -940,6 +940,26 @@ near-miss/unanchored/write-class skips, budget cap), the body-preserving
 round-trip through real storage, and the gateway loop-closure (contribute
 two script nodes → tick rehearses in the sandbox → promotes a SubgraphBody
 node; a broken web records `paver.rehearsal_failed`, never a publish).
+**Amended (W2.1)** — adversarial review of the W2 diff caught a blocker
+and majors, fixed: (1) the tick re-paved every web EVERY tick (no
+idempotence), minting duplicate nodes and starving the budget — a web
+now carries a content SIGNATURE, and `is_paved`/`is_blocked` ports skip
+an unchanged-paved or reproduced-failure web BEFORE the budget, so the
+model bill really is paid once and a failing junction is not re-ground
+(the graduated-block M3 doctrine); (2) the budget capped promotions, not
+rehearsals — it now caps the expensive sandbox run; (3) the rehearsal
+reintroduced the W0.1 stale-port inversion (fixed namespace, no
+obligations) — it now files under a rehearsal-UNIQUE namespace (the
+blueprint id) and enforces output obligations, a faithful mirror of the
+live door, so no stale value ever resolves clean; (4) the promoted node
+advertised no slots (invisible to the assembler it claimed to reach) —
+`_web_contract` now derives the web's BOUNDARY interface (inputs no
+child produces, outputs no child consumes); (5) defense-in-depth: the
+contribute screen now recurses into a subgraph's encoded children so a
+buried child script cannot slip past the pre-storage screen. Plus the
+survey uses the body-preserving decoder (a paved node re-enters as its
+real subgraph) and the extended live-door wiring gained explicit test
+coverage.
 Changes: `paver/agent.py` (tick loop, budgets); seats `paver.match`,
 `paver.adapt`, `paver.build` in `seats.py`; pre-provision via the
 existing synthesis ladder + verify + drawer landing; rehearsal under

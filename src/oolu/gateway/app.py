@@ -204,6 +204,7 @@ from ..skills.contract import (
     NodeStats,
     Slot,
     SubgraphBody,
+    contract_from_registered_skill,
     derive_data_edges,
 )
 from ..skills.inputs import bind_inputs, inputs_manifest, validate_user_inputs
@@ -13513,7 +13514,38 @@ class GatewayApp:
             ),
             negative=self._pave_negative,
             audit=self._durable.audit.append,
+            is_paved=self._web_already_paved,
+            is_blocked=self._web_blocked,
         )
+
+    def _web_already_paved(self, tenant: str, web) -> bool:
+        """True iff this web was paved and its shape is UNCHANGED — the
+        idempotence gate that stops re-paving the same web every tick
+        (W2.1). A web whose nodes or edges moved has a fresh signature and
+        re-paves."""
+        stored = self._pave_store.paved(tenant, web.web_id)
+        return stored is not None and stored.get("signature") == web.signature()
+
+    def _web_blocked(self, tenant: str, web) -> bool:
+        """True iff a REPRODUCED rehearsal failure blocks this web (M3) —
+        so a web that keeps failing is not re-ground every tick. One
+        failure never blocks (the graduated-block doctrine); a reproduced
+        one does, until a reopen condition."""
+        spine = self._memory_spine()
+        if spine is None:
+            return False
+        try:
+            from ..negative import negative_check
+
+            verdict = negative_check(
+                spine,
+                tenant=tenant,
+                subject=f"paver:web:{web.web_id}",
+                context={"anchor": web.anchor or ""},
+            )
+            return bool(verdict.get("blocked"))
+        except Exception:  # noqa: BLE001 - a check failure never blocks paving
+            return False
 
     def _rehearse_web(self, contract):
         """Run a web's SubgraphBody end-to-end in the SEVERED sandbox — the
@@ -13522,6 +13554,7 @@ class GatewayApp:
         hop resolves them, and reports whether the whole web ran clean. No
         market economics: the Paver rehearses, it does not bill."""
         from ..paver import RehearsalResult
+        from ..values import parse_output_ref
 
         try:
             children = (
@@ -13533,25 +13566,58 @@ class GatewayApp:
             compiled = compile_contract(
                 contract, wire_dataflow=True, producer_keys=producer_keys
             )
-            compiled = stamp_value_tenant(compiled, _PAVER_REHEARSAL_TENANT)
-            by_name = {c.name: c for c in children}
+            # A rehearsal-UNIQUE namespace (W2.1): the blueprint id is
+            # uuid4-minted per compile, so each rehearsal files under a
+            # fresh tenant — no cross-rehearsal collision, and no STALE
+            # value from a prior tick's rehearsal can ever resolve (the
+            # namespace's port index starts empty).
+            namespace = f"{_PAVER_REHEARSAL_TENANT}:{compiled.blueprint.id}"
+            compiled = stamp_value_tenant(compiled, namespace)
+            # Same duplicate-name guard the live door uses (W0.1): a
+            # colliding child name would misattribute a producer key.
+            name_counts: dict[str, int] = {}
+            for c in children:
+                name_counts[c.name] = name_counts.get(c.name, 0) + 1
+            by_name = {c.name: c for c in children if name_counts[c.name] == 1}
             producer_ids = {
                 action_id: producer_keys[by_name[owner].id]
                 for action_id, owner in compiled.owners.items()
                 if owner in by_name
             }
+            # Every wired port is an OBLIGATION here too (W0.1/W2.1): a
+            # producer that succeeds without re-emitting a consumed port
+            # FAILS the rehearsal loudly, so a web never rehearses "clean"
+            # on data a real run would not produce.
+            obligations: dict[str, set[str]] = {}
+            for item in compiled.blueprint.actions:
+                for bound in (item.action.parameters.get("bindings") or {}).values():
+                    port = parse_output_ref(bound)
+                    if port is not None:
+                        obligations.setdefault(port[0], set()).add(port[1])
+            compiled = stamp_output_obligations(compiled, producer_ids, obligations)
 
             def value_pipe(action_id, outcome):
                 producer = producer_ids.get(action_id)
-                payload = (outcome.evidence or {}).get("result")
-                if not producer or payload is None:
+                if not producer:
                     return
-                self._values.snapshot_outputs(
-                    _PAVER_REHEARSAL_TENANT,
-                    payload,
-                    label=producer,
-                    producer=producer,
+                obligated = obligations.get(producer, set())
+                payload = (outcome.evidence or {}).get("result")
+                if payload is None:
+                    if obligated:
+                        raise ValuePipeError(
+                            f"producer {producer} emitted no result for "
+                            f"obligated port(s) {', '.join(sorted(obligated))}"
+                        )
+                    return
+                refs = self._values.snapshot_outputs(
+                    namespace, payload, label=producer, producer=producer
                 )
+                missing = sorted(obligated - set(refs))
+                if missing:
+                    raise ValuePipeError(
+                        f"producer {producer} did not fill obligated "
+                        f"port(s) {', '.join(missing)}"
+                    )
 
             record = self._contract_runner.execute(
                 RoutePlan(chosen=compiled.blueprint, alternatives=[], total_cost=0.0),
@@ -13600,6 +13666,7 @@ class GatewayApp:
             node_id=node_id,
             version_id=result.version.version_id,
             contract_json=contract.model_dump_json(),
+            signature=web.signature(),
             now=now,
         )
         return node_id
@@ -13691,22 +13758,26 @@ class GatewayApp:
             if version is None:
                 return None
             skill = ReusableSkill.model_validate_json(version.sanitized_skill_json)
-            contract = NodeContract.from_skill(skill)
             listing = self._nodeplace.listing_for_version(version.version_id)
-            if listing is not None:
-                contract = contract.model_copy(
-                    update={
-                        "consumes": [
-                            Slot(name=s.name, value_type=s.value_type, role=s.role)
-                            for s in listing.consumes
-                        ],
-                        "produces": [
-                            Slot(name=s.name, value_type=s.value_type, role=s.role)
-                            for s in listing.produces
-                        ],
-                    }
-                )
-            return contract
+            slot_consumes = (
+                [Slot(name=s.name, value_type=s.value_type, role=s.role)
+                 for s in listing.consumes]
+                if listing is not None
+                else None
+            )
+            slot_produces = (
+                [Slot(name=s.name, value_type=s.value_type, role=s.role)
+                 for s in listing.produces]
+                if listing is not None
+                else None
+            )
+            # Body-preserving (W2.1): a PAVED node decodes back to its whole
+            # SubgraphBody, so a survey sees it as a real composed node, not
+            # an opaque single 'subgraph' action. Every other node takes the
+            # ActionsBody path.
+            return contract_from_registered_skill(
+                skill, consumes=slot_consumes, produces=slot_produces
+            )
         except Exception:  # noqa: BLE001 - a bad row is skipped, never fatal
             return None
 

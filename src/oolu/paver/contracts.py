@@ -77,6 +77,22 @@ class RouteWeb(BaseModel):
     def anchored(self) -> bool:
         return self.anchor is not None
 
+    def signature(self) -> str:
+        """A stable content hash of the web's nodes and direct edges — two
+        surveys of the SAME web share it, so a paved web is skipped next
+        tick; a web whose shape moved gets a new signature and re-paves."""
+        import hashlib
+
+        payload = "|".join(
+            [
+                ",".join(sorted(self.node_ids)),
+                ";".join(
+                    sorted(f"{e.source}>{e.target}:{e.slot}" for e in self.edges)
+                ),
+            ]
+        )
+        return hashlib.sha256(payload.encode()).hexdigest()
+
 
 class SurveyReport(BaseModel):
     """One survey tick's whole map — what the heartbeat produced and the

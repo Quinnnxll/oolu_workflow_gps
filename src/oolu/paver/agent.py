@@ -74,6 +74,18 @@ class PaveReport:
     outcomes: list[PaveOutcome] = field(default_factory=list)
 
 
+def _dedupe_slots(slots) -> list:
+    """The distinct slots by (name, value_type, role), first-seen order."""
+    out: list = []
+    seen: set = set()
+    for slot in slots:
+        key = (slot.name, slot.value_type, slot.role)
+        if key not in seen:
+            seen.add(key)
+            out.append(slot)
+    return out
+
+
 def _rehearsable_effect_free(children: list[NodeContract]) -> bool:
     """True iff every child runs as a sandboxed SCRIPT — a ScriptBody or a
     sole-script-action ActionsBody. A cli/http/browser action has real
@@ -113,12 +125,20 @@ class PaverAgent:
         promote: Callable[[str, RouteWeb, NodeContract], str],
         negative: Callable[[str, RouteWeb, str], None] | None = None,
         audit: Callable[[str, dict], None] | None = None,
+        is_paved: Callable[[str, RouteWeb], bool] | None = None,
+        is_blocked: Callable[[str, RouteWeb], bool] | None = None,
         surveyor: WebSurveyor | None = None,
     ):
         self._rehearse = rehearse
         self._promote = promote
         self._negative = negative
         self._audit = audit
+        # Idempotence ports (W2.1): a web already paved (unchanged) is not
+        # re-paved; a web a prior failure blocked is not re-ground. Without
+        # these the tick would re-rehearse and re-promote every web every
+        # tick — minting duplicate nodes and starving the budget.
+        self._is_paved = is_paved or (lambda tenant, web: False)
+        self._is_blocked = is_blocked or (lambda tenant, web: False)
         self._surveyor = surveyor or WebSurveyor()
 
     # ------------------------------------------------------------------ #
@@ -130,24 +150,47 @@ class PaverAgent:
         max_paves: int = 4,
     ) -> PaveReport:
         """Survey ``nodes``, then pave up to ``max_paves`` fully-direct
-        anchored webs. Webs with near-misses (needing an adapter) are left
-        for W3; webs carrying a write-class hop are named, not run."""
+        anchored webs. Webs already paved (unchanged) or blocked by a prior
+        failure are skipped BEFORE the budget so they never re-rehearse or
+        starve fresh candidates. Webs with near-misses are left for W3;
+        webs carrying a write-class hop are named, not run. The budget caps
+        REHEARSALS (the expensive sandbox run), not just promotions."""
         report: SurveyReport = self._surveyor.survey(tenant, nodes)
         by_key = {node.key: node for node in nodes}
         paved: list[str] = []
         refused: list[dict] = []
         outcomes: list[PaveOutcome] = []
         candidates = 0
+        rehearsed = 0
 
         for web in report.webs:
-            decision = self._classify(web)
+            decision = self._classify(web, by_key)
             if decision is not None:
                 outcomes.append(
                     PaveOutcome(web.web_id, web.anchor, "skipped", reason=decision)
                 )
                 continue
+            # Already paved (unchanged), or blocked by a recorded failure:
+            # neither re-rehearses. Idempotence is what makes "the model
+            # bill is paid at pave time" and "never grind the same junction"
+            # true across ticks.
+            if self._is_paved(tenant, web):
+                outcomes.append(
+                    PaveOutcome(
+                        web.web_id, web.anchor, "skipped", reason="already paved"
+                    )
+                )
+                continue
+            if self._is_blocked(tenant, web):
+                outcomes.append(
+                    PaveOutcome(
+                        web.web_id, web.anchor, "skipped",
+                        reason="blocked by a prior rehearsal failure",
+                    )
+                )
+                continue
             candidates += 1
-            if len(paved) >= max_paves:
+            if rehearsed >= max_paves:
                 outcomes.append(
                     PaveOutcome(
                         web.web_id, web.anchor, "skipped",
@@ -155,6 +198,7 @@ class PaverAgent:
                     )
                 )
                 continue
+            rehearsed += 1
             outcomes.append(self._pave_one(tenant, web, by_key))
             if outcomes[-1].status == "paved":
                 paved.append(web.web_id)
@@ -174,9 +218,13 @@ class PaverAgent:
         return report_out
 
     # ------------------------------------------------------------------ #
-    @staticmethod
-    def _classify(web: RouteWeb) -> str | None:
-        """None means "a W2 candidate"; a string is the reason to skip."""
+    def _classify(
+        self, web: RouteWeb, by_key: dict[str, SurveyNode]
+    ) -> str | None:
+        """None means "a W2 candidate"; a string is the reason to skip.
+        The effect-freedom check lives here (not in _pave_one) so a
+        write-class web is classified out BEFORE the budget and the
+        idempotence ports."""
         if not web.anchored:
             return "no trigger door anchors this web"
         if web.near_misses:
@@ -185,6 +233,14 @@ class PaverAgent:
             return "has near-misses — needs an adapter (W3)"
         if not web.edges:
             return "no direct edges to pave"
+        children = [by_key[key].contract for key in web.node_ids if key in by_key]
+        if len(children) != len(web.node_ids):
+            return "a web node is missing its contract"
+        if not _rehearsable_effect_free(children):
+            # A write-class hop (cli/http/browser side effects): W2 paves
+            # only the effect-free case; the write-class web is deferred to
+            # a real run (named, never silently rehearsed).
+            return "carries a write-class hop — deferred to a real run"
         return None
 
     def _pave_one(
@@ -193,20 +249,6 @@ class PaverAgent:
         children = [
             by_key[key].contract for key in web.node_ids if key in by_key
         ]
-        if len(children) != len(web.node_ids):
-            return PaveOutcome(
-                web.web_id, web.anchor, "skipped",
-                reason="a web node is missing its contract",
-            )
-        if not _rehearsable_effect_free(children):
-            # A write-class hop: promote without an end-to-end rehearsal,
-            # rehearsed=false — the first real run earns its edges. (Named
-            # here; W2's tests cover the effect-free path; the write-class
-            # promotion rides the same promote port with rehearsed=False.)
-            return PaveOutcome(
-                web.web_id, web.anchor, "skipped",
-                reason="carries a write-class hop — deferred to a real run",
-            )
         contract = self._web_contract(tenant, web, children)
         rehearsal = self._rehearse(contract)
         if not rehearsal.ok:
@@ -253,13 +295,30 @@ class PaverAgent:
         children composed, ordering left to ``derive_data_edges`` (the
         slot flow IS the order, node-generation §5). The compiler wires the
         dataflow and stamps the tenant at run time; this is just the
-        composition."""
+        composition.
+
+        The web's EXTERNAL interface is its boundary (W2.1): it consumes
+        the inputs no child inside the web produces, and produces the
+        outputs no child inside consumes — so the promoted node advertises
+        real slots and is assemblable, not an opaque slotless node."""
+        produced_inside = [p for child in children for p in child.produces]
+        consumed_inside = [c for child in children for c in child.consumes]
+        consumes = _dedupe_slots(
+            slot
+            for slot in consumed_inside
+            if not any(p.matches(slot) for p in produced_inside)
+        )
+        produces = _dedupe_slots(
+            slot
+            for slot in produced_inside
+            if not any(slot.matches(c) for c in consumed_inside)
+        )
         name = f"web:{(web.anchor or web.web_id)[:16]}"
         return NodeContract(
             name=name,
             description=f"paved web anchored at {web.anchor}",
             provenance="synthesized",
-            consumes=[],
-            produces=[],
+            consumes=consumes,
+            produces=produces,
             body=SubgraphBody(nodes=list(children)),
         )

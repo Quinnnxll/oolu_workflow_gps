@@ -37,15 +37,17 @@ __all__ = ["SurveyNode", "WebSurveyor"]
 
 def _files_port_values(contract: NodeContract) -> bool:
     """True iff this producer's success files port values W0 could bind
-    against — a ScriptBody, or an ActionsBody whose function is a
+    against — a ScriptBody, or an ActionsBody whose SOLE action is a
     ``script`` action (the shape every function and program node
-    publishes). A cli/http/browser ActionsBody skill files nothing to
-    bind, so it never sources a candidate edge."""
+    publishes, and exactly the shape the compiler can wire — a mixed
+    ``[http, script]`` body neither wires nor rehearses effect-free, so
+    it must not source a candidate edge either). A cli/http/browser skill
+    files nothing to bind."""
     body = contract.body
     if isinstance(body, ScriptBody):
         return True
     if isinstance(body, ActionsBody):
-        return any(action.adapter == "script" for action in body.actions)
+        return len(body.actions) == 1 and body.actions[0].adapter == "script"
     return False
 
 

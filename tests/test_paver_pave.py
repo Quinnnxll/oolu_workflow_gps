@@ -438,3 +438,137 @@ def test_gateway_rehearsal_failure_leaves_no_promotion(tmp_path):
         if r.event_type == "paver.rehearsal_failed"
     ]
     conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# W2.1 — review fixes.                                                         #
+# --------------------------------------------------------------------------- #
+def test_already_paved_web_is_not_repaved():
+    paved_ids: set = set()
+
+    def promote(tenant, web, contract):
+        paved_ids.add(web.web_id)
+        return "node-1"
+
+    agent = PaverAgent(
+        rehearse=lambda c: RehearsalResult(ok=True),
+        promote=promote,
+        is_paved=lambda tenant, web: web.web_id in paved_ids,
+    )
+    nodes = _direct_web_nodes()
+    first = agent.tick("t1", nodes)
+    assert len(first.paved) == 1
+    # Second tick: the same web is already paved — no re-rehearse, no
+    # re-promote, no duplicate node.
+    rehearsed = {"n": 0}
+    agent2 = PaverAgent(
+        rehearse=lambda c: (rehearsed.__setitem__("n", rehearsed["n"] + 1)
+                            or RehearsalResult(ok=True)),
+        promote=promote,
+        is_paved=lambda tenant, web: web.web_id in paved_ids,
+    )
+    second = agent2.tick("t1", nodes)
+    assert second.paved == []
+    assert rehearsed["n"] == 0  # never re-rehearsed
+    assert any(o.reason == "already paved" for o in second.outcomes)
+
+
+def test_blocked_web_is_not_reground():
+    rehearsed = {"n": 0}
+    agent = PaverAgent(
+        rehearse=lambda c: (rehearsed.__setitem__("n", rehearsed["n"] + 1)
+                            or RehearsalResult(ok=False, error="x")),
+        promote=lambda *a: "x",
+        is_blocked=lambda tenant, web: True,
+    )
+    report = agent.tick("t1", _direct_web_nodes())
+    assert rehearsed["n"] == 0  # a blocked web never rehearses
+    assert any("blocked by a prior" in o.reason for o in report.outcomes)
+
+
+def test_budget_caps_rehearsals_not_just_promotions():
+    # Two failing webs, budget of one: only ONE rehearses (the expensive
+    # step), the other is budget-deferred though neither ever "paves".
+    nodes = [
+        _script_survey_node("a1", produces=[_slot("x")], anchor_kind="webhook"),
+        _script_survey_node("a2", consumes=[_slot("x")]),
+        _script_survey_node("b1", produces=[_slot("y")], anchor_kind="webhook"),
+        _script_survey_node("b2", consumes=[_slot("y")]),
+    ]
+    rehearsed = {"n": 0}
+    agent = PaverAgent(
+        rehearse=lambda c: (rehearsed.__setitem__("n", rehearsed["n"] + 1)
+                            or RehearsalResult(ok=False, error="boom")),
+        promote=lambda *a: "x",
+    )
+    report = agent.tick("t1", nodes, max_paves=1)
+    assert rehearsed["n"] == 1  # the budget capped rehearsals, not paves
+    assert any("budget" in o.reason for o in report.outcomes)
+
+
+def test_web_contract_advertises_boundary_slots():
+    from oolu.paver.agent import PaverAgent as _PA
+
+    nodes = [
+        _script_survey_node(
+            "exporter", produces=[_slot("rows_csv")], anchor_kind="webhook"
+        ),
+        _script_survey_node(
+            "cleaner", consumes=[_slot("rows_csv")], produces=[_slot("tidy_csv")]
+        ),
+    ]
+    captured = {}
+    agent = _PA(
+        rehearse=lambda c: RehearsalResult(ok=True),
+        promote=lambda tenant, web, contract: captured.setdefault("c", contract)
+        or "node-1",
+    )
+    agent.tick("t1", nodes)
+    contract = captured["c"]
+    # rows_csv is produced AND consumed inside → internal, not on the face.
+    # tidy_csv is a terminal output; the web consumes nothing external.
+    assert [p.name for p in contract.produces] == ["tidy_csv"]
+    assert [c.name for c in contract.consumes] == []
+
+
+def test_web_signature_changes_when_shape_moves():
+    from oolu.paver.discovery import WebSurveyor
+
+    a = WebSurveyor().survey("t1", _direct_web_nodes()).webs[0]
+    # Same web, surveyed again → same signature.
+    b = WebSurveyor().survey("t1", _direct_web_nodes()).webs[0]
+    assert a.signature() == b.signature()
+    # A third node joins the web → different membership → new signature.
+    more = _direct_web_nodes() + [
+        _script_survey_node("cleaner2", consumes=[_slot("rows_csv")])
+    ]
+    c = WebSurveyor().survey("t1", more).webs[0]
+    assert c.signature() != a.signature()
+
+
+def test_contribute_screens_child_scripts_inside_a_subgraph():
+    from oolu.nodeplace.service import _screenable_scripts
+    from oolu.skills.contract import NodeContract, ScriptBody, SubgraphBody
+
+    # A subgraph whose child carries a hostile script: the nested script
+    # must be surfaced to the screen, not buried in the encoded contract.
+    child = NodeContract(
+        name="evil",
+        provenance="synthesized",
+        body=ActionsBody(
+            actions=[
+                ActionEvent(
+                    correlation_id="c",
+                    adapter="script",
+                    operation="run",
+                    parameters={"script": "import socket\nsocket.socket()"},
+                )
+            ]
+        ),
+    )
+    web = NodeContract(
+        name="web", provenance="synthesized", body=SubgraphBody(nodes=[child])
+    )
+    skill = web.subgraph_to_skill()
+    scripts = _screenable_scripts(skill.actions[0])
+    assert any("socket" in s for s in scripts)

@@ -39,6 +39,40 @@ _CAPABILITY_NOISE = frozenset({"_oolu_runtime", "emit_result", "emit_error", "pr
 _CAPABILITY_CAP = 24
 
 
+def _screenable_scripts(action) -> list[str]:
+    """Every script an action carries, INCLUDING those buried inside a
+    ``subgraph``-adapter action's encoded contract (W2.1). A subgraph
+    node stores its whole child tree in ``parameters['contract']``; its
+    children's scripts must pass the same pre-storage safety screen the
+    top-level scripts do, or the encoding would be a screen bypass. The
+    sandbox re-screens every script at run time regardless — this closes
+    the defense-in-depth gap at the door."""
+    params = action.parameters or {}
+    scripts: list[str] = []
+    direct = params.get("script")
+    if direct:
+        scripts.append(str(direct))
+
+    def _walk(body: dict) -> None:
+        for child in body.get("nodes", []) or []:
+            child_body = child.get("body") or {}
+            kind = child_body.get("kind")
+            if kind == "actions":
+                for act in child_body.get("actions", []) or []:
+                    s = (act.get("parameters") or {}).get("script")
+                    if s:
+                        scripts.append(str(s))
+            elif kind == "subgraph":
+                _walk(child_body)
+
+    contract = params.get("contract")
+    if isinstance(contract, dict):
+        body = contract.get("body") or {}
+        if body.get("kind") == "subgraph":
+            _walk(body)
+    return scripts
+
+
 def _script_tokens(script: str) -> set[str]:
     """The function words INSIDE a script: imported modules, defined
     functions, and called names — parsed, not guessed. An unparseable
@@ -154,18 +188,16 @@ class NodeplaceService:
         # refused with the reason instead of reaching the registry. The
         # sandbox and verify-by-execution remain the real walls behind it.
         for action in skill.actions:
-            script = (action.parameters or {}).get("script")
-            if not script:
-                continue
-            flags = screen_script(str(script))
-            if flags:
-                raise SafetyViolation(
-                    [
-                        "the uploaded function was refused by the safety "
-                        "screen — it " + reason
-                        for reason in flags
-                    ]
-                )
+            for script in _screenable_scripts(action):
+                flags = screen_script(str(script))
+                if flags:
+                    raise SafetyViolation(
+                        [
+                            "the uploaded function was refused by the safety "
+                            "screen — it " + reason
+                            for reason in flags
+                        ]
+                    )
         sanitized, content_hash = sanitize_skill(skill)
 
         node = (

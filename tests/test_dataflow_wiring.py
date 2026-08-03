@@ -654,3 +654,91 @@ def test_reserved_holds_stay_unwired_and_approve_clean(tmp_path):
     assert script.staged["goal:cleaner"] == [{}]
     assert cli.calls == 1
     conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# W2.1 — the extended wiring reaches ActionsBody-single-script children.        #
+# --------------------------------------------------------------------------- #
+def _actions_script_child(name, *, consumes=None, produces=None, script="x"):
+    return NodeContract(
+        name=name,
+        provenance="synthesized",
+        consumes=list(consumes or []),
+        produces=list(produces or []),
+        body=ActionsBody(
+            actions=[
+                ActionEvent(
+                    correlation_id="function",
+                    adapter="script",
+                    operation="run",
+                    parameters={"goal": name, "script": script, "node_key": name},
+                )
+            ]
+        ),
+    )
+
+
+def test_wire_dataflow_reaches_actionsbody_single_script_children():
+    # The shape from_skill gives a registered function node: an
+    # ActionsBody with one script action. W2 wires these so a contract of
+    # registered nodes pipes data (pre-W2, only ScriptBody wired).
+    producer = _actions_script_child("exporter", produces=[_slot("rows_csv")])
+    consumer = _actions_script_child("cleaner", consumes=[_slot("rows_csv")])
+    contract = _subgraph("pipeline", [producer, consumer])
+
+    wired = compile_contract(
+        contract, wire_dataflow=True, producer_keys={producer.id: "desk-7"}
+    )
+    # The consumer's script action carries the output:// binding.
+    consumer_action = next(
+        item.action
+        for item in wired.blueprint.actions
+        if item.action.parameters.get("goal") == "cleaner"
+    )
+    assert consumer_action.parameters["bindings"] == {
+        "rows_csv": "output://desk-7/rows_csv"
+    }
+
+
+def test_wire_dataflow_off_leaves_actionsbody_children_unwired():
+    producer = _actions_script_child("exporter", produces=[_slot("rows_csv")])
+    consumer = _actions_script_child("cleaner", consumes=[_slot("rows_csv")])
+    contract = _subgraph("pipeline", [producer, consumer])
+    plain = compile_contract(contract)
+    consumer_action = next(
+        item.action
+        for item in plain.blueprint.actions
+        if item.action.parameters.get("goal") == "cleaner"
+    )
+    assert consumer_action.parameters.get("bindings") in (None, {})
+
+
+def test_multi_action_body_is_not_wired_as_a_producer():
+    # A [http, script] body is NOT a sole-script producer — it neither
+    # wires nor is a fileable producer, so the consumer stays unbound.
+    producer = NodeContract(
+        name="fetch-and-shape",
+        provenance="synthesized",
+        produces=[_slot("rows_csv")],
+        body=ActionsBody(
+            actions=[
+                ActionEvent(correlation_id="c", adapter="http", operation="get"),
+                ActionEvent(
+                    correlation_id="c",
+                    adapter="script",
+                    operation="run",
+                    parameters={"goal": "shape", "script": "x"},
+                ),
+            ]
+        ),
+    )
+    consumer = _actions_script_child("cleaner", consumes=[_slot("rows_csv")])
+    wired = compile_contract(
+        _subgraph("pipeline", [producer, consumer]), wire_dataflow=True
+    )
+    consumer_action = next(
+        item.action
+        for item in wired.blueprint.actions
+        if item.action.parameters.get("goal") == "cleaner"
+    )
+    assert consumer_action.parameters.get("bindings") in (None, {})

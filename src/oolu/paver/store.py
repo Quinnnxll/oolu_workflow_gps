@@ -34,6 +34,7 @@ _PAVED_SCHEMA = """CREATE TABLE IF NOT EXISTS paver_paved (
     node_id TEXT NOT NULL,
     version_id TEXT,
     contract_json TEXT NOT NULL,
+    signature TEXT NOT NULL DEFAULT '',
     paved_at TEXT NOT NULL,
     PRIMARY KEY (tenant, web_id)
 )"""
@@ -82,30 +83,34 @@ class PaveStore:
         node_id: str,
         version_id: str | None,
         contract_json: str,
+        signature: str = "",
         now,
     ) -> None:
         """Persist a web's promoted contract — the exact SubgraphBody a
-        trigger will fire. Replaces any prior promotion of the same web."""
+        trigger will fire — plus its content ``signature``, so the next
+        tick skips an UNCHANGED web (idempotence) but re-paves one whose
+        shape moved. Replaces any prior promotion of the same web."""
         stamp = now.isoformat() if hasattr(now, "isoformat") else str(now)
         with self._conn.transaction() as db:
             db.execute(
                 """INSERT INTO paver_paved
                      (web_id, tenant, node_id, version_id, contract_json,
-                      paved_at)
-                   VALUES (?, ?, ?, ?, ?, ?)
+                      signature, paved_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(tenant, web_id) DO UPDATE SET
                      node_id = excluded.node_id,
                      version_id = excluded.version_id,
                      contract_json = excluded.contract_json,
+                     signature = excluded.signature,
                      paved_at = excluded.paved_at""",
-                (web_id, tenant, node_id, version_id, contract_json, stamp),
+                (web_id, tenant, node_id, version_id, contract_json, signature, stamp),
             )
 
     def paved(self, tenant: str, web_id: str) -> dict | None:
         """A web's promoted contract row, or None if it was never paved."""
         with self._conn.lock:
             row = self._conn.db.execute(
-                "SELECT node_id, version_id, contract_json, paved_at "
+                "SELECT node_id, version_id, contract_json, signature, paved_at "
                 "FROM paver_paved WHERE tenant = ? AND web_id = ?",
                 (tenant, web_id),
             ).fetchone()
@@ -115,6 +120,7 @@ class PaveStore:
             "node_id": row["node_id"],
             "version_id": row["version_id"],
             "contract_json": row["contract_json"],
+            "signature": row["signature"],
             "paved_at": row["paved_at"],
         }
 

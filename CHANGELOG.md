@@ -31,6 +31,17 @@ time, not trigger time (docs/algorithm-barriers-plan.md, Part II):
   never grinds the same failing junction. `PaveStore` persists the
   promoted contract for the trigger path (W4); audit `paver.web_paved`.
   New seat `paver.build`.
+- **W2.1** (adversarial review): a web carries a content signature and
+  the tick skips an already-paved (unchanged) or reproduced-failure web
+  BEFORE the budget, so it never re-paves the same web or re-grinds a
+  failing junction (the model bill is paid once); the budget caps
+  rehearsals, not just promotions; the rehearsal files under a
+  per-run-unique namespace and enforces output obligations (no stale
+  port ever resolves clean — a faithful mirror of the live door); the
+  promoted node advertises its boundary slots (assemblable, not
+  slotless); and the contribute screen recurses into a subgraph's
+  encoded children so a buried child script cannot slip past the
+  pre-storage screen.
 
 Route paving (W1) — the Paver's map and heartbeat
 (docs/algorithm-barriers-plan.md, Part II):
