@@ -4,6 +4,27 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The unified view (F3) — one face: every node renders its standing result
+(docs/algorithm-barriers-plan.md, Part I):
+
+- **`GET /v1/nodes/{node_id}/view`** — the node's standing result as ONE
+  server-rendered page. The template is the GATEWAY's (`_render_node_view`):
+  semantic HTML only, no script/style/subresource, and every tenant string
+  HTML-escaped — zero tenant-authored bytes interpreted, which is what
+  makes the page safe under the pinned security headers (CSP
+  `default-src 'none'`, `X-Frame-Options: DENY` — asserted unchanged on
+  the HTML route) on every deployment mode.
+- **Content** — the declared output ports against the newest verified
+  result (the `_node_last_result` projection), the run stamp, and — for a
+  program node — the module count plus declared state names with rows
+  counts (F2's `state/state.json`). Every node gets the free ports view;
+  no verified run renders the honest empty page.
+- **Walls** — foreign tenants, unknown, revoked, and deleted nodes see
+  one byte-identical 404 (no existence oracle); unauth is 401. The
+  interact window's `last_result` now points a program node at its view.
+  Tenant-authored HTML views stay the named follow-on behind their three
+  walls — no header relaxed, no credential minted.
+
 Program state + the program limits profile (F2) — the program keeps its
 own books; the sandbox stays hostile (docs/algorithm-barriers-plan.md,
 Part I):

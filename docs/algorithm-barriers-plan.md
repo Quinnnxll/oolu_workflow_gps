@@ -2,10 +2,10 @@
 
 Status: In build. Three phase series, one per barrier: **F0–F3** (the
 program node), **W0–W5** (route paving — the Paver), **G0–G3** (gate
-edges). G0, G1, G2, W0, W1, W2, W3, W4, F0, F1, and F2 LANDED (plus review
+edges). G0, G1, G2, W0, W1, W2, W3, W4, F0, F1, F2, and F3 LANDED (plus review
 amendments G0.1, G1.1, G2.1, W0.1, W2.1, W3.1, W4.1, F0.1, F1.1; W4's
 fast path landed, its slow-path / chaining / billed complements
-named-deferred); every other phase Proposed. Each lands as one commit titled
+named-deferred). Remaining: G3, W5. Each lands as one commit titled
 `<CODE> landed: <name> — <subtitle>` with its loop-closure test, the
 plan-doc status flip, and the CHANGELOG entry in the same commit.
 
@@ -586,6 +586,32 @@ unchanged.
 Done when: a browser shows a program node's rendered standing result,
 updated after each verified run, with zero tenant-authored bytes
 executed — on every deployment mode.
+**Status: LANDED** — `GET /v1/nodes/{node_id}/view` → `_node_view`,
+session-authed. The page is the GATEWAY's deterministic template
+(`_render_node_view`): semantic HTML only — no script, no style, no
+subresource (the pinned CSP `default-src 'none'` forbids them anyway) —
+and EVERY tenant string on it (names, port values, state names) is
+HTML-escaped text, so zero tenant-authored bytes are ever interpreted;
+that is exactly what makes the view safe under the standard security
+headers on every deployment mode, shared hosts included. Content: the
+declared output ports held against the newest verified result (the
+`_node_last_result` projection over `runs/*/outputs.json` — derived on
+read, never stored), the run stamp, and — for a PROGRAM node — the
+module count and the declared state names with rows-kind counts read off
+the standing `state/state.json` (F2). Every node gets the free ports
+view; a node with no verified run renders the honest empty page. Foreign
+tenants, unknown, revoked, and deleted nodes all see ONE uniform 404 —
+the view is not an existence oracle. The interact window's
+`last_result` answer now appends "View it at /v1/nodes/…/view" for a
+program node. The tenant-authored HTML view (`ViewSpec.kind="html"`)
+stays the named follow-on behind its three walls — nothing here relaxes
+a header or mints a credential. Tests: the authed fetch renders the
+standing result inline with the pinned security headers asserted
+UNCHANGED on the HTML response; a hostile `<script>`-bearing payload
+renders as escaped text; foreign-tenant and unknown-node answer
+byte-identical 404s; unauth is 401; a plain function node gets the same
+free ports view with no state section; no-run renders the honest empty
+view.
 
 ## I.4 Risks and invariants
 

@@ -2021,6 +2021,10 @@ class GatewayApp:
             self._nodes_overview,
             requires_permission="users:manage",
         )
+        # The unified view (F3): every node's standing result as one
+        # server-rendered page — gateway-owned template, zero tenant
+        # bytes interpreted. Session-authed; foreign tenants see 404.
+        r.add("GET", "/v1/nodes/{node_id}/view", self._node_view)
         r.add("POST", "/v1/market/quotes", self._market_quote)
         r.add("POST", "/v1/market/assemble", self._market_assemble)
         r.add("POST", "/v1/runs/contract", self._submit_contract_run)
@@ -6508,6 +6512,9 @@ class GatewayApp:
                     say += f", {when}"
                 say += ")"
             say += " — the full record is in this node's drawer under runs/."
+            # F3: a program node has ONE rendered face — point at it.
+            if self._program_spec_of(session.tenant_id, node_id) is not None:
+                say += f" View it at /v1/nodes/{node_id}/view."
             # B4: the chain is visible — what this node received, from
             # whom, and what it passed on, cited with run ids from the
             # graph's handoff edges.
@@ -12298,6 +12305,167 @@ class GatewayApp:
             200,
             {"items": ledger.releases(session.tenant_id, params["node_id"])},
         )
+
+    # ------------------------------------------------------------------ #
+    # The unified view (F3): one face, deterministically rendered.        #
+    # ------------------------------------------------------------------ #
+    def _node_view(self, request, session, params) -> Response:
+        """The node's standing result as ONE server-rendered page — the
+        unified view (F3). The template is the GATEWAY's; every tenant
+        string on it (names, port values, state names) is HTML-escaped
+        text, so zero tenant-authored bytes are ever interpreted — which
+        is exactly why the page is safe under the standard security
+        headers (CSP ``default-src 'none'``: no scripts, no styles, no
+        subresources) on every deployment mode, shared hosts included.
+
+        Every node gets the free view of its declared ports and latest
+        verified values; a PROGRAM node additionally shows its module
+        count and state names. Foreign tenants (and unknown, revoked, or
+        deleted nodes) see one uniform 404 — the view is not an
+        existence oracle."""
+        node_id = params["node_id"]
+        node = None
+        if self._nodeplace is not None:
+            try:
+                node = next(
+                    (
+                        n
+                        for n in self._nodeplace.all_nodes()
+                        if n.node_id == node_id
+                    ),
+                    None,
+                )
+            except Exception:  # noqa: BLE001 - a broken registry views nothing
+                node = None
+        if (
+            node is None
+            or node.tenant_id != session.tenant_id
+            or node.revoked_at is not None
+            or self._node_deleted(node_id)
+        ):
+            raise GatewayError(404, "not_found", "no such node")
+        page = self._render_node_view(session.tenant_id, node)
+        return Response(
+            status=200, body=page, content_type="text/html; charset=utf-8"
+        )
+
+    def _render_node_view(self, tenant: str, node) -> str:
+        """The deterministic template — semantic HTML only, no script, no
+        style, no subresource (the pinned CSP forbids them anyway), every
+        tenant string escaped. The page is a PROJECTION: the declared
+        ports held against the newest verified result, the run stamp, and
+        (for a program node) the module count and declared state."""
+        node_id = node.node_id
+        title = node_id
+        ports: list = []
+        try:
+            version = self._nodeplace.latest_version(node_id)
+            if version is not None:
+                skill = ReusableSkill.model_validate_json(
+                    version.sanitized_skill_json
+                )
+                title = skill.name or node_id
+                listing = self._nodeplace.listing_for_version(
+                    version.version_id
+                )
+                if listing is not None:
+                    ports = list(listing.produces)
+        except Exception:  # noqa: BLE001 - the view renders what it can
+            pass
+
+        standing = self._node_last_result(tenant, node_id) or {}
+        result = standing.get("result")
+        payload = result if isinstance(result, dict) else {}
+        run_id = str(standing.get("run_id") or "")
+        when = str(standing.get("at") or "")
+        spec = self._program_spec_of(tenant, node_id)
+
+        def _value_text(value) -> str:
+            text = (
+                value
+                if isinstance(value, str)
+                else json.dumps(value, ensure_ascii=False, default=str)
+            )
+            if len(text) > 2000:
+                text = text[:2000] + " … (truncated)"
+            return _escape(text)
+
+        kind_line = "function node"
+        if spec is not None:
+            kind_line = f"program node · {len(spec.modules)} internal modules"
+        lines = [
+            "<!doctype html>",
+            '<meta charset="utf-8">',
+            f"<title>{_escape(title)} — OoLu node view</title>",
+            f"<h1>{_escape(title)}</h1>",
+            f"<p>node {_escape(node_id)} · {_escape(kind_line)}</p>",
+            "<h2>Standing result</h2>",
+        ]
+        if standing:
+            stamp = f"run {run_id[:8]}" if run_id else "verified run"
+            if when:
+                stamp += f" · {when}"
+            lines.append(f"<p>{_escape(stamp)}</p>")
+            if ports:
+                lines.append("<dl>")
+                for port in ports:
+                    name = str(port.name)
+                    lines.append(f"<dt>{_escape(name)}</dt>")
+                    if name in payload:
+                        lines.append(f"<dd>{_value_text(payload[name])}</dd>")
+                    else:
+                        lines.append("<dd>—</dd>")
+                lines.append("</dl>")
+            elif payload or result is not None:
+                lines.append(
+                    "<pre>"
+                    + _value_text(payload if payload else result)
+                    + "</pre>"
+                )
+        else:
+            lines.append(
+                "<p>No verified run yet — run the node once and its "
+                "standing result will render here.</p>"
+            )
+        if spec is not None and spec.state:
+            lines.append("<h2>Program state</h2>")
+            counts = self._state_row_counts(tenant, node_id)
+            lines.append("<ul>")
+            for item in spec.state:
+                note = ""
+                if item.kind == "rows" and item.name in counts:
+                    note = f" ({counts[item.name]} rows)"
+                lines.append(
+                    f"<li>{_escape(item.name)} — {_escape(item.kind)}"
+                    f"{_escape(note)}</li>"
+                )
+            lines.append("</ul>")
+        lines.append(
+            "<p>Rendered by the gateway from verified run records; no "
+            "node-authored code or markup runs on this page.</p>"
+        )
+        return "\n".join(lines)
+
+    def _state_row_counts(self, tenant: str, node_id: str) -> dict[str, int]:
+        """How many rows each rows-kind state name currently holds — read
+        off the standing ``state/state.json``, best-effort (a missing or
+        unreadable state simply shows no count)."""
+        if self._files is None:
+            return {}
+        try:
+            for file in self._files.list(tenant=tenant, node_id=node_id):
+                if file.folder == "state" and file.name == "state.json":
+                    data = json.loads(file.content)
+                    if not isinstance(data, dict):
+                        return {}
+                    return {
+                        name: len(value)
+                        for name, value in data.items()
+                        if isinstance(value, list)
+                    }
+        except Exception:  # noqa: BLE001 - a count is decoration
+            return {}
+        return {}
 
     def _node_release_revoke(self, request, session, params) -> Response:
         """The revocation door: a vulnerable release is revoked in words
