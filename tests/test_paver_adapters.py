@@ -136,6 +136,26 @@ def test_rename_adapter_is_byte_stable_and_model_free():
     assert result.rounds == 0
 
 
+def test_rename_with_a_mock_marker_slot_name_is_not_false_refused():
+    # W3.1: a slot NAME containing a mock-screen marker substring
+    # ('simulated', 'mock', 'placeholder', ...) must not refuse the
+    # DETERMINISTIC rename template — the template has no model and is a
+    # provable passthrough, so the mock (fabrication) screen does not apply.
+    spec = AdapterSpec(
+        produced=Slot(name="simulated_temp", value_type="str", role="reading"),
+        consumed=Slot(name="temp_reading", value_type="str", role="reading"),
+        verdict="mappable",
+        sample="21.5",
+    )
+    result = AdapterSynthesizer(verify=_ok_verify, model=DeadModel()).author(spec)
+    assert result.ok and result.templated
+    # A genuine SAFETY violation still refuses the template (defense-in-depth
+    # is not skipped — only the fabrication screen is).
+    from oolu.nodeplace.screening import screen_script
+
+    assert screen_script(render_mapping_adapter("simulated_temp", "temp_reading")) == []
+
+
 def test_rename_adapter_that_fails_verify_makes_no_edge():
     spec = AdapterSpec(
         produced=Slot(name="folder", value_type="str", role="path"),
@@ -288,6 +308,29 @@ def test_unbridgeable_near_miss_fails_the_web_and_files_negative():
     failed = [o for o in report.outcomes if o.status == "adapter-failed"]
     assert len(failed) == 1
     assert negatives and "could not adapt" in negatives[0]
+
+
+def test_defer_skips_the_web_without_negative_knowledge():
+    # W3.1: DEFER (the producer has not filed a value yet) is NOT a
+    # cannot-bridge — the web is skipped WITHOUT a negative note, so a
+    # later tick retries once the value exists. A None would negative-note
+    # and permanently block the web.
+    from oolu.paver import DEFER
+
+    nodes = _near_miss_survey_nodes()
+    negatives: list = []
+    agent = PaverAgent(
+        rehearse=lambda contract: RehearsalResult(ok=True),
+        promote=lambda tenant, web, contract: "unused",
+        negative=lambda tenant, web, reason: negatives.append(reason),
+        build_adapter=lambda tenant, miss, src, tgt: DEFER,
+    )
+    report = agent.tick("t", nodes)
+
+    assert report.paved == []
+    assert negatives == []  # a defer is NEVER negative-noted
+    deferred = [o for o in report.outcomes if o.status == "deferred"]
+    assert len(deferred) == 1 and "not ready" in deferred[0].reason
 
 
 def test_near_miss_web_is_skipped_without_an_adapter_builder():

@@ -170,7 +170,14 @@ class AdapterSynthesizer:
     # ------------------------------------------------------------------ #
     def _pour_template(self, spec: AdapterSpec) -> AdapterResult:
         script = render_mapping_adapter(spec.produced.name, spec.consumed.name)
-        screen = self._screen(script)
+        # The template runs the SAFETY screen only — never the mock screen.
+        # The mock screen guards against a MODEL baking in a constant; this
+        # template has no model and is a provable verbatim passthrough
+        # (emit_result of a subscript, not a constant). Running it would
+        # false-refuse a legitimate rename whose slot NAME merely contains a
+        # marker substring ('simulated_temp', 'mockup_url') — the exact bug
+        # W3.1 fixes.
+        screen = self._safety_screen(script)
         if screen is not None:
             return AdapterResult(
                 ok=False, verdict="mappable", script=script,
@@ -231,14 +238,25 @@ class AdapterSynthesizer:
 
     # ------------------------------------------------------------------ #
     @staticmethod
-    def _screen(script: str) -> str | None:
-        """The free gates before the sandbox — the safety screen and the
-        mock screen, the same two every authored function passes."""
-        from ..nodeplace.screening import mock_smells, screen_script
+    def _safety_screen(script: str) -> str | None:
+        """The safety screen alone — the antivirus pass every script (even
+        a deterministic template) passes before the sandbox."""
+        from ..nodeplace.screening import screen_script
 
         flags = screen_script(script)
         if flags:
             return "refused by the safety screen: " + "; ".join(flags)
+        return None
+
+    def _screen(self, script: str) -> str | None:
+        """The free gates for MODEL-authored code — safety plus the mock
+        screen (a model may fabricate; the template cannot, so the
+        template path skips the mock screen, W3.1)."""
+        from ..nodeplace.screening import mock_smells
+
+        safety = self._safety_screen(script)
+        if safety is not None:
+            return safety
         smells = mock_smells(script)
         if smells:
             return "smells mocked: " + "; ".join(smells)

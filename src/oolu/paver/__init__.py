@@ -20,6 +20,7 @@ from .adapters import (
     render_mapping_adapter,
 )
 from .agent import (
+    DEFER,
     AdapterBuild,
     PaveOutcome,
     PaveReport,
@@ -38,6 +39,7 @@ from .routine import PaverScheduleStore
 from .store import PaveStore
 
 __all__ = [
+    "DEFER",
     "AdapterBuild",
     "AdapterResult",
     "AdapterSpec",

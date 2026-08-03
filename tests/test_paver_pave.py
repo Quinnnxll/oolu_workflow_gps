@@ -475,6 +475,55 @@ def test_gateway_paves_a_near_miss_web_via_a_rename_adapter(tmp_path):
     conn.close()
 
 
+def test_adapted_web_is_not_repaved_on_a_second_tick(tmp_path):
+    # W3.1: after an adapted web paves, a SECOND tick must NOT re-grind it.
+    # The paver-authored adapter citizen is EXCLUDED from the survey, so it
+    # never folds itself into a fresh-web_id the idempotence gate misses —
+    # no duplicate adapter, no duplicate paved-web node, no re-paid bill.
+    app, conn, ident, registry, executor = _pave_app(
+        tmp_path,
+        payloads={
+            "exporter": {"folder": "/data/in"},
+            "adapt folder to path": {"path": "/data/in"},
+            "cleaner": {},
+        },
+    )
+    exporter = _publish_script_node(
+        app, registry, name="exporter", consumes=[],
+        produces=[{"name": "folder", "value_type": "path", "role": "path"}],
+        hook=True,
+    )
+    _publish_script_node(
+        app, registry, name="cleaner",
+        consumes=[{"name": "path", "value_type": "path", "role": "path"}],
+        produces=[],
+    )
+    app._values.snapshot_outputs(
+        "t1", {"folder": "/data/in"}, producer=exporter, label="exporter"
+    )
+    app._paver_schedule.enable(
+        interval_hours=6, granted_by="quinn", tenant="t1",
+        now=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+    def _counts():
+        recs = app._durable.audit.records()
+        built = len([r for r in recs if r.event_type == "paver.adapter_built"])
+        paved = len([r for r in recs if r.event_type == "paver.web_paved"])
+        nodes = len([n for n in app._nodeplace.all_nodes() if n.tenant_id == "t1"])
+        return built, paved, nodes
+
+    app._scheduled_survey_tick(datetime(2026, 1, 1, tzinfo=UTC))
+    first = _counts()
+    assert first[0] == 1 and first[1] == 1  # one adapter, one paved web
+
+    # A second (and third) tick: no NEW adapter, no NEW pave, no new nodes.
+    app._scheduled_survey_tick(datetime(2026, 1, 1, 6, tzinfo=UTC))
+    app._scheduled_survey_tick(datetime(2026, 1, 1, 12, tzinfo=UTC))
+    assert _counts() == first, "the adapted web must not re-grind across ticks"
+    conn.close()
+
+
 def test_gateway_rehearsal_failure_leaves_no_promotion(tmp_path):
     # The consumer's script BLOCKS (its binding can't resolve because the
     # producer emits the wrong key), so the web fails rehearsal.

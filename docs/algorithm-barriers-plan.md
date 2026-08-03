@@ -1034,6 +1034,29 @@ containment (absurd advice builds nothing); the agent loop-closure
 unbridgeable-junction failure (whole web refused, negative filed); and
 the gateway end-to-end (a rename near-miss paves through the real survey,
 negotiate, sample, template, verify, land, splice, rehearse, promote).
+**Amended (W3.1)** — adversarial review of the W3 diff confirmed three
+majors, fixed: (1) the deterministic rename template ran through the
+MOCK screen, whose substring markers matched a slot NAME
+(`simulated_temp`, `mockup_url`) and false-refused a provable passthrough
+— the template now passes the SAFETY screen only (the mock/fabrication
+screen guards MODEL-authored code, which the template is not); the
+model-authored shape path keeps both screens; (2) a paved adapter citizen
+was re-surveyed next tick, folding itself into its own web under a fresh
+`web_id` the idempotence gate (keyed on `web_id`) did not cover —
+re-grinding a junction paved once, minting duplicate citizens and
+re-paying the model bill. The survey now EXCLUDES Paver-authored nodes
+(`noder_principal == "oolu-paver"` — adapters and paved-web nodes alike):
+the Paver's own products are the output of paving, not raw material for
+it, and the web's user-node children still carry the survey signal, so
+the web keeps its stable `web_id` and `_web_already_paved` skips it; (3)
+the "producer has not filed a value yet" case returned the same `None` as
+a genuine cannot-bridge, so a valid near-miss web was negative-noted and
+permanently blocked after two ticks — a distinct `DEFER` sentinel now
+skips the web WITHOUT negative knowledge, so a later tick retries once the
+producer has run ("defer, not fail"). Tests: a mock-marker slot name
+poured as a byte-stable rename; a two/three-tick idempotence run (one
+adapter, one pave, stable node count); a `DEFER` that skips without a
+negative note.
 
 **W4 — Trigger propagation (one trigger, the whole web).** *One POST;
 a deterministic, bounded, consent-gated cascade.*

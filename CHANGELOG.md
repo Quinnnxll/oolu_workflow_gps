@@ -40,6 +40,18 @@ wall: a junction becomes a tested, accountable citizen
   skill-embedded (the session-free path `_promote_web` uses), runnable
   from the registry; drawer landing for paver-authored citizens is a
   named follow-up.
+- **W3.1 (review fixes)** — three majors: (1) the deterministic rename
+  template no longer runs the MOCK screen (its substring markers matched a
+  slot NAME like `simulated_temp` and false-refused a provable
+  passthrough) — safety screen only for the template, both screens for the
+  model-authored shape path; (2) the survey EXCLUDES Paver-authored nodes
+  (`noder_principal == "oolu-paver"`), so a paved adapter citizen is not
+  re-surveyed into its own web under a fresh `web_id` the idempotence gate
+  missed (which had re-ground the junction and minted duplicate citizens);
+  (3) a distinct `DEFER` sentinel separates "producer has not filed a
+  value yet" (retry next tick, no negative) from a genuine cannot-bridge
+  (negative-noted) — a valid near-miss web is no longer permanently blocked
+  when its producer is simply idle.
 
 Gate edges (G2) — builders can say it; the shell can show it
 (docs/algorithm-barriers-plan.md, Part III):

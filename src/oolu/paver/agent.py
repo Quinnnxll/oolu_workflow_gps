@@ -39,12 +39,30 @@ from .contracts import NearMiss, RouteWeb, SurveyReport
 from .discovery import SurveyNode, WebSurveyor
 
 __all__ = [
+    "DEFER",
     "AdapterBuild",
     "PaveOutcome",
     "PaveReport",
     "PaverAgent",
     "RehearsalResult",
 ]
+
+
+class _Defer:
+    """The junction is NOT READY to bridge this tick — the producer has
+    not filed a value to author the adapter against yet (W3.1). Distinct
+    from ``None`` (a GENUINE cannot-bridge: a ``none`` verdict, a candidate
+    that never passed verify): a defer skips the web WITHOUT negative
+    knowledge, so a later tick — once the producer has run — retries;
+    ``None`` files the negative note that blocks a truly dead junction."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return "DEFER"
+
+
+DEFER = _Defer()
 
 
 @dataclass(frozen=True)
@@ -77,7 +95,8 @@ class PaveOutcome:
 
     web_id: str
     anchor: str | None
-    status: str  # "paved" | "rehearsal-failed" | "adapter-failed" | "skipped"
+    # "paved" | "rehearsal-failed" | "adapter-failed" | "deferred" | "skipped"
+    status: str
     node_id: str | None = None
     reason: str = ""
     adapters: int = 0  # junctions bridged by a synthesized adapter (W3)
@@ -295,7 +314,17 @@ class PaverAgent:
         # birth-verified citizen by the time it returns.
         adapters: list[NodeContract] = []
         if web.near_misses:
-            bridged, problem = self._bridge_near_misses(tenant, web, by_key)
+            bridged, problem, deferred = self._bridge_near_misses(
+                tenant, web, by_key
+            )
+            if bridged is None and deferred:
+                # NOT READY, not broken: a junction's producer has not
+                # filed a value yet. Skip the web this tick WITHOUT
+                # negative knowledge, so a later tick retries once the
+                # value exists (the "defer, not fail" invariant, W3.1).
+                return PaveOutcome(
+                    web.web_id, web.anchor, "deferred", reason=problem
+                )
             if bridged is None:
                 if self._negative is not None:
                     self._negative(tenant, web, problem)
@@ -356,31 +385,56 @@ class PaverAgent:
 
     def _bridge_near_misses(
         self, tenant: str, web: RouteWeb, by_key: dict[str, SurveyNode]
-    ) -> tuple[list[AdapterBuild] | None, str]:
-        """Turn each near-miss into an adapter child, or fail the web. The
-        adapter port (gateway-supplied) negotiates the junction, samples
-        the producer's real value, synthesizes+verifies, and lands the
-        adapter as a citizen — returning None for a junction it could not
-        bridge (a ``none`` verdict, no sampled value yet, or a verify that
-        never passed). One unbridged junction fails the whole web: a paved
-        web with a hole is not paved."""
+    ) -> tuple[list[AdapterBuild] | None, str, bool]:
+        """Turn each near-miss into an adapter child, or classify why not.
+        The adapter port (gateway-supplied) negotiates the junction,
+        samples the producer's real value, synthesizes+verifies, and lands
+        the adapter as a citizen. It returns one of three things per
+        junction: an :class:`AdapterBuild` (bridged), ``DEFER`` (not ready
+        — the producer has not filed a value yet), or ``None`` (a GENUINE
+        cannot-bridge).
+
+        Returns ``(builds, reason, deferred)``: a genuine failure DOMINATES
+        (``(None, reason, False)`` — negative-noted), else a defer yields
+        ``(None, reason, True)`` — retried next tick, never negative-noted;
+        all-bridged yields ``(builds, "", False)``. One unbridged junction
+        fails the whole web: a paved web with a hole is not paved."""
         builds: list[AdapterBuild] = []
+        deferred = False
+        defer_reason = ""
         for miss in web.near_misses:
             src = by_key.get(miss.source)
             tgt = by_key.get(miss.target)
             if src is None or tgt is None:
-                return None, (
+                return (
+                    None,
                     f"near-miss {miss.produced_slot!r}->{miss.consumed_slot!r} "
-                    "is missing an endpoint contract"
+                    "is missing an endpoint contract",
+                    False,
                 )
             build = self._build_adapter(tenant, miss, src, tgt)
+            if build is DEFER:
+                # Not ready — remember it, but keep scanning: a GENUINE
+                # failure elsewhere still dominates (it should negative-note,
+                # not silently defer forever).
+                deferred = True
+                defer_reason = (
+                    f"{miss.source}:{miss.produced_slot} -> "
+                    f"{miss.target}:{miss.consumed_slot} not ready "
+                    "(producer has not filed a value yet)"
+                )
+                continue
             if build is None:
-                return None, (
+                return (
+                    None,
                     f"could not adapt {miss.source}:{miss.produced_slot} -> "
-                    f"{miss.target}:{miss.consumed_slot} ({miss.reason})"
+                    f"{miss.target}:{miss.consumed_slot} ({miss.reason})",
+                    False,
                 )
             builds.append(build)
-        return builds, ""
+        if deferred:
+            return None, defer_reason, True
+        return builds, "", False
 
     @staticmethod
     def _web_contract(

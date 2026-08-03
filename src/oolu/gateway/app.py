@@ -249,6 +249,15 @@ NODE_REVIVAL_DAYS = 7.0
 # outputs never collide with a live tenant's standing port values.
 _PAVER_REHEARSAL_TENANT = "__paver_rehearsal__"
 
+# The principal every Paver-authored node is contributed under — paved-web
+# nodes and W3 adapter citizens alike. The survey EXCLUDES this principal
+# (W3.1): the Paver's own products are the OUTPUT of paving, not raw
+# material for it. Re-surveying an adapter citizen would fold it into its
+# own web under a fresh web_id the idempotence gate (keyed on web_id)
+# does not cover, re-grinding a junction already paved once; the web's
+# user-node children still carry the survey signal, so nothing is lost.
+_PAVER_PRINCIPAL = "oolu-paver"
+
 _NODE_BUILD_RE = re.compile(
     r"^\s*"
     # optional polite / addressing lead-in
@@ -13542,11 +13551,15 @@ class GatewayApp:
         or a model-authored shape change under seat ``paver.adapt``),
         verify it by EXECUTION against that sample with the consumer's
         port checked, and — only on a pass — land it as its own citizen.
-        Returns the child to splice into the web, or None (a ``none``
-        verdict, no sampled value yet, no verify seam, or a candidate that
-        never passed) so the agent fails the whole web rather than pave a
-        hole."""
+        Returns the child to splice into the web; ``None`` for a GENUINE
+        cannot-bridge (a ``none`` verdict, no verify seam, or a candidate
+        that never passed) so the agent fails the whole web; or ``DEFER``
+        when the producer has not filed a value to author against yet (a
+        transient not-ready, retried next tick — never negative-noted,
+        W3.1) so an infrequently-triggered producer's web is not
+        permanently lost."""
         from ..paver import (
+            DEFER,
             AdapterBuild,
             AdapterSpec,
             AdapterSynthesizer,
@@ -13569,15 +13582,16 @@ class GatewayApp:
         if verdict not in ("mappable", "convertible"):
             return None
         # The test vector: the producer's REAL last-filed port value. No
-        # value yet (the producer has not run) ⇒ defer, not a failure — a
-        # later tick samples a real value and tries again.
+        # value yet (the producer has not run) ⇒ DEFER, not a failure — a
+        # later tick samples a real value and tries again; a genuine
+        # failure would negative-note and block the junction forever.
         ref = self._values.port_ref(tenant, src.key, miss.produced_slot)
         if ref is None:
-            return None
+            return DEFER
         try:
             sample = self._values.resolve(ref, tenant=tenant)
-        except Exception:  # noqa: BLE001 - an unreadable sample defers
-            return None
+        except Exception:  # noqa: BLE001 - a transiently unreadable sample defers
+            return DEFER
         runner = self._contract_executors.get("script")
         verify_fn = getattr(runner, "verify_function", None) if runner else None
         if not callable(verify_fn):
@@ -13673,7 +13687,7 @@ class GatewayApp:
         )
         try:
             result = self._nodeplace.contribute(
-                noder_principal="oolu-paver",
+                noder_principal=_PAVER_PRINCIPAL,
                 tenant_id=tenant,
                 skill=adapter.to_skill(),
                 semver="1.0.0",
@@ -13693,7 +13707,7 @@ class GatewayApp:
             try:
                 self._desk.create_account(
                     node_id,
-                    principal="oolu-paver",
+                    principal=_PAVER_PRINCIPAL,
                     tenant=tenant,
                     policy_version=NODE_POLICY_VERSION,
                 )
@@ -13823,7 +13837,7 @@ class GatewayApp:
         Persists the paved contract for the trigger path (W4)."""
         skill = contract.subgraph_to_skill()
         result = self._nodeplace.contribute(
-            noder_principal="oolu-paver",
+            noder_principal=_PAVER_PRINCIPAL,
             tenant_id=tenant,
             skill=skill,
             semver="1.0.0",
@@ -13837,7 +13851,7 @@ class GatewayApp:
             try:
                 self._desk.create_account(
                     node_id,
-                    principal="oolu-paver",
+                    principal=_PAVER_PRINCIPAL,
                     tenant=tenant,
                     policy_version=NODE_POLICY_VERSION,
                 )
@@ -13900,7 +13914,13 @@ class GatewayApp:
         nodes = [
             node
             for node in self._nodeplace.all_nodes()
-            if node.tenant_id == tenant and node.revoked_at is None
+            if node.tenant_id == tenant
+            and node.revoked_at is None
+            # The Paver's own products (paved webs, W3 adapters) are never
+            # re-surveyed (W3.1) — surveying an adapter citizen re-grinds
+            # the very web it bridged under a new web_id. Its user-node
+            # children still carry the survey signal.
+            and node.noder_principal != _PAVER_PRINCIPAL
         ]
         # Which nodes carry a webhook door.
         hook_nodes: set[str] = set()
