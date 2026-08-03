@@ -16108,7 +16108,12 @@ class GatewayApp:
         return contract.model_copy(
             update={
                 "body": SubgraphBody(
-                    nodes=list(body.nodes), edges=list(body.edges) + added
+                    nodes=list(body.nodes),
+                    edges=list(body.edges) + added,
+                    # Carry the join modes (G2.1): dropping ``joins`` reverts
+                    # every 'any'-join child to 'all', skipping a guard
+                    # OR-split's join child under a 'succeeded' status.
+                    joins=dict(body.joins),
                 )
             }
         )

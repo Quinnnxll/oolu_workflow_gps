@@ -1363,6 +1363,30 @@ order preserved.
 Done when: the same gate blueprint is reachable from a serialized
 contract through the real HTTP door, and legacy compile output is
 unchanged under normalization.
+**Status: LANDED** — `skills/contract.py` gained the ContractEdge gate
+fields (guard/loop/max_iterations, mirroring BlueprintEdge's validators)
+and `SubgraphBody.joins`; `orchestrator/contract.py` compiles a
+SubgraphBody's guard/loop edges and joins to the DAG scheduler's gate
+edges (guard predicate ridden through, joins landed on the child's entry
+action, a loop endpoint refused unless it is single-exit/single-entry,
+boundary derivation taken over structural edges so a guard-entered nested
+child is never a boundary entry); `promote_sequential_for_gates` upgrades
+a sequential blueprint to `graph` when a gate edge lands; `_plan_view`
+gained skipped + iteration reporting (additive). Legacy contracts compile
+normalized-identical (fresh action ids normalized away).
+**Amended (G2.1)** — adversarial review of the G2 diff reproduced a
+BLOCKER: three sites that rebuild a `SubgraphBody`
+(`skills/inputs.py`'s `bind_inputs`, `gateway/app.py`'s
+`_stamp_fleet_order`, `nodeplace/assembly.py`'s `_with_learned_order`)
+omitted the new `joins` field, silently reverting every `'any'`-join
+child to the `'all'` default before compile. On a guard OR-split whose
+join child declared `'any'`, the reverted `'all'` join then SKIPPED that
+child when one guard branch declined — a wrong result under a
+`succeeded` status, the exact silent-omission this barrier exists to
+kill. All three rebuilds now carry `joins=dict(body.joins)`; a
+regression test drives the review's own OR-split scenario through
+`bind_inputs` (a child declaring a creative input, so the rebuild runs)
+and asserts the join survives and the join child RUNS.
 
 **G3 — Emitters + doctrine.** *SOPs and the docs speak gates.*
 Changes: `skills/sop.py` + `orchestrator/adaptive.py` (`require_guard`

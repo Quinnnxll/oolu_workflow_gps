@@ -221,7 +221,18 @@ def bind_inputs(
     if isinstance(body, SubgraphBody):
         children = [bind_node(child, child.name) for child in body.nodes]
         return contract.model_copy(
-            update={"body": SubgraphBody(nodes=children, edges=list(body.edges))}
+            update={
+                "body": SubgraphBody(
+                    nodes=children,
+                    edges=list(body.edges),
+                    # Carry the join modes (G2.1): a rebuild that drops
+                    # ``joins`` silently reverts every 'any'-join child to
+                    # the 'all' default, so a guard OR-split's join child
+                    # SKIPs instead of running — a wrong result under a
+                    # 'succeeded' status.
+                    joins=dict(body.joins),
+                )
+            }
         )
     return bind_node(contract, contract.name)
 

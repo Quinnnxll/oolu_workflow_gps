@@ -165,7 +165,13 @@ def _with_learned_order(
     stamped = contract.model_copy(
         update={
             "body": SubgraphBody(
-                nodes=list(body.nodes), edges=list(body.edges) + learned
+                nodes=list(body.nodes),
+                edges=list(body.edges) + learned,
+                # Carry the join modes (G2.1): a paved subgraph that has
+                # accumulated trace order must not lose its children's join
+                # modes to a rebuild — an 'any'-join child reverting to
+                # 'all' SKIPs a guard OR-split's join under 'succeeded'.
+                joins=dict(body.joins),
             )
         }
     )

@@ -322,3 +322,58 @@ def test_promotion_is_a_noop_without_gate_edges():
     )
     blueprint = Blueprint(name="seq", actions=[a], ordering="sequential")
     assert promote_sequential_for_gates(blueprint) is blueprint
+
+
+# --------------------------------------------------------------------------- #
+# G2.1 — a SubgraphBody rebuild must carry the join modes.                     #
+# --------------------------------------------------------------------------- #
+def test_subgraph_rebuild_preserves_joins_through_bind_inputs():
+    # The exact review scenario: a guard OR-split with an 'any'-join child,
+    # where ONE child declares a creative input so bind_inputs runs and
+    # rebuilds the SubgraphBody. Before the fix, the rebuild dropped joins,
+    # reverting d to the 'all' default: c's guard-declined branch then
+    # SKIPPED d under a 'succeeded' status. After the fix, d keeps 'any',
+    # so it runs on b's single admission.
+    from oolu.skills.contract import ValueInput
+    from oolu.skills.inputs import bind_inputs
+
+    a = NodeContract(
+        name="a",
+        provenance="synthesized",
+        inputs=[ValueInput(name="threshold", value_type="number", default=0)],
+        body=ActionsBody(
+            actions=[ActionEvent(correlation_id="c", adapter="stub", operation="a")]
+        ),
+    )
+    b, c, d = _child("b"), _child("c"), _child("d")
+    contract = _subgraph(
+        [a, b, c, d],
+        edges=[
+            ContractEdge(
+                source=a.id, target=b.id, relation="guard",
+                guard=_guard("has-rows", "rows", ">", 0),
+            ),
+            ContractEdge(
+                source=a.id, target=c.id, relation="guard",
+                guard=_guard("empty", "rows", "==", 0),
+            ),
+            ContractEdge(source=b.id, target=d.id),
+            ContractEdge(source=c.id, target=d.id),
+        ],
+        joins={d.id: "any"},
+    )
+    bound = bind_inputs(contract, {"a.threshold": 5})
+    # The join mode survived the rebuild.
+    assert bound.body.joins.get(d.id) == "any"
+
+    blueprint = contract_to_blueprint(bound)
+    d_action = next(i for i in blueprint.actions if i.action.operation == "d")
+    assert d_action.join == "any"
+
+    executor = StubExecutor(evidence={"a": {"rows": 3}})
+    record = DagRouteRunner({"stub": executor}).execute(
+        RoutePlan(chosen=blueprint, alternatives=[], total_cost=0.0),
+        idempotency_key="k", attempt=1,
+    )
+    assert record.status is ExecutionStatus.SUCCEEDED
+    assert executor.order == ["a", "b", "d"]  # d RAN — not skipped

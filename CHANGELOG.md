@@ -30,6 +30,14 @@ Gate edges (G2) — builders can say it; the shell can show it
   skips the other, honestly. (Guard-skipped marketplace children are
   cleared at run start — the refund path is deferred beyond the
   G-series, documented not faked.)
+- **G2.1 (review fix)** — three sites that rebuild a `SubgraphBody`
+  (`bind_inputs`, `_stamp_fleet_order`, `_with_learned_order`) dropped
+  the new `joins` field, silently reverting every `"any"`-join child to
+  the `"all"` default. On a guard OR-split whose join child declared
+  `"any"`, the reverted join then SKIPPED that child when one guard
+  branch declined — a wrong result under a `succeeded` status. All three
+  rebuilds now carry `joins`; a regression test drives the OR-split
+  through `bind_inputs` and asserts the join child RUNS.
 
 Route paving (W2) — pave direct webs: the model bill is paid at pave
 time, not trigger time (docs/algorithm-barriers-plan.md, Part II):
