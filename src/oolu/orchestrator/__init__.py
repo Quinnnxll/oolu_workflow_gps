@@ -99,7 +99,12 @@ from .gates import (
     route_verdict,
     structural_edges,
 )
-from .scheduler import DagRouteRunner, action_node_key, strip_iteration_marker
+from .scheduler import (
+    DagRouteRunner,
+    ValuePipeError,
+    action_node_key,
+    strip_iteration_marker,
+)
 from .state import (
     ORCHESTRATOR_SCHEMA_VERSION,
     Blueprint,
@@ -168,6 +173,7 @@ __all__ = [
     "loop_decision",
     "readiness",
     "route_verdict",
+    "ValuePipeError",
     "strip_iteration_marker",
     "structural_edges",
     "contract_from_registered",

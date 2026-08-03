@@ -363,7 +363,7 @@ class _ScriptResolverStub:
         return None
 
 
-def _values_app(tmp_path, executor):
+def _values_app(tmp_path, executor, extra_executors=None):
     base, conn, ident = _app(tmp_path)
     registry = RegistryStore(conn)
     metering = MeteringLedger(conn)
@@ -389,7 +389,7 @@ def _values_app(tmp_path, executor):
         market=assembler,
         price_book=PriceBook(tmp_path / "prices.db"),
         attribution=attribution,
-        contract_executors={"script": executor},
+        contract_executors={"script": executor, **(extra_executors or {})},
         values=values,
     )
     return app, conn, ident, values
@@ -454,4 +454,203 @@ def test_fresh_data_crosses_one_contract_run_with_no_human_handoff(tmp_path):
         )
         == "run-two rows"
     )
+    conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# W0.1 — review fixes.                                                         #
+# --------------------------------------------------------------------------- #
+from oolu.nodeplace import stamp_output_obligations  # noqa: E402
+from oolu.orchestrator import ValuePipeError  # noqa: E402
+
+
+def test_wire_dataflow_is_depth_one_matching_the_filing_depth():
+    # Filing attributes to the TOP-LEVEL child (owners map by immediate
+    # child), so wiring must stop at the same depth: a nested subgraph's
+    # inner children get no output:// refs — a deeper ref would name a key
+    # nothing ever files.
+    exporter = _script_child("exporter", produces=[_slot("rows_csv")])
+    cleaner = _script_child("cleaner", consumes=[_slot("rows_csv")])
+    stage = _subgraph("stage", [exporter, cleaner])
+    top = _subgraph("top", [stage])
+
+    wired = compile_contract(top, wire_dataflow=True)
+    for bindings in _script_bindings(wired.blueprint).values():
+        assert not any(str(v).startswith("output://") for v in bindings.values())
+
+
+def test_wire_dataflow_skips_duplicate_named_producers():
+    # The owners map keys actions by child NAME; a colliding name would
+    # file one child's answer under another's key — so such producers
+    # never wire, and the door never files them.
+    a = _script_child("step", produces=[_slot("rows_csv")])
+    b = _script_child("step", produces=[_slot("cols_csv")])
+    consumer = _script_child("cleaner", consumes=[_slot("rows_csv")])
+    wired = compile_contract(
+        _subgraph("pipeline", [a, b, consumer]), wire_dataflow=True
+    )
+    assert _script_bindings(wired.blueprint)["goal:cleaner"] == {}
+
+
+def test_stamp_output_obligations_unions_onto_the_producer_only():
+    producer = _script_child("exporter", produces=[_slot("rows_csv")])
+    consumer = _script_child("cleaner", consumes=[_slot("rows_csv")])
+    compiled = compile_contract(
+        _subgraph("pipeline", [producer, consumer]), wire_dataflow=True
+    )
+    producer_ids = {
+        action_id: producer.id
+        for action_id, owner in compiled.owners.items()
+        if owner == "exporter"
+    }
+    stamped = stamp_output_obligations(
+        compiled, producer_ids, {producer.id: {"rows_csv"}}
+    )
+    ports = {
+        str(item.action.parameters.get("goal")): item.action.parameters.get(
+            "_output_ports"
+        )
+        for item in stamped.blueprint.actions
+    }
+    assert ports["goal:exporter"] == ["rows_csv"]
+    assert ports["goal:cleaner"] is None
+    # No obligations, no change — identical object back.
+    assert stamp_output_obligations(compiled, producer_ids, {}) is compiled
+
+
+def test_value_pipe_error_demotes_the_producer_and_cancels_dependents():
+    def pipe(action_id: str, outcome: ExecutionOutcome) -> None:
+        if outcome.evidence["result"]["op"] == "a":
+            raise ValuePipeError("obligated port unfiled")
+
+    blueprint = _blueprint("a", "b")  # sequential: b depends on a
+    record = DagRouteRunner({"stub": _StubExecutor()}).execute(
+        RoutePlan(chosen=blueprint, alternatives=[], total_cost=0.0),
+        idempotency_key="k",
+        attempt=1,
+        value_pipe=pipe,
+    )
+    assert record.status is ExecutionStatus.FAILED
+    assert "value filing failed: obligated port unfiled" in (record.error or "")
+    statuses = {
+        o.idempotency_key.rsplit(":", 1)[-1]: o.status
+        for o in record.action_outcomes
+    }
+    ids = {
+        item.action.operation: item.action.id for item in blueprint.actions
+    }
+    assert statuses[ids["a"]] is ExecutionStatus.FAILED
+    assert statuses[ids["b"]] is ExecutionStatus.CANCELLED
+
+
+def test_obligated_port_missing_fails_loudly_never_serves_stale(tmp_path):
+    # Run 1 files the port; run 2's producer succeeds WITHOUT the obligated
+    # key. The old behavior silently served run one's value as fresh — now
+    # the producer fails loudly and the consumer never stages stale data.
+    producer = _script_child("exporter", produces=[_slot("rows_csv")])
+    consumer = _script_child("cleaner", consumes=[_slot("rows_csv")])
+    contract = _subgraph("pipeline", [producer, consumer])
+
+    executor = _ScriptResolverStub(
+        None,
+        {
+            "goal:exporter": [
+                {"rows_csv": "run-one rows"},
+                {"other": "not the port"},
+            ],
+            "goal:cleaner": [{"tidy_csv": "tidy"}],
+        },
+    )
+    app, conn, ident, values = _values_app(tmp_path, executor)
+    executor._values = values
+
+    first = app.handle(
+        _req(
+            "POST",
+            "/v1/runs/contract",
+            token=ident.token("consumer", "t2"),
+            body={"contract": contract.model_dump(mode="json")},
+            headers={"Idempotency-Key": "stale-1"},
+        )
+    )
+    assert first.status == 200 and first.body["status"] == "succeeded"
+
+    second = app.handle(
+        _req(
+            "POST",
+            "/v1/runs/contract",
+            token=ident.token("consumer", "t2"),
+            body={"contract": contract.model_dump(mode="json")},
+            headers={"Idempotency-Key": "stale-2"},
+        )
+    )
+    assert second.body["status"] == "failed"
+    assert "did not fill obligated port" in (second.body["error"] or "")
+    # The consumer staged exactly once — run one's fresh value; run two
+    # never resolved anything, stale or otherwise.
+    assert executor.staged["goal:cleaner"] == [{"rows_csv": "run-one rows"}]
+    # The standing port still holds run one's answer, honestly.
+    ref = values.port_ref("t2", producer.id, "rows_csv")
+    assert values.resolve(ref, tenant="t2") == "run-one rows"
+    conn.close()
+
+
+def test_reserved_holds_stay_unwired_and_approve_clean(tmp_path):
+    # A reserved contract holds the UNWIRED compile: the approval path
+    # carries no tenant stamp and no value pipe, so a wired hold would
+    # refuse on its own injected references. Held, approved, and run —
+    # the script children see empty bindings, exactly as pre-W0.
+    from test_contract_run import _CliExecutor, _grant_approver
+
+    producer = _script_child("exporter", produces=[_slot("rows_csv")])
+    consumer = _script_child("cleaner", consumes=[_slot("rows_csv")])
+    wiper = NodeContract(
+        name="wipe it",
+        provenance="human",
+        body=ActionsBody(
+            actions=[
+                ActionEvent(
+                    correlation_id="c", adapter="cli", operation="delete_files"
+                )
+            ]
+        ),
+    )
+    contract = _subgraph("pipeline", [producer, consumer, wiper])
+
+    script = _ScriptResolverStub(
+        None, {"goal:exporter": [{"rows_csv": "rows"}], "goal:cleaner": [{}]}
+    )
+    cli = _CliExecutor(("delete_files",))
+    app, conn, ident, values = _values_app(
+        tmp_path, script, extra_executors={"cli": cli}
+    )
+    script._values = values
+
+    held = app.handle(
+        _req(
+            "POST",
+            "/v1/runs/contract",
+            token=ident.token("consumer", "t2"),
+            body={"contract": contract.model_dump(mode="json")},
+            headers={"Idempotency-Key": "hold-w0"},
+        )
+    )
+    assert held.status == 202, held.body
+    assert held.body["reserved"] == ["cli/delete_files"]
+
+    _grant_approver(ident, "approver-2", "t2")
+    released = app.handle(
+        _req(
+            "POST",
+            f"/v1/runs/contract/holds/{held.body['pending_id']}",
+            token=ident.token("approver-2", "t2"),
+            body={"approved": True},
+        )
+    )
+    assert released.status == 200, released.body
+    assert released.body["status"] == "succeeded"
+    # The hold executed the UNWIRED compile: no output:// ever reached
+    # the consumer, and both script children ran with empty bindings.
+    assert script.staged["goal:cleaner"] == [{}]
+    assert cli.calls == 1
     conn.close()

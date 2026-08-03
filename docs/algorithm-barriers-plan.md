@@ -760,6 +760,26 @@ holds/approval door wires in a follow-up, the direct door is live.
 Loop-closure test drives the real HTTP door twice and proves the
 consumer reads run one's fresh value, then run two's — never stale,
 no human handoff.
+**Amended (W0.1)** — adversarial review reproduced four defects at the
+live door, fixed: (1) reserved contracts held a WIRED compile the
+approval path (no tenant stamp, no pipe) could never resolve — holds
+now cache and execute the UNWIRED compile, byte-for-byte pre-W0
+behavior, and the wired compile happens only on the unreserved path
+after the hold branch; (2) wiring recursed into nested subgraphs while
+filing attributes to top-level children — wiring is now DEPTH-1 only,
+the same depth as the owners map; (3) same-named siblings collapsed in
+the name-keyed filing map — duplicate-named producers now neither wire
+nor file; (4) the "never stale" inversion: a producer that succeeded
+without re-filing the consumed slot let the consumer silently resolve
+the PREVIOUS run's port value — every wired port is now an
+**obligation**: stamped as `_output_ports` on the producer (the
+runner's port check demotes a success that omits it) and enforced in
+the pipe (`ValuePipeError` fails the producer loudly when an obligated
+filing cannot happen — determinism over availability, loud over
+stale). Named decision: mid-run filing records a verified CHILD
+success even when the route later fails — the port pointer means
+"latest verified child answer", deliberately unlike the single-node
+path's whole-run gate; the equivalence gap is documented, not hidden.
 Changes: `orchestrator/contract.py` (auto-bind flag; `owner_ids`),
 submission-time tenant/owner stamping, `orchestrator/scheduler.py`
 (per-run value pipe), `nodeplace/execution.py` (per-child filing +

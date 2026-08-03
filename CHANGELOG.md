@@ -37,6 +37,16 @@ Route paving (W0) — fresh data crosses one contract run
   never joins the key). `ContractAssembler(index=...)` stops scanning
   the library per slot — behavior-identical ranking, parity-pinned
   against the route-scale benchmark marketplace.
+- **W0.1** (adversarial review at the live door): reserved holds cache
+  and execute the UNWIRED compile — the approval path carries no
+  tenant stamp and no pipe, so a wired hold refused on its own
+  references; wiring is depth-1 only, the same depth value filing
+  attributes at; duplicate-named siblings neither wire nor file (the
+  owners map keys by name); and every wired port is an OBLIGATION —
+  stamped `_output_ports` on the producer plus `ValuePipeError` in the
+  pipe — so a producer that succeeds without re-filing the slot fails
+  loudly instead of letting the consumer silently resolve the previous
+  run's value. Loud over stale, always.
 
 Gate edges (G1) — a cycle becomes a bounded region, not a preflight
 error (docs/algorithm-barriers-plan.md, Part III):

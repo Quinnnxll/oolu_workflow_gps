@@ -97,13 +97,20 @@ def compile_with_owners(
     to its canonical producer key (the desk node id for registered nodes);
     an unmapped child keys by its contract id. Only script-bodied producers
     are wired — an ActionsBody outcome need not carry a result payload, and
-    an edge whose port can never fill is worse than no edge.
+    an edge whose port can never fill is worse than no edge. Wiring is
+    DEPTH-1 only, the same depth value filing attributes at (owners map
+    actions to immediate children): a nested subgraph's inner children are
+    neither wired nor wireable — wiring deeper than filing would mint
+    references nothing ever files (W0.1).
     """
-    fragment = _compile(
-        contract,
-        wire_dataflow=wire_dataflow,
-        producer_keys=producer_keys or {},
-    )
+    if wire_dataflow and isinstance(contract.body, SubgraphBody):
+        wired_nodes = _wire_dataflow_bindings(
+            list(contract.body.nodes), producer_keys or {}
+        )
+        contract = contract.model_copy(
+            update={"body": contract.body.model_copy(update={"nodes": wired_nodes})}
+        )
+    fragment = _compile(contract)
     owners = dict(fragment.owners)
     for item in fragment.actions:
         owners.setdefault(item.action.id, contract.name)
@@ -121,34 +128,19 @@ def compile_with_owners(
     return blueprint, owners
 
 
-def _compile(
-    contract: NodeContract,
-    *,
-    wire_dataflow: bool = False,
-    producer_keys: dict[str, str] | None = None,
-) -> _Fragment:
-    producer_keys = producer_keys or {}
+def _compile(contract: NodeContract) -> _Fragment:
     body = contract.body
     if isinstance(body, ActionsBody):
         fragment = _compile_actions(contract, body)
     elif isinstance(body, ScriptBody):
         fragment = _compile_script(contract, body)
     elif isinstance(body, SubgraphBody):
-        fragment = _compile_subgraph(
-            contract,
-            body,
-            wire_dataflow=wire_dataflow,
-            producer_keys=producer_keys,
-        )
+        fragment = _compile_subgraph(contract, body)
     else:  # pragma: no cover - the union is closed
         raise ValueError(f"unknown body kind: {body!r}")
 
     if contract.fallback is not None:
-        repair = _compile(
-            contract.fallback,
-            wire_dataflow=wire_dataflow,
-            producer_keys=producer_keys,
-        )
+        repair = _compile(contract.fallback)
         edges = fragment.edges + repair.edges
         seen = {(e.source, e.target, e.relation) for e in edges}
         # Every repair action is a fallback target, so dependents of the
@@ -221,11 +213,19 @@ def _wire_dataflow_bindings(
     producer per slot, so assembled subgraphs are never ambiguous).
     ActionsBody producers never wire: their outcomes need not carry a
     result payload, and an ``output://`` edge whose port can never fill
-    would refuse honest runs.
+    would refuse honest runs. A producer whose NAME another sibling shares
+    never wires either (W0.1): value filing attributes by the owners map,
+    which keys actions by child name — a colliding name would file one
+    child's answer under another's key.
     """
+    name_counts: dict[str, int] = {}
+    for child in nodes:
+        name_counts[child.name] = name_counts.get(child.name, 0) + 1
     producers_by_name: dict[str, list[NodeContract]] = {}
     for child in nodes:
         if not isinstance(child.body, ScriptBody):
+            continue
+        if name_counts.get(child.name, 0) > 1:
             continue
         for slot in child.produces:
             producers_by_name.setdefault(slot.name, []).append(child)
@@ -262,25 +262,11 @@ def _wire_dataflow_bindings(
     return wired
 
 
-def _compile_subgraph(
-    contract: NodeContract,
-    body: SubgraphBody,
-    *,
-    wire_dataflow: bool = False,
-    producer_keys: dict[str, str] | None = None,
-) -> _Fragment:
+def _compile_subgraph(contract: NodeContract, body: SubgraphBody) -> _Fragment:
     if not body.nodes:
         raise ValueError(f"contract '{contract.name}' has an empty subgraph body")
-    producer_keys = producer_keys or {}
     nodes = list(body.nodes)
-    if wire_dataflow:
-        nodes = _wire_dataflow_bindings(nodes, producer_keys)
-    fragments = {
-        child.id: _compile(
-            child, wire_dataflow=wire_dataflow, producer_keys=producer_keys
-        )
-        for child in nodes
-    }
+    fragments = {child.id: _compile(child) for child in nodes}
 
     actions: list[ReservedAction] = []
     edges: list[BlueprintEdge] = []

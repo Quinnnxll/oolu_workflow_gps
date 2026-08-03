@@ -204,6 +204,49 @@ def stamp_egress_grants(
     )
 
 
+def stamp_output_obligations(
+    compiled: CompiledContract,
+    producer_ids: Mapping[str, str],
+    obligations: Mapping[str, set[str]],
+) -> CompiledContract:
+    """Stamp ``_output_ports`` onto every script action whose port another
+    child's binding was wired against (W0.1).
+
+    The runner's existing port check then DEMOTES a success that fails to
+    emit an obligated port — so a consumer can never resolve the previous
+    run's value through a port this run silently skipped. Declared ports
+    already on the action are kept and unioned; actions without
+    obligations are untouched."""
+    if not obligations:
+        return compiled
+    stamped: list = []
+    changed = False
+    for item in compiled.blueprint.actions:
+        action = item.action
+        obligated = obligations.get(producer_ids.get(action.id, ""))
+        if action.adapter == "script" and obligated:
+            existing = list(action.parameters.get("_output_ports") or [])
+            merged = sorted(set(existing) | set(obligated))
+            if merged != existing:
+                action = action.model_copy(
+                    update={
+                        "parameters": {
+                            **action.parameters,
+                            "_output_ports": merged,
+                        }
+                    }
+                )
+                item = item.model_copy(update={"action": action})
+                changed = True
+        stamped.append(item)
+    if not changed:
+        return compiled
+    return CompiledContract(
+        blueprint=compiled.blueprint.model_copy(update={"actions": stamped}),
+        owners=compiled.owners,
+    )
+
+
 def stamp_value_tenant(compiled: CompiledContract, tenant: str) -> CompiledContract:
     """Stamp the exact-value binder's tenant wall onto every script action.
 

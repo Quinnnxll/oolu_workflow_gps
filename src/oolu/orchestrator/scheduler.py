@@ -58,6 +58,18 @@ def action_node_key(blueprint_name: str, action: ActionEvent) -> str:
     return f"{blueprint_name}:{action.adapter}/{action.operation}"
 
 
+class ValuePipeError(RuntimeError):
+    """A value-pipe failure that must FAIL the producing action.
+
+    The pipe is best-effort by default — bookkeeping never wedges a route.
+    But when a filing is LOAD-BEARING (a downstream binding was wired
+    against this port), a silent miss would make the consumer resolve the
+    PREVIOUS run's value: stale data served as fresh. A pipe that cannot
+    honor an obligated port raises this, and the settle demotes the
+    action to FAILED with the reason in words — determinism over
+    availability, loud over stale."""
+
+
 _ITERATION_MARKER = re.compile(r"#i\d+$")
 
 
@@ -312,17 +324,30 @@ class DagRouteRunner:
 
         def settle(action_id: str, outcome: ExecutionOutcome) -> None:
             nonlocal first_error, first_failed
+            if (
+                value_pipe is not None
+                and outcome.status is ExecutionStatus.SUCCEEDED
+            ):
+                try:
+                    value_pipe(action_id, outcome)
+                except ValuePipeError as exc:
+                    # An obligated filing failed: recording this success
+                    # would let a downstream binding resolve STALE data.
+                    # The action fails loudly instead.
+                    outcome = outcome.model_copy(
+                        update={
+                            "status": ExecutionStatus.FAILED,
+                            "error": f"value filing failed: {exc}",
+                        }
+                    )
+                except Exception:  # noqa: BLE001 — bookkeeping never wedges
+                    logger.warning(
+                        "value pipe failed for %s", action_id, exc_info=True
+                    )
             status[action_id] = outcome.status
             evidence[action_id] = outcome.evidence
             outcomes.append(outcome)
             if outcome.status is ExecutionStatus.SUCCEEDED:
-                if value_pipe is not None:
-                    try:
-                        value_pipe(action_id, outcome)
-                    except Exception:  # noqa: BLE001 — filing is bookkeeping
-                        logger.warning(
-                            "value pipe failed for %s", action_id, exc_info=True
-                        )
                 for i, spec in enumerate(loops):
                     if spec.tail == action_id and i not in loops_done:
                         tail_events.add(i)

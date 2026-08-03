@@ -160,11 +160,13 @@ from ..nodeplace import (
     reserved_operations,
     reward_multiplier,
     stamp_egress_grants,
+    stamp_output_obligations,
     stamp_value_tenant,
     utility,
 )
 from ..orchestrator import (
     DagRouteRunner,
+    ValuePipeError,
     GoalSpec,
     OrchestratorError,
     patch_or_defaults,
@@ -15121,24 +15123,13 @@ class GatewayApp:
             if isinstance(contract.body, SubgraphBody)
             else [contract]
         )
-        # The canonical producer key (W0): the desk node id when the child
-        # is a registered version — the SAME key the single-node path files
-        # under (_file_run_values) — else the child contract id. One key,
-        # both filing paths, or output:// refs written against one path
-        # would miss values filed by the other.
-        desk_ids = (
-            self._desk.owning_nodes([c.id for c in children])
-            if self._desk is not None
-            else {}
-        )
-        producer_keys = {c.id: desk_ids.get(c.id, c.id) for c in children}
         try:
-            # wire_dataflow: each script child's unbound consumed slots
-            # bind to their sibling producer's output port, so fresh data
-            # crosses the run with no human handoff (W0).
-            compiled = compile_contract(
-                contract, wire_dataflow=True, producer_keys=producer_keys
-            )
+            # UNWIRED first: reserved contracts hold and later execute this
+            # exact compile through the approval flow, which carries no
+            # tenant stamp and no value pipe — a wired hold would refuse on
+            # its own injected references (W0.1). The approval door's
+            # wiring is a named follow-up; holds behave exactly as pre-W0.
+            compiled = compile_contract(contract)
         except ValueError as exc:
             raise GatewayError(400, "invalid_request", str(exc)) from exc
         reserved = reserved_operations(compiled)
@@ -15225,6 +15216,25 @@ class GatewayApp:
             )
             return json_response(202, held)
 
+        # Unreserved and clear to run: NOW compile wired (W0). The canonical
+        # producer key is the desk node id when the child is a registered
+        # version — the SAME key the single-node path files under
+        # (_file_run_values) — else the child contract id. ONE map feeds
+        # both the compile-time injection and the settle-time filing, so
+        # the two paths agree by construction.
+        desk_ids = (
+            self._desk.owning_nodes([c.id for c in children])
+            if self._desk is not None
+            else {}
+        )
+        producer_keys = {c.id: desk_ids.get(c.id, c.id) for c in children}
+        try:
+            compiled = compile_contract(
+                contract, wire_dataflow=True, producer_keys=producer_keys
+            )
+        except ValueError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+
         # Budget gate BEFORE anything commits: estimate in preview mode,
         # judge it against the cap, the review threshold, the tenant's own
         # spending behavior (within this plan's class of goal), and the
@@ -15278,29 +15288,73 @@ class GatewayApp:
         # construction: one runner serves every tenant.
         compiled = stamp_value_tenant(compiled, session.tenant_id)
         # action id -> canonical producer key, for mid-run value filing.
-        # Glue actions the contract contributes directly stay unfiled.
-        by_name = {c.name: c for c in children}
+        # Glue actions the contract contributes directly stay unfiled, and
+        # so does any child whose NAME another sibling shares (W0.1): the
+        # owners map keys by name, so a colliding name would file one
+        # child's answer under another's key. (The compiler refuses to
+        # wire such producers for the same reason.)
+        name_counts: dict[str, int] = {}
+        for c in children:
+            name_counts[c.name] = name_counts.get(c.name, 0) + 1
+        by_name = {c.name: c for c in children if name_counts[c.name] == 1}
         producer_ids = {
             action_id: producer_keys[by_name[owner].id]
             for action_id, owner in compiled.owners.items()
             if owner in by_name
         }
+        # Every port a wired binding depends on is an OBLIGATION (W0.1):
+        # the producer's action carries it as a declared output port, so a
+        # success that omits it DEMOTES — a consumer must never resolve
+        # the previous run's value through a port this run skipped.
+        from ..values import parse_output_ref
+
+        obligations: dict[str, set[str]] = {}
+        for item in compiled.blueprint.actions:
+            if item.action.adapter != "script":
+                continue
+            for bound in (item.action.parameters.get("bindings") or {}).values():
+                port = parse_output_ref(bound)
+                if port is not None:
+                    obligations.setdefault(port[0], set()).add(port[1])
+        compiled = stamp_output_obligations(compiled, producer_ids, obligations)
 
         def value_pipe(action_id: str, outcome) -> None:
             """File one settled child's outputs mid-run — the same shape
             _file_run_values gives a completed single-node run, at the
             same canonical key, so both paths agree and a downstream
-            output:// binding resolves to THIS run's answer."""
+            output:// binding resolves to THIS run's answer. A filing
+            failure on an OBLIGATED port fails the producer loudly
+            (ValuePipeError) — stale data must never pass as fresh."""
             producer = producer_ids.get(action_id)
             if not producer or self._values is None:
                 return
+            obligated = obligations.get(producer, set())
             evidence = outcome.evidence or {}
             payload = evidence.get("result")
             if payload is None:
+                if obligated:
+                    raise ValuePipeError(
+                        f"producer {producer} emitted no result payload for "
+                        f"obligated port(s) {', '.join(sorted(obligated))}"
+                    )
                 return
-            refs = self._values.snapshot_outputs(
-                session.tenant_id, payload, label=producer, producer=producer
-            )
+            try:
+                refs = self._values.snapshot_outputs(
+                    session.tenant_id, payload, label=producer, producer=producer
+                )
+            except Exception as exc:
+                if obligated:
+                    raise ValuePipeError(
+                        f"filing failed for obligated port(s) "
+                        f"{', '.join(sorted(obligated))}: {exc}"
+                    ) from exc
+                raise
+            missing = sorted(obligated - set(refs))
+            if missing:
+                raise ValuePipeError(
+                    f"producer {producer} did not fill obligated port(s) "
+                    f"{', '.join(missing)}"
+                )
             inputs = [
                 str(line.get("value_ref"))
                 for line in evidence.get("value_provenance") or []
