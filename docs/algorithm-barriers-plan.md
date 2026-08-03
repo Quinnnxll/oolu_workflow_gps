@@ -2,7 +2,7 @@
 
 Status: In build. Three phase series, one per barrier: **F0–F3** (the
 program node), **W0–W5** (route paving — the Paver), **G0–G3** (gate
-edges). G0 and G1 LANDED; every other phase Proposed. Each lands as one commit titled
+edges). G0, G1, and W0 LANDED; every other phase Proposed. Each lands as one commit titled
 `<CODE> landed: <name> — <subtitle>` with its loop-closure test, the
 plan-doc status flip, and the CHANGELOG entry in the same commit.
 
@@ -737,6 +737,29 @@ can reach it.
 
 **W0 — Wire the dataflow (engine only; no agent, no LLM, no new
 consent).** *Fresh data crosses one contract run.*
+**Status: LANDED** — the compiler binds each subgraph script child's
+unbound consumed slots to their sibling producer's output port
+(`wire_dataflow=True` + `producer_keys`, default off so library callers
+are byte-identical); `stamp_value_tenant` stamps the binder's tenant
+wall onto script actions at SUBMISSION (the engine's single-node
+idiom); `DagRouteRunner.execute` threads a per-run `value_pipe` called
+on every SUCCEEDED settle (best-effort — a pipe failure never fails
+the route); the gateway door builds ONE `producer_keys` map (desk node
+id via `owning_nodes`, else child contract id) that feeds BOTH the
+compile-time injection and the settle-time filing — cross-path key
+agreement is by construction, not by convention. `skills/index.py`
+`SlotIndex` pre-narrows on `(name, value_type)` and re-applies
+`Slot.matches` per lookup (role matching is asymmetric — a key
+including role would diverge from the scan); assembler `index=` is
+behavior-identical, parity-pinned on the route-scale marketplace.
+Sharper than the plan text: ScriptBody-only wiring (per the decision
+log — ActionsBody outcomes need not carry a result payload); the
+contract-run completion NOTIFICATION moved to W4 where its consumer
+(propagation) lives — W0 lands the per-child filing itself; the
+holds/approval door wires in a follow-up, the direct door is live.
+Loop-closure test drives the real HTTP door twice and proves the
+consumer reads run one's fresh value, then run two's — never stale,
+no human handoff.
 Changes: `orchestrator/contract.py` (auto-bind flag; `owner_ids`),
 submission-time tenant/owner stamping, `orchestrator/scheduler.py`
 (per-run value pipe), `nodeplace/execution.py` (per-child filing +

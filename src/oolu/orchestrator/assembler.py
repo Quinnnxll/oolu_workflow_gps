@@ -39,6 +39,7 @@ from typing import Callable, Iterable, Protocol, Sequence, runtime_checkable
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..knowledge.traces import TraceStore, route_node_key
+from ..skills.index import SlotIndex
 from ..skills.contract import (
     NodeContract,
     NodeStats,
@@ -134,12 +135,20 @@ class ContractAssembler:
         proposal_model: ProposalModel | None = None,
         proposal_strength: float = DEFAULT_PROPOSAL_STRENGTH,
         cost_weight: float = 0.0,
+        index: "SlotIndex | None" = None,
     ):
         self._contracts = contracts
         self._rng = rng
         self._fill_gaps = fill_gaps_with_scripts
         self._proposal_model = proposal_model
         self._proposal_strength = proposal_strength
+        # W0: an optional SlotIndex so producer choice stops scanning the
+        # whole library per slot (the route-finding-proof §1 concession).
+        # Behavior-identical by law — the index pre-narrows candidates, it
+        # never reorders or reranks them; a parity test pins this. The
+        # caller keeps it fresh: a projection over the SAME library,
+        # rebuilt when the library changes.
+        self._index = index
         if cost_weight < 0.0:
             raise ValueError("cost_weight must be >= 0")
         # How much success probability one unit of money is worth giving
@@ -234,12 +243,16 @@ class ContractAssembler:
         selected: list[str],
         exclude: set[str],
     ) -> tuple[NodeContract | None, float]:
-        candidates = [
-            contract
-            for contract in library
-            if contract.id not in exclude
-            and any(produced.matches(slot) for produced in contract.produces)
-        ]
+        pool = (
+            self._index.producers(slot)
+            if self._index is not None
+            else [
+                contract
+                for contract in library
+                if any(produced.matches(slot) for produced in contract.produces)
+            ]
+        )
+        candidates = [contract for contract in pool if contract.id not in exclude]
         if not candidates:
             return None, 0.0
 

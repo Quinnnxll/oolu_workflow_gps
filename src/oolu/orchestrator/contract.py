@@ -61,13 +61,25 @@ class _Fragment:
         return [item.action.id for item in self.actions]
 
 
-def contract_to_blueprint(contract: NodeContract) -> Blueprint:
+def contract_to_blueprint(
+    contract: NodeContract,
+    *,
+    wire_dataflow: bool = False,
+    producer_keys: dict[str, str] | None = None,
+) -> Blueprint:
     """The public entry point: one contract, one executable blueprint."""
-    blueprint, _owners = compile_with_owners(contract)
+    blueprint, _owners = compile_with_owners(
+        contract, wire_dataflow=wire_dataflow, producer_keys=producer_keys
+    )
     return blueprint
 
 
-def compile_with_owners(contract: NodeContract) -> tuple[Blueprint, dict[str, str]]:
+def compile_with_owners(
+    contract: NodeContract,
+    *,
+    wire_dataflow: bool = False,
+    producer_keys: dict[str, str] | None = None,
+) -> tuple[Blueprint, dict[str, str]]:
     """Compile, plus a map from action id to the owning top-level child name.
 
     Both come from ONE compile pass — script bodies mint a fresh action id
@@ -76,8 +88,22 @@ def compile_with_owners(contract: NodeContract) -> tuple[Blueprint, dict[str, st
     directly (non-subgraph bodies, fallback repairs) map to the contract's
     own name. This is what lets per-node execution traces accumulate under
     the same keys the assembler scores by.
+
+    ``wire_dataflow=True`` (W0, off by default so existing callers are
+    untouched) additionally binds each subgraph child's unbound consumed
+    slots to their sibling producer's output port: an ``output://{key}/{s}``
+    reference the deterministic binder resolves at run time to the value the
+    producer filed IN THIS RUN. ``producer_keys`` maps a child contract id
+    to its canonical producer key (the desk node id for registered nodes);
+    an unmapped child keys by its contract id. Only script-bodied producers
+    are wired — an ActionsBody outcome need not carry a result payload, and
+    an edge whose port can never fill is worse than no edge.
     """
-    fragment = _compile(contract)
+    fragment = _compile(
+        contract,
+        wire_dataflow=wire_dataflow,
+        producer_keys=producer_keys or {},
+    )
     owners = dict(fragment.owners)
     for item in fragment.actions:
         owners.setdefault(item.action.id, contract.name)
@@ -95,19 +121,34 @@ def compile_with_owners(contract: NodeContract) -> tuple[Blueprint, dict[str, st
     return blueprint, owners
 
 
-def _compile(contract: NodeContract) -> _Fragment:
+def _compile(
+    contract: NodeContract,
+    *,
+    wire_dataflow: bool = False,
+    producer_keys: dict[str, str] | None = None,
+) -> _Fragment:
+    producer_keys = producer_keys or {}
     body = contract.body
     if isinstance(body, ActionsBody):
         fragment = _compile_actions(contract, body)
     elif isinstance(body, ScriptBody):
         fragment = _compile_script(contract, body)
     elif isinstance(body, SubgraphBody):
-        fragment = _compile_subgraph(contract, body)
+        fragment = _compile_subgraph(
+            contract,
+            body,
+            wire_dataflow=wire_dataflow,
+            producer_keys=producer_keys,
+        )
     else:  # pragma: no cover - the union is closed
         raise ValueError(f"unknown body kind: {body!r}")
 
     if contract.fallback is not None:
-        repair = _compile(contract.fallback)
+        repair = _compile(
+            contract.fallback,
+            wire_dataflow=wire_dataflow,
+            producer_keys=producer_keys,
+        )
         edges = fragment.edges + repair.edges
         seen = {(e.source, e.target, e.relation) for e in edges}
         # Every repair action is a fallback target, so dependents of the
@@ -169,10 +210,77 @@ def _compile_script(contract: NodeContract, body: ScriptBody) -> _Fragment:
     return _Fragment([reserved], [], [action.id], [action.id])
 
 
-def _compile_subgraph(contract: NodeContract, body: SubgraphBody) -> _Fragment:
+def _wire_dataflow_bindings(
+    nodes: list[NodeContract], producer_keys: dict[str, str]
+) -> list[NodeContract]:
+    """Bind each script child's unbound consumed slots to their sibling
+    producer's output port.
+
+    A slot wires only when exactly ONE script-bodied sibling produces it —
+    ambiguity stays unbound, exactly as today (the assembler picks one
+    producer per slot, so assembled subgraphs are never ambiguous).
+    ActionsBody producers never wire: their outcomes need not carry a
+    result payload, and an ``output://`` edge whose port can never fill
+    would refuse honest runs.
+    """
+    producers_by_name: dict[str, list[NodeContract]] = {}
+    for child in nodes:
+        if not isinstance(child.body, ScriptBody):
+            continue
+        for slot in child.produces:
+            producers_by_name.setdefault(slot.name, []).append(child)
+
+    wired: list[NodeContract] = []
+    for child in nodes:
+        body = child.body
+        if not isinstance(body, ScriptBody):
+            wired.append(child)
+            continue
+        additions: dict[str, str] = {}
+        for slot in child.consumes:
+            if slot.name in (body.bindings or {}):
+                continue
+            candidates = [
+                producer
+                for producer in producers_by_name.get(slot.name, [])
+                if producer.id != child.id
+                and any(produced.matches(slot) for produced in producer.produces)
+            ]
+            if len(candidates) != 1:
+                continue
+            key = producer_keys.get(candidates[0].id, candidates[0].id)
+            additions[slot.name] = f"output://{key}/{slot.name}"
+        if additions:
+            child = child.model_copy(
+                update={
+                    "body": body.model_copy(
+                        update={"bindings": {**body.bindings, **additions}}
+                    )
+                }
+            )
+        wired.append(child)
+    return wired
+
+
+def _compile_subgraph(
+    contract: NodeContract,
+    body: SubgraphBody,
+    *,
+    wire_dataflow: bool = False,
+    producer_keys: dict[str, str] | None = None,
+) -> _Fragment:
     if not body.nodes:
         raise ValueError(f"contract '{contract.name}' has an empty subgraph body")
-    fragments = {child.id: _compile(child) for child in body.nodes}
+    producer_keys = producer_keys or {}
+    nodes = list(body.nodes)
+    if wire_dataflow:
+        nodes = _wire_dataflow_bindings(nodes, producer_keys)
+    fragments = {
+        child.id: _compile(
+            child, wire_dataflow=wire_dataflow, producer_keys=producer_keys
+        )
+        for child in nodes
+    }
 
     actions: list[ReservedAction] = []
     edges: list[BlueprintEdge] = []
@@ -211,7 +319,7 @@ def _compile_subgraph(contract: NodeContract, body: SubgraphBody) -> _Fragment:
                 f"subgraph edge references unknown child: {edge.source}->{edge.target}"
             )
         connect(edge.source, edge.target, edge.relation, edge.provenance)
-    for edge in derive_data_edges(body.nodes):
+    for edge in derive_data_edges(nodes):
         connect(edge.source, edge.target, edge.relation, edge.provenance)
 
     # The subgraph's boundary: children nothing points at / nothing leaves.
@@ -236,6 +344,6 @@ def _compile_subgraph(contract: NodeContract, body: SubgraphBody) -> _Fragment:
     # Every action a child contributed (however deeply nested) belongs to
     # that child at THIS level — trace attribution is per immediate child.
     owners = {
-        aid: child.name for child in body.nodes for aid in fragments[child.id].ids
+        aid: child.name for child in nodes for aid in fragments[child.id].ids
     }
     return _Fragment(actions, edges, entries, exits, owners=owners)

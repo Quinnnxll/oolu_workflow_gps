@@ -31,6 +31,7 @@ import logging
 import re
 import time
 from datetime import UTC, datetime
+from typing import Callable
 
 from ..knowledge.traces import NodeObservation, TraceStore
 from ..skills.models import (
@@ -140,8 +141,20 @@ class DagRouteRunner:
     # WorkflowExecutor.execute                                            #
     # ------------------------------------------------------------------ #
     def execute(
-        self, route: RoutePlan, *, idempotency_key: str, attempt: int
+        self,
+        route: RoutePlan,
+        *,
+        idempotency_key: str,
+        attempt: int,
+        value_pipe: Callable[[str, ExecutionOutcome], None] | None = None,
     ) -> ExecutionRecord:
+        """Run the route. ``value_pipe`` (optional, per-run — a runner is
+        shared across tenants, so identity can never live on the instance)
+        is called with ``(action_id, outcome)`` on every SUCCEEDED settle:
+        the W0 seam that files a producer's fresh outputs mid-run so a
+        downstream ``output://`` binding resolves to THIS run's answer.
+        Best-effort by construction — a pipe failure is logged, never a new
+        way for the route to fail."""
         blueprint = route.chosen
         started = datetime.now(UTC)
 
@@ -159,7 +172,7 @@ class DagRouteRunner:
             )
 
         outcomes, error, failed_id, succeeded = self._run_dag(
-            blueprint, idempotency_key
+            blueprint, idempotency_key, value_pipe=value_pipe
         )
         record = ExecutionRecord(
             idempotency_key=idempotency_key,
@@ -247,7 +260,11 @@ class DagRouteRunner:
     # The readiness loop.                                                 #
     # ------------------------------------------------------------------ #
     def _run_dag(
-        self, blueprint: Blueprint, idempotency_key: str
+        self,
+        blueprint: Blueprint,
+        idempotency_key: str,
+        *,
+        value_pipe: Callable[[str, ExecutionOutcome], None] | None = None,
     ) -> tuple[list[ExecutionOutcome], str | None, str | None, bool]:
         actions = {item.action.id: item.action for item in blueprint.actions}
         joins = {item.action.id: item.join for item in blueprint.actions}
@@ -299,6 +316,13 @@ class DagRouteRunner:
             evidence[action_id] = outcome.evidence
             outcomes.append(outcome)
             if outcome.status is ExecutionStatus.SUCCEEDED:
+                if value_pipe is not None:
+                    try:
+                        value_pipe(action_id, outcome)
+                    except Exception:  # noqa: BLE001 — filing is bookkeeping
+                        logger.warning(
+                            "value pipe failed for %s", action_id, exc_info=True
+                        )
                 for i, spec in enumerate(loops):
                     if spec.tail == action_id and i not in loops_done:
                         tail_events.add(i)

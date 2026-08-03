@@ -4,6 +4,40 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Route paving (W0) — fresh data crosses one contract run
+(docs/algorithm-barriers-plan.md, Part II):
+
+- **Auto-bound dataflow at compile** — `compile_contract(...,
+  wire_dataflow=True, producer_keys=...)`: each subgraph script child's
+  unbound consumed slot binds to its sibling producer's output port as
+  an `output://{key}/{slot}` reference the deterministic binder
+  resolves at run time. Off by default (library callers byte-identical);
+  the `/v1/runs/contract` door turns it on. Only script-bodied
+  producers wire, only unambiguous ones (exactly one producing
+  sibling), and bound slots are never overwritten.
+- **Identity at submission** — `stamp_value_tenant` stamps the exact-
+  value binder's tenant wall onto every script action when the run is
+  submitted (the engine's single-node idiom): compiled actions carry no
+  identity, one runner serves every tenant, and without the stamp every
+  `output://` binding refuses.
+- **The value pipe** — `DagRouteRunner.execute(...,
+  value_pipe=...)`: a per-run callable fired on every SUCCEEDED settle
+  files the producer's outputs (and lineage) mid-run, so a downstream
+  child's binding resolves to THIS run's answer, not the previous
+  run's. Best-effort by construction: a filing failure logs and the
+  route stands. The gateway builds ONE canonical producer-key map (the
+  desk node id for registered children — the same key single-node runs
+  file under — else the child contract id) feeding both the compile
+  injection and the settle filing, so the two paths agree by
+  construction.
+- **The SlotIndex** (`src/oolu/skills/index.py`) — the
+  producers/consumers lookup route-finding-proof §1 conceded: one O(N)
+  pass buckets slots by `(name, value_type)`; each lookup re-applies
+  `Slot.matches` over its bucket (role matching is asymmetric, so role
+  never joins the key). `ContractAssembler(index=...)` stops scanning
+  the library per slot — behavior-identical ranking, parity-pinned
+  against the route-scale benchmark marketplace.
+
 Gate edges (G1) — a cycle becomes a bounded region, not a preflight
 error (docs/algorithm-barriers-plan.md, Part III):
 

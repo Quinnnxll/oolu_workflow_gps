@@ -28,6 +28,7 @@ from .contract import (
     classify_risk,
     derive_data_edges,
 )
+from .index import SlotIndex
 from .discovery import (
     DEFAULT_TOOL_CATALOG,
     DiscoveredTool,
@@ -242,6 +243,7 @@ __all__ = [
     "SkillParameter",
     "SkillRegistry",
     "SkillSignature",
+    "SlotIndex",
     "SkillStore",
     "SkillsServer",
     "VerificationResult",

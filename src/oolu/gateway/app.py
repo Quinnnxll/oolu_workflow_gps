@@ -160,6 +160,7 @@ from ..nodeplace import (
     reserved_operations,
     reward_multiplier,
     stamp_egress_grants,
+    stamp_value_tenant,
     utility,
 )
 from ..orchestrator import (
@@ -15115,16 +15116,32 @@ class GatewayApp:
             # as explicit sop edges the scheduler honors — work passed to
             # the next number, ties in parallel, unordered members free.
             contract = self._stamp_fleet_order(contract)
-        try:
-            compiled = compile_contract(contract)
-        except ValueError as exc:
-            raise GatewayError(400, "invalid_request", str(exc)) from exc
-        reserved = reserved_operations(compiled)
         children = (
             contract.body.nodes
             if isinstance(contract.body, SubgraphBody)
             else [contract]
         )
+        # The canonical producer key (W0): the desk node id when the child
+        # is a registered version — the SAME key the single-node path files
+        # under (_file_run_values) — else the child contract id. One key,
+        # both filing paths, or output:// refs written against one path
+        # would miss values filed by the other.
+        desk_ids = (
+            self._desk.owning_nodes([c.id for c in children])
+            if self._desk is not None
+            else {}
+        )
+        producer_keys = {c.id: desk_ids.get(c.id, c.id) for c in children}
+        try:
+            # wire_dataflow: each script child's unbound consumed slots
+            # bind to their sibling producer's output port, so fresh data
+            # crosses the run with no human handoff (W0).
+            compiled = compile_contract(
+                contract, wire_dataflow=True, producer_keys=producer_keys
+            )
+        except ValueError as exc:
+            raise GatewayError(400, "invalid_request", str(exc)) from exc
+        reserved = reserved_operations(compiled)
         if self._hygiene is not None:
             # The Node Policy's restriction is real: a restricted (or
             # revoked) node refuses new contract runs outright.
@@ -15256,6 +15273,43 @@ class GatewayApp:
             # CONSENT into the executor — stamped at execution time, so the
             # run honors the grants of this moment, not of compile time.
             compiled = self._stamp_egress(contract, compiled, children)
+        # The binder's tenant wall rides every script action (W0) — stamped
+        # at submission like the engine does for single-node runs, never at
+        # construction: one runner serves every tenant.
+        compiled = stamp_value_tenant(compiled, session.tenant_id)
+        # action id -> canonical producer key, for mid-run value filing.
+        # Glue actions the contract contributes directly stay unfiled.
+        by_name = {c.name: c for c in children}
+        producer_ids = {
+            action_id: producer_keys[by_name[owner].id]
+            for action_id, owner in compiled.owners.items()
+            if owner in by_name
+        }
+
+        def value_pipe(action_id: str, outcome) -> None:
+            """File one settled child's outputs mid-run — the same shape
+            _file_run_values gives a completed single-node run, at the
+            same canonical key, so both paths agree and a downstream
+            output:// binding resolves to THIS run's answer."""
+            producer = producer_ids.get(action_id)
+            if not producer or self._values is None:
+                return
+            evidence = outcome.evidence or {}
+            payload = evidence.get("result")
+            if payload is None:
+                return
+            refs = self._values.snapshot_outputs(
+                session.tenant_id, payload, label=producer, producer=producer
+            )
+            inputs = [
+                str(line.get("value_ref"))
+                for line in evidence.get("value_provenance") or []
+                if line.get("value_ref")
+            ]
+            if inputs and refs:
+                self._values.record_lineage(
+                    session.tenant_id, producer, inputs, list(refs.values())
+                )
 
         def submit() -> dict:
             result = execute_contract(
@@ -15271,6 +15325,7 @@ class GatewayApp:
                 trace_store=self._trace_store,
                 trace_context=session.tenant_id,
                 trace_exclude=trace_exclude,
+                value_pipe=value_pipe if self._values is not None else None,
             )
             self._metrics["contract_runs"] += 1
             payload = result.model_dump(mode="json")

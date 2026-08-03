@@ -78,15 +78,26 @@ class ContractRunResult(BaseModel):
     market: ContractMarket = Field(default_factory=ContractMarket)
 
 
-def compile_contract(contract: NodeContract) -> CompiledContract:
+def compile_contract(
+    contract: NodeContract,
+    *,
+    wire_dataflow: bool = False,
+    producer_keys: dict[str, str] | None = None,
+) -> CompiledContract:
     """Compile without the reserved gate (raises ``ValueError`` if broken).
 
     For surfaces that HOLD reserved contracts for explicit approval rather
     than refusing them — the approval flow calls this after an authorized
     identity session grants the approval. Unattended paths must use
     :func:`compile_runnable` instead.
+
+    ``wire_dataflow``/``producer_keys`` thread through to the compiler
+    (W0): subgraph children's unbound consumed slots bind to their sibling
+    producers' output ports as ``output://`` references.
     """
-    blueprint, owners = compile_with_owners(contract)
+    blueprint, owners = compile_with_owners(
+        contract, wire_dataflow=wire_dataflow, producer_keys=producer_keys
+    )
     return CompiledContract(blueprint=blueprint, owners=owners)
 
 
@@ -193,6 +204,38 @@ def stamp_egress_grants(
     )
 
 
+def stamp_value_tenant(compiled: CompiledContract, tenant: str) -> CompiledContract:
+    """Stamp the exact-value binder's tenant wall onto every script action.
+
+    Compiled subgraph actions carry no identity (the compiler is
+    deliberately tenant-agnostic), so without this stamp the binder
+    resolves with an empty tenant and every ``output://`` binding refuses.
+    Stamped at SUBMISSION — the same idiom the engine uses for single-node
+    runs — never at compile or construction: one runner serves every
+    tenant. An action that already carries a tenant keeps it."""
+    if not tenant:
+        return compiled
+    stamped: list = []
+    changed = False
+    for item in compiled.blueprint.actions:
+        action = item.action
+        if action.adapter == "script" and "_value_tenant" not in action.parameters:
+            action = action.model_copy(
+                update={
+                    "parameters": {**action.parameters, "_value_tenant": tenant}
+                }
+            )
+            item = item.model_copy(update={"action": action})
+            changed = True
+        stamped.append(item)
+    if not changed:
+        return compiled
+    return CompiledContract(
+        blueprint=compiled.blueprint.model_copy(update={"actions": stamped}),
+        owners=compiled.owners,
+    )
+
+
 class ContractEstimate(NamedTuple):
     """A pre-commit cost estimate plus what kind of job this mostly is."""
 
@@ -253,6 +296,7 @@ def execute_contract(
     trace_store: TraceStore | None = None,
     trace_context: str = "",
     trace_exclude: frozenset[str] = frozenset(),
+    value_pipe=None,  # (action_id, outcome) -> None: per-settle value filing
 ) -> ContractRunResult:
     """Run an assembled contract with multi-node marketplace binding.
 
@@ -336,11 +380,22 @@ def execute_contract(
             )
         )
 
-    record = runner.execute(
-        RoutePlan(chosen=compiled.blueprint, alternatives=[], total_cost=0.0),
-        idempotency_key=f"{run_id}:exec:1",
-        attempt=1,
-    )
+    route = RoutePlan(chosen=compiled.blueprint, alternatives=[], total_cost=0.0)
+    if value_pipe is not None:
+        # Mid-run filing (W0): each SUCCEEDED child's outputs reach the
+        # port index as they settle, so a downstream child's output://
+        # binding resolves to THIS run's fresh answer. Passed only when
+        # wired — legacy runners without the parameter stay drop-in.
+        record = runner.execute(
+            route,
+            idempotency_key=f"{run_id}:exec:1",
+            attempt=1,
+            value_pipe=value_pipe,
+        )
+    else:
+        record = runner.execute(
+            route, idempotency_key=f"{run_id}:exec:1", attempt=1
+        )
     # The same audit event the deriver mints money from — but only on a
     # verified success, exactly like orchestrated runs.
     audit.append(
