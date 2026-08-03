@@ -370,6 +370,16 @@ def _drawer_function(function: dict) -> dict:
     return updated
 
 
+def _limits_profile_stamp(action) -> dict:
+    """The published action's ``_limits_profile`` (F2), carried onto the
+    resolved function so the runner widens a PROGRAM node's sandbox to
+    the (clamped) program profile. Read from the FROZEN action parameters
+    — the publish door stamped it from the verified spec, so a drawer
+    edit cannot mint a wider sandbox than the build consented to."""
+    profile = (getattr(action, "parameters", None) or {}).get("_limits_profile")
+    return {"_limits_profile": profile} if profile else {}
+
+
 def _tz_minutes(raw) -> int:
     """The client's timezone offset, minutes east of UTC — clamped to the
     real world's ±14 h and never trusted to be a number."""
@@ -8122,6 +8132,7 @@ class GatewayApp:
                 **self._node_function_extras(session, node.node_id),
                 **self._declared_ports(listing),
                 **self._declared_inputs(listing),
+                **_limits_profile_stamp(action),
             },
             tenant=session.tenant_id,
         )
@@ -8208,6 +8219,7 @@ class GatewayApp:
             f"{SHIM_MODULE_NAME}.py",  # derive the shim name, never drift
             "bindings.json",
             "records.json",
+            "state.json",  # F2: the program-state side channel
             "program.json",
         }
         tree: dict[str, str] = {}
@@ -8394,6 +8406,20 @@ class GatewayApp:
                     + str(report.get("error", "")),
                 }
 
+        # The limits-profile consent, SURFACED (F2): a program profile is
+        # a wider sandbox, and the receipt says so in numbers — the build
+        # that carries this note is the consent the stamp rides on.
+        if spec.limits_profile == "program":
+            from ..runtime.backend import PROGRAM_LIMITS
+
+            notes.append(
+                "runs under the program limits profile — wall "
+                f"{PROGRAM_LIMITS.wall_timeout_s:.0f}s, memory "
+                f"{PROGRAM_LIMITS.memory_mb}MB, scratch "
+                f"{PROGRAM_LIMITS.writable_scratch_mb}MB (clamped ceilings; "
+                "a step node gets 30s/512MB)"
+            )
+
         # Publish: the citizen face is ONE contract — a single script
         # action, exactly like every function node; the tree is drawer
         # truth the runs promote and the bundle store freezes.
@@ -8422,6 +8448,16 @@ class GatewayApp:
                             "goal": goal,
                             "script": script,
                             "node_key": f"node:{skill_id}",
+                            # F2: the spec's limits profile rides the FROZEN
+                            # action — resolved runs widen to the (clamped)
+                            # program sandbox only because the verified
+                            # build said so, never because a drawer edit
+                            # asked for it.
+                            **(
+                                {"_limits_profile": "program"}
+                                if spec.limits_profile == "program"
+                                else {}
+                            ),
                         },
                     }
                 ],
@@ -8618,6 +8654,12 @@ class GatewayApp:
                     # (staged as ./records.json by the runner) — never
                     # part of the frozen code tree.
                     extras["_records"] = file.content
+                elif folder == "state" and file.name == "state.json":
+                    # F2: the program's OWN state rides the run as DATA
+                    # (staged as ./state.json by the runner) — outside
+                    # the frozen tree AND the cache key, so the cached
+                    # script replays against the CURRENT state.
+                    extras["_state"] = file.content
             if staged:
                 extras["files"] = staged
         return extras
@@ -8671,6 +8713,7 @@ class GatewayApp:
                 ),
                 **self._node_function_extras(session, node.node_id),
                 **self._declared_ports(listing),
+                **_limits_profile_stamp(action),
             },
             tenant=session.tenant_id,
         )
@@ -19185,6 +19228,11 @@ class GatewayApp:
         # B4: every value this run moved along an output:// edge lands a
         # run-cited handoff edge on the temporal graph.
         self._land_handoffs(state)
+        # F2: a program node's emitted state update lands back in its
+        # drawer (rows merged by the lifebooks discipline, values replaced
+        # whole), with the run's STAGED state copied under runs/<id>/ so
+        # replayed history reconstructs what each run read.
+        self._land_state(state)
         # P2: the node's emitted book lands back in its drawer, and a
         # reminder the run asked for is filed into the standing store.
         self._land_records(state)
@@ -19569,6 +19617,144 @@ class GatewayApp:
         except Exception:  # noqa: BLE001 - bookkeeping never fails a run
             logging.getLogger("oolu.gateway").warning(
                 "records write failed for run %s", state.run_id, exc_info=True
+            )
+
+    def _program_spec_of(self, tenant: str, node_id: str):
+        """The node's frozen ``src/program.json`` parsed to a spec, or
+        None — the reader the state landing trusts for WHICH state names
+        exist and their kinds. Best-effort: a missing or unparseable spec
+        means no declared state, so nothing lands."""
+        if self._files is None:
+            return None
+        from ..skills.program import parse_program_spec
+
+        try:
+            for file in self._files.list(tenant=tenant, node_id=node_id):
+                if file.folder == "src" and file.name == "program.json":
+                    spec, problem = parse_program_spec(json.loads(file.content))
+                    return None if problem else spec
+        except Exception:  # noqa: BLE001 - a bad spec lands nothing
+            return None
+        return None
+
+    def _land_state(self, state: RunState) -> None:
+        """F2 — the program-state write-back: a run that emitted ``state``
+        (a dict of updates) lands it in the drawer as ``state/state.json``
+        — the file the next run stages as ``./state.json``. Only DECLARED
+        state names land (the spec is the contract; an undeclared key is
+        dropped with a warning): a ``rows``-kind name merges through the
+        lifebooks row discipline (dedup on ``(at, label)``, standing rows
+        win, sorted, capped), a ``value``-kind name is replaced whole.
+
+        History first: the state THIS run was staged with (the standing
+        book BEFORE the update) is copied under
+        ``runs/<run_id>/state/state.json`` — so replayed history
+        reconstructs each run's staged state from ``runs/*`` alone.
+        Idempotent per run, best-effort: bookkeeping on a finished run is
+        never a new way for it to fail."""
+        if self._files is None:
+            return
+        result = self._completed_result(state)
+        if result is None or not isinstance(result.get("state"), dict):
+            return
+        function = state.contract.metadata["node_function"]
+        tenant = str(state.contract.metadata.get("tenant_id", ""))
+        node_id = str(function["node_id"])
+        spec = self._program_spec_of(tenant, node_id)
+        if spec is None or not spec.state:
+            return  # only a program node with DECLARED state keeps state
+        from ..skills.program import merge_state_rows
+
+        emitted = result["state"]
+        try:
+            files = list(self._files.list(tenant=tenant, node_id=node_id))
+            current = next(
+                (
+                    f
+                    for f in files
+                    if f.folder == "state" and f.name == "state.json"
+                ),
+                None,
+            )
+            try:
+                standing = (
+                    json.loads(current.content)
+                    if current is not None and current.content
+                    else {}
+                )
+            except ValueError:
+                standing = {}
+            if not isinstance(standing, dict):
+                standing = {}
+
+            # History FIRST — what this run READ, before the update, one
+            # copy per run (a retry files the same run once).
+            history_folder = f"runs/{state.run_id}/state"
+            if not any(
+                f.folder == history_folder and f.name == "state.json"
+                for f in files
+            ):
+                self._files.save(
+                    UserFile(
+                        tenant_id=tenant,
+                        node_id=node_id,
+                        folder=history_folder,
+                        name="state.json",
+                        media_type="application/json",
+                        content=json.dumps(
+                            standing, ensure_ascii=False, sort_keys=True,
+                            default=str,
+                        ),
+                    )
+                )
+
+            declared = {item.name: item for item in spec.state}
+            dropped = sorted(set(emitted) - set(declared))
+            if dropped:
+                logging.getLogger("oolu.gateway").warning(
+                    "state write for %s dropped undeclared name(s): %s",
+                    node_id,
+                    ", ".join(dropped),
+                )
+            updated = dict(standing)
+            for name, item in declared.items():
+                if name not in emitted:
+                    continue
+                if item.kind == "rows":
+                    updated[name] = merge_state_rows(
+                        standing.get(name), emitted[name]
+                    )
+                else:
+                    updated[name] = emitted[name]
+            content = json.dumps(
+                updated, ensure_ascii=False, sort_keys=True, default=str
+            )
+            if len(content) > 1_000_000:
+                logging.getLogger("oolu.gateway").warning(
+                    "state write skipped for %s: the state outgrew the "
+                    "drawer write",
+                    node_id,
+                )
+                return
+            if current is not None:
+                if current.content != content:
+                    self._files.save(
+                        current.model_copy(update={"content": content})
+                    )
+            else:
+                self._files.save(
+                    UserFile(
+                        tenant_id=tenant,
+                        node_id=node_id,
+                        folder="state",
+                        name="state.json",
+                        media_type="application/json",
+                        content=content,
+                    )
+                )
+        except Exception:  # noqa: BLE001 - bookkeeping never fails a run
+            logging.getLogger("oolu.gateway").warning(
+                "state write failed for run %s", state.run_id, exc_info=True
             )
 
     def _file_reminder(self, state: RunState) -> None:

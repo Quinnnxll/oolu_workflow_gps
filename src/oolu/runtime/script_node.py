@@ -390,6 +390,15 @@ class NodeScriptRunner:
         records = action.parameters.get("_records")
         if isinstance(records, str) and records:
             files = {**files, "records.json": records}
+        # The program's OWN state (F2): a program node's standing state
+        # rides into the sandbox as DATA (./state.json) — the records
+        # discipline applied to programs. Like the book, it never joins
+        # the frozen tree or the cache key, so the same cached script
+        # replays against the CURRENT state on every run; the completion
+        # hook lands the emitted update back in the drawer.
+        program_state = action.parameters.get("_state")
+        if isinstance(program_state, str) and program_state:
+            files = {**files, "state.json": program_state}
         # Delivered documents (P3): a binding that NAMED a file in the
         # node's message drawer rides in as ./attachments/<name> — the
         # run reads what was forwarded to it, nothing more.
@@ -408,6 +417,9 @@ class NodeScriptRunner:
         bundle = None
         if bundle_id and self._bundle_resolver is not None:
             bundle = self._bundle_resolver(str(bundle_id))
+        # The action's sandbox limits (F2): a program node's stamped
+        # profile widens the step defaults — clamped, never trusted.
+        limits = self._action_limits(action)
 
         # --- hit path: replay the memoized script, no synthesis paid ----- #
         cached = self._cache.get(key)
@@ -420,6 +432,7 @@ class NodeScriptRunner:
                 web=web,
                 files=files,
                 bundle=bundle,
+                limits=limits,
             )
             record = classify(result)
             gap = self._answer_gap(result, ports) if record is None else None
@@ -464,6 +477,7 @@ class NodeScriptRunner:
                     web=web,
                     files=files,
                     bundle=bundle,
+                    limits=limits,
                 )
                 record = classify(result)
                 gap = self._answer_gap(result, ports) if record is None else None
@@ -538,6 +552,7 @@ class NodeScriptRunner:
                         web=web,
                         files=files,
                         bundle=bundle,
+                        limits=limits,
                     )
                     record = classify(result)
                     gap = (
@@ -634,6 +649,7 @@ class NodeScriptRunner:
             web=web,
             files=files,
             bundle=bundle,
+            limits=limits,
         )
         record = classify(result)
         gap = self._answer_gap(result, ports) if record is None else None
@@ -811,6 +827,39 @@ class NodeScriptRunner:
             evidence["bindings"] = dict(bindings)
         return evidence
 
+    def _action_limits(self, action: ActionEvent) -> ResourceLimits:
+        """The sandbox limits for THIS action (F2): a program node's
+        ``_limits_profile`` stamp widens the step defaults to the PROGRAM
+        profile — always CLAMPED to ``PROGRAM_LIMITS_MAX``, so whatever a
+        spec (or anything hostile) requests, a 10-hour wall still runs
+        under 180 seconds. ``"program"`` takes the profile; a dict is a
+        request clamped field-by-field; anything else keeps the runner's
+        own (step) limits. Derived only from the stamp — never part of the
+        cache key, so replay determinism stands."""
+        from .backend import PROGRAM_LIMITS, clamp_limits
+
+        profile = action.parameters.get("_limits_profile")
+        if profile == "program":
+            return clamp_limits(PROGRAM_LIMITS)
+        if isinstance(profile, dict):
+            merged = PROGRAM_LIMITS.model_dump()
+            for field_name in (
+                "cpus",
+                "memory_mb",
+                "pids_limit",
+                "wall_timeout_s",
+                "install_timeout_s",
+                "writable_scratch_mb",
+            ):
+                raw = profile.get(field_name)
+                if isinstance(raw, (int, float)) and raw > 0:
+                    merged[field_name] = raw
+            try:
+                return clamp_limits(ResourceLimits(**merged))
+            except Exception:  # noqa: BLE001 - a malformed request keeps step
+                return self._limits
+        return self._limits
+
     def _run_script(
         self,
         script: str,
@@ -820,6 +869,7 @@ class NodeScriptRunner:
         web: WebGrant | None = None,
         files: dict[str, str] | None = None,
         bundle=None,
+        limits: ResourceLimits | None = None,
     ) -> ExecutionResult:
         # The antivirus screen at the last gate: no script — provided,
         # synthesized, repaired, or replayed from cache — reaches the
@@ -838,7 +888,7 @@ class NodeScriptRunner:
                 script=script,
                 dependencies=dependencies,
                 pinned_index_url=self._pinned_index_url,
-                limits=self._limits,
+                limits=limits if limits is not None else self._limits,
                 session_id=session_id,
                 web=web,
                 files=dict(files or {}),

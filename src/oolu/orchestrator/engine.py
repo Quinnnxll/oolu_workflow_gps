@@ -337,6 +337,8 @@ class WorkflowOrchestrator:
             "_output_ports",
             "_records",
             "_attachments",
+            "_state",  # F2: the program's standing state (./state.json)
+            "_limits_profile",  # F2: the program limits profile, clamped
         ):
             if carried in function:
                 parameters[carried] = function[carried]

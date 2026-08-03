@@ -56,19 +56,37 @@ _MAX_STAGED_FILES = 32
 _MAX_STAGED_BYTES = 2_000_000
 
 
+
+# What a bundle member may never be named (F0.1, extended F2): the harness
+# itself, and the RUN-TIME SIDE CHANNELS — the bundle unpacks AFTER the
+# inline staging writes them, so a member of any of these names would
+# silently overwrite the sandbox's own code (the harness) or the runtime's
+# staged data (the bound inputs, the node's book, the program's state)
+# with unverified bytes from a frozen tree.
+def _reserved_workspace_names() -> set[str]:
+    return {
+        f"{SHIM_MODULE_NAME}.py",
+        "user_script.py",
+        "bindings.json",
+        "records.json",
+        "state.json",
+    }
+
+
 def _unpack_into(root: Path, archive: bytes) -> None:
     """Extract a bundle tar under ``root``, refusing any escaping member —
     the subprocess backend's one-pass staging of a large tree.
 
-    A bundle member may not SHADOW the harness either: it unpacks AFTER
-    the shim and ``user_script.py`` are written, so a member of either
-    name would overwrite the sandbox's own code with unverified bytes.
-    The same wall inline staging holds, at the same boundary — a large
-    tree is not a trust bypass."""
+    A bundle member may not SHADOW the harness or a run-time side channel
+    either: it unpacks AFTER the shim, ``user_script.py``, and the staged
+    data files are written, so a member of any reserved name would
+    overwrite the sandbox's own code — or the runtime's staged data —
+    with unverified bytes. The same wall inline staging holds, at the
+    same boundary — a large tree is not a trust bypass."""
     from .bundle import unpack_tar
 
     base = root.resolve()
-    reserved = {f"{SHIM_MODULE_NAME}.py", "user_script.py"}
+    reserved = _reserved_workspace_names()
     for name, data in unpack_tar(archive).items():
         head = str(name).replace("\\", "/").split("/", 1)[0]
         if head in reserved:
@@ -321,12 +339,21 @@ class SubprocessBackend(_TwoPhaseBackend):
     def _stage_bundle(self, workspace: Path, bundle) -> None:
         """Stage a bundle into the workspace: symlink from the mounted,
         read-only materialized dir when one is configured (no byte copy);
-        otherwise unpack the tar inline."""
+        otherwise unpack the tar inline. The same shadow wall as
+        ``_unpack_into`` (F2): a top-level bundle name may not replace the
+        harness or a staged side channel — the symlink path unlinks what
+        it replaces, so an unreserved name would silently swap the
+        runtime's staged data for frozen-tree bytes."""
         if self._materialized_dir is None:
             _unpack_into(workspace, bundle.tar)
             return
         source = self._materialized_dir.ensure(bundle.bundle_id, bundle.tar)
+        reserved = _reserved_workspace_names()
         for name in self._materialized_dir.top_level(bundle.bundle_id):
+            if str(name).replace("\\", "/").split("/", 1)[0] in reserved:
+                raise BackendError(
+                    f"bundle member may not shadow the harness: {name!r}"
+                )
             link = workspace / name
             if link.exists() or link.is_symlink():
                 link.unlink()

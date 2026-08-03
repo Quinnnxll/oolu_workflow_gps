@@ -4,6 +4,41 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Program state + the program limits profile (F2) — the program keeps its
+own books; the sandbox stays hostile (docs/algorithm-barriers-plan.md,
+Part I):
+
+- **Program state as DATA** — a program node's standing state
+  (`state/state.json` in the drawer) rides the run as the `_state`
+  parameter the runner stages as `./state.json` — outside the frozen tree
+  AND the cache key, so the cached script replays against the CURRENT
+  state (pinned: a state change still cache-HITS). A completed run's
+  emitted `state` dict lands back via `_land_state`: only DECLARED names
+  (the frozen `src/program.json` is the contract), `rows`-kind names
+  merged through the lifebooks row discipline (`merge_state_rows` —
+  dedup on `(at, label)`, the standing book wins, sorted, capped at
+  2 000), `value`-kind replaced whole; and the state each run was STAGED
+  with is copied under `runs/<run_id>/state/state.json` first, so
+  replayed history reconstructs every run's staged state from `runs/*`
+  alone.
+- **The program limits profile** — `PROGRAM_LIMITS` (wall 180 s, memory
+  1024 MB) and `PROGRAM_LIMITS_MAX` ceilings with `clamp_limits`
+  (field-wise min; the read-only rootfs NEVER widens). The publish door
+  stamps `_limits_profile: "program"` onto the FROZEN action when the
+  spec declares it — a drawer edit cannot mint a wider sandbox than the
+  verified build consented to — and surfaces the consent in the build
+  notes in numbers; the runner's `_action_limits` maps the stamp,
+  clamping any REQUEST (a requested 10-hour wall runs under 180 s).
+- **Walls extended** — `state.json` joins the publish door's reserved
+  tree keys, and the bundle shadow wall (`_unpack_into` + the
+  materialized symlink path) now refuses ALL run-time side channels
+  (`bindings.json`, `records.json`, `state.json`): a frozen tree can no
+  longer silently overwrite the runtime's staged data.
+- **Polyglot timeout aligned** — the generated wrapper's inner subprocess
+  timeout (170 s) sits under the program wall, so a hung toolchain dies
+  with an honest `emit_error` naming the reason instead of a silent
+  container kill.
+
 Trigger propagation (W4) — one trigger, the whole web: a deterministic,
 bounded, consent-gated cascade (docs/algorithm-barriers-plan.md, Part II):
 

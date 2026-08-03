@@ -2,9 +2,10 @@
 
 Status: In build. Three phase series, one per barrier: **F0–F3** (the
 program node), **W0–W5** (route paving — the Paver), **G0–G3** (gate
-edges). G0, G1, G2, W0, W1, W2, W3, W4, F0, and F1 LANDED (plus review amendments
-G0.1, G1.1, G2.1, W0.1, W2.1, F0.1, F1.1; W4's fast path, its slow-path /
-chaining / billed complements named-deferred); every other phase Proposed. Each lands as one commit titled
+edges). G0, G1, G2, W0, W1, W2, W3, W4, F0, F1, and F2 LANDED (plus review
+amendments G0.1, G1.1, G2.1, W0.1, W2.1, W3.1, W4.1, F0.1, F1.1; W4's
+fast path landed, its slow-path / chaining / billed complements
+named-deferred); every other phase Proposed. Each lands as one commit titled
 `<CODE> landed: <name> — <subtitle>` with its loop-closure test, the
 plan-doc status flip, and the CHANGELOG entry in the same commit.
 
@@ -527,6 +528,51 @@ records seam untouched; a port named `state` still refuses at parse.
 Done when: a program node accumulates typed rows across runs, its
 cached script replays against current state, and replayed history
 reconstructs each run's staged state from `runs/*` alone.
+**Status: LANDED** — the records discipline applied to programs, and the
+sandbox kept hostile. STATE: a program node's standing state
+(`state/state.json` in the drawer) rides the run as DATA — the `_state`
+action parameter the runner stages as `./state.json`, outside the frozen
+tree AND the cache key, so the cached script replays against the CURRENT
+state (pinned: run 2 with different state HITS run 1's cache entry). A
+completed run's emitted `state` dict lands back through `_land_state`:
+only DECLARED names land (the frozen `src/program.json` spec is the
+contract; undeclared keys are dropped with a warning), a `rows`-kind name
+merges through the LIFEBOOKS row discipline
+(`skills/program.py::merge_state_rows` — `{at,label,value,note}`
+normalization, dedup on `(at,label)` with the standing book winning,
+sorted, capped at 2 000), a `value`-kind name replaces whole; and the
+state THIS run was staged with is copied under
+`runs/<run_id>/state/state.json` FIRST, so replayed history reconstructs
+each run's staged state from `runs/*` alone. LIMITS: `PROGRAM_LIMITS`
+(wall 180 s, memory 1024 MB, scratch 256 MB, install 300 s) and
+`PROGRAM_LIMITS_MAX` ceilings with `clamp_limits` (field-wise min; the
+read-only rootfs NEVER widens) in `runtime/backend.py`; the publish door
+stamps `_limits_profile: "program"` onto the FROZEN action when the spec
+declares it (a drawer edit cannot mint a wider sandbox than the verified
+build consented to), surfaces the consent in the build notes in numbers,
+and both resolvers carry the stamp onto the run; the runner's
+`_action_limits` maps the stamp — `"program"` takes the profile, a dict
+is a REQUEST clamped field-by-field (the pinned clamp test: a requested
+10-hour wall runs under 180 s), anything else keeps the hostile step
+defaults. Walls extended (the F0.1 discipline): `state.json` joins the
+publish door's reserved tree keys, and the bundle shadow wall
+(`_unpack_into` + the materialized symlink path) now refuses ALL
+run-time side channels (`bindings.json`, `records.json`, `state.json`)
+— a frozen tree can no longer silently overwrite the runtime's staged
+data. Polyglot timeout ALIGNED: the generated wrapper's inner subprocess
+timeout (170 s, `POLYGLOT_STEP_TIMEOUT_S`) sits under the program wall,
+so a hung toolchain dies with its reason named (an honest `emit_error`)
+before the container kill silences it. Tests: state stages as
+`./state.json`; the cache-hit-across-state-change pin; the 10-hour clamp
+and the never-unlocked rootfs; the merge discipline (standing wins,
+garbage dropped, capped); the wrapper alignment; the shadow walls; a
+port named `state` still refuses at parse; and the gateway loop-closure
+in the REAL sandbox — publish a ledger program, run 1 lands rows +
+cursor (undeclared keys dropped), `runs/run-1/state/` holds the empty
+pre-run state, run 2 STAGES run 1's landed state, its merge dedups with
+the standing book winning, `runs/run-2/state/` holds what run 2 read,
+re-landing is idempotent, and the state file never joins the frozen
+bundle tree.
 
 **F3 — The unified view, deterministic form.** *One face: every program
 node renders its standing result.*

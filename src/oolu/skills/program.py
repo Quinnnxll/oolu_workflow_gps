@@ -33,6 +33,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = [
     "MAX_PROGRAM_MODULES",
+    "MAX_STATE_ROWS",
     "RESERVED_PAYLOAD_KEYS",
     "ModuleSpec",
     "OpSig",
@@ -42,6 +43,7 @@ __all__ = [
     "UnifiedInterface",
     "ViewSpec",
     "canonical_program_json",
+    "merge_state_rows",
     "parse_program_spec",
 ]
 
@@ -141,6 +143,48 @@ class ProgramSpec(BaseModel):
     state: list[StateSpec] = Field(default_factory=list)
     interface: UnifiedInterface = Field(default_factory=UnifiedInterface)
     limits_profile: Literal["step", "program"] = "step"
+
+
+# A rows-kind state is a BOOK, not an archive (the lifebooks cap, F2):
+# oldest rows fall off past this many.
+MAX_STATE_ROWS = 2_000
+
+
+def merge_state_rows(standing: Any, emitted: Any) -> list[dict]:
+    """Merge a run's emitted rows into a rows-kind state — the LIFEBOOKS
+    row discipline (F2): every row normalized to ``{at, label, value,
+    note}``, deduplicated on ``(at, label)`` with the STANDING book
+    winning (an import re-run never doubles a book), sorted by ``at``,
+    capped at :data:`MAX_STATE_ROWS` (oldest fall off). Deterministic:
+    the same standing book and the same emission always merge to the
+    same rows, so replayed history reconstructs identically."""
+
+    def _clean(row: Any) -> dict | None:
+        if not isinstance(row, dict):
+            return None
+        return {
+            "at": str(row.get("at") or ""),
+            "label": str(row.get("label") or ""),
+            "value": row.get("value"),
+            "note": str(row.get("note") or ""),
+        }
+
+    merged: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for raw in list(standing or []) if isinstance(standing, list) else []:
+        row = _clean(raw)
+        if row is None or (row["at"], row["label"]) in seen:
+            continue
+        merged.append(row)
+        seen.add((row["at"], row["label"]))
+    for raw in list(emitted or []) if isinstance(emitted, list) else []:
+        row = _clean(raw)
+        if row is None or (row["at"], row["label"]) in seen:
+            continue
+        merged.append(row)
+        seen.add((row["at"], row["label"]))
+    merged.sort(key=lambda r: r["at"])
+    return merged[-MAX_STATE_ROWS:]
 
 
 def canonical_program_json(spec: ProgramSpec) -> str:

@@ -114,6 +114,54 @@ class ResourceLimits(BaseModel):
     )
 
 
+# --------------------------------------------------------------------------- #
+# The program limits profile (F2): a program node is larger than a step.       #
+# --------------------------------------------------------------------------- #
+# The STEP profile is the ResourceLimits defaults above — one small, fast
+# navigation step. A PROGRAM node (several modules behind one face) may
+# legitimately need more, and its build surfaced that consent — but the
+# sandbox stays hostile: whatever a spec (or anything hostile upstream)
+# REQUESTS is clamped to PROGRAM_LIMITS_MAX, so a request for a 10-hour
+# wall still runs under a 180-second one. The ceilings are the wall.
+PROGRAM_LIMITS = ResourceLimits(
+    memory_mb=1024,
+    wall_timeout_s=180.0,
+    install_timeout_s=300.0,
+    writable_scratch_mb=256,
+)
+
+PROGRAM_LIMITS_MAX = ResourceLimits(
+    cpus=2.0,
+    memory_mb=2048,
+    pids_limit=512,
+    wall_timeout_s=180.0,
+    install_timeout_s=300.0,
+    writable_scratch_mb=512,
+)
+
+
+def clamp_limits(
+    requested: ResourceLimits, ceiling: ResourceLimits = PROGRAM_LIMITS_MAX
+) -> ResourceLimits:
+    """``requested`` held under ``ceiling``, field by field — the numeric
+    fields min'd, the rootfs posture NEVER widened (read-only stays
+    read-only whatever was asked). Deterministic: the same request always
+    clamps to the same limits, so replay sees the same sandbox."""
+    return ResourceLimits(
+        cpus=min(requested.cpus, ceiling.cpus),
+        memory_mb=min(requested.memory_mb, ceiling.memory_mb),
+        pids_limit=min(requested.pids_limit, ceiling.pids_limit),
+        wall_timeout_s=min(requested.wall_timeout_s, ceiling.wall_timeout_s),
+        install_timeout_s=min(
+            requested.install_timeout_s, ceiling.install_timeout_s
+        ),
+        read_only_rootfs=True,
+        writable_scratch_mb=min(
+            requested.writable_scratch_mb, ceiling.writable_scratch_mb
+        ),
+    )
+
+
 class ExecutionRequest(BaseModel):
     """One unit of work for a backend: a script plus everything needed to run it
     hostilely. The graph rebuilds this each recalc cycle (e.g. adding a resolved

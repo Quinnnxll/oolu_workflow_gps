@@ -30,6 +30,15 @@ ENTRY_STEPS: dict[str, list[list[str]]] = {
 
 ENTRY_ORDER = tuple(ENTRY_STEPS)
 
+# The wrapper's inner subprocess timeout, ALIGNED with the sandbox walls
+# (F2): strictly below PROGRAM_LIMITS_MAX.wall_timeout_s (180 s), so under
+# the program limits profile the wrapper's honest emit_error fires BEFORE
+# the container's wall kill — a timeout with the reason named, never a
+# silent kill that loses the message. (Under the tighter step profile the
+# 30 s container wall still governs, as it always did — the old inner
+# 240 s could never fire first under EITHER profile.)
+POLYGLOT_STEP_TIMEOUT_S = 170.0
+
 
 def polyglot_entry(files: dict[str, str]) -> str | None:
     """The drawer's non-Python entry, if that is what the node is —
@@ -42,9 +51,12 @@ def polyglot_entry(files: dict[str, str]) -> str | None:
     return None
 
 
-def polyglot_wrapper(entry: str) -> str:
+def polyglot_wrapper(entry: str, *, timeout_s: float = POLYGLOT_STEP_TIMEOUT_S) -> str:
     """The Python wrapper that runs a foreign-language entry inside the
-    sandbox and speaks the contract for it."""
+    sandbox and speaks the contract for it. ``timeout_s`` bounds each
+    toolchain step; the default sits under the program profile's wall so
+    a hung toolchain dies with its reason named (see
+    ``POLYGLOT_STEP_TIMEOUT_S``)."""
     steps = ENTRY_STEPS[entry]
     return f'''from _oolu_runtime import emit_result, emit_error
 import shutil
@@ -62,7 +74,16 @@ if tool != "./main_bin" and shutil.which(tool) is None:
     )
 out = ""
 for argv in steps:
-    proc = subprocess.run(argv, capture_output=True, text=True, timeout=240)
+    try:
+        proc = subprocess.run(
+            argv, capture_output=True, text=True, timeout={timeout_s!r}
+        )
+    except subprocess.TimeoutExpired:
+        emit_error(
+            f"{{argv[0]}} exceeded {timeout_s:.0f}s — the toolchain hung "
+            "or the program runs longer than its sandbox wall"
+        )
+        raise SystemExit(0)
     if proc.returncode != 0:
         emit_error(
             f"{{argv[0]}} failed (exit {{proc.returncode}}): "
