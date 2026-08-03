@@ -34,6 +34,7 @@ in exactly that direction.
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -240,7 +241,7 @@ class CasSweep:
 MIN_SWEEP_INTERVAL_HOURS = 1.0
 DEFAULT_SWEEP_INTERVAL_HOURS = 24.0
 
-_SCHEDULE_SCHEMA = """CREATE TABLE IF NOT EXISTS sweep_schedule (
+_SCHEDULE_COLUMNS = """(
     id INTEGER PRIMARY KEY CHECK (id = 1),
     enabled INTEGER NOT NULL DEFAULT 0,
     interval_hours REAL NOT NULL,
@@ -253,9 +254,16 @@ _SCHEDULE_SCHEMA = """CREATE TABLE IF NOT EXISTS sweep_schedule (
     last_error TEXT
 )"""
 
+# The default schema string is byte-identical to the pre-parameterization
+# literal, so an existing ``sweep_schedule`` table and its tests are
+# untouched.
+_SCHEDULE_SCHEMA = f"CREATE TABLE IF NOT EXISTS sweep_schedule {_SCHEDULE_COLUMNS}"
+
+_SAFE_TABLE = re.compile(r"^[a-z][a-z0-9_]*$")
+
 
 class SweepScheduleStore:
-    """The sweep's recurring Routine — consent that stands until revoked.
+    """A recurring Routine — consent that stands until revoked.
 
     The manual sweep is approve-gated because it deletes; a SCHEDULE means
     unattended firings, so the consent moves up a level: ENABLING the
@@ -268,12 +276,22 @@ class SweepScheduleStore:
     in ONE conditional UPDATE, so when many hosts tick at once exactly one
     wins the firing and the rest see the claim already taken — no locks,
     no coordinator, the database's own atomicity.
+
+    ``table`` names the row's home (default ``sweep_schedule``): a SECOND
+    standing pass — the Paver's survey heartbeat (W1) — instantiates the
+    same store on ``paver_schedule`` and inherits every property, so the
+    consent-first, fleet-safe, revocable discipline is written once. The
+    name is a module-internal literal validated as a plain identifier;
+    SQLite cannot parameterize a table name, so the guard is the wall.
     """
 
-    def __init__(self, conn) -> None:
+    def __init__(self, conn, *, table: str = "sweep_schedule") -> None:
+        if not _SAFE_TABLE.match(table):
+            raise ValueError(f"unsafe schedule table name: {table!r}")
         self._conn = conn
+        self._table = table
         with self._conn.transaction() as db:
-            db.execute(_SCHEDULE_SCHEMA)
+            db.execute(f"CREATE TABLE IF NOT EXISTS {table} {_SCHEDULE_COLUMNS}")
 
     def enable(
         self,
@@ -288,7 +306,7 @@ class SweepScheduleStore:
         interval = max(MIN_SWEEP_INTERVAL_HOURS, float(interval_hours))
         with self._conn.transaction() as db:
             db.execute(
-                """INSERT INTO sweep_schedule
+                f"""INSERT INTO {self._table}
                      (id, enabled, interval_hours, granted_by, tenant,
                       granted_at, last_started_at)
                    VALUES (1, 1, ?, ?, ?, ?, NULL)
@@ -305,14 +323,15 @@ class SweepScheduleStore:
     def disable(self) -> bool:
         with self._conn.transaction() as db:
             cursor = db.execute(
-                "UPDATE sweep_schedule SET enabled = 0 WHERE id = 1 AND enabled = 1"
+                f"UPDATE {self._table} SET enabled = 0 "
+                "WHERE id = 1 AND enabled = 1"
             )
             return int(getattr(cursor, "rowcount", 0) or 0) > 0
 
     def view(self) -> dict | None:
         with self._conn.lock:
             row = self._conn.db.execute(
-                "SELECT * FROM sweep_schedule WHERE id = 1"
+                f"SELECT * FROM {self._table} WHERE id = 1"
             ).fetchone()
         if row is None:
             return None
@@ -341,7 +360,7 @@ class SweepScheduleStore:
         ).isoformat()
         with self._conn.transaction() as db:
             cursor = db.execute(
-                """UPDATE sweep_schedule
+                f"""UPDATE {self._table}
                    SET last_started_at = ?
                    WHERE id = 1 AND enabled = 1
                      AND (last_started_at IS NULL OR last_started_at <= ?)""",
@@ -358,7 +377,7 @@ class SweepScheduleStore:
     ) -> None:
         with self._conn.transaction() as db:
             db.execute(
-                """UPDATE sweep_schedule
+                f"""UPDATE {self._table}
                    SET last_finished_at = ?, last_summary_json = ?, last_error = ?
                    WHERE id = 1""",
                 (

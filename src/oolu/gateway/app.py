@@ -784,6 +784,16 @@ class GatewayApp:
         self._sweep_schedule = SweepScheduleStore(durable.conn)
         # The tick's cheap gate: at most one due-check per minute per host.
         self._sweep_gate = 0.0
+        # The Paver's heartbeat (W1): the survey's own standing Routine on
+        # its own table, and the durable map it refreshes. Same consent-
+        # first, fleet-safe discipline as the sweep — a separate schedule
+        # so the two cadences never entangle.
+        from ..paver import PaveStore, PaverScheduleStore, WebSurveyor
+
+        self._paver_schedule = PaverScheduleStore(durable.conn)
+        self._pave_store = PaveStore(durable.conn)
+        self._surveyor = WebSurveyor()
+        self._paver_gate = 0.0
         # Retention's own gate: at most one pruning pass per hour per host.
         self._retention_gate = 0.0
         # The pulse (personal-nodes plan P0): durable schedules that fire
@@ -1838,6 +1848,14 @@ class GatewayApp:
             self._bundle_sweep_audit,
             requires_permission="hygiene:sweep",
         )
+        # The Paver (W1): the survey's standing schedule and the map it
+        # draws. Enabling is the approved, audited act (like the sweep);
+        # the map is the caller's own tenant, read straight back.
+        r.add("GET", "/v1/paver/schedule", self._paver_schedule_view)
+        r.add("POST", "/v1/paver/schedule", self._paver_schedule_set)
+        r.add("DELETE", "/v1/paver/schedule", self._paver_schedule_clear)
+        r.add("GET", "/v1/paver/webs", self._paver_webs)
+        r.add("GET", "/v1/paver/webs/{anchor}", self._paver_webs_for_anchor)
         # The platform's finance monitor: what every account DRAWS (model
         # API spend against its allowance) and what every noder EARNS
         # (execution revenue) — one screen for the operator, read straight
@@ -13182,6 +13200,100 @@ class GatewayApp:
             )
         return json_response(200, {"enabled": False, "disabled": disabled})
 
+    def _paver_schedule_view(self, request, session, params) -> Response:
+        view = self._paver_schedule.view()
+        return json_response(200, view or {"enabled": False})
+
+    def _paver_schedule_set(self, request, session, params) -> Response:
+        """Stand up (or retune) the Paver's survey Routine — the consent
+        for every future unattended survey, given once, audited, revocable.
+        Passes the same approve gate as a sweep schedule (an operator act),
+        though W1 only READS the registry and refreshes the map."""
+        if self._nodeplace is None:
+            raise GatewayError(404, "not_found", "nodes are not enabled")
+        if self._approval is None:
+            raise GatewayError(404, "not_found", "approval authority is not configured")
+        now = request.now or self._clock()
+        try:
+            self._approval.approve(
+                session,
+                run_id="paver:schedule",
+                policy="paver.survey",
+                requester_id="",
+                now=now,
+            )
+        except AuthorizationError as exc:
+            raise GatewayError(403, "forbidden", str(exc)) from exc
+        raw = (request.body or {}).get("interval_hours", 24)
+        try:
+            interval = float(raw)
+        except (TypeError, ValueError) as exc:
+            raise GatewayError(
+                400, "invalid_request", "interval_hours must be a number"
+            ) from exc
+        view = self._paver_schedule.enable(
+            interval_hours=interval,
+            granted_by=session.principal_id,
+            tenant=session.tenant_id,
+            now=now,
+        )
+        self._durable.audit.append(
+            "paver.scheduled",
+            {
+                "run_id": "paver:schedule",
+                "by": session.principal_id,
+                "tenant": session.tenant_id,
+                "interval_hours": view["interval_hours"],
+            },
+        )
+        return json_response(200, view)
+
+    def _paver_schedule_clear(self, request, session, params) -> Response:
+        """Revoke the standing consent — same authority that granted it."""
+        if self._approval is None:
+            raise GatewayError(404, "not_found", "approval authority is not configured")
+        try:
+            self._approval.approve(
+                session,
+                run_id="paver:schedule",
+                policy="paver.survey",
+                requester_id="",
+                now=request.now or self._clock(),
+            )
+        except AuthorizationError as exc:
+            raise GatewayError(403, "forbidden", str(exc)) from exc
+        disabled = self._paver_schedule.disable()
+        if disabled:
+            self._durable.audit.append(
+                "paver.unscheduled",
+                {"run_id": "paver:schedule", "by": session.principal_id},
+            )
+        return json_response(200, {"enabled": False, "disabled": disabled})
+
+    def _paver_webs(self, request, session, params) -> Response:
+        """The caller's own tenant's surveyed map — every web, its edges,
+        and the near-misses a paver would have to bridge."""
+        if self._pave_store is None:
+            raise GatewayError(404, "not_found", "the Paver is not enabled")
+        webs = self._pave_store.webs(session.tenant_id)
+        return json_response(
+            200,
+            {
+                "webs": [web.model_dump(mode="json") for web in webs],
+                "count": len(webs),
+            },
+        )
+
+    def _paver_webs_for_anchor(self, request, session, params) -> Response:
+        """The webs a single anchor node fans out — the trigger-door view."""
+        if self._pave_store is None:
+            raise GatewayError(404, "not_found", "the Paver is not enabled")
+        webs = self._pave_store.webs(session.tenant_id, anchor=params["anchor"])
+        return json_response(
+            200,
+            {"webs": [web.model_dump(mode="json") for web in webs]},
+        )
+
     def _bundle_sweep_audit(self, request, session, params) -> Response:
         """The sweep's whole history, straight off the hash-chained audit
         log: consents granted and revoked, and every firing — manual or
@@ -13228,6 +13340,11 @@ class GatewayApp:
             if now_mono >= self._pulse_gate:
                 self._pulse_gate = now_mono + 60.0
                 self._pulse_tick(request.now or self._clock())
+            # The Paver's survey keeps its OWN minute gate — the map must
+            # refresh whether or not a bundle sweep is configured.
+            if now_mono >= self._paver_gate:
+                self._paver_gate = now_mono + 60.0
+                self._scheduled_survey_tick(request.now or self._clock())
             if now_mono < self._sweep_gate:
                 return
             self._sweep_gate = now_mono + 60.0
@@ -13294,6 +13411,163 @@ class GatewayApp:
                 **summary,
             },
         )
+
+    # ------------------------------------------------------------------ #
+    # The Paver's survey heartbeat (W1): map, never author.               #
+    # ------------------------------------------------------------------ #
+    def _scheduled_survey_tick(self, now) -> None:
+        """One due-check and, when this host wins the claim, one survey per
+        tenant — under the schedule's standing consent, recorded like a
+        manual run. Surveying only READS the registry and REPLACES the
+        stored map; no code is authored, nothing is run, so the tick is
+        cheap and effect-free by construction."""
+        if self._nodeplace is None or self._pave_store is None:
+            return
+        if not self._paver_schedule.claim_due(now):
+            return
+        schedule = self._paver_schedule.view() or {}
+        try:
+            tenants = self._paver_tenants()
+            total_webs = 0
+            for tenant in tenants:
+                report = self._surveyor.survey(
+                    tenant, self._survey_nodes(tenant)
+                )
+                self._pave_store.replace_tenant(report, now=now)
+                total_webs += len(report.webs)
+        except Exception as exc:  # noqa: BLE001 - the Routine records its own
+            # failure and waits for the next interval; it never raises.
+            self._paver_schedule.record_result(now, error=str(exc))
+            logging.getLogger("oolu.gateway").exception("paver survey failed")
+            return
+        summary = {"tenants": len(tenants), "webs": total_webs}
+        self._paver_schedule.record_result(now, summary=summary)
+        self._durable.audit.append(
+            "paver.surveyed",
+            {
+                "run_id": "paver:schedule",
+                "scheduled": True,
+                "granted_by": schedule.get("granted_by", ""),
+                **summary,
+            },
+        )
+
+    def _paver_tenants(self) -> list[str]:
+        """Every tenant with at least one node — the survey's field of
+        view. Best-effort: an enumeration failure surveys nothing, never
+        raises into the tick."""
+        try:
+            return sorted(
+                {node.tenant_id for node in self._nodeplace.all_nodes()}
+            )
+        except Exception:  # noqa: BLE001 - the tick catches and records
+            return []
+
+    def _survey_nodes(self, tenant: str) -> list:
+        """Build one tenant's :class:`SurveyNode` list: each live node as a
+        contract, its canonical key (the node id — the same key W0 files
+        under), and its trigger door (webhook or pulse) if it has one.
+
+        A node's function is its latest version's script; a node with no
+        script (revoked, empty) is skipped. Pulse anchors resolve by GOAL —
+        schedules fire goals, not nodes — so a schedule whose goal names a
+        node marks that node a pulse anchor."""
+        from ..paver import SurveyNode
+
+        nodes = [
+            node
+            for node in self._nodeplace.all_nodes()
+            if node.tenant_id == tenant and node.revoked_at is None
+        ]
+        # Which nodes carry a webhook door.
+        hook_nodes: set[str] = set()
+        for node in nodes:
+            try:
+                if self._node_hooks.get(node.node_id) is not None:
+                    hook_nodes.add(node.node_id)
+            except Exception:  # noqa: BLE001 - a missing hook is just no door
+                continue
+        # Which nodes a pulse schedule fires, by goal → node resolution.
+        pulse_nodes = self._pulse_anchor_nodes(tenant, nodes)
+
+        survey_nodes = []
+        for node in nodes:
+            contract = self._survey_contract(node)
+            if contract is None:
+                continue
+            kind = (
+                "webhook"
+                if node.node_id in hook_nodes
+                else "pulse"
+                if node.node_id in pulse_nodes
+                else None
+            )
+            survey_nodes.append(
+                SurveyNode(key=node.node_id, contract=contract, anchor_kind=kind)
+            )
+        return survey_nodes
+
+    def _survey_contract(self, node):
+        """One node's contract for the survey — the BODY from its latest
+        version's skill (so the fileable-producer check sees the real
+        script action), the INTERFACE from its listing (the published
+        consumes/produces, the same slot vocabulary routing chains on).
+        None when the node has no runnable function."""
+        try:
+            version = self._nodeplace.latest_version(node.node_id)
+            if version is None:
+                return None
+            skill = ReusableSkill.model_validate_json(version.sanitized_skill_json)
+            contract = NodeContract.from_skill(skill)
+            listing = self._nodeplace.listing_for_version(version.version_id)
+            if listing is not None:
+                contract = contract.model_copy(
+                    update={
+                        "consumes": [
+                            Slot(name=s.name, value_type=s.value_type, role=s.role)
+                            for s in listing.consumes
+                        ],
+                        "produces": [
+                            Slot(name=s.name, value_type=s.value_type, role=s.role)
+                            for s in listing.produces
+                        ],
+                    }
+                )
+            return contract
+        except Exception:  # noqa: BLE001 - a bad row is skipped, never fatal
+            return None
+
+    def _pulse_anchor_nodes(self, tenant: str, nodes) -> set[str]:
+        """Node ids a pulse schedule fires, resolved by GOAL: a schedule's
+        goal that names an existing node (the way the growth/build door
+        resolves one) marks that node a pulse anchor."""
+        anchors: set[str] = set()
+        try:
+            schedules = [
+                s for s in self._pulse.all_enabled() if s.tenant == tenant
+            ]
+        except Exception:  # noqa: BLE001 - no pulse, no pulse anchors
+            return anchors
+        if not schedules:
+            return anchors
+        title_to_id = {}
+        for node in nodes:
+            try:
+                version = self._nodeplace.latest_version(node.node_id)
+                if version is None:
+                    continue
+                skill = ReusableSkill.model_validate_json(
+                    version.sanitized_skill_json
+                )
+                title_to_id[skill.description.strip().casefold()] = node.node_id
+                title_to_id[skill.name.strip().casefold()] = node.node_id
+            except Exception:  # noqa: BLE001
+                continue
+        for schedule in schedules:
+            goal = str(getattr(schedule, "goal", "")).strip().casefold()
+            if goal in title_to_id:
+                anchors.add(title_to_id[goal])
+        return anchors
 
     # ------------------------------------------------------------------ #
     # The pulse (personal-nodes plan P0): schedules fire runs.            #

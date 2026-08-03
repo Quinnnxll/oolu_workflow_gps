@@ -4,6 +4,34 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Route paving (W1) — the Paver's map and heartbeat
+(docs/algorithm-barriers-plan.md, Part II):
+
+- **The Paver** (`src/oolu/paver/`) — "sweep" is a taken noun three
+  ways, so the road idiom names this: the Paver surveys candidate
+  roads, and W1 draws the map W2+ will pave. `WebSurveyor.survey` is a
+  pure function of a tenant's node contracts and their trigger doors: a
+  `SlotIndex` over the contracts, a `direct` candidate edge on every
+  exact `Slot.matches`, near-miss records for the almost-matches,
+  grouped into connected components anchored at nodes with an external
+  trigger door (webhook or pulse). No code is authored, nothing runs.
+- **Only fileable producers source edges** — a `script`-action node
+  (every function and program node), not a cli/http/browser ActionsBody
+  whose outcome need not carry a result payload (W0's filing rule), so
+  a surveyed edge is one the value pipe can actually fill.
+- **Near-misses need a shared role** — the different-name case demands
+  a shared DECLARED role ("path", "url"), else every `str` port would
+  near-miss every `str` input; a near-miss unites its two nodes into
+  one web (a candidate bridge is a relation the negotiator will pave).
+- **The heartbeat** — `PaverScheduleStore` is `SweepScheduleStore`
+  parameterized onto its own `paver_schedule` table (default byte-
+  identical, existing sweep untouched): consent-first enable, fleet-
+  safe conditional claim, revocable. A minute-gated survey tick refreshes
+  the durable map (`PaveStore`, replaced wholesale per survey — a
+  projection, never authoritative). Surface: `POST/DELETE
+  /v1/paver/schedule` (approve-gated, audited), `GET
+  /v1/paver/webs[/{anchor}]`; pulse anchors resolve by goal.
+
 Program nodes (F1) — the builder writes trees, one verified module at a
 time (docs/algorithm-barriers-plan.md, Part I):
 

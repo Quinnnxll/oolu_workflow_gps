@@ -2,7 +2,7 @@
 
 Status: In build. Three phase series, one per barrier: **F0–F3** (the
 program node), **W0–W5** (route paving — the Paver), **G0–G3** (gate
-edges). G0, G1, W0, F0, and F1 LANDED; every other phase Proposed. Each lands as one commit titled
+edges). G0, G1, W0, F0, F1, and W1 LANDED; every other phase Proposed. Each lands as one commit titled
 `<CODE> landed: <name> — <subtitle>` with its loop-closure test, the
 plan-doc status flip, and the CHANGELOG entry in the same commit.
 
@@ -865,6 +865,34 @@ with no human handoff, and both filing paths agree on the producer key.
 
 **W1 — The Paver's map and heartbeat (survey + Routine; no code
 written).** *An inspectable web map, refreshed on the tick.*
+**Status: LANDED** — `src/oolu/paver/` (the road idiom, since "sweep" is
+triple-booked): `discovery.WebSurveyor.survey` is a PURE function of a
+tenant's contracts and trigger doors — a `SlotIndex` over the contracts,
+a `direct` candidate edge on every exact `Slot.matches`, near-miss
+records for the almost-matches, grouped into connected components
+anchored at trigger-door nodes (webhook or pulse). `contracts.py`
+(WebEdge/NearMiss/RouteWeb/SurveyReport, frozen), `store.PaveStore`
+(the map persisted, replaced wholesale per survey — a projection, never
+authoritative), `routine.PaverScheduleStore` (`SweepScheduleStore`
+parameterized onto `paver_schedule` — every property inherited:
+consent-first enable, fleet-safe conditional claim, revocable). Gateway:
+a minute-gated survey tick in `_maybe_scheduled_sweep` with its own gate,
+`POST/DELETE /v1/paver/schedule` (approve-gated, audited),
+`GET /v1/paver/webs[/{anchor}]`, and pulse-anchor resolution by goal.
+Two decisions landed sharper than the plan text: (1) only producers that
+FILE PORT VALUES source edges — a `script`-action node, not a
+cli/http/browser ActionsBody whose outcome need not carry a result (the
+W0 filing rule, so a surveyed edge can actually be paved); (2) the
+different-name near-miss demands a SHARED DECLARED ROLE, else every
+`str` port would near-miss every `str` input and the map would drown in
+noise — a shared role ("path", "url") is the real signal two
+differently-named slots are the same kind of thing, and a near-miss
+unites its two nodes into one web (a candidate bridge is a relation).
+Tests: pure survey (direct/near-miss/anchor/components/stable-ids), the
+store (wholesale replace, tenant wall), the schedule (separate table,
+fire-once, revoke), and the gateway loop-closure (contribute two nodes →
+tick → `GET /v1/paver/webs` shows the edge keyed by canonical node id);
+existing sweep tests unmodified.
 Changes: `paver/{contracts,store,discovery,routine}.py`;
 `SweepScheduleStore` table parameterization (defaults preserved);
 gateway: `paver_schedule` instance, minute-gated tick, HTTP
