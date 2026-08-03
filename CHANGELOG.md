@@ -4,6 +4,34 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Route paving (W2) — pave direct webs: the model bill is paid at pave
+time, not trigger time (docs/algorithm-barriers-plan.md, Part II):
+
+- **The Paver's tick loop** (`src/oolu/paver/agent.py`, `PaverAgent`) —
+  pure orchestration over injected ports (rehearse, promote, negative,
+  audit). For each fully-direct anchored web the survey found (near-miss
+  webs are deferred to W3), it REHEARSES the composed SubgraphBody
+  end-to-end in the SEVERED sandbox and, only on a clean run, PROMOTES
+  it to ONE node. The rehearsal gate is EFFECT-FREEDOM: a web of
+  sandboxed scripts rehearses in full; a web carrying a write-class
+  cli/http hop is deferred by name to a real run, never silently run.
+  Budget-capped per tick.
+- **Body-preserving registration** — `NodeContract.subgraph_to_skill`
+  encodes the whole contract JSON into a single `subgraph`-adapter
+  action (no script, so the contribute screen skips it);
+  `contract_from_registered_skill` decodes it back; the market library
+  reconstructs a subgraph-encoded version to its whole SubgraphBody
+  instead of flattening it. A paved web is a first-class citizen —
+  visible to `/v1/market/assemble`, its children and wired edges intact.
+- **Pave-time determinism** — the compiler's dataflow wiring (W0) now
+  reaches ActionsBody-with-single-script children (the shape a
+  registered node takes), so a web of registered nodes wires and
+  rehearses from provided scripts, no model in the loop. A rehearsal
+  FAILURE files an M3 negative note and never publishes, so the Paver
+  never grinds the same failing junction. `PaveStore` persists the
+  promoted contract for the trigger path (W4); audit `paver.web_paved`.
+  New seat `paver.build`.
+
 Route paving (W1) — the Paver's map and heartbeat
 (docs/algorithm-barriers-plan.md, Part II):
 

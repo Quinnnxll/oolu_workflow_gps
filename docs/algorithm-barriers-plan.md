@@ -2,7 +2,7 @@
 
 Status: In build. Three phase series, one per barrier: **F0–F3** (the
 program node), **W0–W5** (route paving — the Paver), **G0–G3** (gate
-edges). G0, G1, W0, F0, F1, and W1 LANDED; every other phase Proposed. Each lands as one commit titled
+edges). G0, G1, W0, F0, F1, W1, and W2 LANDED; every other phase Proposed. Each lands as one commit titled
 `<CODE> landed: <name> — <subtitle>` with its loop-closure test, the
 plan-doc status flip, and the CHANGELOG entry in the same commit.
 
@@ -907,6 +907,39 @@ that refreshes on the lazy tick, with zero code authored.
 
 **W2 — Pave direct webs (pre-provision + rehearse + promote).** *The
 model bill is paid at pave time, not trigger time.*
+**Status: LANDED** — `paver/agent.py` (`PaverAgent`): pure orchestration
+over injected ports (rehearse, promote, negative, audit), so the loop
+unit-tests without a gateway. `tick(tenant, nodes, max_paves=)` surveys,
+then for each FULLY-DIRECT ANCHORED web (near-miss webs deferred to W3):
+rehearses the composed SubgraphBody end-to-end in the SEVERED sandbox
+(the gateway's `_rehearse_web` compiles with the dataflow wired + tenant
+stamped, files each hop's outputs mid-run so the next resolves them, and
+reports whether the whole web ran clean — no market economics, the Paver
+rehearses, it does not bill), and on a clean run PROMOTES the web to ONE
+node. The subgraph-preserving registration the plan flagged as required:
+`NodeContract.subgraph_to_skill` encodes the whole contract JSON into a
+single `subgraph`-adapter action (no script, so the contribute screen
+skips it), `contract_from_registered_skill` decodes it back, and the
+market library (`economics.py`) reconstructs a subgraph-encoded version
+to its whole SubgraphBody instead of flattening it — so a paved web is a
+first-class citizen visible to `/v1/market/assemble` with its children
+and wired edges intact. `PaveStore` persists the promoted contract (the
+exact SubgraphBody a trigger fires in W4); a rehearsal FAILURE files an
+M3 negative note (no publish) so the Paver never grinds the same
+junction. Budget-capped per tick; audit `paver.web_paved`. The W0
+compiler wiring was extended to reach ActionsBody-with-single-script
+children (the shape `from_skill` gives a registered node), so a web of
+registered nodes wires and rehearses; new seat `paver.build`. Sharper
+than the plan text: the rehearsal effect-freedom gate is enforced
+structurally (`_rehearsable_effect_free` — a web carrying a write-class
+cli/http hop is NOT rehearsed end-to-end, it is deferred by name to a
+real run); the "broken edge" is the durable M3 note (the survey map is a
+per-tick projection, so edge status lives in negative knowledge, not the
+map). Tests: agent orchestration (rehearse→promote, fail→negative,
+near-miss/unanchored/write-class skips, budget cap), the body-preserving
+round-trip through real storage, and the gateway loop-closure (contribute
+two script nodes → tick rehearses in the sandbox → promotes a SubgraphBody
+node; a broken web records `paver.rehearsal_failed`, never a publish).
 Changes: `paver/agent.py` (tick loop, budgets); seats `paver.match`,
 `paver.adapt`, `paver.build` in `seats.py`; pre-provision via the
 existing synthesis ladder + verify + drawer landing; rehearsal under

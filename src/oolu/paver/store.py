@@ -25,6 +25,19 @@ _SCHEMA = """CREATE TABLE IF NOT EXISTS paver_webs (
     PRIMARY KEY (tenant, web_id)
 )"""
 
+# The promoted contract of a PAVED web (W2): stored so a trigger (W4) can
+# execute the exact SubgraphBody the Paver verified, deterministically,
+# without re-deriving it. Keyed by web — one paved contract per web.
+_PAVED_SCHEMA = """CREATE TABLE IF NOT EXISTS paver_paved (
+    web_id TEXT NOT NULL,
+    tenant TEXT NOT NULL,
+    node_id TEXT NOT NULL,
+    version_id TEXT,
+    contract_json TEXT NOT NULL,
+    paved_at TEXT NOT NULL,
+    PRIMARY KEY (tenant, web_id)
+)"""
+
 
 class PaveStore:
     """The tenant's surveyed webs on the shared durable connection."""
@@ -33,11 +46,13 @@ class PaveStore:
         self._conn = conn
         with self._conn.transaction() as db:
             db.execute(_SCHEMA)
+            db.execute(_PAVED_SCHEMA)
 
     def replace_tenant(self, report: SurveyReport, *, now) -> None:
-        """Swap the tenant's whole map for this survey's — one transaction,
-        so a reader never sees a half-replaced map. The survey is the
-        authority; the store just remembers its latest word."""
+        """Swap the tenant's whole SURVEY map for this survey's — one
+        transaction, so a reader never sees a half-replaced map. The paved
+        table is left alone: a promotion is durable truth, not a projection
+        the next survey overwrites."""
         stamp = now.isoformat() if hasattr(now, "isoformat") else str(now)
         with self._conn.transaction() as db:
             db.execute(
@@ -58,6 +73,50 @@ class PaveStore:
                         stamp,
                     ),
                 )
+
+    def record_paved(
+        self,
+        tenant: str,
+        web_id: str,
+        *,
+        node_id: str,
+        version_id: str | None,
+        contract_json: str,
+        now,
+    ) -> None:
+        """Persist a web's promoted contract — the exact SubgraphBody a
+        trigger will fire. Replaces any prior promotion of the same web."""
+        stamp = now.isoformat() if hasattr(now, "isoformat") else str(now)
+        with self._conn.transaction() as db:
+            db.execute(
+                """INSERT INTO paver_paved
+                     (web_id, tenant, node_id, version_id, contract_json,
+                      paved_at)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(tenant, web_id) DO UPDATE SET
+                     node_id = excluded.node_id,
+                     version_id = excluded.version_id,
+                     contract_json = excluded.contract_json,
+                     paved_at = excluded.paved_at""",
+                (web_id, tenant, node_id, version_id, contract_json, stamp),
+            )
+
+    def paved(self, tenant: str, web_id: str) -> dict | None:
+        """A web's promoted contract row, or None if it was never paved."""
+        with self._conn.lock:
+            row = self._conn.db.execute(
+                "SELECT node_id, version_id, contract_json, paved_at "
+                "FROM paver_paved WHERE tenant = ? AND web_id = ?",
+                (tenant, web_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "node_id": row["node_id"],
+            "version_id": row["version_id"],
+            "contract_json": row["contract_json"],
+            "paved_at": row["paved_at"],
+        }
 
     def webs(self, tenant: str, *, anchor: str | None = None) -> list[RouteWeb]:
         """The tenant's stored webs, newest survey — optionally only those

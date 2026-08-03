@@ -121,6 +121,18 @@ SEATS: dict[str, Seat] = {
             audited=True,
         ),
         Seat(
+            purpose="paver.build",
+            charge=(
+                "pre-provision a paved web's gap scripts: synthesize the "
+                "connective code a web needs, verified by execution, so a "
+                "later trigger fires it from provided scripts — the model "
+                "bill paid at pave time, never at trigger time"
+            ),
+            reads=("src/", "lessons/"),
+            consent_key="account.autobuild_consent",
+            audited=True,
+        ),
+        Seat(
             purpose="node.plan_program",
             charge=(
                 "plan a program node: internal modules with checks, "

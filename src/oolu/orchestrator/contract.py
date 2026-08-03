@@ -202,28 +202,85 @@ def _compile_script(contract: NodeContract, body: ScriptBody) -> _Fragment:
     return _Fragment([reserved], [], [action.id], [action.id])
 
 
+def _sole_script_action(contract: NodeContract):
+    """The single ``script`` action of an ActionsBody child, or None. A
+    published function/program node reconstructs (via ``from_skill``) as
+    an ActionsBody carrying exactly this one action WITH its provided
+    script inline — a fileable producer whose bindings can be wired (W2),
+    exactly like a ScriptBody, just a different body shape."""
+    body = contract.body
+    if not isinstance(body, ActionsBody) or len(body.actions) != 1:
+        return None
+    action = body.actions[0]
+    return action if action.adapter == "script" else None
+
+
+def _child_bindings(contract: NodeContract) -> dict:
+    """A wireable child's current bindings — the ScriptBody's, or the
+    sole script action's ``parameters['bindings']``."""
+    if isinstance(contract.body, ScriptBody):
+        return dict(contract.body.bindings or {})
+    action = _sole_script_action(contract)
+    if action is not None:
+        return dict(action.parameters.get("bindings") or {})
+    return {}
+
+
+def _with_bindings(contract: NodeContract, additions: dict) -> NodeContract:
+    """Return the child with ``additions`` merged into its bindings, on
+    whichever body shape it has."""
+    if isinstance(contract.body, ScriptBody):
+        return contract.model_copy(
+            update={
+                "body": contract.body.model_copy(
+                    update={"bindings": {**contract.body.bindings, **additions}}
+                )
+            }
+        )
+    action = _sole_script_action(contract)
+    if action is None:  # pragma: no cover - callers gate on wireability
+        return contract
+    merged = {**(action.parameters.get("bindings") or {}), **additions}
+    new_action = action.model_copy(
+        update={"parameters": {**action.parameters, "bindings": merged}}
+    )
+    return contract.model_copy(
+        update={"body": contract.body.model_copy(update={"actions": [new_action]})}
+    )
+
+
+def _wireable_producer(contract: NodeContract) -> bool:
+    """True iff this child FILES PORT VALUES an ``output://`` edge could
+    bind — a ScriptBody or a sole-script-action ActionsBody. A
+    cli/http/browser ActionsBody never sources a wired edge (its outcome
+    need not carry a result), the same rule W1's survey applies."""
+    return isinstance(contract.body, ScriptBody) or (
+        _sole_script_action(contract) is not None
+    )
+
+
 def _wire_dataflow_bindings(
     nodes: list[NodeContract], producer_keys: dict[str, str]
 ) -> list[NodeContract]:
-    """Bind each script child's unbound consumed slots to their sibling
+    """Bind each wireable child's unbound consumed slots to their sibling
     producer's output port.
 
-    A slot wires only when exactly ONE script-bodied sibling produces it —
+    A slot wires only when exactly ONE fileable sibling produces it —
     ambiguity stays unbound, exactly as today (the assembler picks one
-    producer per slot, so assembled subgraphs are never ambiguous).
-    ActionsBody producers never wire: their outcomes need not carry a
-    result payload, and an ``output://`` edge whose port can never fill
-    would refuse honest runs. A producer whose NAME another sibling shares
-    never wires either (W0.1): value filing attributes by the owners map,
-    which keys actions by child name — a colliding name would file one
-    child's answer under another's key.
+    producer per slot, so assembled subgraphs are never ambiguous). A
+    cli/http/browser ActionsBody producer never wires: its outcome need
+    not carry a result payload, and an ``output://`` edge whose port can
+    never fill would refuse honest runs. A producer whose NAME another
+    sibling shares never wires either (W0.1): value filing attributes by
+    the owners map, which keys actions by child name — a colliding name
+    would file one child's answer under another's key.
     """
     name_counts: dict[str, int] = {}
     for child in nodes:
         name_counts[child.name] = name_counts.get(child.name, 0) + 1
     producers_by_name: dict[str, list[NodeContract]] = {}
     for child in nodes:
-        if not isinstance(child.body, ScriptBody):
+        if not _wireable_producer(child):
             continue
         if name_counts.get(child.name, 0) > 1:
             continue
@@ -232,13 +289,13 @@ def _wire_dataflow_bindings(
 
     wired: list[NodeContract] = []
     for child in nodes:
-        body = child.body
-        if not isinstance(body, ScriptBody):
+        if not _wireable_producer(child):
             wired.append(child)
             continue
+        bound = _child_bindings(child)
         additions: dict[str, str] = {}
         for slot in child.consumes:
-            if slot.name in (body.bindings or {}):
+            if slot.name in bound:
                 continue
             candidates = [
                 producer
@@ -251,13 +308,7 @@ def _wire_dataflow_bindings(
             key = producer_keys.get(candidates[0].id, candidates[0].id)
             additions[slot.name] = f"output://{key}/{slot.name}"
         if additions:
-            child = child.model_copy(
-                update={
-                    "body": body.model_copy(
-                        update={"bindings": {**body.bindings, **additions}}
-                    )
-                }
-            )
+            child = _with_bindings(child, additions)
         wired.append(child)
     return wired
 

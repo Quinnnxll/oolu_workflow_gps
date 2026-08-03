@@ -13,6 +13,7 @@ W1 draws the map W2+ will pave.
 
 from __future__ import annotations
 
+from .agent import PaveOutcome, PaveReport, PaverAgent, RehearsalResult
 from .contracts import (
     NearMiss,
     RouteWeb,
@@ -25,8 +26,12 @@ from .store import PaveStore
 
 __all__ = [
     "NearMiss",
+    "PaveOutcome",
+    "PaveReport",
     "PaveStore",
+    "PaverAgent",
     "PaverScheduleStore",
+    "RehearsalResult",
     "RouteWeb",
     "SurveyNode",
     "SurveyReport",

@@ -176,6 +176,7 @@ from ..orchestrator.state import (
     PauseKind,
     Phase,
     ResumeInput,
+    RoutePlan,
     RunState,
     TaskContract,
 )
@@ -241,6 +242,11 @@ NODE_REVIVAL_DAYS = 7.0
 # ride along ("a NEW node", "a weather-fetching node"), and the ask-shaped
 # forms count too ("i need a node that ..."), because every phrasing this
 # misses becomes a workflow run on the meta-sentence instead of a build.
+# The tenant a Paver REHEARSAL files its intermediate values under — an
+# isolated namespace, never a real tenant, so a rehearsal's mid-run
+# outputs never collide with a live tenant's standing port values.
+_PAVER_REHEARSAL_TENANT = "__paver_rehearsal__"
+
 _NODE_BUILD_RE = re.compile(
     r"^\s*"
     # optional polite / addressing lead-in
@@ -13455,18 +13461,24 @@ class GatewayApp:
         try:
             tenants = self._paver_tenants()
             total_webs = 0
+            total_paved = 0
             for tenant in tenants:
-                report = self._surveyor.survey(
-                    tenant, self._survey_nodes(tenant)
-                )
+                nodes = self._survey_nodes(tenant)
+                report = self._surveyor.survey(tenant, nodes)
                 self._pave_store.replace_tenant(report, now=now)
                 total_webs += len(report.webs)
+                # PAVE (W2): rehearse each fully-direct anchored web and,
+                # on a clean run, promote it to one SubgraphBody node. The
+                # model bill is paid here, at pave time — a later trigger
+                # fires the web from provided scripts. Budget-capped per
+                # tick so a big tenant never runs the host away.
+                total_paved += self._pave_tenant(tenant, nodes, now)
         except Exception as exc:  # noqa: BLE001 - the Routine records its own
             # failure and waits for the next interval; it never raises.
             self._paver_schedule.record_result(now, error=str(exc))
             logging.getLogger("oolu.gateway").exception("paver survey failed")
             return
-        summary = {"tenants": len(tenants), "webs": total_webs}
+        summary = {"tenants": len(tenants), "webs": total_webs, "paved": total_paved}
         self._paver_schedule.record_result(now, summary=summary)
         self._durable.audit.append(
             "paver.surveyed",
@@ -13477,6 +13489,141 @@ class GatewayApp:
                 **summary,
             },
         )
+
+    def _pave_tenant(self, tenant: str, nodes, now, *, max_paves: int = 4) -> int:
+        """Rehearse and promote one tenant's fully-direct anchored webs
+        (W2). Requires a script runtime (to rehearse in the sandbox) — a
+        host without one surveys but never paves. Returns the count paved."""
+        if self._contract_runner is None or self._values is None:
+            return 0
+        agent = self._paver_agent(now)
+        report = agent.tick(tenant, nodes, max_paves=max_paves)
+        return len(report.paved)
+
+    def _paver_agent(self, now):
+        """Construct the tick's :class:`PaverAgent` with the real sandbox
+        rehearsal and body-preserving promotion ports."""
+        from ..paver import PaverAgent
+
+        return PaverAgent(
+            surveyor=self._surveyor,
+            rehearse=self._rehearse_web,
+            promote=lambda tenant, web, contract: self._promote_web(
+                tenant, web, contract, now
+            ),
+            negative=self._pave_negative,
+            audit=self._durable.audit.append,
+        )
+
+    def _rehearse_web(self, contract):
+        """Run a web's SubgraphBody end-to-end in the SEVERED sandbox — the
+        effect-freedom rehearsal (W2). Compiles with the dataflow wired and
+        the tenant stamped, files each hop's outputs mid-run so the next
+        hop resolves them, and reports whether the whole web ran clean. No
+        market economics: the Paver rehearses, it does not bill."""
+        from ..paver import RehearsalResult
+
+        try:
+            children = (
+                contract.body.nodes
+                if hasattr(contract.body, "nodes")
+                else [contract]
+            )
+            producer_keys = {child.id: child.id for child in children}
+            compiled = compile_contract(
+                contract, wire_dataflow=True, producer_keys=producer_keys
+            )
+            compiled = stamp_value_tenant(compiled, _PAVER_REHEARSAL_TENANT)
+            by_name = {c.name: c for c in children}
+            producer_ids = {
+                action_id: producer_keys[by_name[owner].id]
+                for action_id, owner in compiled.owners.items()
+                if owner in by_name
+            }
+
+            def value_pipe(action_id, outcome):
+                producer = producer_ids.get(action_id)
+                payload = (outcome.evidence or {}).get("result")
+                if not producer or payload is None:
+                    return
+                self._values.snapshot_outputs(
+                    _PAVER_REHEARSAL_TENANT,
+                    payload,
+                    label=producer,
+                    producer=producer,
+                )
+
+            record = self._contract_runner.execute(
+                RoutePlan(chosen=compiled.blueprint, alternatives=[], total_cost=0.0),
+                idempotency_key=f"paver-rehearse:{compiled.blueprint.id}",
+                attempt=1,
+                value_pipe=value_pipe,
+            )
+        except Exception as exc:  # noqa: BLE001 - a rehearsal failure is data
+            return RehearsalResult(ok=False, error=f"rehearsal error: {exc}")
+        ok = record.status is ExecutionStatus.SUCCEEDED
+        return RehearsalResult(
+            ok=ok,
+            error="" if ok else (record.error or "the web failed to rehearse"),
+            run_id=record.idempotency_key,
+        )
+
+    def _promote_web(self, tenant: str, web, contract, now) -> str:
+        """Register a rehearsed web as ONE SubgraphBody node — body-
+        preserving (W2), so a trigger fires the exact subgraph verified.
+        Persists the paved contract for the trigger path (W4)."""
+        skill = contract.subgraph_to_skill()
+        result = self._nodeplace.contribute(
+            noder_principal="oolu-paver",
+            tenant_id=tenant,
+            skill=skill,
+            semver="1.0.0",
+            title=contract.name,
+            summary=contract.description or f"paved web {web.web_id[:8]}",
+            consumes=list(contract.consumes) or None,
+            produces=list(contract.produces) or None,
+        )
+        node_id = result.node.node_id
+        if self._desk is not None:
+            try:
+                self._desk.create_account(
+                    node_id,
+                    principal="oolu-paver",
+                    tenant=tenant,
+                    policy_version=NODE_POLICY_VERSION,
+                )
+            except Exception:  # noqa: BLE001 - account is desk bookkeeping
+                pass
+        self._pave_store.record_paved(
+            tenant,
+            web.web_id,
+            node_id=node_id,
+            version_id=result.version.version_id,
+            contract_json=contract.model_dump_json(),
+            now=now,
+        )
+        return node_id
+
+    def _pave_negative(self, tenant: str, web, reason: str) -> None:
+        """A web that failed rehearsal leaves a negative-knowledge note so
+        the Paver never grinds the same failing junction (M3)."""
+        spine = self._memory_spine()
+        if spine is None:
+            return
+        try:
+            from ..negative import record_failure
+
+            record_failure(
+                spine,
+                tenant=tenant,
+                subject=f"paver:web:{web.web_id}",
+                problem=str(reason)[:400],
+                applicability={"anchor": web.anchor},
+            )
+        except Exception:  # noqa: BLE001 - negative knowledge is advisory
+            logging.getLogger("oolu.gateway").warning(
+                "paver negative note failed for %s", web.web_id, exc_info=True
+            )
 
     def _paver_tenants(self) -> list[str]:
         """Every tenant with at least one node — the survey's field of

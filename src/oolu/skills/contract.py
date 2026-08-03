@@ -31,7 +31,7 @@ layering as SOPs.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Literal, Union
+from typing import Any, ClassVar, Literal, Union
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -300,6 +300,54 @@ class NodeContract(BaseModel):
             stats=stats,
         )
 
+    # The marker adapter of the single action a SubgraphBody contract
+    # round-trips through: a body-preserving encoding, so a paved web (W2)
+    # registers as ONE citizen whose stored form reconstructs to the SAME
+    # subgraph — children, edges, and all — not a flattened action list.
+    SUBGRAPH_ADAPTER: ClassVar[str] = "subgraph"
+
+    def subgraph_to_skill(
+        self, *, signature: SkillSignature | None = None
+    ) -> ReusableSkill:
+        """Encode a SubgraphBody contract as a ``ReusableSkill`` whose one
+        action carries the WHOLE contract JSON (W2). The action's adapter
+        is ``subgraph`` and it carries no ``script``, so the contribute
+        screen skips it; ``contract_from_skill`` decodes it back to the
+        exact subgraph. Consumes/produces ride as the skill's parameters
+        and (via the listing) its slot vocabulary, so the node is
+        discoverable and assemblable like any other."""
+        if not isinstance(self.body, SubgraphBody):
+            raise ValueError(
+                f"subgraph_to_skill needs a SubgraphBody; got "
+                f"'{self.body.kind.value}'"
+            )
+        parameters = [
+            SkillParameter(
+                name=slot.name,
+                value_type=slot.value_type,
+                required=slot.required,
+                description=slot.description or None,
+                domain={"role": slot.role} if slot.role else {},
+            )
+            for slot in self.consumes
+        ]
+        return ReusableSkill(
+            id=self.id,
+            name=self.name,
+            description=self.description,
+            signature=signature
+            or SkillSignature(application="subgraph", adapter=self.SUBGRAPH_ADAPTER),
+            parameters=parameters,
+            actions=[
+                ActionEvent(
+                    correlation_id=self.id,
+                    adapter=self.SUBGRAPH_ADAPTER,
+                    operation="run",
+                    parameters={"contract": self.model_dump(mode="json")},
+                )
+            ],
+        )
+
     def to_skill(self, *, signature: SkillSignature | None = None) -> ReusableSkill:
         """Round-trip an actions-bodied contract back to a ``ReusableSkill``."""
         if not isinstance(self.body, ActionsBody):
@@ -328,6 +376,50 @@ class NodeContract(BaseModel):
             validators=list(self.validators),
             demonstration_ids=list(self.demonstration_ids),
         )
+
+
+def contract_from_registered_skill(
+    skill: ReusableSkill,
+    *,
+    consumes: list[Slot] | None = None,
+    produces: list[Slot] | None = None,
+    inputs: list | None = None,
+    stats: "NodeStats | None" = None,
+    provenance: str = "marketplace",
+) -> NodeContract:
+    """One registered skill as a contract, PRESERVING a SubgraphBody (W2).
+
+    A skill whose sole action is the ``subgraph`` marker decodes back to
+    the exact contract it carried — children, edges, and all — so a paved
+    web is a first-class citizen the assembler and the runner see whole.
+    Every other skill takes the ActionsBody path (``from_skill``), with
+    the caller's declared slot vocabulary layered on when given."""
+    action = skill.actions[0] if skill.actions else None
+    if (
+        action is not None
+        and action.adapter == NodeContract.SUBGRAPH_ADAPTER
+        and isinstance(action.parameters.get("contract"), dict)
+    ):
+        contract = NodeContract.model_validate(action.parameters["contract"])
+        update: dict[str, Any] = {}
+        if consumes is not None:
+            update["consumes"] = list(consumes)
+        if produces is not None:
+            update["produces"] = list(produces)
+        if inputs is not None:
+            update["inputs"] = list(inputs)
+        if stats is not None:
+            update["stats"] = stats
+        return contract.model_copy(update=update) if update else contract
+    contract = NodeContract.from_skill(skill, provenance=provenance, stats=stats)  # type: ignore[arg-type]
+    update = {}
+    if consumes is not None:
+        update["consumes"] = list(consumes)
+    if produces is not None:
+        update["produces"] = list(produces)
+    if inputs is not None:
+        update["inputs"] = list(inputs)
+    return contract.model_copy(update=update) if update else contract
 
 
 def derive_data_edges(nodes: list[NodeContract]) -> list[ContractEdge]:

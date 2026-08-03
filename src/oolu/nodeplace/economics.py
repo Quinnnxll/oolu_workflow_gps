@@ -34,7 +34,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..durable.audit import DurableAuditLog
 from ..metering.attribution import AttributionStore
 from ..metering.store import MeteringLedger
-from ..skills.contract import ActionsBody, NodeContract, NodeStats
+from ..skills.contract import (
+    ActionsBody,
+    NodeContract,
+    NodeStats,
+    contract_from_registered_skill,
+)
 from ..skills.models import ExecutionStatus, ReusableSkill
 from .market import CandidateEconomics, CostVector, NodeClass
 from .pricing import gross_from_policy
@@ -203,25 +208,31 @@ class CandidateAssembler:
                 continue
             if not skill.actions:
                 continue
+            stats = NodeStats(
+                successes=entry.candidate.verified_successes,
+                failures=entry.candidate.verified_failures,
+                cost_ewma=entry.candidate.cost.automation_cost or None,
+            )
+            # Body-preserving (W2): a paved web's subgraph decodes back to
+            # its whole SubgraphBody — children and wired edges intact —
+            # instead of being flattened to an ActionsBody. Every other
+            # listing takes the ActionsBody path exactly as before. The
+            # listing's slot vocabulary and the candidate id/stats layer on.
+            contract = contract_from_registered_skill(
+                skill,
+                consumes=list(listing.consumes),
+                produces=list(listing.produces),
+                inputs=list(listing.inputs),
+                stats=stats,
+            ).model_copy(
+                update={
+                    "id": entry.candidate.version_id,
+                    "name": entry.title,
+                    "description": listing.summary,
+                }
+            )
             results.append(
-                MarketplaceContract(
-                    contract=NodeContract(
-                        id=entry.candidate.version_id,
-                        name=entry.title,
-                        description=listing.summary,
-                        provenance="marketplace",
-                        consumes=list(listing.consumes),
-                        produces=list(listing.produces),
-                        inputs=list(listing.inputs),
-                        body=ActionsBody(actions=list(skill.actions)),
-                        stats=NodeStats(
-                            successes=entry.candidate.verified_successes,
-                            failures=entry.candidate.verified_failures,
-                            cost_ewma=entry.candidate.cost.automation_cost or None,
-                        ),
-                    ),
-                    assembled=entry,
-                )
+                MarketplaceContract(contract=contract, assembled=entry)
             )
         return results
 
