@@ -322,8 +322,8 @@ def _completed_run(node_id, run_id, payload, *, staged_state=None):
 def _publish_state_program(tmp_path):
     from test_program_substrate import _program_app, _session
 
-    from oolu.skills.program import ProgramSpec, StateSpec
     from oolu.skills.program import ModuleSpec as MS
+    from oolu.skills.program import ProgramSpec, StateSpec
     from oolu.skills.program import UnifiedInterface as UI
 
     spec = ProgramSpec(

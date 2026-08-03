@@ -12,7 +12,6 @@ from oolu.programbuilder import (
 )
 from oolu.runtime import NodeScriptRunner
 from oolu.runtime.isolation import SubprocessBackend
-from oolu.skills.program import parse_program_spec
 
 
 # --------------------------------------------------------------------------- #

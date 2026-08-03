@@ -10,11 +10,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "benchmarks"))
 
 from route_scale import chain_goal, marketplace  # noqa: E402
-
 from test_http_gateway import _app, _req  # noqa: E402
 
 from oolu.gateway import GatewayApp  # noqa: E402
 from oolu.metering.attribution import AttributionStore  # noqa: E402
+from oolu.metering.store import MeteringLedger  # noqa: E402
 from oolu.nodeplace import (  # noqa: E402
     CandidateAssembler,
     LiveVersionStats,
@@ -26,7 +26,6 @@ from oolu.nodeplace import (  # noqa: E402
     compile_contract,
     stamp_value_tenant,
 )
-from oolu.metering.store import MeteringLedger  # noqa: E402
 from oolu.orchestrator import (  # noqa: E402
     Blueprint,
     ContractAssembler,
@@ -43,7 +42,11 @@ from oolu.skills.contract import (  # noqa: E402
     Slot,
     SubgraphBody,
 )
-from oolu.skills.models import ActionEvent, ExecutionOutcome, ExecutionStatus  # noqa: E402
+from oolu.skills.models import (  # noqa: E402
+    ActionEvent,
+    ExecutionOutcome,
+    ExecutionStatus,
+)
 from oolu.values import ValueStore  # noqa: E402
 
 

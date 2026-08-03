@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from ..skills.contract import (
     ActionsBody,
+    ContractEdge,
     NodeContract,
     ScriptBody,
     SubgraphBody,

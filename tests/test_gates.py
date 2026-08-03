@@ -190,8 +190,12 @@ def test_route_verdict_counts_skipped_as_ok_and_failures_as_not():
 # --------------------------------------------------------------------------- #
 # G1 — loop edges: validators, regions, decisions, key normalization.          #
 # --------------------------------------------------------------------------- #
-from oolu.orchestrator.gates import derive_loops, loop_decision, LoopSpec
-from oolu.orchestrator.scheduler import strip_iteration_marker
+from oolu.orchestrator.gates import (  # noqa: E402 - the G1 section's imports
+    LoopSpec,
+    derive_loops,
+    loop_decision,
+)
+from oolu.orchestrator.scheduler import strip_iteration_marker  # noqa: E402
 
 
 def test_loop_edge_without_budget_refuses_by_name():

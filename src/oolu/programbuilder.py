@@ -496,7 +496,7 @@ class ProgramAuthor:
             check_flags = screen_script(check)
             if check_flags:
                 return (
-                    f"its check is refused by the safety screen: "
+                    "its check is refused by the safety screen: "
                     + "; ".join(check_flags),
                     "",
                 )

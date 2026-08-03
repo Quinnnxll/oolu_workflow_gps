@@ -376,7 +376,7 @@ def test_gateway_paves_a_direct_web_end_to_end(tmp_path):
             "cleaner": {"tidy_csv": "tidy"},
         },
     )
-    exporter = _publish_script_node(
+    _publish_script_node(
         app,
         registry,
         name="exporter",
@@ -384,7 +384,7 @@ def test_gateway_paves_a_direct_web_end_to_end(tmp_path):
         produces=[{"name": "rows_csv", "value_type": "path", "role": "path"}],
         hook=True,  # the webhook door makes it an anchor
     )
-    cleaner = _publish_script_node(
+    _publish_script_node(
         app,
         registry,
         name="cleaner",
@@ -669,7 +669,7 @@ def test_web_signature_changes_when_shape_moves():
 
 def test_contribute_screens_child_scripts_inside_a_subgraph():
     from oolu.nodeplace.service import _screenable_scripts
-    from oolu.skills.contract import NodeContract, ScriptBody, SubgraphBody
+    from oolu.skills.contract import NodeContract, SubgraphBody
 
     # A subgraph whose child carries a hostile script: the nested script
     # must be surfaced to the screen, not buried in the encoded contract.

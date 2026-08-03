@@ -3,11 +3,11 @@ transactional tree landing, the pre-publish freeze, and the round trip."""
 
 from __future__ import annotations
 
-from test_http_gateway import _app, _req
+from test_http_gateway import _app
 
-from oolu.durable.artifacts import FilesystemArtifactStore
 from oolu.cache import LocalScriptCache
 from oolu.durable import UserFileStore
+from oolu.durable.artifacts import FilesystemArtifactStore
 from oolu.gateway import GatewayApp
 from oolu.nodeplace import NodeplaceService, RegistryStore
 from oolu.runtime import NodeScriptRunner
@@ -429,9 +429,10 @@ def test_bundle_member_cannot_shadow_the_harness(tmp_path):
     # The over-wall path packs the tree into a bundle; a member named
     # like the harness must be refused at the sandbox boundary, not
     # overwrite the shim after it is written.
+    import pytest
+
     from oolu.runtime.bundle import freeze_tree
     from oolu.runtime.isolation import _unpack_into
-    import pytest
 
     manifest, blobs = freeze_tree(
         {"lib/ok.py": "X = 1\n", "_oolu_runtime.py": "evil = True\n"}

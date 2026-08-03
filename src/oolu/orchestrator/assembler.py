@@ -39,7 +39,6 @@ from typing import Callable, Iterable, Protocol, Sequence, runtime_checkable
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..knowledge.traces import TraceStore, route_node_key
-from ..skills.index import SlotIndex
 from ..skills.contract import (
     NodeContract,
     NodeStats,
@@ -47,6 +46,7 @@ from ..skills.contract import (
     Slot,
     SubgraphBody,
 )
+from ..skills.index import SlotIndex
 from ..skills.registry import RegisteredSkill
 
 logger = logging.getLogger(__name__)

@@ -19,7 +19,6 @@ from oolu.paver.discovery import SurveyNode
 from oolu.skills import parse_sop
 from oolu.skills.contract import ContractEdge, NodeContract, ScriptBody, Slot
 from oolu.skills.models import (
-    ActionEvent,
     ExecutionOutcome,
     ExecutionStatus,
     Postcondition,

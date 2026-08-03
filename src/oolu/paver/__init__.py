@@ -23,8 +23,8 @@ from .agent import (
     DEFER,
     AdapterBuild,
     PaveOutcome,
-    PaveReport,
     PaverAgent,
+    PaveReport,
     RehearsalResult,
 )
 from .contracts import (

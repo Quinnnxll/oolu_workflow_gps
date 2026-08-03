@@ -35,7 +35,6 @@ from ..durable.audit import DurableAuditLog
 from ..metering.attribution import AttributionStore
 from ..metering.store import MeteringLedger
 from ..skills.contract import (
-    ActionsBody,
     NodeContract,
     NodeStats,
     contract_from_registered_skill,

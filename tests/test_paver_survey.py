@@ -248,7 +248,7 @@ def test_paver_revoke_stops_the_next_firing(tmp_path):
 # The gateway wiring — the survey tick reads the registry, draws the map.      #
 # --------------------------------------------------------------------------- #
 def _paver_gateway(tmp_path):
-    from test_http_gateway import _app, _req
+    from test_http_gateway import _app
 
     from oolu.gateway import GatewayApp
     from oolu.nodeplace import NodeplaceService, RegistryStore

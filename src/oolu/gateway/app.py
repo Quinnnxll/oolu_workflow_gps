@@ -166,9 +166,9 @@ from ..nodeplace import (
 )
 from ..orchestrator import (
     DagRouteRunner,
-    ValuePipeError,
     GoalSpec,
     OrchestratorError,
+    ValuePipeError,
     patch_or_defaults,
 )
 from ..orchestrator.rebuild import AUTOBUILD_CONSENT_KEY, AUTOBUILD_HINT
@@ -841,8 +841,8 @@ class GatewayApp:
         # first, fleet-safe discipline as the sweep — a separate schedule
         # so the two cadences never entangle.
         from ..paver import (
-            PaveStore,
             PaverScheduleStore,
+            PaveStore,
             PropagationConsentStore,
             TriggerClaimStore,
             WebSurveyor,

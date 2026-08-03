@@ -173,9 +173,9 @@ def test_transient_failure_releases_the_claim_and_retries():
     # A transient "failed" fire must RAISE DeliveryRetry with its claim
     # released, so the outbox leaves the message pending and a later drain
     # re-takes the claim and fires — the cascade is never silently lost.
-    from oolu.paver import DeliveryRetry
-
     import pytest
+
+    from oolu.paver import DeliveryRetry
 
     claimed: set = set()
     released: list = []

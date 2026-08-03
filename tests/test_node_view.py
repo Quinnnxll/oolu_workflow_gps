@@ -8,8 +8,6 @@ and state names; every other node gets the same free view of its ports.
 
 from __future__ import annotations
 
-import json
-
 from test_http_gateway import _req
 from test_program_state import STATE_ENTRY, STATE_LIB, _completed_run
 from test_program_substrate import _program_app, _session

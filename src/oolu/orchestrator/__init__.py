@@ -36,6 +36,18 @@ from .contract import (
     promote_sequential_for_gates,
 )
 from .engine import WorkflowOrchestrator
+from .gates import (
+    Admission,
+    LoopSpec,
+    Readiness,
+    admit,
+    dependency_edges,
+    derive_loops,
+    loop_decision,
+    readiness,
+    route_verdict,
+    structural_edges,
+)
 from .intake import (
     INTAKE_SYSTEM_PROMPT,
     HeuristicIntaker,
@@ -90,18 +102,6 @@ from .replay import (
     earns_its_cost,
     replay,
     synthetic_semantic_runs,
-)
-from .gates import (
-    Admission,
-    LoopSpec,
-    Readiness,
-    admit,
-    dependency_edges,
-    derive_loops,
-    loop_decision,
-    readiness,
-    route_verdict,
-    structural_edges,
 )
 from .scheduler import (
     DagRouteRunner,

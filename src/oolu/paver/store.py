@@ -9,8 +9,6 @@ reads a durable answer between ticks — not to be a second source of truth.
 
 from __future__ import annotations
 
-import json
-
 from .contracts import RouteWeb, SurveyReport
 
 __all__ = ["PaveStore"]

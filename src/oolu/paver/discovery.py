@@ -26,7 +26,7 @@ Two disciplines carry over from W0's decisions:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from uuid import uuid5, NAMESPACE_URL
+from uuid import NAMESPACE_URL, uuid5
 
 from ..skills.contract import ActionsBody, NodeContract, ScriptBody, Slot
 from ..skills.index import SlotIndex

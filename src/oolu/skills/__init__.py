@@ -28,20 +28,6 @@ from .contract import (
     classify_risk,
     derive_data_edges,
 )
-from .index import SlotIndex
-from .program import (
-    MAX_PROGRAM_MODULES,
-    RESERVED_PAYLOAD_KEYS,
-    ModuleSpec,
-    OpSig,
-    OperationSpec,
-    ProgramSpec,
-    StateSpec,
-    UnifiedInterface,
-    ViewSpec,
-    canonical_program_json,
-    parse_program_spec,
-)
 from .discovery import (
     DEFAULT_TOOL_CATALOG,
     DiscoveredTool,
@@ -49,6 +35,7 @@ from .discovery import (
     discover_tools,
     resolve_file,
 )
+from .index import SlotIndex
 from .inputs import (
     BoundInput,
     bind_inputs,
@@ -99,6 +86,19 @@ from .ports import (
     SecretProvider,
     SkillStore,
     StateProbe,
+)
+from .program import (
+    MAX_PROGRAM_MODULES,
+    RESERVED_PAYLOAD_KEYS,
+    ModuleSpec,
+    OperationSpec,
+    OpSig,
+    ProgramSpec,
+    StateSpec,
+    UnifiedInterface,
+    ViewSpec,
+    canonical_program_json,
+    parse_program_spec,
 )
 from .recorder import (
     DemonstrationRecorder,
@@ -267,6 +267,18 @@ __all__ = [
     "WorkspaceConstraintValidator",
     "WorkspaceProbe",
     "changed_artifacts",
+    # The program-node vocabulary (F0/F2), re-exported at package level.
+    "MAX_PROGRAM_MODULES",
+    "RESERVED_PAYLOAD_KEYS",
+    "ModuleSpec",
+    "OperationSpec",
+    "OpSig",
+    "ProgramSpec",
+    "StateSpec",
+    "UnifiedInterface",
+    "ViewSpec",
+    "canonical_program_json",
+    "parse_program_spec",
     "discover_chromium",
     "discover_tools",
     "load_skill_pack",
