@@ -4,6 +4,43 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Adapter synthesis (W3) — the coding-agent half breaks the exact-name
+wall: a junction becomes a tested, accountable citizen
+(docs/algorithm-barriers-plan.md, Part II):
+
+- **The negotiator** (`src/oolu/paver/negotiator.py`,
+  `ContractNegotiator`) — a PURE classifier of a producer→consumer
+  junction: `direct` (`Slot.matches`), `mappable` (same value_type+role,
+  a different name — a rename), `convertible` (the same name at a
+  different type — a shape change), or `none`. Advice under seat
+  `paver.match` may propose which near-misses to try; the negotiator and
+  a passing test dispose, so no proposal ever becomes an edge on the
+  model's say-so.
+- **The synthesizer** (`src/oolu/paver/adapters.py`,
+  `AdapterSynthesizer`) — pours a rename as a DETERMINISTIC, byte-stable
+  template (`render_mapping_adapter`, no model) and a shape change as a
+  model-authored script under seat `paver.adapt`. Either way it is earned
+  by EXECUTION: screened, then verified against the producer's REAL
+  sampled value with the consumer's port checked (the F0
+  `verify_function(files=, ports=)` seam), a shape adapter buying ≤2
+  repair rounds. A candidate that never passes creates no edge.
+- **The Paver's loop** (`PaverAgent.build_adapter` port) — a web with
+  near-misses is no longer skipped: each junction is bridged into an
+  adapter child (consuming the produced slot, producing the consumed
+  slot) the compiler wires producer→adapter→consumer by slot match, so
+  the near-miss web composes, rehearses, and promotes like a direct one.
+  One junction the Paver cannot bridge fails the WHOLE web (named,
+  negative-noted) — never a silent partial pave.
+- **The gateway** (`_build_adapter`) — negotiates, samples the producer's
+  last-filed port value (deferring, not failing, when the producer has
+  not run yet), synthesizes, and lands the adapter as its OWN citizen
+  through the same contribute door every node passes (the script
+  re-screened before storage); audit `paver.adapter_built`. New seats
+  `paver.match` (advice) and `paver.adapt` (authoring). The adapter lands
+  skill-embedded (the session-free path `_promote_web` uses), runnable
+  from the registry; drawer landing for paver-authored citizens is a
+  named follow-up.
+
 Gate edges (G2) — builders can say it; the shell can show it
 (docs/algorithm-barriers-plan.md, Part III):
 

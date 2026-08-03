@@ -269,6 +269,21 @@ class _ResolverStub:
             completed_at=now,
         )
 
+    def verify_function(self, goal, script, *, session_id, ports=None, files=None,
+                        bundle=None):
+        """The F0 birth-verify seam, stubbed (W3): a real host executes the
+        candidate in the sandbox against the staged sample; here a screened,
+        non-empty adapter is judged to pass, so the gateway wiring
+        (negotiate → sample → synthesize → verify → land → splice) is
+        exercised end-to-end without a live sandbox."""
+        from oolu.nodeplace.screening import screen_script
+
+        self.verify_calls = getattr(self, "verify_calls", 0) + 1
+        if not (script or "").strip() or screen_script(script):
+            return {"ok": False, "honest_error": False, "error": "screen",
+                    "healed": []}
+        return {"ok": True, "honest_error": False, "error": "", "healed": []}
+
     def cancel(self, idempotency_key):
         return None
 
@@ -400,6 +415,63 @@ def test_gateway_paves_a_direct_web_end_to_end(tmp_path):
     restored = contract_from_registered_skill(skill)
     assert isinstance(restored.body, SubgraphBody)
     assert {n.name for n in restored.body.nodes} == {"exporter", "cleaner"}
+    conn.close()
+
+
+def test_gateway_paves_a_near_miss_web_via_a_rename_adapter(tmp_path):
+    # W3 loop-closure: a producer's 'folder' near-misses a consumer's
+    # 'path' (same type+role, different name). The tick negotiates the
+    # junction, samples the producer's REAL filed value, pours the rename
+    # template (no model), verifies it, lands it as a citizen, splices it
+    # in, and paves the now-direct web.
+    app, conn, ident, registry, executor = _pave_app(
+        tmp_path,
+        payloads={
+            "exporter": {"folder": "/data/in"},
+            "adapt folder to path": {"path": "/data/in"},
+            "cleaner": {},
+        },
+    )
+    exporter = _publish_script_node(
+        app, registry, name="exporter", consumes=[],
+        produces=[{"name": "folder", "value_type": "path", "role": "path"}],
+        hook=True,
+    )
+    _publish_script_node(
+        app, registry, name="cleaner",
+        consumes=[{"name": "path", "value_type": "path", "role": "path"}],
+        produces=[],
+    )
+    # The producer must have FILED its port for the adapter to be sampled
+    # against a real value — seed the live tenant's port index.
+    app._values.snapshot_outputs(
+        "t1", {"folder": "/data/in"}, producer=exporter, label="exporter"
+    )
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    app._paver_schedule.enable(
+        interval_hours=6, granted_by="quinn", tenant="t1", now=now
+    )
+    app._scheduled_survey_tick(now)
+
+    records = app._durable.audit.records()
+    built = [r for r in records if r.event_type == "paver.adapter_built"]
+    assert built, "the rename adapter should have been built"
+    assert built[0].payload["verdict"] == "mappable"
+    assert built[0].payload["templated"] is True
+
+    paved = [r for r in records if r.event_type == "paver.web_paved"]
+    assert paved and paved[0].payload["adapters"] == 1
+    stored = app._pave_store.paved("t1", paved[0].payload["web_id"])
+    assert stored is not None
+
+    # The promoted web carries three children — producer, consumer, adapter.
+    version = app._nodeplace.latest_version(stored["node_id"])
+    from oolu.skills.pack import ReusableSkill
+
+    skill = ReusableSkill.model_validate_json(version.sanitized_skill_json)
+    restored = contract_from_registered_skill(skill)
+    assert isinstance(restored.body, SubgraphBody)
+    assert len(restored.body.nodes) == 3
     conn.close()
 
 

@@ -2,7 +2,8 @@
 
 Status: In build. Three phase series, one per barrier: **F0–F3** (the
 program node), **W0–W5** (route paving — the Paver), **G0–G3** (gate
-edges). G0, G1, G2, W0, F0, F1, W1, and W2 LANDED; every other phase Proposed. Each lands as one commit titled
+edges). G0, G1, G2, W0, W1, W2, W3, F0, and F1 LANDED (plus review amendments
+G0.1, G1.1, G2.1, W0.1, W2.1, F0.1, F1.1); every other phase Proposed. Each lands as one commit titled
 `<CODE> landed: <name> — <subtitle>` with its loop-closure test, the
 plan-doc status flip, and the CHANGELOG entry in the same commit.
 
@@ -991,6 +992,48 @@ as a citizen.
 Done when: a producer/consumer pair separated by naming or shape
 becomes a `paved(adapted)` edge whose adapter is a birth-verified,
 drawer-landed, accountable node.
+**Status: LANDED** — `paver/negotiator.py` (`ContractNegotiator`) is a
+PURE classifier of a producer→consumer junction: `direct` (`Slot.matches`
+exactly), `mappable` (same value_type+role, a different NAME — a rename),
+`convertible` (the same NAME at a different value_type — a shape change),
+or `none` (no bridge). Advice under seat `paver.match` may propose which
+near-misses to try, but the negotiator disposes and only a passing test
+pours an edge — advice never creates one. `paver/adapters.py`
+(`AdapterSynthesizer`) pours the bridge: a rename is a DETERMINISTIC,
+byte-stable template (`render_mapping_adapter`, no model), a shape change
+is model-authored under seat `paver.adapt`; either way it is earned by
+EXECUTION — screened, then `verify_function` against the producer's REAL
+sampled value with the consumer's port checked (the F0 `files=`/`ports=`
+seam), a shape adapter buying ≤2 repair rounds. The `PaverAgent` grew a
+`build_adapter` port: a web with near-misses is no longer skipped — each
+junction is bridged into an adapter child (consuming the produced slot,
+producing the consumed slot) that the compiler wires
+producer→adapter→consumer by slot match, so the near-miss web composes,
+rehearses, and promotes exactly like a direct one; one junction the Paver
+cannot bridge fails the WHOLE web (named, negative-noted), never a silent
+partial pave. The gateway `_build_adapter` negotiates, samples the
+producer's last-filed port value (deferring, not failing, when the
+producer has not run yet), synthesizes, and lands the adapter as its OWN
+citizen through the same contribute door every node passes (script
+re-screened before storage), audit `paver.adapter_built`. Sharper than
+the plan text in two honest ways: (1) the adapter lands skill-embedded
+(the same session-free contribute path the paved web uses in
+`_promote_web`), not via the session-scoped `_land_src` — the script
+rides `sanitized_skill_json`, runnable from the registry with no drawer
+write, and drawer landing for paver-authored citizens is a shared
+follow-up; (2) the near-miss `paved(adapted)` edge is realized as the
+adapter CHILD embedded in the promoted web's SubgraphBody (a birth-
+verified, listed citizen), the faithful form of "a junction becomes a
+tested, accountable citizen." Tests: the negotiator's four verdicts and
+role-disagreement; the rename template byte-stable and model-free (a
+`DeadModel` proves the path never consults it); a rename that fails
+verify makes no edge; a shape adapter passing verify with a stub model,
+and one exhausting ≤2 repairs then refusing; the `none`-verdict
+containment (absurd advice builds nothing); the agent loop-closure
+(near-miss → adapted pave, adapter spliced as the third child) and the
+unbridgeable-junction failure (whole web refused, negative filed); and
+the gateway end-to-end (a rename near-miss paves through the real survey,
+negotiate, sample, template, verify, land, splice, rehearse, promote).
 
 **W4 — Trigger propagation (one trigger, the whole web).** *One POST;
 a deterministic, bounded, consent-gated cascade.*

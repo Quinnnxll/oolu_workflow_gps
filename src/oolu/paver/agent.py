@@ -35,10 +35,16 @@ from ..skills.contract import (
     ScriptBody,
     SubgraphBody,
 )
-from .contracts import RouteWeb, SurveyReport
+from .contracts import NearMiss, RouteWeb, SurveyReport
 from .discovery import SurveyNode, WebSurveyor
 
-__all__ = ["PaveOutcome", "PaveReport", "PaverAgent", "RehearsalResult"]
+__all__ = [
+    "AdapterBuild",
+    "PaveOutcome",
+    "PaveReport",
+    "PaverAgent",
+    "RehearsalResult",
+]
 
 
 @dataclass(frozen=True)
@@ -52,14 +58,29 @@ class RehearsalResult:
 
 
 @dataclass(frozen=True)
+class AdapterBuild:
+    """One bridged junction (W3): the adapter landed as its own citizen
+    (``node_id``) plus the child contract to splice into the web — it
+    CONSUMES the producer's produced slot and PRODUCES the consumer's
+    consumed slot, so the compiler's dataflow derivation wires
+    producer → adapter → consumer by slot match, and the near-miss
+    becomes a direct chain. ``templated`` marks a deterministic rename."""
+
+    node_id: str
+    contract: NodeContract
+    templated: bool = False
+
+
+@dataclass(frozen=True)
 class PaveOutcome:
     """One web's fate this tick."""
 
     web_id: str
     anchor: str | None
-    status: str  # "paved" | "rehearsal-failed" | "skipped"
+    status: str  # "paved" | "rehearsal-failed" | "adapter-failed" | "skipped"
     node_id: str | None = None
     reason: str = ""
+    adapters: int = 0  # junctions bridged by a synthesized adapter (W3)
 
 
 @dataclass(frozen=True)
@@ -69,6 +90,7 @@ class PaveReport:
     tenant: str
     surveyed: int = 0
     candidates: int = 0
+    adapters_built: int = 0  # junctions bridged by a synthesized adapter (W3)
     paved: list[str] = field(default_factory=list)
     refused: list[dict] = field(default_factory=list)
     outcomes: list[PaveOutcome] = field(default_factory=list)
@@ -127,12 +149,22 @@ class PaverAgent:
         audit: Callable[[str, dict], None] | None = None,
         is_paved: Callable[[str, RouteWeb], bool] | None = None,
         is_blocked: Callable[[str, RouteWeb], bool] | None = None,
+        build_adapter: (
+            Callable[[str, NearMiss, SurveyNode, SurveyNode], AdapterBuild | None]
+            | None
+        ) = None,
         surveyor: WebSurveyor | None = None,
     ):
         self._rehearse = rehearse
         self._promote = promote
         self._negative = negative
         self._audit = audit
+        # The adapter port (W3): bridge one near-miss junction — negotiate,
+        # sample the producer's real value, synthesize+verify, land the
+        # adapter as a citizen, and return the child to splice in. None
+        # means this Paver paves only fully-direct webs (the W2 posture);
+        # a web with near-misses is then skipped, never forced.
+        self._build_adapter = build_adapter
         # Idempotence ports (W2.1): a web already paved (unchanged) is not
         # re-paved; a web a prior failure blocked is not re-ground. Without
         # these the tick would re-rehearse and re-promote every web every
@@ -149,11 +181,12 @@ class PaverAgent:
         *,
         max_paves: int = 4,
     ) -> PaveReport:
-        """Survey ``nodes``, then pave up to ``max_paves`` fully-direct
-        anchored webs. Webs already paved (unchanged) or blocked by a prior
-        failure are skipped BEFORE the budget so they never re-rehearse or
-        starve fresh candidates. Webs with near-misses are left for W3;
-        webs carrying a write-class hop are named, not run. The budget caps
+        """Survey ``nodes``, then pave up to ``max_paves`` anchored webs.
+        Webs already paved (unchanged) or blocked by a prior failure are
+        skipped BEFORE the budget so they never re-rehearse or starve
+        fresh candidates. A web with near-misses is bridged by synthesized
+        adapters (W3) when an adapter builder is configured, else skipped;
+        a web carrying a write-class hop is named, not run. The budget caps
         REHEARSALS (the expensive sandbox run), not just promotions."""
         report: SurveyReport = self._surveyor.survey(tenant, nodes)
         by_key = {node.key: node for node in nodes}
@@ -162,6 +195,7 @@ class PaverAgent:
         outcomes: list[PaveOutcome] = []
         candidates = 0
         rehearsed = 0
+        adapters_built = 0
 
         for web in report.webs:
             decision = self._classify(web, by_key)
@@ -199,18 +233,21 @@ class PaverAgent:
                 )
                 continue
             rehearsed += 1
-            outcomes.append(self._pave_one(tenant, web, by_key))
-            if outcomes[-1].status == "paved":
+            outcome = self._pave_one(tenant, web, by_key)
+            outcomes.append(outcome)
+            adapters_built += outcome.adapters
+            if outcome.status == "paved":
                 paved.append(web.web_id)
-            elif outcomes[-1].status == "rehearsal-failed":
+            elif outcome.status in ("rehearsal-failed", "adapter-failed"):
                 refused.append(
-                    {"web_id": web.web_id, "reason": outcomes[-1].reason}
+                    {"web_id": web.web_id, "reason": outcome.reason}
                 )
 
         report_out = PaveReport(
             tenant=tenant,
             surveyed=report.surveyed_nodes,
             candidates=candidates,
+            adapters_built=adapters_built,
             paved=paved,
             refused=refused,
             outcomes=outcomes,
@@ -227,19 +264,21 @@ class PaverAgent:
         idempotence ports."""
         if not web.anchored:
             return "no trigger door anchors this web"
-        if web.near_misses:
-            # A web needing ANY adapter is W3's, whether or not it also has
-            # direct edges — W2 paves only the fully-direct case.
-            return "has near-misses — needs an adapter (W3)"
-        if not web.edges:
-            return "no direct edges to pave"
+        if web.near_misses and self._build_adapter is None:
+            # A web needing an adapter but no builder is configured: this
+            # Paver paves only fully-direct webs (the W2 posture).
+            return "has near-misses but no adapter builder is configured"
+        if not web.edges and not web.near_misses:
+            return "no edges to pave"
         children = [by_key[key].contract for key in web.node_ids if key in by_key]
         if len(children) != len(web.node_ids):
             return "a web node is missing its contract"
         if not _rehearsable_effect_free(children):
             # A write-class hop (cli/http/browser side effects): W2 paves
             # only the effect-free case; the write-class web is deferred to
-            # a real run (named, never silently rehearsed).
+            # a real run (named, never silently rehearsed). The synthesized
+            # adapters are scripts (effect-free), so a near-miss over
+            # sandboxed nodes still rehearses in full.
             return "carries a write-class hop — deferred to a real run"
         return None
 
@@ -249,7 +288,33 @@ class PaverAgent:
         children = [
             by_key[key].contract for key in web.node_ids if key in by_key
         ]
-        contract = self._web_contract(tenant, web, children)
+        # Bridge every near-miss into an adapter child FIRST (W3): a web
+        # only paves once all its junctions are direct, so a junction the
+        # Paver cannot adapt fails the WHOLE web (named, negative-noted),
+        # never a silent partial pave. Each adapter is already a
+        # birth-verified citizen by the time it returns.
+        adapters: list[NodeContract] = []
+        if web.near_misses:
+            bridged, problem = self._bridge_near_misses(tenant, web, by_key)
+            if bridged is None:
+                if self._negative is not None:
+                    self._negative(tenant, web, problem)
+                if self._audit is not None:
+                    self._audit(
+                        "paver.adapter_failed",
+                        {
+                            "run_id": "paver:schedule",
+                            "tenant": tenant,
+                            "web_id": web.web_id,
+                            "reason": problem[:200],
+                        },
+                    )
+                return PaveOutcome(
+                    web.web_id, web.anchor, "adapter-failed", reason=problem
+                )
+            adapters = [build.contract for build in bridged]
+
+        contract = self._web_contract(tenant, web, children + adapters)
         rehearsal = self._rehearse(contract)
         if not rehearsal.ok:
             if self._negative is not None:
@@ -266,7 +331,7 @@ class PaverAgent:
                 )
             return PaveOutcome(
                 web.web_id, web.anchor, "rehearsal-failed",
-                reason=rehearsal.error,
+                reason=rehearsal.error, adapters=len(adapters),
             )
         node_id = self._promote(tenant, web, contract)
         if self._audit is not None:
@@ -280,12 +345,42 @@ class PaverAgent:
                     "node_id": node_id,
                     "nodes": len(children),
                     "edges": len(web.edges),
+                    "adapters": len(adapters),
                     "rehearsed": rehearsal.rehearsed,
                 },
             )
         return PaveOutcome(
-            web.web_id, web.anchor, "paved", node_id=node_id
+            web.web_id, web.anchor, "paved", node_id=node_id,
+            adapters=len(adapters),
         )
+
+    def _bridge_near_misses(
+        self, tenant: str, web: RouteWeb, by_key: dict[str, SurveyNode]
+    ) -> tuple[list[AdapterBuild] | None, str]:
+        """Turn each near-miss into an adapter child, or fail the web. The
+        adapter port (gateway-supplied) negotiates the junction, samples
+        the producer's real value, synthesizes+verifies, and lands the
+        adapter as a citizen — returning None for a junction it could not
+        bridge (a ``none`` verdict, no sampled value yet, or a verify that
+        never passed). One unbridged junction fails the whole web: a paved
+        web with a hole is not paved."""
+        builds: list[AdapterBuild] = []
+        for miss in web.near_misses:
+            src = by_key.get(miss.source)
+            tgt = by_key.get(miss.target)
+            if src is None or tgt is None:
+                return None, (
+                    f"near-miss {miss.produced_slot!r}->{miss.consumed_slot!r} "
+                    "is missing an endpoint contract"
+                )
+            build = self._build_adapter(tenant, miss, src, tgt)
+            if build is None:
+                return None, (
+                    f"could not adapt {miss.source}:{miss.produced_slot} -> "
+                    f"{miss.target}:{miss.consumed_slot} ({miss.reason})"
+                )
+            builds.append(build)
+        return builds, ""
 
     @staticmethod
     def _web_contract(

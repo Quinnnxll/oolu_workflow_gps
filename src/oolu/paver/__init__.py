@@ -13,7 +13,19 @@ W1 draws the map W2+ will pave.
 
 from __future__ import annotations
 
-from .agent import PaveOutcome, PaveReport, PaverAgent, RehearsalResult
+from .adapters import (
+    AdapterResult,
+    AdapterSpec,
+    AdapterSynthesizer,
+    render_mapping_adapter,
+)
+from .agent import (
+    AdapterBuild,
+    PaveOutcome,
+    PaveReport,
+    PaverAgent,
+    RehearsalResult,
+)
 from .contracts import (
     NearMiss,
     RouteWeb,
@@ -21,11 +33,18 @@ from .contracts import (
     WebEdge,
 )
 from .discovery import SurveyNode, WebSurveyor
+from .negotiator import ContractNegotiator, NegotiationResult
 from .routine import PaverScheduleStore
 from .store import PaveStore
 
 __all__ = [
+    "AdapterBuild",
+    "AdapterResult",
+    "AdapterSpec",
+    "AdapterSynthesizer",
+    "ContractNegotiator",
     "NearMiss",
+    "NegotiationResult",
     "PaveOutcome",
     "PaveReport",
     "PaveStore",
@@ -37,4 +56,5 @@ __all__ = [
     "SurveyReport",
     "WebEdge",
     "WebSurveyor",
+    "render_mapping_adapter",
 ]

@@ -133,6 +133,29 @@ SEATS: dict[str, Seat] = {
             audited=True,
         ),
         Seat(
+            purpose="paver.match",
+            charge=(
+                "PROPOSE which near-miss junctions are worth bridging — "
+                "advice only: the type-system negotiator and a passing "
+                "test dispose, so no proposal ever becomes an edge on the "
+                "model's say-so"
+            ),
+            audited=True,
+        ),
+        Seat(
+            purpose="paver.adapt",
+            charge=(
+                "author ONE adapter that converts a producer's output into "
+                "the shape the consumer needs — verified against the "
+                "producer's real sampled value with the consumer's port "
+                "checked; a rename is poured deterministically, no model"
+            ),
+            reads=("src/",),
+            writes=("src/",),
+            consent_key="account.autobuild_consent",
+            audited=True,
+        ),
+        Seat(
             purpose="node.plan_program",
             charge=(
                 "plan a program node: internal modules with checks, "

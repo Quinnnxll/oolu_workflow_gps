@@ -199,6 +199,7 @@ from ..runtime.bundle import BundleError, BundleStore
 from ..seats import SEATS, DeskFiles, SeatViolation
 from ..settings_node import SettingError, SettingsNode
 from ..skills.contract import (
+    ActionsBody,
     ContractEdge,
     NodeContract,
     NodeStats,
@@ -13527,7 +13528,178 @@ class GatewayApp:
             audit=self._durable.audit.append,
             is_paved=self._web_already_paved,
             is_blocked=self._web_blocked,
+            build_adapter=lambda tenant, miss, src, tgt: self._build_adapter(
+                tenant, miss, src, tgt, now
+            ),
         )
+
+    def _build_adapter(self, tenant, miss, src, tgt, now):
+        """Bridge ONE near-miss junction into an adapter citizen (W3).
+
+        Negotiate the two slots (the type system disposes, not advice),
+        sample the producer's REAL last-filed port value as the test
+        vector, synthesize the adapter (a deterministic rename template,
+        or a model-authored shape change under seat ``paver.adapt``),
+        verify it by EXECUTION against that sample with the consumer's
+        port checked, and — only on a pass — land it as its own citizen.
+        Returns the child to splice into the web, or None (a ``none``
+        verdict, no sampled value yet, no verify seam, or a candidate that
+        never passed) so the agent fails the whole web rather than pave a
+        hole."""
+        from ..paver import (
+            AdapterBuild,
+            AdapterSpec,
+            AdapterSynthesizer,
+            ContractNegotiator,
+        )
+
+        if self._values is None:
+            return None
+        produced = next(
+            (s for s in src.contract.produces if s.name == miss.produced_slot),
+            None,
+        )
+        consumed = next(
+            (s for s in tgt.contract.consumes if s.name == miss.consumed_slot),
+            None,
+        )
+        if produced is None or consumed is None:
+            return None
+        verdict = ContractNegotiator().negotiate(produced, consumed).verdict
+        if verdict not in ("mappable", "convertible"):
+            return None
+        # The test vector: the producer's REAL last-filed port value. No
+        # value yet (the producer has not run) ⇒ defer, not a failure — a
+        # later tick samples a real value and tries again.
+        ref = self._values.port_ref(tenant, src.key, miss.produced_slot)
+        if ref is None:
+            return None
+        try:
+            sample = self._values.resolve(ref, tenant=tenant)
+        except Exception:  # noqa: BLE001 - an unreadable sample defers
+            return None
+        runner = self._contract_executors.get("script")
+        verify_fn = getattr(runner, "verify_function", None) if runner else None
+        if not callable(verify_fn):
+            return None
+        model = None
+        if verdict == "convertible":
+            # A shape change is model-authored under its own seat; a rename
+            # is deterministic and never touches a model.
+            model = self._tenant_model(tenant, purpose="paver.adapt")
+            if model is None:
+                return None
+        synth = AdapterSynthesizer(verify=verify_fn, model=model)
+        result = synth.author(
+            AdapterSpec(
+                produced=produced, consumed=consumed,
+                verdict=verdict, sample=sample,
+            )
+        )
+        if not result.ok:
+            return None
+        landed = self._land_adapter_citizen(
+            tenant, miss, produced, consumed, result.script, verdict, now
+        )
+        if landed is None:
+            return None
+        node_id, contract = landed
+        self._durable.audit.append(
+            "paver.adapter_built",
+            {
+                "run_id": "paver:schedule",
+                "tenant": tenant,
+                "node_id": node_id,
+                "produced": miss.produced_slot,
+                "consumed": miss.consumed_slot,
+                "verdict": verdict,
+                "templated": result.templated,
+                "rounds": result.rounds,
+            },
+        )
+        return AdapterBuild(
+            node_id=node_id, contract=contract, templated=result.templated
+        )
+
+    def _land_adapter_citizen(
+        self, tenant, miss, produced, consumed, script, verdict, now
+    ):
+        """Register the adapter as its OWN node — the same contribute door
+        every citizen passes (the script re-screened before storage), so
+        the bridge is an accountable, listed, runnable node, not an opaque
+        splice. Returns ``(node_id, child_contract)`` — the child carrying
+        the script the rehearsal runs — or None if registration refused.
+
+        Like the paved web (:meth:`_promote_web`), the script rides the
+        skill action (``sanitized_skill_json``), so the node is runnable
+        from the registry with no session-scoped drawer write."""
+        # The child name must be UNIQUE within the web: the rehearsal's
+        # by-name producer map drops colliding names (W0.1), so two
+        # near-misses that share slot names but bridge different node pairs
+        # would otherwise both vanish from the wiring. The endpoint keys
+        # make each junction's adapter distinct.
+        adapter = NodeContract(
+            name=(
+                f"adapt-{str(miss.source)[:8]}-{str(miss.target)[:8]}-"
+                f"{miss.produced_slot}-to-{miss.consumed_slot}"
+            ),
+            description=(
+                f"adapter {miss.produced_slot} -> {miss.consumed_slot} "
+                f"({verdict})"
+            ),
+            provenance="synthesized",
+            consumes=[produced],
+            produces=[consumed],
+            body=ActionsBody(
+                actions=[
+                    ActionEvent(
+                        correlation_id="function",
+                        adapter="script",
+                        operation="run",
+                        parameters={
+                            "goal": (
+                                f"adapt {miss.produced_slot} to "
+                                f"{miss.consumed_slot}"
+                            ),
+                            "script": script,
+                            "node_key": (
+                                f"paver-adapter:{tenant}:{miss.produced_slot}"
+                                f"->{miss.consumed_slot}"
+                            ),
+                        },
+                    )
+                ]
+            ),
+        )
+        try:
+            result = self._nodeplace.contribute(
+                noder_principal="oolu-paver",
+                tenant_id=tenant,
+                skill=adapter.to_skill(),
+                semver="1.0.0",
+                title=adapter.name,
+                summary=adapter.description,
+                consumes=[produced],
+                produces=[consumed],
+            )
+        except Exception:  # noqa: BLE001 - a refused adapter bridges nothing
+            logging.getLogger("oolu.gateway").warning(
+                "paver adapter contribute refused for %s->%s",
+                miss.produced_slot, miss.consumed_slot, exc_info=True,
+            )
+            return None
+        node_id = result.node.node_id
+        if self._desk is not None:
+            try:
+                self._desk.create_account(
+                    node_id,
+                    principal="oolu-paver",
+                    tenant=tenant,
+                    policy_version=NODE_POLICY_VERSION,
+                )
+            except Exception:  # noqa: BLE001 - account is desk bookkeeping
+                pass
+        return node_id, adapter
 
     def _web_already_paved(self, tenant: str, web) -> bool:
         """True iff this web was paved and its shape is UNCHANGED — the
