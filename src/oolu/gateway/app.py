@@ -20212,9 +20212,14 @@ class GatewayApp:
         if newest is None:
             return None
         try:
-            return json.loads(newest.content)
+            parsed = json.loads(newest.content)
         except ValueError:
             return None
+        # The contract is dict-or-None (F3.1): a hand-written outputs.json
+        # holding a bare list/number parses cleanly but would crash every
+        # reader that .get()s it — the view answered 500 until the file
+        # was removed. A non-dict is no standing result.
+        return parsed if isinstance(parsed, dict) else None
 
     def _file_run_values(self, state: RunState) -> None:
         """A COMPLETED node-function run's outputs, filed where the typed

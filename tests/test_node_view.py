@@ -199,3 +199,29 @@ def test_a_plain_function_node_gets_the_same_free_view(tmp_path):
         assert "Program state" not in page  # no program, no state section
     finally:
         conn.close()
+
+
+def test_a_non_dict_outputs_file_renders_the_empty_view_not_a_500(tmp_path):
+    # F3.1: a hand-written runs/*/outputs.json holding a bare list parses
+    # cleanly but is NOT a standing result — the view renders the honest
+    # empty page instead of crashing on .get().
+    from oolu.durable.files import UserFile
+
+    app, conn, ident, runner = _program_app(tmp_path)
+    try:
+        node_id = _publish_ledger_program(app, ident)
+        app._files.save(
+            UserFile(
+                tenant_id="t1",
+                node_id=node_id,
+                folder="runs/hand-written",
+                name="outputs.json",
+                media_type="application/json",
+                content="[1, 2, 3]",
+            )
+        )
+        response = _view(app, ident, node_id)
+        assert response.status == 200, response.body
+        assert "No verified run yet" in response.body
+    finally:
+        conn.close()
