@@ -824,12 +824,24 @@ class GatewayApp:
         # its own table, and the durable map it refreshes. Same consent-
         # first, fleet-safe discipline as the sweep — a separate schedule
         # so the two cadences never entangle.
-        from ..paver import PaveStore, PaverScheduleStore, WebSurveyor
+        from ..paver import (
+            PaveStore,
+            PaverScheduleStore,
+            PropagationConsentStore,
+            TriggerClaimStore,
+            WebSurveyor,
+        )
 
         self._paver_schedule = PaverScheduleStore(durable.conn)
         self._pave_store = PaveStore(durable.conn)
         self._surveyor = WebSurveyor()
         self._paver_gate = 0.0
+        # Trigger propagation (W4): per-web standing consent, the durable
+        # fire-once claim (a cycle A→B→A fires each node once per trigger),
+        # and the drain gate that delivers the outbox-deferred cascade.
+        self._propagation_consent = PropagationConsentStore(durable.conn)
+        self._trigger_claims = TriggerClaimStore(durable.conn)
+        self._propagation_gate = 0.0
         # Retention's own gate: at most one pruning pass per hour per host.
         self._retention_gate = 0.0
         # The pulse (personal-nodes plan P0): durable schedules that fire
@@ -1892,6 +1904,9 @@ class GatewayApp:
         r.add("DELETE", "/v1/paver/schedule", self._paver_schedule_clear)
         r.add("GET", "/v1/paver/webs", self._paver_webs)
         r.add("GET", "/v1/paver/webs/{anchor}", self._paver_webs_for_anchor)
+        r.add("GET", "/v1/paver/propagation", self._propagation_list)
+        r.add("POST", "/v1/paver/propagation/{web_id}", self._propagation_grant)
+        r.add("DELETE", "/v1/paver/propagation/{web_id}", self._propagation_revoke)
         # The platform's finance monitor: what every account DRAWS (model
         # API spend against its allowance) and what every noder EARNS
         # (execution revenue) — one screen for the operator, read straight
@@ -13348,6 +13363,61 @@ class GatewayApp:
             {"webs": [web.model_dump(mode="json") for web in webs]},
         )
 
+    # -- trigger propagation consent (W4) --------------------------------- #
+    def _propagation_list(self, request, session, params) -> Response:
+        """The caller's own tenant's propagation consents — which paved
+        webs will fan out when their anchor is triggered, and which were
+        revoked."""
+        return json_response(
+            200,
+            {"consents": self._propagation_consent.list(session.tenant_id)},
+        )
+
+    def _propagation_grant(self, request, session, params) -> Response:
+        """Opt one paved web into trigger propagation — the standing,
+        revocable consent that lets a trigger on its anchor fan out the
+        whole web. The web must be paved (a promoted contract exists), so a
+        consent can never arm a web that has nothing deterministic to fire."""
+        web_id = params["web_id"]
+        if self._pave_store.paved(session.tenant_id, web_id) is None:
+            raise GatewayError(
+                404, "not_found",
+                "no paved web with that id — propagation arms only paved webs",
+            )
+        now = request.now or self._clock()
+        self._propagation_consent.grant(
+            session.tenant_id, web_id, granted_by=session.principal_id, now=now
+        )
+        self._durable.audit.append(
+            "paver.propagation_granted",
+            {
+                "run_id": "paver:propagation",
+                "tenant": session.tenant_id,
+                "web_id": web_id,
+                "by": session.principal_id,
+            },
+        )
+        return json_response(200, {"web_id": web_id, "stands": True})
+
+    def _propagation_revoke(self, request, session, params) -> Response:
+        """Revoke a web's propagation consent — the NEXT trigger stops cold
+        (re-checked at delivery, so even an already-enqueued cascade is
+        refused)."""
+        web_id = params["web_id"]
+        now = request.now or self._clock()
+        revoked = self._propagation_consent.revoke(session.tenant_id, web_id, now=now)
+        if revoked:
+            self._durable.audit.append(
+                "paver.propagation_revoked",
+                {
+                    "run_id": "paver:propagation",
+                    "tenant": session.tenant_id,
+                    "web_id": web_id,
+                    "by": session.principal_id,
+                },
+            )
+        return json_response(200, {"web_id": web_id, "stands": False, "revoked": revoked})
+
     def _bundle_sweep_audit(self, request, session, params) -> Response:
         """The sweep's whole history, straight off the hash-chained audit
         log: consents granted and revoked, and every firing — manual or
@@ -13399,6 +13469,12 @@ class GatewayApp:
             if now_mono >= self._paver_gate:
                 self._paver_gate = now_mono + 60.0
                 self._scheduled_survey_tick(request.now or self._clock())
+            # Trigger propagation (W4): deliver outbox-deferred cascades on
+            # their own minute gate, so a paved web's fan-out fires even
+            # between survey ticks.
+            if now_mono >= self._propagation_gate:
+                self._propagation_gate = now_mono + 60.0
+                self._drain_propagation(request.now or self._clock())
             if now_mono < self._sweep_gate:
                 return
             self._sweep_gate = now_mono + 60.0
@@ -13744,78 +13820,86 @@ class GatewayApp:
         except Exception:  # noqa: BLE001 - a check failure never blocks paving
             return False
 
-    def _rehearse_web(self, contract):
-        """Run a web's SubgraphBody end-to-end in the SEVERED sandbox — the
-        effect-freedom rehearsal (W2). Compiles with the dataflow wired and
-        the tenant stamped, files each hop's outputs mid-run so the next
-        hop resolves them, and reports whether the whole web ran clean. No
-        market economics: the Paver rehearses, it does not bill."""
-        from ..paver import RehearsalResult
+    def _prepare_web_run(self, contract, *, namespace: str | None = None):
+        """Compile a web's SubgraphBody for execution: wire the dataflow,
+        stamp the value tenant, stamp output obligations, and build the
+        per-settle value pipe that files each hop's outputs so the next hop
+        resolves them. Shared by the W2 rehearsal (namespace omitted → a
+        rehearsal-unique namespace off the uuid4 blueprint id, severed) and
+        the W4 fire (namespace = the REAL tenant, un-severed) — the compile
+        is identical, only the namespace and isolation differ. Returns
+        ``(compiled, value_pipe, namespace)``."""
         from ..values import parse_output_ref
 
-        try:
-            children = (
-                contract.body.nodes
-                if hasattr(contract.body, "nodes")
-                else [contract]
-            )
-            producer_keys = {child.id: child.id for child in children}
-            compiled = compile_contract(
-                contract, wire_dataflow=True, producer_keys=producer_keys
-            )
-            # A rehearsal-UNIQUE namespace (W2.1): the blueprint id is
-            # uuid4-minted per compile, so each rehearsal files under a
-            # fresh tenant — no cross-rehearsal collision, and no STALE
-            # value from a prior tick's rehearsal can ever resolve (the
-            # namespace's port index starts empty).
-            namespace = f"{_PAVER_REHEARSAL_TENANT}:{compiled.blueprint.id}"
-            compiled = stamp_value_tenant(compiled, namespace)
-            # Same duplicate-name guard the live door uses (W0.1): a
-            # colliding child name would misattribute a producer key.
-            name_counts: dict[str, int] = {}
-            for c in children:
-                name_counts[c.name] = name_counts.get(c.name, 0) + 1
-            by_name = {c.name: c for c in children if name_counts[c.name] == 1}
-            producer_ids = {
-                action_id: producer_keys[by_name[owner].id]
-                for action_id, owner in compiled.owners.items()
-                if owner in by_name
-            }
-            # Every wired port is an OBLIGATION here too (W0.1/W2.1): a
-            # producer that succeeds without re-emitting a consumed port
-            # FAILS the rehearsal loudly, so a web never rehearses "clean"
-            # on data a real run would not produce.
-            obligations: dict[str, set[str]] = {}
-            for item in compiled.blueprint.actions:
-                for bound in (item.action.parameters.get("bindings") or {}).values():
-                    port = parse_output_ref(bound)
-                    if port is not None:
-                        obligations.setdefault(port[0], set()).add(port[1])
-            compiled = stamp_output_obligations(compiled, producer_ids, obligations)
+        children = (
+            contract.body.nodes if hasattr(contract.body, "nodes") else [contract]
+        )
+        producer_keys = {child.id: child.id for child in children}
+        compiled = compile_contract(
+            contract, wire_dataflow=True, producer_keys=producer_keys
+        )
+        # A rehearsal-UNIQUE namespace (W2.1) when none is given: the
+        # blueprint id is uuid4-minted per compile, so each rehearsal files
+        # under a fresh tenant — no stale value ever resolves.
+        namespace = namespace or f"{_PAVER_REHEARSAL_TENANT}:{compiled.blueprint.id}"
+        compiled = stamp_value_tenant(compiled, namespace)
+        # Duplicate-name guard (W0.1): a colliding child name would
+        # misattribute a producer key, so it neither wires nor files.
+        name_counts: dict[str, int] = {}
+        for c in children:
+            name_counts[c.name] = name_counts.get(c.name, 0) + 1
+        by_name = {c.name: c for c in children if name_counts[c.name] == 1}
+        producer_ids = {
+            action_id: producer_keys[by_name[owner].id]
+            for action_id, owner in compiled.owners.items()
+            if owner in by_name
+        }
+        # Every wired port is an OBLIGATION (W0.1/W2.1): a producer that
+        # succeeds without re-emitting a consumed port FAILS the run loudly,
+        # so a consumer never resolves a stale value.
+        obligations: dict[str, set[str]] = {}
+        for item in compiled.blueprint.actions:
+            for bound in (item.action.parameters.get("bindings") or {}).values():
+                port = parse_output_ref(bound)
+                if port is not None:
+                    obligations.setdefault(port[0], set()).add(port[1])
+        compiled = stamp_output_obligations(compiled, producer_ids, obligations)
 
-            def value_pipe(action_id, outcome):
-                producer = producer_ids.get(action_id)
-                if not producer:
-                    return
-                obligated = obligations.get(producer, set())
-                payload = (outcome.evidence or {}).get("result")
-                if payload is None:
-                    if obligated:
-                        raise ValuePipeError(
-                            f"producer {producer} emitted no result for "
-                            f"obligated port(s) {', '.join(sorted(obligated))}"
-                        )
-                    return
-                refs = self._values.snapshot_outputs(
-                    namespace, payload, label=producer, producer=producer
-                )
-                missing = sorted(obligated - set(refs))
-                if missing:
+        def value_pipe(action_id, outcome):
+            producer = producer_ids.get(action_id)
+            if not producer:
+                return
+            obligated = obligations.get(producer, set())
+            payload = (outcome.evidence or {}).get("result")
+            if payload is None:
+                if obligated:
                     raise ValuePipeError(
-                        f"producer {producer} did not fill obligated "
-                        f"port(s) {', '.join(missing)}"
+                        f"producer {producer} emitted no result for "
+                        f"obligated port(s) {', '.join(sorted(obligated))}"
                     )
+                return
+            refs = self._values.snapshot_outputs(
+                namespace, payload, label=producer, producer=producer
+            )
+            missing = sorted(obligated - set(refs))
+            if missing:
+                raise ValuePipeError(
+                    f"producer {producer} did not fill obligated "
+                    f"port(s) {', '.join(missing)}"
+                )
 
+        return compiled, value_pipe, namespace
+
+    def _rehearse_web(self, contract):
+        """Run a web's SubgraphBody end-to-end in the SEVERED sandbox — the
+        effect-freedom rehearsal (W2). A rehearsal-UNIQUE namespace (off the
+        uuid4 blueprint id) means no stale value ever resolves; each hop's
+        outputs are filed mid-run so the next hop resolves them. No market
+        economics: the Paver rehearses, it does not bill."""
+        from ..paver import RehearsalResult
+
+        try:
+            compiled, value_pipe, _ = self._prepare_web_run(contract)
             record = self._contract_runner.execute(
                 RoutePlan(chosen=compiled.blueprint, alternatives=[], total_cost=0.0),
                 idempotency_key=f"paver-rehearse:{compiled.blueprint.id}",
@@ -13888,6 +13972,134 @@ class GatewayApp:
             logging.getLogger("oolu.gateway").warning(
                 "paver negative note failed for %s", web.web_id, exc_info=True
             )
+
+    # ------------------------------------------------------------------ #
+    # Trigger propagation (W4): one trigger, the whole web.               #
+    # ------------------------------------------------------------------ #
+    def _web_router(self, now):
+        """Construct the tick's :class:`WebTriggerRouter` over the real
+        durable ports — per-web consent, the fire-once claim, the survey's
+        anchored-web view, and the market-free web firing."""
+        from ..paver import PROPAGATION_TOPIC, WebTriggerRouter
+
+        return WebTriggerRouter(
+            consent=self._propagation_consent.stands,
+            claim=lambda stamp, target: self._trigger_claims.claim(
+                stamp, target, now=now
+            ),
+            webs_at=lambda tenant, node_id: self._pave_store.webs(
+                tenant, anchor=node_id
+            ),
+            fire_web=lambda tenant, web_id, stamp, hop: self._fire_web(
+                tenant, web_id, stamp, hop, now
+            ),
+            enqueue=lambda payload: self._durable.outbox.publish(
+                PROPAGATION_TOPIC, payload
+            ),
+            audit=self._durable.audit.append,
+        )
+
+    def _on_anchor_filed(self, state) -> None:
+        """The post-terminal hook (W4): a completed anchor run's ports are
+        already filed, so ENQUEUE trigger propagation for every consented
+        web anchored at this node and return. Enqueue-only — the cascade is
+        delivered by the lazy tick's drain, so the triggering POST returns
+        after the anchor's own run alone. Never raises into a run's
+        completion; propagation is best-effort at the enqueue side."""
+        try:
+            if getattr(state, "phase", None) is not Phase.COMPLETED:
+                return
+            if self._values is None:
+                return
+            meta = getattr(state.contract, "metadata", None) or {}
+            function = meta.get("node_function") or {}
+            node_id = str(function.get("node_id") or "")
+            tenant = str(meta.get("tenant_id") or "")
+            if not node_id or not tenant:
+                return
+            self._web_router(datetime.now(UTC)).on_trigger(
+                tenant, node_id, str(state.run_id)
+            )
+        except Exception:  # noqa: BLE001 - propagation never breaks completion
+            logging.getLogger("oolu.gateway").warning(
+                "propagation enqueue failed", exc_info=True
+            )
+
+    def _drain_propagation(self, now) -> None:
+        """Deliver outbox-deferred propagation messages (W4) — the lazy
+        tick's drain. Relays ONLY the propagation topic (the outbox also
+        carries unrelated workflow.* checkpoint messages a blind relay
+        would wrongly mark sent). A host without a contract runtime never
+        fires a web, so it never drains."""
+        from ..paver import PROPAGATION_TOPIC
+
+        if self._values is None or self._contract_runner is None:
+            return
+        router = self._web_router(now)
+        self._durable.outbox.relay(
+            lambda message: router.deliver(message.payload), topic=PROPAGATION_TOPIC
+        )
+
+    def _fire_web(self, tenant: str, web_id: str, trigger_stamp: str, hop: int, now):
+        """Fire one paved web as ONE contract run under the REAL tenant
+        (W4 fast path) — the ``_rehearse_web`` machinery un-severed: wire
+        the dataflow, file each hop's outputs so the next resolves them,
+        and run the whole SubgraphBody in one parallel DAG. Market-free by
+        construction (``runner.execute`` directly, no billing) — the paved
+        web IS the deterministic unit; the trigger only starts it.
+
+        A web with no promoted contract is not fired (nothing deterministic
+        to run). A web carrying a reserved hop HALTS at the hold and
+        surfaces ``awaiting_approval`` — propagation never routes around a
+        human. Effect-free paved webs (all W2/W3 pave) carry no reserved
+        hop, so the hold branch is the defensive floor, not the common path."""
+        from ..paver import FireResult
+
+        stored = self._pave_store.paved(tenant, web_id)
+        if stored is None:
+            return FireResult(web_id, "skipped", reason="web is not paved")
+        try:
+            contract = NodeContract.model_validate_json(stored["contract_json"])
+            compiled, value_pipe, _ = self._prepare_web_run(contract, namespace=tenant)
+            reserved = reserved_operations(compiled)
+            if reserved:
+                self._durable.audit.append(
+                    "paver.propagation_held",
+                    {
+                        "run_id": "paver:propagation",
+                        "tenant": tenant,
+                        "web_id": web_id,
+                        "trigger_stamp": trigger_stamp,
+                        "reserved": reserved,
+                        "status": "awaiting_approval",
+                    },
+                )
+                return FireResult(
+                    web_id, "held",
+                    reason="reserved hop halts propagation: " + ", ".join(reserved),
+                )
+            record = self._contract_runner.execute(
+                RoutePlan(chosen=compiled.blueprint, alternatives=[], total_cost=0.0),
+                idempotency_key=f"propagation:{trigger_stamp}:{web_id}",
+                attempt=1,
+                value_pipe=value_pipe,
+            )
+        except Exception as exc:  # noqa: BLE001 - a fire failure is data, not a crash
+            logging.getLogger("oolu.gateway").warning(
+                "propagation fire failed for web %s", web_id, exc_info=True
+            )
+            return FireResult(web_id, "failed", reason=f"fire error: {exc}")
+        fired = len(
+            contract.body.nodes if hasattr(contract.body, "nodes") else [contract]
+        )
+        if record.status is ExecutionStatus.SUCCEEDED:
+            return FireResult(
+                web_id, "fired", fired=fired, run_id=record.idempotency_key
+            )
+        return FireResult(
+            web_id, "failed", fired=fired, run_id=record.idempotency_key,
+            reason=record.error or "the web run failed",
+        )
 
     def _paver_tenants(self) -> list[str]:
         """Every tenant with at least one node — the survey's field of
@@ -18942,6 +19154,10 @@ class GatewayApp:
         # And the run's real outputs are FILED: immutable values, the
         # node's port index, and the input→output lineage.
         self._file_run_values(state)
+        # W4: this node may ANCHOR a paved web — the ports are filed now,
+        # so ENQUEUE trigger propagation (deferred to the drain; the POST
+        # returns after the anchor alone). Only consented webs propagate.
+        self._on_anchor_filed(state)
         # B3: the node keeps its OWN record — the run's resolved inputs
         # and emitted outputs land in the node's drawer, scrubbed.
         self._land_run_io(state)

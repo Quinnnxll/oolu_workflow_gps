@@ -693,3 +693,115 @@ def test_contribute_screens_child_scripts_inside_a_subgraph():
     skill = web.subgraph_to_skill()
     scripts = _screenable_scripts(skill.actions[0])
     assert any("socket" in s for s in scripts)
+
+
+# --------------------------------------------------------------------------- #
+# W4 — trigger propagation: one trigger fires the whole paved web.            #
+# --------------------------------------------------------------------------- #
+def _paved_web_app(tmp_path):
+    """Pave a direct exporter->cleaner web and return (app, conn, web_id,
+    anchor node id) ready for a propagation trigger."""
+    app, conn, ident, registry, executor = _pave_app(
+        tmp_path,
+        payloads={
+            "exporter": {"rows_csv": "the rows"},
+            "cleaner": {"tidy_csv": "tidy"},
+        },
+    )
+    exporter = _publish_script_node(
+        app, registry, name="exporter", consumes=[],
+        produces=[{"name": "rows_csv", "value_type": "path", "role": "path"}],
+        hook=True,
+    )
+    _publish_script_node(
+        app, registry, name="cleaner",
+        consumes=[{"name": "rows_csv", "value_type": "path", "role": "path"}],
+        produces=[],
+    )
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    app._paver_schedule.enable(
+        interval_hours=6, granted_by="quinn", tenant="t1", now=now
+    )
+    app._scheduled_survey_tick(now)
+    paved = [
+        r for r in app._durable.audit.records() if r.event_type == "paver.web_paved"
+    ]
+    assert paved, "the direct web should have paved"
+    return app, conn, paved[0].payload["web_id"], exporter
+
+
+def test_trigger_fires_the_whole_paved_web(tmp_path):
+    # The W4 loop-closure: consent stands, the anchor is triggered, the
+    # propagation is enqueued and — on the drain — the whole paved web
+    # fires as ONE contract run under the real tenant.
+    app, conn, web_id, anchor = _paved_web_app(tmp_path)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    app._propagation_consent.grant("t1", web_id, granted_by="quinn", now=now)
+
+    # Trigger: the anchor's completion enqueues propagation (deferred).
+    enqueued = app._web_router(now).on_trigger("t1", anchor, "run-1")
+    assert [e.web_id for e in enqueued] == [web_id]
+    fired_before = [
+        r for r in app._durable.audit.records()
+        if r.event_type == "paver.propagation_fired"
+    ]
+    assert not fired_before  # nothing fired in-request — it is deferred
+
+    # Drain: the web fires.
+    app._drain_propagation(now)
+    fired = [
+        r for r in app._durable.audit.records()
+        if r.event_type == "paver.propagation_fired"
+    ]
+    assert len(fired) == 1
+    assert fired[0].payload["web_id"] == web_id
+    assert fired[0].payload["fired"] == 2  # exporter + cleaner ran
+
+    # Idempotent: a second drain (at-least-once outbox) re-fires nothing —
+    # the (trigger_stamp, web_id) claim was taken.
+    app._web_router(now).on_trigger("t1", anchor, "run-1")  # same run => same stamp
+    app._drain_propagation(now)
+    still = [
+        r for r in app._durable.audit.records()
+        if r.event_type == "paver.propagation_fired"
+    ]
+    assert len(still) == 1
+    conn.close()
+
+
+def test_revoking_consent_stops_the_next_propagation_cold(tmp_path):
+    # Consent stands at enqueue, is revoked before the drain: delivery
+    # re-checks consent and refuses — the web never fires.
+    app, conn, web_id, anchor = _paved_web_app(tmp_path)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    app._propagation_consent.grant("t1", web_id, granted_by="quinn", now=now)
+    app._web_router(now).on_trigger("t1", anchor, "run-1")  # enqueued while granted
+    assert app._propagation_consent.revoke("t1", web_id, now=now) is True
+
+    app._drain_propagation(now)
+    fired = [
+        r for r in app._durable.audit.records()
+        if r.event_type == "paver.propagation_fired"
+    ]
+    assert not fired  # revoked between enqueue and delivery => never fires
+    no_consent = [
+        r for r in app._durable.audit.records()
+        if r.event_type == "paver.propagation_no_consent"
+    ]
+    assert no_consent
+    conn.close()
+
+
+def test_unconsented_web_never_enqueues(tmp_path):
+    # No consent => a trigger on the anchor enqueues nothing (the POST just
+    # returns; the web does not fan out).
+    app, conn, web_id, anchor = _paved_web_app(tmp_path)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    enqueued = app._web_router(now).on_trigger("t1", anchor, "run-1")
+    assert enqueued == []
+    app._drain_propagation(now)
+    assert not [
+        r for r in app._durable.audit.records()
+        if r.event_type == "paver.propagation_fired"
+    ]
+    conn.close()

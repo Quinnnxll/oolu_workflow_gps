@@ -4,6 +4,45 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Trigger propagation (W4) — one trigger, the whole web: a deterministic,
+bounded, consent-gated cascade (docs/algorithm-barriers-plan.md, Part II):
+
+- **The stores** (`src/oolu/paver/propagation.py`) —
+  `PropagationConsentStore` holds per-(tenant, web) STANDING, revocable
+  consent (a user opts one paved web into propagation; revoking stops the
+  next cascade cold). `TriggerClaimStore` is the durable
+  `(trigger_stamp, target)` INSERT-OR-IGNORE fire-once claim (mirroring
+  `PulseStore.claim`), so a web fires ONCE per trigger across processes and
+  restarts — a cycle A→B→A settles.
+- **The router** (`WebTriggerRouter`) — pure orchestration over injected
+  ports. `on_trigger` is ENQUEUE-ONLY: it mints a trigger stamp from the
+  anchor run, stages one durable outbox message per consented anchored web,
+  and returns — the triggering POST is never held. `deliver` is the drain
+  sink: bounds (`MAX_HOPS`, `MAX_FIRES_PER_TRIGGER`), then consent
+  RE-CHECKED (a revoke since enqueue refuses it), then the fire-once claim,
+  then the web fires — idempotent under the at-least-once outbox.
+- **The gateway** — `_record_function_verification` (the post-terminal
+  seam both the webhook and pulse doors share) calls `_on_anchor_filed`
+  right after the anchor's ports are filed, enqueuing propagation without
+  blocking the POST. A `_propagation_gate` on the lazy tick drains the
+  outbox with a TOPIC-SCOPED relay (`outbox.relay(topic=)`, a new
+  backward-compatible filter, so the drain never touches unrelated
+  `workflow.*` checkpoint messages). `_fire_web` runs the paved web's
+  SubgraphBody as ONE contract run under the REAL tenant via
+  `_prepare_web_run` (the `_rehearse_web` compile/pipe core refactored to
+  share) and `_contract_runner.execute` directly — market-FREE by
+  construction, so it runs on a personal, local-first install. A reserved
+  hop HALTS at the hold and surfaces `awaiting_approval`, never routing
+  around a human.
+- **Consent surface** — `GET/POST/DELETE /v1/paver/propagation[/{web_id}]`
+  list/grant/revoke; a grant is refused for a web that is not paved.
+- **Deferred (named, not faked)** — the SLOW per-edge path (payload-driven
+  / partially-paved webs), cross-web CHAINING past hop 1, and BILLED
+  propagation + reserved-hold auto-resume are named follow-ups; the fast
+  path re-runs the whole paved web, which for the effect-free deterministic
+  webs the Paver paves is identical to firing downstream off the anchor's
+  output.
+
 Adapter synthesis (W3) — the coding-agent half breaks the exact-name
 wall: a junction becomes a tested, accountable citizen
 (docs/algorithm-barriers-plan.md, Part II):

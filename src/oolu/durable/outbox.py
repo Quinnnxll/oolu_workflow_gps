@@ -72,22 +72,45 @@ class TransactionalOutbox:
         with self._conn.transaction() as db:
             return self.stage(db, topic, payload)
 
-    def pending(self, *, limit: int = 100) -> list[OutboxMessage]:
+    def pending(
+        self, *, limit: int = 100, topic: str | None = None
+    ) -> list[OutboxMessage]:
+        """Pending messages oldest-first. ``topic`` scopes to one topic —
+        so a relay for one subsystem never sweeps another's messages (the
+        outbox holds several topics: workflow.* checkpoints, W4's
+        paver.propagation, …). Without it, ALL pending are returned."""
         with self._conn.lock:
-            rows = self._conn.db.execute(
-                "SELECT * FROM outbox WHERE status = ? ORDER BY created_at ASC LIMIT ?",
-                (OutboxStatus.PENDING.value, limit),
-            ).fetchall()
+            if topic is None:
+                rows = self._conn.db.execute(
+                    "SELECT * FROM outbox WHERE status = ? "
+                    "ORDER BY created_at ASC LIMIT ?",
+                    (OutboxStatus.PENDING.value, limit),
+                ).fetchall()
+            else:
+                rows = self._conn.db.execute(
+                    "SELECT * FROM outbox WHERE status = ? AND topic = ? "
+                    "ORDER BY created_at ASC LIMIT ?",
+                    (OutboxStatus.PENDING.value, topic, limit),
+                ).fetchall()
         return [self._row(row) for row in rows]
 
-    def relay(self, sink: Callable[[OutboxMessage], None], *, limit: int = 100) -> int:
-        """Deliver pending messages to ``sink`` and mark them sent.
+    def relay(
+        self,
+        sink: Callable[[OutboxMessage], None],
+        *,
+        limit: int = 100,
+        topic: str | None = None,
+    ) -> int:
+        """Deliver pending messages to ``sink`` and mark them sent. ``topic``
+        scopes the relay to one topic — mandatory when the outbox carries
+        more than one (a blind relay would mark another subsystem's messages
+        sent without delivering them).
 
         A delivery failure leaves the message pending (attempts incremented) so a
         later relay retries it; a successful sink marks it sent exactly once.
         """
         delivered = 0
-        for message in self.pending(limit=limit):
+        for message in self.pending(limit=limit, topic=topic):
             try:
                 sink(message)
             except Exception:

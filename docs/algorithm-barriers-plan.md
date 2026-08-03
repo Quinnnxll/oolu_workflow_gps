@@ -2,8 +2,9 @@
 
 Status: In build. Three phase series, one per barrier: **F0–F3** (the
 program node), **W0–W5** (route paving — the Paver), **G0–G3** (gate
-edges). G0, G1, G2, W0, W1, W2, W3, F0, and F1 LANDED (plus review amendments
-G0.1, G1.1, G2.1, W0.1, W2.1, F0.1, F1.1); every other phase Proposed. Each lands as one commit titled
+edges). G0, G1, G2, W0, W1, W2, W3, W4, F0, and F1 LANDED (plus review amendments
+G0.1, G1.1, G2.1, W0.1, W2.1, F0.1, F1.1; W4's fast path, its slow-path /
+chaining / billed complements named-deferred); every other phase Proposed. Each lands as one commit titled
 `<CODE> landed: <name> — <subtitle>` with its loop-closure test, the
 plan-doc status flip, and the CHANGELOG entry in the same commit.
 
@@ -1077,6 +1078,54 @@ same cascade on the slow path.
 Done when: "trigger one node → the paved web fires" is a single POST,
 deterministic, bounded, consent-gated, replayable — on a personal
 install and a market install alike.
+**Status: LANDED (fast path)** — `paver/propagation.py` holds three
+things, all pure/durable and unit-testable without a gateway:
+`PropagationConsentStore` (per-(tenant, web) standing, revocable consent —
+the consent-first doctrine keyed per web), `TriggerClaimStore` (the
+durable `(trigger_stamp, target)` INSERT-OR-IGNORE fire-once claim,
+mirroring `PulseStore.claim`, so a web fires once per trigger across
+processes), and `WebTriggerRouter` — pure orchestration over injected
+ports: `on_trigger` (ENQUEUE-only: mint a stamp from the anchor run,
+stage one durable message per consented anchored web, return — the POST
+is never held) and `deliver` (the drain sink: bounds → consent
+RE-CHECKED → fire-once claim → fire the web; idempotent under the
+at-least-once outbox). The gateway wires it: the post-terminal seam
+`_record_function_verification` calls `_on_anchor_filed` right after the
+anchor's ports are filed (enqueue-only, so both the webhook and pulse
+doors — which share that seam — enqueue without blocking); a
+`_propagation_gate` on the lazy tick drains the outbox with a
+TOPIC-SCOPED relay (`outbox.relay(..., topic=)` — a new backward-
+compatible filter, so the drain never marks the unrelated `workflow.*`
+checkpoint messages sent); `_fire_web` runs the paved web's SubgraphBody
+as ONE contract run under the REAL tenant via `_prepare_web_run` (the
+`_rehearse_web` compile/pipe core refactored to share, un-severed) and
+`_contract_runner.execute` DIRECTLY — market-FREE by construction (the
+Paver's fan-out is infrastructure, not a billed transaction, exactly as
+the rehearsal is), so it runs on a personal, local-first install with no
+market. A reserved hop HALTS at the hold and surfaces `awaiting_approval`
+(never routes around a human) — defensive, since W2/W3 pave only
+effect-free webs. Consent routes: `GET/POST/DELETE /v1/paver/propagation`.
+Tests: consent grant/revoke/re-grant/wall; the fire-once claim across two
+store instances (a cycle A→B fires each once); the router's enqueue
+(consented-only, stamp minting, hop cap) and deliver (fire-once dedupe, a
+revoke between enqueue and drain refusing cold, the hop bound, a hold
+surfaced without firing around it); and the gateway loop-closure — a
+trigger enqueues nothing in-request, the drain fires the whole web as one
+run (`fired=2`), a second drain re-fires nothing (claim taken), a revoke
+stops it cold, and an unconsented web enqueues nothing.
+**Deferred (named, not faked)** — three complements land later, honestly
+scoped: (1) the SLOW per-edge path (fire downstream consumers off the
+anchor's exact filed output for a PARTIALLY-paved or payload-driven web,
+preserving trigger-specific input) — the fast path re-runs the whole
+paved web, which for the EFFECT-FREE deterministic webs the Paver paves
+produces the identical result, so it is correct for the paved case;
+(2) cross-web CHAINING past hop 1 (a fired web's completion re-enqueuing
+downstream webs) — the hop bound is enforced but the contract-run
+completion does not yet re-fire `on_trigger`, so today's cascade is one
+web deep; (3) BILLED propagation on a market install (fire via
+`execute_contract` with attribution) and the reserved-hold AUTO-RESUME
+(approver releases → the web completes) — the halt is built, the resume
+is not. Each is a named follow-up, not a silent gap.
 
 **W5 — Gate-aware paving (after G2).** *The Paver speaks gates.*
 Changes: the negotiator may propose guard edges (e.g. "only invoice

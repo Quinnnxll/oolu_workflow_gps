@@ -35,16 +35,29 @@ from .contracts import (
 )
 from .discovery import SurveyNode, WebSurveyor
 from .negotiator import ContractNegotiator, NegotiationResult
+from .propagation import (
+    MAX_FIRES_PER_TRIGGER,
+    MAX_HOPS,
+    PROPAGATION_TOPIC,
+    FireResult,
+    PropagationConsentStore,
+    TriggerClaimStore,
+    WebTriggerRouter,
+)
 from .routine import PaverScheduleStore
 from .store import PaveStore
 
 __all__ = [
     "DEFER",
+    "MAX_FIRES_PER_TRIGGER",
+    "MAX_HOPS",
+    "PROPAGATION_TOPIC",
     "AdapterBuild",
     "AdapterResult",
     "AdapterSpec",
     "AdapterSynthesizer",
     "ContractNegotiator",
+    "FireResult",
     "NearMiss",
     "NegotiationResult",
     "PaveOutcome",
@@ -52,11 +65,14 @@ __all__ = [
     "PaveStore",
     "PaverAgent",
     "PaverScheduleStore",
+    "PropagationConsentStore",
     "RehearsalResult",
     "RouteWeb",
     "SurveyNode",
     "SurveyReport",
+    "TriggerClaimStore",
     "WebEdge",
     "WebSurveyor",
+    "WebTriggerRouter",
     "render_mapping_adapter",
 ]
