@@ -1106,6 +1106,21 @@ def parse_node_io_checked(raw: str) -> tuple[dict, str]:
         return out
     inputs = clean(declared.get("inputs"))
     outputs = clean(declared.get("outputs")) or default["outputs"]
+    # Reserved payload keys (F0): completion hooks consume these out of
+    # the emitted payload as side channels ("records" lands the book,
+    # "files" lands documents, "state" is program state) — a declared
+    # output PORT so named would have its answer silently eaten as a
+    # command. Refused at declaration, the same wall the program door
+    # enforces.
+    from .skills.program import RESERVED_PAYLOAD_KEYS
+
+    for item in outputs:
+        if item["name"] in RESERVED_PAYLOAD_KEYS:
+            return default, (
+                f"the output '{item['name']}' is a reserved payload key "
+                "(completion hooks consume it as a side channel) — name "
+                "the result something else"
+            )
     # The B1 label gate: every input carries a plain-word ask. A
     # mechanism-flavored label is refused (it would interrogate the
     # user at every form and every conversation from here on); a

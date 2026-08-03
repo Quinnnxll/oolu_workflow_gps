@@ -2,7 +2,7 @@
 
 Status: In build. Three phase series, one per barrier: **F0–F3** (the
 program node), **W0–W5** (route paving — the Paver), **G0–G3** (gate
-edges). G0, G1, and W0 LANDED; every other phase Proposed. Each lands as one commit titled
+edges). G0, G1, W0, and F0 LANDED; every other phase Proposed. Each lands as one commit titled
 `<CODE> landed: <name> — <subtitle>` with its loop-closure test, the
 plan-doc status flip, and the CHANGELOG entry in the same commit.
 
@@ -403,6 +403,33 @@ the frozen bundle — a presentation-only edit must not change
 **F0 — Program substrate: spec, tree landing, tree-true birth verify.**
 *The tree becomes a first-class thing a build can produce and a birth
 can judge.*
+**Status: LANDED** — `skills/program.py` holds the vocabulary
+(ProgramSpec/ModuleSpec/OpSig/OperationSpec/StateSpec/UnifiedInterface,
+singular by construction) with `parse_program_spec` refusing by name:
+ceilings, dependency cycles, escaping paths, undeclared
+operations/state, mechanism-flavored labels, and RESERVED payload keys
+(`state`/`files`/`records`) — the reserved wall also landed on the
+single-file path (`parse_node_io_checked`). `verify_function` gained
+`files=`/`bundle=` with keyword defaults (both call sites regression-
+covered) — the shared seam W3 consumes. `_land_src` now DELEGATES to
+the new `_land_tree`: one landing law, single-file publishes
+byte-identical, whole trees through one seat-walled pass with the same
+loud `node.src_unlanded` miss. The internal door
+`publish_program_node` runs the full gate — spec parse, spec/tree
+coherence, build-time text screening of every authored module,
+per-module checks fail-fast, entry verified against declared ports —
+then contributes, opens the account, and lands the tree
+transactionally; zero model consultations. Over-wall trees PRE-PUBLISH
+FREEZE and verify via the bundle. Sharper than the plan text:
+(1) declared CHECK scripts keep the safety screen but skip the mock
+screen — a check's `emit_result` is a status constant by nature, its
+worth is in the asserts it makes against real modules, not the answer
+it emits; (2) `verify_function(bundle=)` takes a PREPARED bundle,
+exactly what `_run_script` stages — birth judges the same packed
+artifact runs will. Loop-closure: a hand-authored multi-module program
+publishes, its checks run in-sandbox against the staged tree, and the
+bundle round-trips freeze → run → cache hit on the real subprocess
+backend.
 Changes: `skills/program.py` (models, `parse_program_spec`, refusals
 including reserved payload keys and module-dependency cycles);
 `verify_function` gains `files=`/`bundle=`; `_land_tree`; the

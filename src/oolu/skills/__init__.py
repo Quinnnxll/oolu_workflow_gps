@@ -29,6 +29,19 @@ from .contract import (
     derive_data_edges,
 )
 from .index import SlotIndex
+from .program import (
+    MAX_PROGRAM_MODULES,
+    RESERVED_PAYLOAD_KEYS,
+    ModuleSpec,
+    OpSig,
+    OperationSpec,
+    ProgramSpec,
+    StateSpec,
+    UnifiedInterface,
+    ViewSpec,
+    canonical_program_json,
+    parse_program_spec,
+)
 from .discovery import (
     DEFAULT_TOOL_CATALOG,
     DiscoveredTool,

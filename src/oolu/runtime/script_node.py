@@ -680,6 +680,8 @@ class NodeScriptRunner:
         *,
         session_id: str,
         ports: list[dict] | None = None,
+        files: dict[str, str] | None = None,
+        bundle=None,
     ) -> dict:
         """One candidate function against the contract — the BIRTH-VERIFY
         primitive (context-harness plan, Phase 4). The function under
@@ -688,6 +690,15 @@ class NodeScriptRunner:
         repair and NO resynthesis here — a substitute passing is not the
         authored function passing, and ``execute``'s recovery ladder
         exists for RUNS, not for judging births.
+
+        ``files``/``bundle`` (F0, default None — both existing call sites
+        keep their exact behavior) stage the candidate's TREE into the
+        sandbox, so a multi-module program is judged as itself at birth,
+        and a per-module check is just another script verified with the
+        same tree. ``bundle`` takes a PREPARED bundle (the resolver's
+        output), exactly as ``_run_script`` stages it — birth judges the
+        same packed artifact runs will. The shared seam W3's adapter
+        verification consumes.
 
         Returns ``{"ok", "honest_error", "error", "healed"}``. ``ok``:
         ran clean (and, when ``ports`` are declared, the payload carries
@@ -703,7 +714,7 @@ class NodeScriptRunner:
         record = None
         for _ in range(3):
             result = self._run_script(
-                script, deps, session_id, web=None, files=None, bundle=None
+                script, deps, session_id, web=None, files=files, bundle=bundle
             )
             record = classify(result)
             if record is None:

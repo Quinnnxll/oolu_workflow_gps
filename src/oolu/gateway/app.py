@@ -7392,12 +7392,39 @@ class GatewayApp:
         instruction: str | None = None,
     ) -> str:
         """Land a function in its drawer home (``src/main.py``) as part
-        of the publish/revise transaction — B2's law: the write either
-        succeeds (seat-walled, audited, committed on the file chain) or
-        misses LOUDLY (``node.src_unlanded`` on the audit chain, echoed
-        in the receipt, standing in the operator inbox until the
-        run-time heal closes it). Returns the receipt's note: empty on
-        success, the warning sentence on a miss."""
+        of the publish/revise transaction — B2's law, via the one tree
+        landing (:meth:`_land_tree` with a single file)."""
+        return self._land_tree(
+            session,
+            node_id,
+            {"src/main.py": script},
+            goal=goal,
+            transaction=transaction,
+            revision=revision,
+            instruction=instruction,
+        )
+
+    def _land_tree(
+        self,
+        session,
+        node_id: str,
+        tree: dict[str, str],
+        *,
+        goal: str,
+        transaction: list | None = None,
+        revision: bool = False,
+        instruction: str | None = None,
+    ) -> str:
+        """Land a function's WHOLE tree in its drawer home as part of the
+        publish/revise transaction — B2's law generalized (F0): every
+        write goes through one seat-walled ``DeskFiles`` pass and one
+        audit event, and the transaction either commits or misses LOUDLY
+        (``node.src_unlanded`` on the audit chain, echoed in the receipt,
+        standing in the operator inbox until the run-time heal closes
+        it). ``tree`` maps drawer paths (``src/main.py``,
+        ``src/lib/ingest.py``, ``src/program.json``) to content. Returns
+        the receipt's note: empty on success, the warning sentence on a
+        miss."""
         problem = None
         if self._files is None:
             problem = "this host keeps no file store"
@@ -7413,7 +7440,8 @@ class GatewayApp:
                     # or the user's explicit ask; the caller attests.
                     consented=True,
                 )
-                desk_files.write("src/main.py", script)
+                for path in sorted(tree):
+                    desk_files.write(path, tree[path])
                 if transaction is not None:
                     transaction.append("published")
                 self._durable.audit.append(
@@ -7873,6 +7901,296 @@ class GatewayApp:
             },
             tenant=session.tenant_id,
         )
+
+    def publish_program_node(
+        self,
+        session,
+        *,
+        goal: str,
+        script: str,
+        files: dict[str, str],
+        program,
+        io: dict | None = None,
+    ) -> dict:
+        """The internal publish door for PROGRAM NODES (F0): a hand- (or
+        later, F1: model-) authored tree passes the same birth gate as any
+        function — judged AS ITSELF, with its tree staged — and lands as
+        one citizen with one face.
+
+        ``script`` is the entry (``src/main.py``); ``files`` the tree
+        beyond it, in run-staging form (``lib/ingest.py``,
+        ``tests/check_ingest.py``); ``program`` a :class:`ProgramSpec` or
+        its raw dict; ``io`` the optional declared interface
+        (``{"inputs": [...], "outputs": [...]}``, outputs defaulting to
+        the spec's interface ports).
+
+        The gate, in order — each wall refuses by name:
+        1. the spec parses (ceilings, cycles, reserved ports, B0 labels);
+        2. spec/tree coherence (every declared module and check exists);
+        3. build-time TEXT screening of every Python file in the tree —
+           the entry-only screening gap closed for programs: the modules
+           are where an author actually writes;
+        4. tree-true birth verification: per-module checks first (fail
+           fast), then the entry against its declared ports — inline
+           within the staging walls, else PRE-PUBLISH FROZEN to a bundle
+           and verified via ``bundle=``;
+        5. publish: contribute + node account + the whole tree landed
+           transactionally (B2, ``_land_tree``).
+
+        Zero model consultations — this door verifies and lands what it
+        was handed; authoring is F1's job. Returns ``{"ok": False,
+        "problem": ...}`` on refusal, else ``{"ok": True, "node_id",
+        "skill_id", "version_id", "bundle_id", "healed", "notes",
+        "receipt_note"}``."""
+        import hashlib
+        from uuid import uuid4 as _uuid4
+
+        from ..nodeplace.screening import mock_smells, screen_script
+        from ..runtime.isolation import _MAX_STAGED_BYTES, _MAX_STAGED_FILES
+        from ..skills.program import (
+            RESERVED_PAYLOAD_KEYS,
+            canonical_program_json,
+            parse_program_spec,
+        )
+
+        if self._nodeplace is None:
+            return {"ok": False, "problem": "this host has no nodeplace"}
+        runner = self._contract_executors.get("script")
+        verify = getattr(runner, "verify_function", None)
+        if not callable(verify):
+            return {
+                "ok": False,
+                "problem": "this host has no script runtime to verify with",
+            }
+
+        spec, problem = parse_program_spec(program)
+        if problem:
+            return {"ok": False, "problem": problem}
+        tree = {str(path): str(content) for path, content in (files or {}).items()}
+        tree["program.json"] = canonical_program_json(spec)
+        for module in spec.modules:
+            if module.path not in tree:
+                return {
+                    "ok": False,
+                    "problem": f"declared module '{module.path}' is not in "
+                    "the tree",
+                }
+            if module.check is not None and module.check not in tree:
+                return {
+                    "ok": False,
+                    "problem": f"declared check '{module.check}' is not in "
+                    "the tree",
+                }
+
+        # Build-time text screening — every Python byte the author wrote,
+        # not just the entry. A module returning fabricated "computed"
+        # data must refuse HERE. Declared CHECK scripts keep the safety
+        # screen but skip the mock screen: a check's emit_result is a
+        # status constant by nature — its worth is in the asserts it
+        # makes against the real modules, not in the answer it emits.
+        check_paths = {m.check for m in spec.modules if m.check is not None}
+        for path in ("main.py", *sorted(tree)):
+            text = script if path == "main.py" else tree[path]
+            if not path.endswith(".py"):
+                continue
+            flags = screen_script(text)
+            if flags:
+                return {
+                    "ok": False,
+                    "problem": f"'{path}' refused by the safety screen: "
+                    + "; ".join(flags),
+                }
+            if path in check_paths:
+                continue
+            smells = mock_smells(text)
+            if smells:
+                return {
+                    "ok": False,
+                    "problem": f"'{path}' smells mocked: " + "; ".join(smells),
+                }
+
+        io = dict(io or {})
+        outputs = list(io.get("outputs") or spec.interface.ports or [])
+        inputs = list(io.get("inputs") or [])
+        for port in outputs:
+            if str(port.get("name", "")) in RESERVED_PAYLOAD_KEYS:
+                return {
+                    "ok": False,
+                    "problem": f"the output '{port.get('name')}' is a "
+                    "reserved payload key — name the result something else",
+                }
+
+        # Tree-true birth verification: inline within the staging walls,
+        # else pre-publish frozen — a bundle without a node yet, adopted
+        # at publish, so a big program is judged exactly as it will run.
+        total_bytes = sum(len(v.encode("utf-8", "replace")) for v in tree.values())
+        bundle_id: str | None = None
+        stage_kwargs: dict = {"files": tree}
+        if len(tree) + 1 > _MAX_STAGED_FILES or total_bytes > _MAX_STAGED_BYTES:
+            bundle_id = self._freeze_tree(tree)
+            prepared = (
+                self._bundle_store.prepare(bundle_id)
+                if bundle_id is not None and self._bundle_store is not None
+                else None
+            )
+            if prepared is None:
+                return {
+                    "ok": False,
+                    "problem": "the tree exceeds inline staging "
+                    f"({len(tree)} files / {total_bytes} bytes) and this "
+                    "host has no bundle store to freeze it into",
+                }
+            # The runner stages a PREPARED bundle (one packed archive) —
+            # the same seam runs use, so birth judges the exact artifact.
+            stage_kwargs = {"bundle": prepared}
+
+        notes: list[str] = []
+        healed: list[str] = []
+        digest = hashlib.sha256(
+            (script + tree["program.json"]).encode()
+        ).hexdigest()[:16]
+        for module in spec.modules:
+            if module.check is None:
+                continue
+            report = verify(
+                f"check module {module.path}",
+                tree[module.check],
+                session_id=f"program-birth:{digest}:{module.path}",
+                **stage_kwargs,
+            )
+            healed.extend(report.get("healed") or [])
+            if report.get("ok"):
+                continue
+            if report.get("honest_error"):
+                # Checks run without real bindings: an honest structured
+                # refusal is the module naming its missing data, not a
+                # broken module (the birth-gate rule, applied per module).
+                notes.append(
+                    f"check {module.check}: honest error — "
+                    + str(report.get("error", ""))[:200]
+                )
+                continue
+            return {
+                "ok": False,
+                "problem": f"module '{module.path}' failed its check "
+                f"({module.check}): " + str(report.get("error", "")),
+            }
+        report = verify(
+            goal,
+            script,
+            session_id=f"program-birth:{digest}",
+            ports=[
+                {"name": str(p.get("name")), "type": str(p.get("type", "str"))}
+                for p in outputs
+            ],
+            **stage_kwargs,
+        )
+        healed.extend(report.get("healed") or [])
+        if not report.get("ok"):
+            if report.get("honest_error"):
+                notes.append(
+                    "birth ran honest: " + str(report.get("error", ""))[:200]
+                )
+            else:
+                return {
+                    "ok": False,
+                    "problem": "the program failed birth verification: "
+                    + str(report.get("error", "")),
+                }
+
+        # Publish: the citizen face is ONE contract — a single script
+        # action, exactly like every function node; the tree is drawer
+        # truth the runs promote and the bundle store freezes.
+        skill_id = f"program-{_uuid4().hex[:12]}"
+        name = concise_name(goal)
+        skill = ReusableSkill.model_validate(
+            {
+                "id": skill_id,
+                "name": name,
+                "description": goal,
+                "signature": {"application": "script", "adapter": "script"},
+                "parameters": [
+                    {
+                        "name": str(item.get("name")),
+                        "value_type": str(item.get("type", "str")),
+                        "required": True,
+                    }
+                    for item in inputs
+                ],
+                "actions": [
+                    {
+                        "correlation_id": "function",
+                        "adapter": "script",
+                        "operation": "run",
+                        "parameters": {
+                            "goal": goal,
+                            "script": script,
+                            "node_key": f"node:{skill_id}",
+                        },
+                    }
+                ],
+            }
+        )
+        transaction: list[str] = ["verified"]
+        try:
+            result = self._nodeplace.contribute(
+                noder_principal=session.principal_id,
+                tenant_id=session.tenant_id,
+                skill=skill,
+                semver="1.0.0",
+                title=name,
+                summary=goal,
+                consumes=[
+                    Slot(
+                        name=str(item.get("name")),
+                        value_type=str(item.get("type", "str")),
+                        role="input",
+                        label=str(item.get("label", "")),
+                    )
+                    for item in inputs
+                ]
+                or None,
+                produces=[
+                    Slot(
+                        name=str(item.get("name")),
+                        value_type=str(item.get("type", "str")),
+                        role="result",
+                        label=str(item.get("label", "")),
+                    )
+                    for item in outputs
+                ]
+                or None,
+            )
+        except Exception as exc:  # noqa: BLE001 - refusal over half-publish
+            return {"ok": False, "problem": f"contribute refused: {exc}"}
+        node_id = result.node.node_id
+        if self._desk is not None:
+            try:
+                self._desk.create_account(
+                    node_id,
+                    principal=session.principal_id,
+                    tenant=session.tenant_id,
+                    policy_version=NODE_POLICY_VERSION,
+                )
+            except Exception:  # noqa: BLE001 - account is desk bookkeeping
+                notes.append("the node account did not open; runs still work")
+        receipt_note = self._land_tree(
+            session,
+            node_id,
+            {"src/main.py": script, **{f"src/{p}": tree[p] for p in tree}},
+            goal=goal,
+            transaction=transaction,
+        )
+        return {
+            "ok": True,
+            "node_id": node_id,
+            "skill_id": skill_id,
+            "version_id": result.version.version_id,
+            "bundle_id": bundle_id,
+            "healed": sorted(set(healed)),
+            "notes": notes,
+            "receipt_note": receipt_note,
+        }
 
     def _finalize_function(self, function: dict, *, tenant: str = "") -> dict:
         """Shape a resolved function for execution: promote the drawer's

@@ -4,6 +4,40 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Program nodes (F0) — the tree becomes a first-class thing a build can
+produce and a birth can judge (docs/algorithm-barriers-plan.md, Part I):
+
+- **The program vocabulary** (`src/oolu/skills/program.py`) — a program
+  node is a drawer tree of internal modules with declared interfaces,
+  operations behind ONE deterministic dispatcher, named program state,
+  and exactly ONE unified interface (singular by construction — a
+  field, never a list). `parse_program_spec` refuses by name: module
+  ceilings, dependency cycles, escaping paths, undeclared
+  operations/state, mechanism-flavored port labels (B0), and RESERVED
+  payload keys (`state`/`files`/`records` — the side channels
+  completion hooks consume); the reserved wall also guards the
+  single-file IO declaration now. Canonical serialization: the same
+  spec is the same bytes is the same bundle id, always.
+- **Tree-true birth verification** — `verify_function` gained
+  `files=`/`bundle=` (keyword defaults; both existing call sites
+  byte-identical): a multi-module program is judged AS ITSELF at birth,
+  and a per-module check is just another script verified with the same
+  tree. `bundle=` takes a PREPARED bundle — the exact packed artifact
+  runs stage. The shared seam W3's adapter verification will consume.
+- **One landing law** — `_land_src` delegates to the new `_land_tree`:
+  whole trees land through one seat-walled `DeskFiles` pass, one audit
+  event, the same loud `node.src_unlanded` miss (B2 generalized).
+- **The internal publish door** (`publish_program_node`) — spec parse,
+  spec/tree coherence, build-time TEXT screening of every authored
+  module (the entry-only screening gap closed for programs; declared
+  check scripts keep the safety screen but skip the mock screen — a
+  check's emit is a status, its worth is its asserts), per-module
+  checks fail-fast, the entry verified against its declared ports,
+  then contribute + account + transactional tree landing. Zero model
+  consultations — authoring is F1's job. Over-wall trees PRE-PUBLISH
+  FREEZE to a content-addressed bundle and verify through it; a host
+  without a bundle store refuses honestly.
+
 Route paving (W0) — fresh data crosses one contract run
 (docs/algorithm-barriers-plan.md, Part II):
 
