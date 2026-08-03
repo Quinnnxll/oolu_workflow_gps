@@ -197,3 +197,135 @@ def test_guard_pattern_matching_reaches_adapter_qualified_names():
     )
     assert not compiled.excluded
     assert any(e.relation == "guard" for e in compiled.edges)
+
+
+# --------------------------------------------------------------------------- #
+# G3.1 — the review's holes, closed.                                           #
+# --------------------------------------------------------------------------- #
+def test_two_predicates_on_one_pair_both_compile_and_both_gate():
+    # The review's blocker: dedup keyed on (source, target) alone dropped
+    # a second, differently-predicated rule. Both rules now compile; the
+    # scheduler ANDs them, so failing EITHER gate skips the step.
+    sop = parse_sop(
+        "sop: double-gate\n"
+        "require_guard:\n"
+        "  - operation: send_invoice\n"
+        "    source: compute_total\n"
+        "    when: {pointer: total, op: '>', value: 0}\n"
+        "  - operation: send_invoice\n"
+        "    source: compute_total\n"
+        "    when: {pointer: approved, op: '==', value: true}\n"
+    )
+    compiled = apply_sop_to_blueprint(
+        _blueprint("compute_total", "send_invoice"), sop
+    )
+    assert not compiled.excluded
+    guards = [e for e in compiled.edges if e.relation == "guard"]
+    assert len(guards) == 2  # BOTH human rules stand
+
+    # total ok, approval missing: the second gate declines — skipped.
+    record, executor = _run(
+        compiled, {"compute_total": {"total": 100, "approved": False}}
+    )
+    assert record.status is ExecutionStatus.SUCCEEDED
+    assert executor.order == ["compute_total"]
+    # Both satisfied: the invoice goes.
+    record, executor = _run(
+        compiled, {"compute_total": {"total": 100, "approved": True}}
+    )
+    assert executor.order == ["compute_total", "send_invoice"]
+
+
+def test_apply_is_idempotent_for_guards():
+    sop = parse_sop(GUARD_SOP)
+    once = apply_sop_to_blueprint(
+        _blueprint("compute_total", "send_invoice"), sop
+    )
+    twice = apply_sop_to_blueprint(once, sop)
+    assert len([e for e in twice.edges if e.relation == "guard"]) == 1
+
+
+def test_a_target_whose_only_source_is_itself_excludes_the_route():
+    # The review's silent-narrowing hole: 'send_*' gates send_receipt AND
+    # send_invoice, but send_receipt's only source match is ITSELF — it
+    # would have run unguarded. The route now excludes, loudly.
+    sop = parse_sop(
+        "sop: self-source\n"
+        "require_guard:\n"
+        "  - operation: 'send_*'\n"
+        "    source: send_receipt\n"
+        "    when: {pointer: ok, op: '==', value: true}\n"
+    )
+    compiled = apply_sop_to_blueprint(
+        _blueprint("send_receipt", "send_invoice"), sop
+    )
+    assert compiled.excluded
+    assert "cannot express" in (compiled.exclusion_reason or "")
+
+
+def test_an_ambiguous_multi_source_pattern_excludes_with_the_names():
+    # A guard reads ONE producer's evidence. A pattern naming several is
+    # ambiguous — under the all-join it would AND the predicate across
+    # producers the author never meant — so the route refuses, candidates
+    # named, instead of compiling a gate that means something else.
+    sop = parse_sop(
+        "sop: ambiguous\n"
+        "require_guard:\n"
+        "  - operation: send_invoice\n"
+        "    source: 'compute_*'\n"
+        "    when: {pointer: total, op: '>', value: 0}\n"
+    )
+    compiled = apply_sop_to_blueprint(
+        _blueprint("compute_total", "compute_tax", "send_invoice"), sop
+    )
+    assert compiled.excluded
+    reason = compiled.exclusion_reason or ""
+    assert "ambiguous" in reason
+    assert "compute_tax" in reason and "compute_total" in reason
+
+
+def test_a_later_sops_order_rule_survives_promotion_as_sop_provenance():
+    # The review's absorption hole: a guard-SOP promotes the chain to
+    # explicit provenance="learned" edges; a LATER order-SOP's rule was
+    # then deduped away — the human's ordering lived only as prunable
+    # learned structure. The sop edge is now always added.
+    guard_sop = parse_sop(GUARD_SOP)
+    order_sop = parse_sop(
+        "sop: order\nrequire_order: [compute_total, send_invoice]\n"
+    )
+    blueprint = _blueprint("compute_total", "send_invoice")
+    for sops in ([guard_sop, order_sop], [order_sop, guard_sop]):
+        compiled = blueprint
+        for sop in sops:
+            compiled = apply_sop_to_blueprint(compiled, sop)
+        sop_befores = [
+            e
+            for e in compiled.edges
+            if e.relation == "before" and e.provenance == "sop"
+        ]
+        assert len(sop_befores) == 1, (
+            "the human's ordering must stand as sop provenance in EITHER "
+            "application order"
+        )
+
+
+def test_unknown_keys_in_a_guard_refuse_loudly():
+    import pytest
+
+    with pytest.raises(Exception, match="unknown key"):
+        parse_sop(
+            "sop: typo\n"
+            "require_guard:\n"
+            "  - operation: send_invoice\n"
+            "    source: compute_total\n"
+            "    when: {pointer: total, op: '>', value: 0, unles: retry}\n"
+        )
+    with pytest.raises(Exception):
+        parse_sop(
+            "sop: typo2\n"
+            "require_guard:\n"
+            "  - operation: send_invoice\n"
+            "    source: compute_total\n"
+            "    excempt: true\n"
+            "    when: {pointer: total, op: '>', value: 0}\n"
+        )

@@ -52,9 +52,13 @@ class GuardRule(BaseModel):
     language the gate scheduler evaluates (:class:`Postcondition` —
     pointer into the producer's evidence, an operator, a value). The
     YAML form may omit ``when.name``; it defaults to the predicate in
-    words, so the decline reason always says what was judged."""
+    words, so the decline reason always says what was judged.
 
-    model_config = ConfigDict(frozen=True)
+    Parsing is STRICT (G3.1): an unknown key on the rule or inside
+    ``when`` refuses loudly — a typo'd or hostile modifier must never
+    compile to a weaker guard than the author wrote."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     operation: str  # the GATED action(s)
     source: str  # the evidence producer the predicate reads
@@ -65,13 +69,23 @@ class GuardRule(BaseModel):
     def _default_predicate_name(cls, data):
         if isinstance(data, dict):
             when = data.get("when")
-            if isinstance(when, dict) and not when.get("name"):
-                when = dict(when)
-                when["name"] = (
-                    f"{when.get('pointer', '?')} {when.get('op', '?')} "
-                    f"{when.get('value', '')}"
-                ).strip()
-                data = {**data, "when": when}
+            if isinstance(when, dict):
+                unknown = sorted(
+                    set(when) - {"name", "pointer", "op", "value"}
+                )
+                if unknown:
+                    raise ValueError(
+                        "unknown key(s) in a guard predicate: "
+                        + ", ".join(unknown)
+                        + " — a guard is {pointer, op, value} (name optional)"
+                    )
+                if not when.get("name"):
+                    when = dict(when)
+                    when["name"] = (
+                        f"{when.get('pointer', '?')} {when.get('op', '?')} "
+                        f"{when.get('value', '')}"
+                    ).strip()
+                    data = {**data, "when": when}
         return data
 
 

@@ -27,6 +27,19 @@ SOP emitters + doctrine (G3) — SOPs and the docs speak gates
   the layers. Future work named, not faked: trace-induced loops behind
   the M4 replay gate, the skipped-children refund path, ActionsBody
   evidence-port mapping.
+- **G3.1 (review fixes)** — five defects from eight confirmed findings:
+  guard dedup now keys on the PREDICATE (a second, differently-predicated
+  rule on the same pair was silently dropped — a human-authored gate
+  simply didn't exist; the scheduler ANDs multiple gates, so both stand);
+  every gated step must resolve its OWN non-self evidence source
+  (rule-level exclusion let a pattern-matched step run unguarded); an
+  ambiguous multi-producer source pattern EXCLUDES with the candidates
+  named (fanning one predicate across producers ANDed evidence the
+  author never meant); a later SOP's `require_order` edge is no longer
+  absorbed into promotion-materialized `learned` chain edges (the order
+  dedup considers sop-provenance edges only — the human's ordering
+  survives either application order); and GuardRule parsing is strict
+  (unknown keys on the rule or inside `when` refuse loudly).
 
 The unified view (F3) — one face: every node renders its standing result
 (docs/algorithm-barriers-plan.md, Part I):

@@ -144,7 +144,17 @@ def apply_sop_to_blueprint(
                     }
                 )
             step_ids.append(ids)
-        existing = {(e.source, e.target) for e in edges if e.relation == "before"}
+        # Dedup against SOP-provenance edges ONLY (G3.1): a learned or
+        # promotion-materialized chain edge on the same pair must not
+        # absorb the human's rule — the sop edge is always added (a
+        # duplicate dependency is harmless to the scheduler), so the
+        # human's ordering survives as sop provenance whatever order the
+        # SOPs compile in and whatever evidence later prunes.
+        existing = {
+            (e.source, e.target)
+            for e in edges
+            if e.relation == "before" and e.provenance == "sop"
+        }
         for earlier, later in zip(step_ids, step_ids[1:]):
             for source in earlier:
                 for target in later:
@@ -159,26 +169,39 @@ def apply_sop_to_blueprint(
                         )
                         existing.add((source, target))
 
-    # ``require_guard`` (G3): the human's gate, compiled to the exact
-    # relation="guard" edge the gate scheduler evaluates — predicate and
-    # all. The guard's SOURCE is the evidence producer the predicate
-    # reads; a route missing either end cannot express the guard and is
-    # excluded (the require_order discipline: never run unguarded, never
-    # silently drop the rule).
+    # ``require_guard`` (G3, hardened G3.1): the human's gate, compiled to
+    # the exact relation="guard" edge the gate scheduler evaluates —
+    # predicate and all. The discipline: never run unguarded, never
+    # silently drop or narrow a rule.
+    #   * EVERY gated step must resolve exactly ONE evidence producer —
+    #     a target with no non-self source cannot express the rule
+    #     (excluded), and a pattern matching SEVERAL producers is
+    #     ambiguous (excluded, the candidates named): under the all-join
+    #     a fanned-out guard would AND the predicate across producers the
+    #     author never meant, silently skipping the step forever.
+    #   * Dedup keys on the PREDICATE too — a second rule on the same
+    #     pair with a different predicate is a second gate (the scheduler
+    #     ANDs them), never a silent drop.
     if sop.require_guard:
+
+        def _guard_key(guard) -> tuple:
+            import json as _json
+
+            return (
+                guard.name,
+                guard.pointer,
+                guard.op,
+                _json.dumps(guard.value, sort_keys=True, default=str),
+            )
+
         existing_guards = {
-            (e.source, e.target) for e in edges if e.relation == "guard"
+            (e.source, e.target, _guard_key(e.guard))
+            for e in edges
+            if e.relation == "guard" and e.guard is not None
         }
         for rule in sop.require_guard:
-            sources = matching_ids(rule.source)
             targets = matching_ids(rule.operation)
-            pairs = [
-                (source, target)
-                for source in sources
-                for target in targets
-                if source != target
-            ]
-            if not pairs:
+            if not targets:
                 return blueprint.model_copy(
                     update={
                         "excluded": True,
@@ -189,8 +212,41 @@ def apply_sop_to_blueprint(
                         ),
                     }
                 )
-            for source, target in pairs:
-                if (source, target) in existing_guards:
+            sources = matching_ids(rule.source)
+            op_of = {
+                item.action.id: item.action.operation for item in actions
+            }
+            for target in targets:
+                rule_sources = [s for s in sources if s != target]
+                if not rule_sources:
+                    return blueprint.model_copy(
+                        update={
+                            "excluded": True,
+                            "exclusion_reason": (
+                                f"SOP '{sop.name}' guards '{rule.operation}' "
+                                f"on evidence from '{rule.source}', which "
+                                "this route cannot express"
+                            ),
+                        }
+                    )
+                if len(rule_sources) > 1:
+                    names = ", ".join(
+                        sorted(op_of.get(s, s) for s in rule_sources)
+                    )
+                    return blueprint.model_copy(
+                        update={
+                            "excluded": True,
+                            "exclusion_reason": (
+                                f"SOP '{sop.name}': the guard source "
+                                f"'{rule.source}' is ambiguous for "
+                                f"'{op_of.get(target, target)}' — it names "
+                                f"several producers ({names}); name one"
+                            ),
+                        }
+                    )
+                source = rule_sources[0]
+                key = (source, target, _guard_key(rule.when))
+                if key in existing_guards:
                     continue
                 edges.append(
                     BlueprintEdge(
@@ -201,7 +257,7 @@ def apply_sop_to_blueprint(
                         provenance="sop",
                     )
                 )
-                existing_guards.add((source, target))
+                existing_guards.add(key)
 
     result = blueprint.model_copy(update={"actions": actions, "edges": edges})
     # The sequential-promotion rule (G2): a gate edge on a default

@@ -1670,6 +1670,29 @@ default sequential blueprint → promoted graph → total=0 skips
 send_invoice, total=250 sends it); cannot-express exclusion both ways;
 the contradiction-as-cycle (BLOCKED at preflight, nothing ran); the
 gate-free promotion no-op pin; adapter-qualified pattern matching.
+**Amended (G3.1)** — adversarial review of the G3 diff confirmed eight
+findings deduplicating to five defects, fixed: (1, BLOCKER) the guard
+dedup keyed on ``(source, target)`` alone, silently dropping a second,
+differently-predicated rule on the same pair (within one SOP and across
+SOPs) — the gated action ran without a human-authored gate. Dedup now
+keys on the PREDICATE too; the scheduler ANDs multiple gates on one
+pair, so both rules stand. (2) Exclusion was rule-level, not
+target-level: a step matched by the operation pattern whose ONLY source
+match was itself was silently narrowed out by the self-pair filter and
+ran unguarded — every gated step must now resolve its own non-self
+source or the route excludes. (3) A pattern matching SEVERAL producers
+fanned the same predicate onto every one under the all-join — ANDing
+evidence the author never meant and silently skipping the step forever;
+an ambiguous source now EXCLUDES with the candidates named. (4) the
+unconditional promotion ride made multi-SOP compilation order-dependent:
+a later SOP's ``require_order`` edge was absorbed into promotion-
+materialized ``learned`` chain edges, leaving the human's ordering as
+prunable learned structure — the order dedup now considers
+sop-provenance edges only, so the human's edge is always added and
+survives either application order. (5) GuardRule/``when`` accepted
+unknown keys silently — a typo'd modifier compiled to a weaker guard;
+parsing is now strict (``extra="forbid"`` + explicit ``when``-key
+check), refusing loudly.
 
 ## III.4 Risks and invariants
 
