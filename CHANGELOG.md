@@ -4,8 +4,39 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+SOP emitters + doctrine (G3) — SOPs and the docs speak gates
+(docs/algorithm-barriers-plan.md, Part III):
+
+- **`require_guard`** joins the SOP schema (`GuardRule`): "only run X
+  when the evidence from Y shows P" — fnmatch patterns like every other
+  SOP rule, the predicate in the SAME deterministic language the gate
+  scheduler evaluates (`Postcondition`; an unnamed predicate defaults to
+  its own words, so the decline reason says what was judged).
+- **Compilation** — `apply_sop_to_blueprint` emits `relation="guard"`
+  edges with `provenance="sop"` carrying the predicate, and the result
+  rides the G2 sequential-promotion rule: a human's gate drives a REAL
+  skip on a FRESH sequential route with no trace history, through the
+  gate scheduler — never a prompt the model may ignore. A route that
+  cannot EXPRESS the guard is excluded, never run unguarded; a guard
+  fighting the demonstrated chain surfaces as a cycle at preflight
+  (BLOCKED, with the reason), never a silent reorder. Promotion is a
+  no-op for gate-free SOPs (pinned byte-compat).
+- **Doctrine** — node-generation §5 gained the G-series amendment: gate
+  edges are LOGIC, legitimately explicit, outside the "no explicit
+  edges" rule (which governs `before` ordering); provenance separates
+  the layers. Future work named, not faked: trace-induced loops behind
+  the M4 replay gate, the skipped-children refund path, ActionsBody
+  evidence-port mapping.
+
 The unified view (F3) — one face: every node renders its standing result
 (docs/algorithm-barriers-plan.md, Part I):
+
+- **F3.1 (review fix)** — `_node_last_result` returned any parsed JSON
+  unchecked; a hand-written `runs/*/outputs.json` holding a bare list
+  parsed cleanly and crashed every reader that `.get()`s it — the view
+  answered 500 until the file was removed. The projection now honors its
+  dict-or-None contract: a non-dict is no standing result, and the view
+  renders the honest empty page.
 
 - **`GET /v1/nodes/{node_id}/view`** — the node's standing result as ONE
   server-rendered page. The template is the GATEWAY's (`_render_node_view`):

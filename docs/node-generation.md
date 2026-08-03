@@ -167,6 +167,42 @@ needs an "and", split the node and let the subgraph compose them.
   derived from slot flow. A super-node is a route that earned the right to
   be reusable — its value is the learned order, not new code.
 
+### Gates and the derived-order doctrine (G-series amendment)
+
+The "no explicit edges" rule governs **`before` edges** — ordering
+preferences, which slot flow derives and trace evidence refines. **Gate
+edges are a different kind of thing and are legitimately explicit**:
+
+- A `guard` edge ("only send the invoice when `total > 0`") and a
+  bounded `loop` edge are **logic**, not order preference. Slot flow
+  cannot derive them, evidence must never prune them, and writing one is
+  not a doctrine violation — it is the contract vocabulary G2 landed
+  (`ContractEdge` with `relation="guard" | "loop"`, `SubgraphBody.joins`).
+- **Provenance still separates the layers.** Derived data edges and
+  learned precedence stay prunable by evidence; `provenance="sop"` gate
+  edges belong to the human and only the human removes them. A generator
+  never invents a gate; it carries one the contract, an SOP
+  (`require_guard`), or the responsible human declared.
+- **Contradictions refuse, never reorder.** A gate whose structural
+  direction fights the derived or demonstrated order surfaces as a cycle
+  at preflight (`BLOCKED`, with the reason) — the same discipline as
+  SOP-vs-data ordering conflicts. Nothing silently reorders around a
+  human's rule.
+- **A guard-skipped child is `SKIPPED`, honestly** — never a failure,
+  never a fake success; posteriors ignore it (G0/G1), and the plan view
+  renders it.
+
+Named future work, deliberately not landed with the G-series:
+trace-induced loop edges stay behind the M4 replay gate (a loop inferred
+from history must replay deterministically before it may be authored);
+the skipped-children **refund path** for marketplace contract runs
+(guard-skipped children are cleared at run start today — the refund is
+deferred, documented, not faked); and the ActionsBody
+**evidence-port mapping** (letting demonstrated cli/http nodes source
+candidate edges by mapping postcondition evidence onto ports — until
+then only script-bodied producers form auto-bound edges, and the survey
+says so).
+
 ---
 
 ## 6. Safety, risk, and the account — the parts the generator must not decide

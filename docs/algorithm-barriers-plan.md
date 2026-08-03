@@ -2,10 +2,10 @@
 
 Status: In build. Three phase series, one per barrier: **F0–F3** (the
 program node), **W0–W5** (route paving — the Paver), **G0–G3** (gate
-edges). G0, G1, G2, W0, W1, W2, W3, W4, F0, F1, F2, and F3 LANDED (plus review
-amendments G0.1, G1.1, G2.1, W0.1, W2.1, W3.1, W4.1, F0.1, F1.1; W4's
-fast path landed, its slow-path / chaining / billed complements
-named-deferred). Remaining: G3, W5. Each lands as one commit titled
+edges). G0, G1, G2, G3, W0, W1, W2, W3, W4, F0, F1, F2, and F3 LANDED (plus
+review amendments G0.1, G1.1, G2.1, W0.1, W2.1, W3.1, W4.1, F0.1, F1.1,
+F3.1; W4's fast path landed, its slow-path / chaining / billed
+complements named-deferred). Remaining: W5. Each lands as one commit titled
 `<CODE> landed: <name> — <subtitle>` with its loop-closure test, the
 plan-doc status flip, and the CHANGELOG entry in the same commit.
 
@@ -1609,6 +1609,36 @@ contradiction still surfaces as a cycle, never silent reorder.
 Done when: an SOP-authored guard skips a branch in a real run on a
 fresh route with no trace history, docs land in the same commit, full
 suite green.
+**Status: LANDED** — ``require_guard`` joins the SOP schema
+(`skills/sop.py::GuardRule`): "only run ``operation`` when the evidence
+from ``source`` satisfies ``when``" — fnmatch patterns like every other
+SOP rule, and ``when`` is the SAME deterministic predicate language the
+gate scheduler evaluates (:class:`Postcondition`; the YAML may omit the
+predicate's name, which defaults to the predicate in words so the
+decline reason always says what was judged). `apply_sop_to_blueprint`
+compiles each rule to ``relation="guard"`` edges with
+``provenance="sop"`` carrying the predicate, and the result rides the
+G2 sequential-promotion rule — so a human's gate drives a REAL skip on
+a FRESH sequential route with no trace history, through the same gate
+scheduler, never a prompt the model may ignore. The require_order
+discipline holds for guards: a route that cannot EXPRESS the guard (the
+gated step or its evidence producer missing) is EXCLUDED, never run
+unguarded; a guard whose structural direction fights the demonstrated
+chain surfaces as a cycle at preflight (BLOCKED, with the reason),
+never a silent reorder. Promotion is a no-op for gate-free SOPs, so
+every existing SOP path is byte-identical (pinned). Doctrine landed in
+the same commit: node-generation §5 gained the G-series amendment —
+gate edges are LOGIC, legitimately explicit, outside the
+"no explicit edges" rule that governs `before` ordering; provenance
+separates the layers (evidence prunes learned edges, only the human
+removes sop gates); and the named future work is written down:
+trace-induced loops behind the M4 replay gate, the skipped-children
+refund path, ActionsBody evidence-port mapping. Tests: the YAML parse
+with defaulted predicate name; the loop-closure (guard compiled on a
+default sequential blueprint → promoted graph → total=0 skips
+send_invoice, total=250 sends it); cannot-express exclusion both ways;
+the contradiction-as-cycle (BLOCKED at preflight, nothing ran); the
+gate-free promotion no-op pin; adapter-qualified pattern matching.
 
 ## III.4 Risks and invariants
 

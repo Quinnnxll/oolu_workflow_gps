@@ -66,6 +66,14 @@ def apply_sop_to_blueprint(
       action.
     - ``require_order`` adds hard ``provenance="sop"`` edges; a route missing
       a required step is excluded, never silently reordered.
+    - ``require_guard`` (G3) adds ``relation="guard"`` edges carrying the
+      rule's predicate — "only run X when the evidence from Y shows P" —
+      and the result rides the sequential-promotion rule, so a guard on a
+      default (sequential) blueprint promotes it to an explicit graph the
+      gate scheduler runs. A route that cannot EXPRESS the guard (the gated
+      step or its evidence producer missing) is excluded, never run
+      unguarded; a guard that contradicts the demonstrated order surfaces
+      as a cycle at run time, never a silent reorder.
     """
     if blueprint.excluded:
         return blueprint
@@ -151,7 +159,59 @@ def apply_sop_to_blueprint(
                         )
                         existing.add((source, target))
 
-    return blueprint.model_copy(update={"actions": actions, "edges": edges})
+    # ``require_guard`` (G3): the human's gate, compiled to the exact
+    # relation="guard" edge the gate scheduler evaluates — predicate and
+    # all. The guard's SOURCE is the evidence producer the predicate
+    # reads; a route missing either end cannot express the guard and is
+    # excluded (the require_order discipline: never run unguarded, never
+    # silently drop the rule).
+    if sop.require_guard:
+        existing_guards = {
+            (e.source, e.target) for e in edges if e.relation == "guard"
+        }
+        for rule in sop.require_guard:
+            sources = matching_ids(rule.source)
+            targets = matching_ids(rule.operation)
+            pairs = [
+                (source, target)
+                for source in sources
+                for target in targets
+                if source != target
+            ]
+            if not pairs:
+                return blueprint.model_copy(
+                    update={
+                        "excluded": True,
+                        "exclusion_reason": (
+                            f"SOP '{sop.name}' guards '{rule.operation}' on "
+                            f"evidence from '{rule.source}', which this "
+                            "route cannot express"
+                        ),
+                    }
+                )
+            for source, target in pairs:
+                if (source, target) in existing_guards:
+                    continue
+                edges.append(
+                    BlueprintEdge(
+                        source=source,
+                        target=target,
+                        relation="guard",
+                        guard=rule.when,
+                        provenance="sop",
+                    )
+                )
+                existing_guards.add((source, target))
+
+    result = blueprint.model_copy(update={"actions": actions, "edges": edges})
+    # The sequential-promotion rule (G2): a gate edge on a default
+    # (sequential) blueprint materializes the implicit chain as explicit
+    # before-edges and switches to graph — so an SOP guard runs through
+    # the gate scheduler on a FRESH route with no trace history. A no-op
+    # without gate edges, so every existing SOP path is byte-identical.
+    from .contract import promote_sequential_for_gates
+
+    return promote_sequential_for_gates(result)
 
 
 # --------------------------------------------------------------------------- #

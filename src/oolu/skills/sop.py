@@ -6,6 +6,11 @@ SOP compliance is a property of the plan rather than of model behaviour:
 
 - ``require_order``  -> hard blueprint edges (``provenance="sop"``); a route
   missing a required step is excluded, not silently reordered.
+- ``require_guard``  -> ``relation="guard"`` blueprint edges
+  (``provenance="sop"``, G3): "only run X when the evidence from Y shows
+  P" — the gate semantics G0 landed, authored by the human. A route that
+  cannot express the guard (missing the gated step or its evidence
+  producer) is excluded, never run unguarded.
 - ``forbid``         -> matching actions exclude the route, or become reserved
   (approval-gated) when ``unless_approved`` is set.
 - ``approval``       -> matching actions become reserved actions, feeding the
@@ -26,9 +31,9 @@ from __future__ import annotations
 from fnmatch import fnmatchcase
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .models import ConstraintSeverity, ConstraintSpec, ReusableSkill
+from .models import ConstraintSeverity, ConstraintSpec, Postcondition, ReusableSkill
 
 
 class ForbidRule(BaseModel):
@@ -36,6 +41,38 @@ class ForbidRule(BaseModel):
 
     operation: str  # fnmatch pattern against "operation" and "adapter/operation"
     unless_approved: bool = False
+
+
+class GuardRule(BaseModel):
+    """One human-authored gate (G3): run ``operation`` only when the
+    evidence from ``source`` satisfies ``when``.
+
+    ``operation`` and ``source`` are fnmatch patterns (same matching as
+    every other SOP rule); ``when`` is the SAME deterministic predicate
+    language the gate scheduler evaluates (:class:`Postcondition` —
+    pointer into the producer's evidence, an operator, a value). The
+    YAML form may omit ``when.name``; it defaults to the predicate in
+    words, so the decline reason always says what was judged."""
+
+    model_config = ConfigDict(frozen=True)
+
+    operation: str  # the GATED action(s)
+    source: str  # the evidence producer the predicate reads
+    when: Postcondition
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_predicate_name(cls, data):
+        if isinstance(data, dict):
+            when = data.get("when")
+            if isinstance(when, dict) and not when.get("name"):
+                when = dict(when)
+                when["name"] = (
+                    f"{when.get('pointer', '?')} {when.get('op', '?')} "
+                    f"{when.get('value', '')}"
+                ).strip()
+                data = {**data, "when": when}
+        return data
 
 
 class ApprovalRule(BaseModel):
@@ -62,6 +99,7 @@ class StandardOperatingProcedure(BaseModel):
     name: str
     applies_to: dict[str, list[str]] = Field(default_factory=dict)  # tags / names
     require_order: list[str] = Field(default_factory=list)  # operation patterns
+    require_guard: list[GuardRule] = Field(default_factory=list)  # gates (G3)
     forbid: list[ForbidRule] = Field(default_factory=list)
     approval: ApprovalRule | None = None
     require_verify: list[VerifyRule] = Field(default_factory=list)
