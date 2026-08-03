@@ -4,6 +4,33 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Gate edges (G2) — builders can say it; the shell can show it
+(docs/algorithm-barriers-plan.md, Part III):
+
+- **Contract vocabulary** — `ContractEdge` gained `guard` /
+  `max_iterations` and `relation` guard|loop, with the same loud-refusal
+  validators as `BlueprintEdge`; `SubgraphBody.joins` maps a child to
+  its `"all"`/`"any"` join. A guard OR-split and a bounded loop are now
+  authorable in a serialized contract.
+- **Compiler** — `connect` passes the gate fields through; a loop edge
+  whose endpoints are not single-exit tail / single-entry head refuses
+  by name (one child edge maps to exactly one blueprint loop region);
+  each child's declared join lands on its ENTRY actions. The subgraph
+  BOUNDARY derives over STRUCTURAL edges (before + guard), so a
+  guard-entered child counts as entered and nested composition wires
+  fan-in correctly.
+- **Sequential promotion** — `promote_sequential_for_gates`
+  materializes a sequential blueprint's implicit chain as explicit
+  before-edges and switches it to graph when a gate edge lands
+  (order-preserving; a no-op otherwise), so a gate never trips the
+  scheduler's sequential refusal.
+- **The shell surface** — `_plan_view` renders `skipped` and an
+  `iterations` count per step, additively. Loop-closure: a guard
+  OR-split contract posted to `/v1/runs/contract` runs one branch,
+  skips the other, honestly. (Guard-skipped marketplace children are
+  cleared at run start — the refund path is deferred beyond the
+  G-series, documented not faked.)
+
 Route paving (W2) — pave direct webs: the model bill is paid at pave
 time, not trigger time (docs/algorithm-barriers-plan.md, Part II):
 

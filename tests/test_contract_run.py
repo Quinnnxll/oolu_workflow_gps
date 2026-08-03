@@ -954,3 +954,88 @@ def test_contract_run_disabled_without_executors(tmp_path):
     )
     assert resp.status == 404
     conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# G2 — a gate-edged contract runs through the real HTTP door.                  #
+# --------------------------------------------------------------------------- #
+class _EvidenceExecutor:
+    """A contract-run executor that emits per-operation evidence, so a
+    guard can read it — the gate scheduler through the real door."""
+
+    name = "stub"
+
+    def __init__(self, evidence=None):
+        self._evidence = dict(evidence or {})
+        self.calls = 0
+
+    def capabilities(self):
+        return frozenset({"a", "b", "c", "d"})
+
+    def execute(self, action, *, idempotency_key):
+        self.calls += 1
+        return ExecutionOutcome(
+            idempotency_key=idempotency_key,
+            skill_id=action.correlation_id,
+            status=ExecutionStatus.SUCCEEDED,
+            evidence=self._evidence.get(action.operation, {}),
+        )
+
+    def cancel(self, idempotency_key):
+        return None
+
+
+def test_gate_edged_contract_runs_through_the_http_door(tmp_path):
+    from oolu.skills.contract import ContractEdge, SubgraphBody
+    from oolu.skills.models import Postcondition
+
+    executor = _EvidenceExecutor(evidence={"a": {"rows": 3}})
+    app, conn, ident, *_ = _build(tmp_path, executors={"stub": executor})
+
+    def _node(op):
+        return NodeContract(
+            name=op,
+            provenance="synthesized",
+            body=ActionsBody(
+                actions=[
+                    ActionEvent(correlation_id="c", adapter="stub", operation=op)
+                ]
+            ),
+        )
+
+    a, b, c, d = _node("a"), _node("b"), _node("c"), _node("d")
+    contract = NodeContract(
+        name="guarded-web",
+        provenance="synthesized",
+        body=SubgraphBody(
+            nodes=[a, b, c, d],
+            edges=[
+                ContractEdge(
+                    source=a.id, target=b.id, relation="guard",
+                    guard=Postcondition(name="has-rows", pointer="rows", op=">", value=0),
+                ),
+                ContractEdge(
+                    source=a.id, target=c.id, relation="guard",
+                    guard=Postcondition(name="empty", pointer="rows", op="==", value=0),
+                ),
+                ContractEdge(source=b.id, target=d.id),
+                ContractEdge(source=c.id, target=d.id),
+            ],
+            joins={d.id: "any"},
+        ),
+    )
+    resp = app.handle(
+        _req(
+            "POST",
+            "/v1/runs/contract",
+            token=ident.token("consumer", "t2"),
+            body={"contract": contract.model_dump(mode="json")},
+        )
+    )
+    assert resp.status == 200, resp.body
+    assert resp.body["status"] == "succeeded"
+    # a, b, d ran; c's branch was not taken (guard declined).
+    statuses = {o["status"] for o in resp.body["outcomes"]}
+    assert "skipped" in statuses
+    assert executor.calls == 3  # a, b, d — never c
+    conn.close()

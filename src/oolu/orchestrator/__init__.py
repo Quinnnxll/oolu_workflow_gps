@@ -30,7 +30,11 @@ from .assembler import (
     ProposalModel,
     contract_from_registered,
 )
-from .contract import compile_with_owners, contract_to_blueprint
+from .contract import (
+    compile_with_owners,
+    contract_to_blueprint,
+    promote_sequential_for_gates,
+)
 from .engine import WorkflowOrchestrator
 from .intake import (
     INTAKE_SYSTEM_PROMPT,
@@ -178,6 +182,7 @@ __all__ = [
     "structural_edges",
     "contract_from_registered",
     "contract_to_blueprint",
+    "promote_sequential_for_gates",
     "CapabilityGrounder",
     "CollectingFeedbackSink",
     "ConfirmationRecord",

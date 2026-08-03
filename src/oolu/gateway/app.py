@@ -402,10 +402,19 @@ def _plan_view(state: RunState) -> dict | None:
     chosen = state.route.chosen
     execution = state.execution
     outcome_by_action: dict[str, object] = {}
+    iterations_by_action: dict[str, int] = {}
     if execution is not None:
         for outcome in execution.action_outcomes:
             # Per-action idempotency keys end in the action id (both runners).
-            outcome_by_action[outcome.idempotency_key.rsplit(":", 1)[-1]] = outcome
+            # A loop iteration keys ``{run}#i{n}:{action_id}`` — the rsplit
+            # still yields the action id, so the LATEST iteration wins the
+            # dict (its status is what the row shows) and the count below is
+            # how many times the step ran (G2: honest loop rendering).
+            action_id = outcome.idempotency_key.rsplit(":", 1)[-1]
+            outcome_by_action[action_id] = outcome
+            iterations_by_action[action_id] = (
+                iterations_by_action.get(action_id, 0) + 1
+            )
     failed_id = execution.failed_action_id if execution else None
     steps = []
     for item in chosen.actions:
@@ -428,6 +437,8 @@ def _plan_view(state: RunState) -> dict | None:
                 "status": status,
                 "error": error,
                 "failed": failed,
+                # 0 = never reached; 1 = ran once; N = a loop's iterations.
+                "iterations": iterations_by_action.get(item.action.id, 0),
             }
         )
     return {

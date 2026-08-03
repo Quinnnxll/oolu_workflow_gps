@@ -2,7 +2,7 @@
 
 Status: In build. Three phase series, one per barrier: **F0–F3** (the
 program node), **W0–W5** (route paving — the Paver), **G0–G3** (gate
-edges). G0, G1, W0, F0, F1, W1, and W2 LANDED; every other phase Proposed. Each lands as one commit titled
+edges). G0, G1, G2, W0, F0, F1, W1, and W2 LANDED; every other phase Proposed. Each lands as one commit titled
 `<CODE> landed: <name> — <subtitle>` with its loop-closure test, the
 plan-doc status flip, and the CHANGELOG entry in the same commit.
 

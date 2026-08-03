@@ -34,12 +34,13 @@ from enum import Enum
 from typing import Any, ClassVar, Literal, Union
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .models import (
     SKILL_SCHEMA_VERSION,
     ActionEvent,
     ConstraintSpec,
+    Postcondition,
     ReusableSkill,
     SkillParameter,
     SkillSignature,
@@ -159,25 +160,81 @@ class ScriptBody(BaseModel):
 
 
 class ContractEdge(BaseModel):
-    """An explicit dependency between two child contracts of a subgraph."""
+    """An explicit dependency between two child contracts of a subgraph.
+
+    ``relation="before"``: the target child runs after the source verified.
+    ``relation="fallback"``: the target is a dormant repair branch.
+    ``relation="guard"`` (G2): a ``before`` edge that admits only if the
+    source verified AND its evidence satisfies ``guard`` — the child-level
+    mirror of ``BlueprintEdge``'s guard, compiled onto the source's exits
+    and the target's entries. ``relation="loop"`` (G2): a back-edge
+    tail→head over the region between them, with a mandatory
+    ``max_iterations`` and an optional continue ``guard``; a child-level
+    loop edge maps to exactly ONE blueprint LoopSpec, so its endpoints
+    must be single-exit/single-entry children (the compiler refuses
+    otherwise). The predicate speaks the one predicate language, so no
+    model ever routes."""
 
     model_config = ConfigDict(frozen=True)
 
     source: str  # child contract id
     target: str
-    relation: Literal["before", "fallback"] = "before"
+    relation: Literal["before", "fallback", "guard", "loop"] = "before"
     provenance: Literal["sop", "learned", "data"] = "learned"
+    guard: Postcondition | None = None
+    max_iterations: int | None = None
+
+    @model_validator(mode="after")
+    def _gate_fields_ride_gate_edges_only(self) -> "ContractEdge":
+        """Loud refusal at construction — the same discipline as
+        ``BlueprintEdge`` (the mirrored-pair rule stands)."""
+        if self.relation == "guard" and self.guard is None:
+            raise ValueError(
+                f"guard edge {self.source}->{self.target} declares no "
+                "predicate — relation='guard' requires a guard"
+            )
+        if self.relation not in ("guard", "loop") and self.guard is not None:
+            raise ValueError(
+                f"edge {self.source}->{self.target} carries a guard predicate "
+                f"but relation={self.relation!r} — a predicate rides only "
+                "relation='guard' or relation='loop'"
+            )
+        if self.relation == "loop":
+            if self.max_iterations is None:
+                raise ValueError(
+                    f"loop edge {self.source}->{self.target} declares no "
+                    "max_iterations — an unbounded loop is unconstructible"
+                )
+            if self.max_iterations < 1:
+                raise ValueError(
+                    f"loop edge {self.source}->{self.target} declares "
+                    f"max_iterations={self.max_iterations} — the budget "
+                    "must be >= 1"
+                )
+        elif self.max_iterations is not None:
+            raise ValueError(
+                f"edge {self.source}->{self.target} carries max_iterations "
+                f"but relation={self.relation!r} — a budget rides only "
+                "relation='loop'"
+            )
+        return self
 
 
 class SubgraphBody(BaseModel):
     """Nested contracts — a composed super-node. Ordering = explicit edges
-    plus the data-flow edges derived from the children's slots."""
+    plus the data-flow edges derived from the children's slots.
+
+    ``joins`` (G2) is how a child's incoming ordering edges combine at run
+    time — ``child_id -> "all" | "any"`` — compiled onto that child's
+    ENTRY actions. The default (absent, or ``"all"``) is the pre-gate
+    behaviour; ``"any"`` is the OR-join a guard OR-split feeds."""
 
     model_config = ConfigDict(frozen=True)
 
     kind: Literal[BodyKind.SUBGRAPH] = BodyKind.SUBGRAPH
     nodes: list["NodeContract"]
     edges: list[ContractEdge] = Field(default_factory=list)
+    joins: dict[str, Literal["all", "any"]] = Field(default_factory=dict)
 
 
 NodeBody = Union[ActionsBody, ScriptBody, SubgraphBody]

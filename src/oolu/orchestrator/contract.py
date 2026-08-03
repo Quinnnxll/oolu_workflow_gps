@@ -61,6 +61,49 @@ class _Fragment:
         return [item.action.id for item in self.actions]
 
 
+def promote_sequential_for_gates(blueprint: Blueprint) -> Blueprint:
+    """Materialize a sequential blueprint's implicit chain as explicit
+    ``before`` edges and switch it to ``ordering="graph"`` (G2), so a gate
+    edge (guard/loop) added on top runs — the scheduler refuses gate edges
+    under ``ordering="sequential"``, and this is the order-preserving
+    promotion that avoids that refusal.
+
+    A no-op unless the blueprint is sequential AND already carries a gate
+    edge: legacy sequential blueprints are untouched, so the promotion
+    fires only where a caller (an SOP, a builder) actually added a gate.
+    The chain is exactly the one ``gates.dependency_edges`` would synthesize
+    for a sequential blueprint — same order, now spelled out."""
+    if blueprint.ordering != "sequential":
+        return blueprint
+    if not any(e.relation in ("guard", "loop") for e in blueprint.edges):
+        return blueprint
+    fallback_ids = {
+        edge.target for edge in blueprint.edges if edge.relation == "fallback"
+    }
+    seen = {(e.source, e.target, e.relation) for e in blueprint.edges}
+    chain: list[BlueprintEdge] = []
+    previous: str | None = None
+    for item in blueprint.actions:
+        if item.action.id in fallback_ids:
+            continue
+        if previous is not None:
+            marker = (previous, item.action.id, "before")
+            if marker not in seen:
+                chain.append(
+                    BlueprintEdge(
+                        source=previous,
+                        target=item.action.id,
+                        relation="before",
+                        provenance="learned",
+                    )
+                )
+                seen.add(marker)
+        previous = item.action.id
+    return blueprint.model_copy(
+        update={"edges": list(blueprint.edges) + chain, "ordering": "graph"}
+    )
+
+
 def contract_to_blueprint(
     contract: NodeContract,
     *,
@@ -327,14 +370,25 @@ def _compile_subgraph(contract: NodeContract, body: SubgraphBody) -> _Fragment:
 
     seen = {(e.source, e.target, e.relation) for e in edges}
 
-    def connect(source_id: str, target_id: str, relation: str, provenance: str):
-        source, target = fragments[source_id], fragments[target_id]
-        endpoints = (
-            (source.exits, target.entries)
-            if relation == "before"
-            # fallback: the whole repair fragment gates the substitution
-            else (source.ids, target.ids)
-        )
+    def connect(edge: ContractEdge):
+        source, target = fragments[edge.source], fragments[edge.target]
+        relation = edge.relation
+        if relation == "loop":
+            # A child-level loop maps to exactly ONE blueprint LoopSpec, so
+            # the tail must be single-exit and the head single-entry (G2).
+            # Refuse otherwise, loudly — one edge, one loop region.
+            if len(source.exits) != 1 or len(target.entries) != 1:
+                raise ValueError(
+                    f"loop edge {edge.source}->{edge.target} needs a "
+                    "single-exit tail and a single-entry head "
+                    f"(got {len(source.exits)} exit(s), "
+                    f"{len(target.entries)} entry/entries)"
+                )
+            endpoints = (source.exits, target.entries)
+        elif relation in ("before", "guard"):
+            endpoints = (source.exits, target.entries)
+        else:  # fallback: the whole repair fragment gates the substitution
+            endpoints = (source.ids, target.ids)
         for from_id in endpoints[0]:
             for to_id in endpoints[1]:
                 marker = (from_id, to_id, relation)
@@ -344,7 +398,9 @@ def _compile_subgraph(contract: NodeContract, body: SubgraphBody) -> _Fragment:
                             source=from_id,
                             target=to_id,
                             relation=relation,  # type: ignore[arg-type]
-                            provenance=provenance,  # type: ignore[arg-type]
+                            provenance=edge.provenance,  # type: ignore[arg-type]
+                            guard=edge.guard,
+                            max_iterations=edge.max_iterations,
                         )
                     )
                     seen.add(marker)
@@ -355,13 +411,39 @@ def _compile_subgraph(contract: NodeContract, body: SubgraphBody) -> _Fragment:
             raise ValueError(
                 f"subgraph edge references unknown child: {edge.source}->{edge.target}"
             )
-        connect(edge.source, edge.target, edge.relation, edge.provenance)
+        connect(edge)
     for edge in derive_data_edges(nodes):
-        connect(edge.source, edge.target, edge.relation, edge.provenance)
+        connect(edge)
 
-    # The subgraph's boundary: children nothing points at / nothing leaves.
-    targeted = {e.target for e in edges if e.relation == "before"}
-    sourced = {e.source for e in edges if e.relation == "before"}
+    # Joins (G2): a child's declared join mode rides its ENTRY actions —
+    # the actions its incoming ordering edges land on. An unmapped child
+    # keeps the "all" default. Rebuild the actions carrying the join so
+    # the boundary/owners below see the same objects.
+    if body.joins:
+        join_by_action: dict[str, str] = {}
+        for child_id, mode in body.joins.items():
+            if child_id not in fragments:
+                raise ValueError(
+                    f"subgraph join names unknown child: {child_id}"
+                )
+            for entry_id in fragments[child_id].entries:
+                join_by_action[entry_id] = mode
+        if join_by_action:
+            actions = [
+                item.model_copy(update={"join": join_by_action[item.action.id]})
+                if item.action.id in join_by_action
+                else item
+                for item in actions
+            ]
+
+    # The subgraph's boundary is derived over the STRUCTURAL edges —
+    # ``before`` AND ``guard`` (guards ARE ordering edges, G2). A child
+    # reached ONLY via a guard edge is entered, not a boundary entry, so
+    # nested composition wires fan-in correctly; ``loop`` back-edges and
+    # dormant ``fallback`` branches never define the boundary.
+    structural = ("before", "guard")
+    targeted = {e.target for e in edges if e.relation in structural}
+    sourced = {e.source for e in edges if e.relation in structural}
     entries = [
         aid
         for fragment in fragments.values()
