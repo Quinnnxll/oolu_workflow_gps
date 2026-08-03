@@ -175,14 +175,67 @@ def test_polyglot_wrapper_timeout_sits_under_the_program_wall():
 # --------------------------------------------------------------------------- #
 # The walls stand.                                                             #
 # --------------------------------------------------------------------------- #
-def test_a_bundle_member_may_not_shadow_the_state_channel():
+def test_a_bundle_member_shadows_only_a_STAGED_side_channel(tmp_path):
+    # F2.1 — collision-precise: a tree member named like a side channel
+    # is refused ONLY when the runtime actually staged that channel this
+    # run (the file exists in the workspace); a legitimate tree shipping
+    # such a name on a channel-free run still runs. The harness names
+    # refuse unconditionally.
     from oolu.runtime.bundle import pack_tar
     from oolu.runtime.isolation import BackendError, _unpack_into
 
     for name in ("state.json", "records.json", "bindings.json"):
-        archive = pack_tar({name: b"hostile"})
+        # Not staged: the member lands (pre-F2 behavior preserved).
+        free = tmp_path / f"free-{name}"
+        free.mkdir()
+        _unpack_into(free, pack_tar({name: b"legit tree data"}))
+        assert (free / name).read_bytes() == b"legit tree data"
+        # Staged: the member would clobber live data — refused loudly.
+        staged = tmp_path / f"staged-{name}"
+        staged.mkdir()
+        (staged / name).write_text("{}")
         with pytest.raises(BackendError, match="shadow"):
-            _unpack_into(__import__("pathlib").Path("/tmp/never-used"), archive)
+            _unpack_into(staged, pack_tar({name: b"hostile"}))
+    # The harness refuses with or without a collision.
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    with pytest.raises(BackendError, match="shadow"):
+        _unpack_into(bare, pack_tar({"user_script.py": b"x"}))
+
+
+def test_birth_verify_takes_the_program_profile_limits():
+    # F2.1: a program declaring the program profile is BORN under the
+    # same (clamped) walls its runs get — judged at step limits, a
+    # legitimately-slow program could never pass its own birth.
+    backend = StubBackend([make_success({"result": 1}), make_success({"result": 1})])
+    runner = _runner(backend)
+    report = runner.verify_function(
+        "birth", SCRIPT, session_id="s",
+        limits=clamp_limits(PROGRAM_LIMITS),
+    )
+    assert report["ok"], report["error"]
+    assert backend.requests[0].limits.wall_timeout_s == 180.0
+    # Default stays the step wall — every existing caller byte-identical.
+    runner.verify_function("birth", SCRIPT, session_id="s2")
+    assert backend.requests[1].limits.wall_timeout_s == 30.0
+
+
+def test_merge_keeps_the_newest_row_at_the_cap_and_falsy_at_rows():
+    # F2.1: append-order capping — a just-emitted row survives even when
+    # its stringified stamp sorts lexicographically low ("10" < "3");
+    # and empty-at rows carry no identity, so they never collapse.
+    standing = [
+        {"at": str(i), "label": f"r{i}"} for i in range(3, 3 + MAX_STATE_ROWS)
+    ]
+    merged = merge_state_rows(standing, [{"at": "10", "label": "newest"}])
+    assert any(r["label"] == "newest" for r in merged)
+    assert len(merged) == MAX_STATE_ROWS  # the OLDEST appended fell off
+
+    kept = merge_state_rows(
+        [{"at": None, "label": "x", "value": 1}],
+        [{"at": 0, "label": "x", "value": 2}],
+    )
+    assert len(kept) == 2  # distinct falsy-at rows both stand
 
 
 def test_a_port_named_state_still_refuses_at_parse():
@@ -228,9 +281,11 @@ STATE_LIB = {
 }
 
 
-def _completed_run(node_id, run_id, payload):
+def _completed_run(node_id, run_id, payload, *, staged_state=None):
     """A COMPLETED node-function RunState, shaped as the completion hooks
-    read it — the minimal honest stand-in."""
+    read it — the minimal honest stand-in. ``staged_state`` is the
+    ``_state`` the run was resolved with (the exact ./state.json bytes),
+    riding the node_function metadata as it does in a real run."""
     from datetime import UTC, datetime
     from types import SimpleNamespace
 
@@ -247,13 +302,16 @@ def _completed_run(node_id, run_id, payload):
         started_at=now,
         completed_at=now,
     )
+    function = {"node_id": node_id}
+    if staged_state is not None:
+        function["_state"] = staged_state
     return SimpleNamespace(
         run_id=run_id,
         phase=Phase.COMPLETED,
         execution=SimpleNamespace(action_outcomes=[outcome]),
         contract=SimpleNamespace(
             metadata={
-                "node_function": {"node_id": node_id},
+                "node_function": function,
                 "tenant_id": "t1",
             }
         ),
@@ -335,6 +393,8 @@ def test_state_lands_copies_history_and_stages_the_next_run(tmp_path):
         assert json.loads(extras["_state"]) == standing
 
         # Run 2 completes: the standing row re-emitted (dedup) + a new one.
+        # Its metadata carries the _state it was RESOLVED with (F2.1) —
+        # the exact bytes the extras staged.
         row2 = {"at": "2026-01-02", "label": "entry-2", "value": 2}
         app._land_state(
             _completed_run(
@@ -350,6 +410,7 @@ def test_state_lands_copies_history_and_stages_the_next_run(tmp_path):
                         "cursor": 2,
                     },
                 },
+                staged_state=extras["_state"],
             )
         )
         merged = json.loads(
@@ -375,6 +436,55 @@ def test_state_lands_copies_history_and_stages_the_next_run(tmp_path):
         # The state file never joins the frozen tree — the bundle id (and
         # so the cache key) is identical across state changes.
         assert "state.json" not in app._node_src_bundle_tree("t1", node_id)
+    finally:
+        conn.close()
+
+
+def test_history_records_what_the_run_was_staged_with_not_the_drawer(tmp_path):
+    # F2.1: the history copy is the run's OWN staged snapshot — even when
+    # the drawer moved between this run's staging and its landing (a
+    # concurrent run, a file edit), runs/<id>/state/ tells the truth.
+    app, conn, session, node_id = _publish_state_program(tmp_path)
+    try:
+        s0 = json.dumps({"cursor": 0})
+        # The drawer moves AFTER this run was staged with s0:
+        from oolu.durable.files import UserFile
+
+        app._files.save(
+            UserFile(
+                tenant_id="t1", node_id=node_id, folder="state",
+                name="state.json", media_type="application/json",
+                content=json.dumps({"cursor": 999}),  # drawer drifted
+            )
+        )
+        app._land_state(
+            _completed_run(
+                node_id, "run-A", {"summary": "x", "state": {"cursor": 1}},
+                staged_state=s0,
+            )
+        )
+        history = _drawer_file(app, node_id, "runs/run-A/state", "state.json")
+        assert json.loads(history.content) == {"cursor": 0}  # s0, NOT 999
+    finally:
+        conn.close()
+
+
+def test_a_reads_only_run_still_files_its_history(tmp_path):
+    # F2.1: a completed run that emitted NO state update still records
+    # what it was staged with — replayed history covers every run.
+    app, conn, session, node_id = _publish_state_program(tmp_path)
+    try:
+        staged = json.dumps({"cursor": 7})
+        app._land_state(
+            _completed_run(
+                node_id, "run-R", {"summary": "just reading"},
+                staged_state=staged,
+            )
+        )
+        history = _drawer_file(app, node_id, "runs/run-R/state", "state.json")
+        assert history is not None and json.loads(history.content) == {"cursor": 7}
+        # And the standing book is untouched (nothing was emitted).
+        assert _drawer_file(app, node_id, "state", "state.json") is None
     finally:
         conn.close()
 

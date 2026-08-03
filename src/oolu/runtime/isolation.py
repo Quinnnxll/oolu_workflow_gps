@@ -57,39 +57,44 @@ _MAX_STAGED_BYTES = 2_000_000
 
 
 
-# What a bundle member may never be named (F0.1, extended F2): the harness
-# itself, and the RUN-TIME SIDE CHANNELS — the bundle unpacks AFTER the
-# inline staging writes them, so a member of any of these names would
-# silently overwrite the sandbox's own code (the harness) or the runtime's
-# staged data (the bound inputs, the node's book, the program's state)
-# with unverified bytes from a frozen tree.
-def _reserved_workspace_names() -> set[str]:
-    return {
-        f"{SHIM_MODULE_NAME}.py",
-        "user_script.py",
-        "bindings.json",
-        "records.json",
-        "state.json",
-    }
+# What a bundle member may never be named (F0.1, extended F2/F2.1): the
+# HARNESS names are refused unconditionally — the shim and the script are
+# always staged, so a member of either name always overwrites verified
+# code. The RUN-TIME SIDE CHANNELS (the bound inputs, the node's book,
+# the program's state) are refused ON COLLISION: the bundle unpacks AFTER
+# inline staging writes them, so a member of a name the runtime actually
+# staged THIS run would silently swap live data for frozen-tree bytes —
+# but a tree that merely ships a file of that name, on a run that staged
+# no such channel, is legitimate and runs as it always did.
+_HARNESS_NAMES = frozenset({f"{SHIM_MODULE_NAME}.py", "user_script.py"})
+_SIDE_CHANNEL_NAMES = frozenset({"bindings.json", "records.json", "state.json"})
+
+
+def _bundle_refusals(staged_names: set[str]) -> frozenset[str]:
+    """The top-level names a bundle member may not carry for THIS run:
+    the harness always, a side channel only when it was actually staged."""
+    return _HARNESS_NAMES | (_SIDE_CHANNEL_NAMES & staged_names)
 
 
 def _unpack_into(root: Path, archive: bytes) -> None:
     """Extract a bundle tar under ``root``, refusing any escaping member —
     the subprocess backend's one-pass staging of a large tree.
 
-    A bundle member may not SHADOW the harness or a run-time side channel
-    either: it unpacks AFTER the shim, ``user_script.py``, and the staged
-    data files are written, so a member of any reserved name would
-    overwrite the sandbox's own code — or the runtime's staged data —
-    with unverified bytes. The same wall inline staging holds, at the
-    same boundary — a large tree is not a trust bypass."""
+    A bundle member may not SHADOW the harness, and may not shadow a
+    run-time side channel THE RUN STAGED (F2.1 — collision-precise: the
+    workspace already holds everything inline staging wrote, so
+    "does the file exist" is exactly "was it staged"). A member of such
+    a name would overwrite the sandbox's own code — or the runtime's
+    staged data — with unverified bytes. The same wall inline staging
+    holds, at the same boundary — a large tree is not a trust bypass."""
     from .bundle import unpack_tar
 
     base = root.resolve()
-    reserved = _reserved_workspace_names()
     for name, data in unpack_tar(archive).items():
         head = str(name).replace("\\", "/").split("/", 1)[0]
-        if head in reserved:
+        if head in _HARNESS_NAMES or (
+            head in _SIDE_CHANNEL_NAMES and (root / head).exists()
+        ):
             raise BackendError(f"bundle member may not shadow the harness: {name!r}")
         target = (root / name).resolve()
         if base not in target.parents:
@@ -348,13 +353,15 @@ class SubprocessBackend(_TwoPhaseBackend):
             _unpack_into(workspace, bundle.tar)
             return
         source = self._materialized_dir.ensure(bundle.bundle_id, bundle.tar)
-        reserved = _reserved_workspace_names()
         for name in self._materialized_dir.top_level(bundle.bundle_id):
-            if str(name).replace("\\", "/").split("/", 1)[0] in reserved:
+            head = str(name).replace("\\", "/").split("/", 1)[0]
+            link = workspace / name
+            if head in _HARNESS_NAMES or (
+                head in _SIDE_CHANNEL_NAMES and (workspace / head).exists()
+            ):
                 raise BackendError(
                     f"bundle member may not shadow the harness: {name!r}"
                 )
-            link = workspace / name
             if link.exists() or link.is_symlink():
                 link.unlink()
             link.symlink_to(source / name)
@@ -636,25 +643,46 @@ class LocalDockerBackend(_TwoPhaseBackend):
         # read-only and symlinked into /sandbox in ONE exec — no byte copy,
         # and the OS page cache keeps it hot across containers. Otherwise a
         # pre-packed bundle tar is extracted in this one more exec.
+        # The SAME shadow wall as the subprocess backend (F2.1 — the
+        # production boundary must not be the weaker one): a bundle member
+        # may not replace the harness, nor a side channel this run staged.
         bundle = request.bundle
         if bundle is None:
             return
+        refusals = _bundle_refusals(
+            {str(k).replace("\\", "/").split("/", 1)[0] for k in harness}
+        )
         if bundle_mount is not None:
             entries = self._materialized_dir.top_level(bundle.bundle_id)
+            for name in entries:
+                if str(name).replace("\\", "/").split("/", 1)[0] in refusals:
+                    raise BackendError(
+                        f"bundle member may not shadow the harness: {name!r}"
+                    )
             self._stage_exec(
                 container, symlink_stage_cmd(entries, bundle_mount)
             )
         else:
-            self._extract_archive(container, bundle.tar)
+            self._extract_archive(container, bundle.tar, refuse=refusals)
 
-    def _extract_archive(self, container: object, archive: bytes) -> None:
+    def _extract_archive(
+        self,
+        container: object,
+        archive: bytes,
+        *,
+        refuse: frozenset[str] = frozenset(),
+    ) -> None:
         """Write one tar into the container and extract it in a single exec.
 
         The bytes travel base64 on argv (the read-only rootfs refuses the
         Docker copy API even onto the writable tmpfs), but as ONE object:
         the per-file round-trips are gone, so staging cost no longer grows
-        with the file count."""
+        with the file count. ``refuse`` (F2.1) names top-level members the
+        extraction must reject — the harness and any staged side channel —
+        so a frozen tree cannot silently overwrite them; enforced INSIDE
+        the container, where the extraction runs."""
         b64 = base64.b64encode(archive).decode("ascii")
+        refuse_literal = repr(sorted(refuse))
         code = (
             "import base64,io,tarfile,pathlib;"
             "buf=io.BytesIO(base64.b64decode('" + b64 + "'));"
@@ -665,6 +693,10 @@ class LocalDockerBackend(_TwoPhaseBackend):
             # /sandbox, even though freeze/pack already forbid such paths.
             "assert all(base in (base/ m.name).resolve().parents for m in ms),"
             "'archive path escapes /sandbox';"
+            "rs=set(" + refuse_literal + ");"
+            "assert all(m.name.replace('\\\\','/').split('/',1)[0] not in rs "
+            "for m in ms),"
+            "'bundle member may not shadow the harness';"
             "t.extractall('/sandbox',members=ms)"
         )
         self._stage_exec(container, ["python", "-c", code])

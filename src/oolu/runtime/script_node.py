@@ -698,6 +698,7 @@ class NodeScriptRunner:
         ports: list[dict] | None = None,
         files: dict[str, str] | None = None,
         bundle=None,
+        limits: ResourceLimits | None = None,
     ) -> dict:
         """One candidate function against the contract — the BIRTH-VERIFY
         primitive (context-harness plan, Phase 4). The function under
@@ -716,6 +717,14 @@ class NodeScriptRunner:
         same packed artifact runs will. The shared seam W3's adapter
         verification consumes.
 
+        ``limits`` (F2.1, default None — the runner's own step limits, so
+        every existing caller is byte-identical): the sandbox walls for
+        THIS verification. A program declaring ``limits_profile:
+        "program"`` may legitimately need the wider (clamped) profile to
+        pass its birth — judged at step limits it would time out and the
+        very program the profile exists for could never be born. The
+        caller passes the SAME clamped limits its runs will get.
+
         Returns ``{"ok", "honest_error", "error", "healed"}``. ``ok``:
         ran clean (and, when ``ports`` are declared, the payload carries
         them — a run that skips its declared ports is a mocked answer).
@@ -730,7 +739,13 @@ class NodeScriptRunner:
         record = None
         for _ in range(3):
             result = self._run_script(
-                script, deps, session_id, web=None, files=files, bundle=bundle
+                script,
+                deps,
+                session_id,
+                web=None,
+                files=files,
+                bundle=bundle,
+                limits=limits,
             )
             record = classify(result)
             if record is None:

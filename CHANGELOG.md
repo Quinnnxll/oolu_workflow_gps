@@ -90,6 +90,20 @@ Part I):
   timeout (170 s) sits under the program wall, so a hung toolchain dies
   with an honest `emit_error` naming the reason instead of a silent
   container kill.
+- **F2.1 (review fixes)** — five defects from nine confirmed findings:
+  the `runs/<id>/state/` history now copies the run's OWN staged `_state`
+  bytes (never the drawer's landing-time content, which a concurrent run
+  or file edit may have moved) and files for EVERY completed run of a
+  state-declaring program, reads-only runs included; `merge_state_rows`
+  is append-ordered (the lexicographic `at`-sort dropped the newest rows
+  at the cap) and empty-`at` rows never collapse on the dedup key; birth
+  verification takes the clamped program limits via
+  `verify_function(limits=)` (default unchanged) so a program needing its
+  declared profile can actually be born; and the bundle shadow wall is
+  now on BOTH backends (the Docker path had none) and collision-precise —
+  harness names always refuse, a side-channel name refuses only when that
+  channel was actually staged this run, so legitimate trees shipping such
+  names keep running.
 
 Trigger propagation (W4) — one trigger, the whole web: a deterministic,
 bounded, consent-gated cascade (docs/algorithm-barriers-plan.md, Part II):

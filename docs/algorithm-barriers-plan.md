@@ -573,6 +573,37 @@ pre-run state, run 2 STAGES run 1's landed state, its merge dedups with
 the standing book winning, `runs/run-2/state/` holds what run 2 read,
 re-landing is idempotent, and the state file never joins the frozen
 bundle tree.
+**Amended (F2.1)** — adversarial review of the F2 diff confirmed nine
+findings deduplicating to five defects, all fixed: (1, major) the
+``runs/<id>/state/`` history copy was written from the drawer's CURRENT
+state at landing time, not the run's actual staged snapshot — a
+concurrent run or a file edit between staging and landing recorded
+state the run never read. History now copies the EXACT ``_state`` bytes
+riding the run's own metadata; the standing-book merge stays
+last-writer-merges (documented — the per-run history is what stays
+truthful under a race). (2) A reads-only run filed no history — it now
+files for EVERY completed run of a state-declaring program, so
+``runs/*`` covers every run. (3) ``merge_state_rows`` sorted on the
+stringified ``at`` and capped after — a lexicographic sort
+(``"10" < "3"``) dropped the chronologically NEWEST rows at the cap,
+and distinct falsy-``at`` rows collapsed on the dedup key. The book is
+now APPEND-ordered (the cap trims the oldest appended; a just-emitted
+row always survives) and an empty-``at`` row carries no identity, so it
+never collides. (4, major) birth verification ran at the 30 s step wall
+regardless of the declared profile — the very program
+``limits_profile: "program"`` exists for could never be born.
+``verify_function`` gained ``limits=`` (default None — every existing
+caller byte-identical) and the publish door passes the same clamped
+program limits its runs get. (5, major) the bundle shadow wall existed
+only on the subprocess backend — the Docker backend (the production
+boundary) staged bundles with no reserved-name check at all; and the
+subprocess wall refused on NAME rather than collision, hard-failing
+legitimate trees shipping such names on channel-free runs. Both
+backends now enforce ONE collision-precise wall: harness names refuse
+unconditionally; a side-channel name refuses only when that channel was
+actually staged this run (workspace-existence on subprocess, the staged
+set threaded into the in-container extraction and the symlink path on
+Docker).
 
 **F3 — The unified view, deterministic form.** *One face: every program
 node renders its standing result.*

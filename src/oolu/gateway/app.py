@@ -8338,13 +8338,26 @@ class GatewayApp:
             (script + tree["program.json"]).encode()
         ).hexdigest()[:16]
 
+        # Birth is judged under the SAME walls the runs will get (F2.1):
+        # a program declaring the program profile may legitimately need
+        # more than the 30 s step wall to pass its checks — judged at
+        # step limits, the very program the profile exists for could
+        # never be born. Same clamped ceilings, no wider.
+        birth_kwargs: dict = {}
+        if spec.limits_profile == "program":
+            from ..runtime.backend import PROGRAM_LIMITS, clamp_limits
+
+            birth_kwargs["limits"] = clamp_limits(PROGRAM_LIMITS)
+
         def _verify(label, code, session_id, **kw):
             """Wrap the birth primitive: an infrastructure failure (the
             backend down, a bad stage) is a REFUSAL with the reason
             named, never a crash that escapes the door — matching
             _author_verifier's discipline (F0.1)."""
             try:
-                return verify(label, code, session_id=session_id, **kw)
+                return verify(
+                    label, code, session_id=session_id, **birth_kwargs, **kw
+                )
             except Exception as exc:  # noqa: BLE001 - answered, never fatal
                 return {"ok": False, "error": f"verification failed: {exc}"}
 
@@ -19811,19 +19824,25 @@ class GatewayApp:
         — the file the next run stages as ``./state.json``. Only DECLARED
         state names land (the spec is the contract; an undeclared key is
         dropped with a warning): a ``rows``-kind name merges through the
-        lifebooks row discipline (dedup on ``(at, label)``, standing rows
-        win, sorted, capped), a ``value``-kind name is replaced whole.
+        row discipline (dedup on ``(at, label)``, standing rows win,
+        append-order, capped), a ``value``-kind name is replaced whole.
 
-        History first: the state THIS run was staged with (the standing
-        book BEFORE the update) is copied under
-        ``runs/<run_id>/state/state.json`` — so replayed history
-        reconstructs each run's staged state from ``runs/*`` alone.
-        Idempotent per run, best-effort: bookkeeping on a finished run is
-        never a new way for it to fail."""
+        History first, for EVERY completed run of a state-declaring
+        program (F2.1): the EXACT bytes this run was STAGED with — the
+        ``_state`` parameter riding the run's own metadata, never the
+        drawer's content at landing time (another run or a file edit may
+        have moved the drawer since this run was staged) — are copied
+        under ``runs/<run_id>/state/state.json``, reads-only runs
+        included, so replayed history reconstructs each run's staged
+        state from ``runs/*`` alone. Idempotent per run, best-effort:
+        bookkeeping on a finished run is never a new way for it to fail.
+        The STANDING book's merge is last-writer-merges over the freshest
+        drawer content — concurrent same-node runs are not serialized
+        here; the per-run history is what stays truthful under a race."""
         if self._files is None:
             return
         result = self._completed_result(state)
-        if result is None or not isinstance(result.get("state"), dict):
+        if result is None:
             return
         function = state.contract.metadata["node_function"]
         tenant = str(state.contract.metadata.get("tenant_id", ""))
@@ -19833,9 +19852,46 @@ class GatewayApp:
             return  # only a program node with DECLARED state keeps state
         from ..skills.program import merge_state_rows
 
-        emitted = result["state"]
         try:
             files = list(self._files.list(tenant=tenant, node_id=node_id))
+
+            # History FIRST — the state THIS run was STAGED with, from the
+            # run's own metadata (the exact ./state.json bytes), one copy
+            # per run (a retry files the same run once).
+            staged_raw = function.get("_state")
+            try:
+                staged = (
+                    json.loads(staged_raw)
+                    if isinstance(staged_raw, str) and staged_raw
+                    else {}
+                )
+            except ValueError:
+                staged = {}
+            if not isinstance(staged, dict):
+                staged = {}
+            history_folder = f"runs/{state.run_id}/state"
+            if not any(
+                f.folder == history_folder and f.name == "state.json"
+                for f in files
+            ):
+                self._files.save(
+                    UserFile(
+                        tenant_id=tenant,
+                        node_id=node_id,
+                        folder=history_folder,
+                        name="state.json",
+                        media_type="application/json",
+                        content=json.dumps(
+                            staged, ensure_ascii=False, sort_keys=True,
+                            default=str,
+                        ),
+                    )
+                )
+
+            # The standing-book update: only when the run EMITTED state.
+            emitted = result.get("state")
+            if not isinstance(emitted, dict):
+                return
             current = next(
                 (
                     f
@@ -19854,27 +19910,6 @@ class GatewayApp:
                 standing = {}
             if not isinstance(standing, dict):
                 standing = {}
-
-            # History FIRST — what this run READ, before the update, one
-            # copy per run (a retry files the same run once).
-            history_folder = f"runs/{state.run_id}/state"
-            if not any(
-                f.folder == history_folder and f.name == "state.json"
-                for f in files
-            ):
-                self._files.save(
-                    UserFile(
-                        tenant_id=tenant,
-                        node_id=node_id,
-                        folder=history_folder,
-                        name="state.json",
-                        media_type="application/json",
-                        content=json.dumps(
-                            standing, ensure_ascii=False, sort_keys=True,
-                            default=str,
-                        ),
-                    )
-                )
 
             declared = {item.name: item for item in spec.state}
             dropped = sorted(set(emitted) - set(declared))

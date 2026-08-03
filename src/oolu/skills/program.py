@@ -151,13 +151,21 @@ MAX_STATE_ROWS = 2_000
 
 
 def merge_state_rows(standing: Any, emitted: Any) -> list[dict]:
-    """Merge a run's emitted rows into a rows-kind state — the LIFEBOOKS
-    row discipline (F2): every row normalized to ``{at, label, value,
-    note}``, deduplicated on ``(at, label)`` with the STANDING book
-    winning (an import re-run never doubles a book), sorted by ``at``,
-    capped at :data:`MAX_STATE_ROWS` (oldest fall off). Deterministic:
-    the same standing book and the same emission always merge to the
-    same rows, so replayed history reconstructs identically."""
+    """Merge a run's emitted rows into a rows-kind state — the row
+    discipline (F2, amended F2.1): every row normalized to ``{at, label,
+    value, note}``, deduplicated on ``(at, label)`` with the STANDING
+    book winning (an import re-run never doubles a book), kept in
+    APPEND order, capped at :data:`MAX_STATE_ROWS`.
+
+    F2.1 sharpened two edges the review reproduced: the book is
+    append-ordered, NOT sorted by ``at`` — a lexicographic sort on
+    stringified stamps (``"10" < "3"``) dropped the chronologically
+    NEWEST rows at the cap, so the cap now trims the FRONT of the
+    append order (the oldest entries) and a just-emitted row always
+    survives; and a row with an EMPTY ``at`` carries no identity, so it
+    always appends instead of colliding with every other empty-``at``
+    row on the dedup key. Deterministic: the same standing book and the
+    same emission always merge to the same rows."""
 
     def _clean(row: Any) -> dict | None:
         if not isinstance(row, dict):
@@ -171,19 +179,17 @@ def merge_state_rows(standing: Any, emitted: Any) -> list[dict]:
 
     merged: list[dict] = []
     seen: set[tuple[str, str]] = set()
-    for raw in list(standing or []) if isinstance(standing, list) else []:
-        row = _clean(raw)
-        if row is None or (row["at"], row["label"]) in seen:
-            continue
-        merged.append(row)
-        seen.add((row["at"], row["label"]))
-    for raw in list(emitted or []) if isinstance(emitted, list) else []:
-        row = _clean(raw)
-        if row is None or (row["at"], row["label"]) in seen:
-            continue
-        merged.append(row)
-        seen.add((row["at"], row["label"]))
-    merged.sort(key=lambda r: r["at"])
+    for source in (standing, emitted):
+        for raw in list(source or []) if isinstance(source, list) else []:
+            row = _clean(raw)
+            if row is None:
+                continue
+            key = (row["at"], row["label"])
+            if row["at"] and key in seen:
+                continue  # a dated row's identity: the standing book won
+            merged.append(row)
+            if row["at"]:
+                seen.add(key)
     return merged[-MAX_STATE_ROWS:]
 
 
