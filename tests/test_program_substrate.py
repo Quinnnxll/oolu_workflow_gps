@@ -526,3 +526,54 @@ def test_verify_backend_failure_refuses_not_crashes(tmp_path):
     assert not result["ok"]
     assert "verification failed" in result["problem"]
     conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# F1.1 — review fixes.                                                         #
+# --------------------------------------------------------------------------- #
+INPUT_ENTRY = (
+    "import json\n"
+    "from _oolu_runtime import emit_result\n"
+    "from lib.compute import answer\n"
+    "with open('bindings.json', encoding='utf-8') as fh:\n"
+    "    bindings = json.load(fh)\n"
+    "emit_result({'summary': answer(bindings.get('source', 'default'))})\n"
+)
+INPUT_LIB = {
+    "lib/__init__.py": "",
+    "lib/compute.py": "def answer(source):\n    return 'from ' + str(source)\n",
+}
+INPUT_SPEC = ProgramSpec(
+    modules=[ModuleSpec(path="lib/compute.py"), ModuleSpec(path="lib/__init__.py")],
+    interface=UnifiedInterface(operation="main", ports=[{"name": "summary"}]),
+)
+
+
+def test_inputs_declaring_program_births_with_a_staged_bindings_file(tmp_path):
+    # The dispatcher reads bindings.json; birth must stage one, or the
+    # entry dies on open() before it dispatches or checks a port.
+    app, conn, ident, runner = _program_app(tmp_path)
+    session = _session(app, ident)
+    result = app.publish_program_node(
+        session,
+        goal="compute from a source",
+        script=INPUT_ENTRY,
+        files=dict(INPUT_LIB),
+        program=INPUT_SPEC,
+        io={
+            "inputs": [{"name": "source", "type": "str", "label": "Which source?"}],
+            "outputs": [{"name": "summary", "type": "str"}],
+        },
+    )
+    # The entry actually ran the real dispatch path (read bindings, called
+    # the module, emitted the port) — not silently defeated as honest_error.
+    assert result["ok"], result.get("problem")
+    assert not any("birth ran honest" in n for n in result.get("notes", []))
+    conn.close()
+
+
+def test_reserved_tree_key_uses_the_real_shim_name():
+    from oolu.runtime.contract import SHIM_MODULE_NAME
+
+    # The shim's own name is a reserved tree key derived from the constant.
+    assert SHIM_MODULE_NAME == "_oolu_runtime"

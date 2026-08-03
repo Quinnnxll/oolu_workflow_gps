@@ -319,3 +319,45 @@ def test_explicit_program_request_is_recognized_and_scoped():
     # so ordering matters: the program check must run FIRST. The node regex
     # does not spuriously claim a bare "program" request.
     assert explicit_node_build_goal("build me a program that does X") is None
+
+
+def test_program_regex_does_not_hijack_program_named_nodes():
+    from oolu.gateway.app import explicit_program_build_goal
+
+    # "program <noun> node" is a single node ABOUT program management —
+    # the head noun is followed by a word, not a connector, so it must
+    # NOT route to the program pipeline (F1.1).
+    for message in (
+        "build me a program manager node",
+        "build me a program tracker",
+        "create a program coordinator node that tracks milestones",
+        "i need a program director node",
+    ):
+        assert explicit_program_build_goal(message) is None, message
+    # A genuine program request with a connector still matches.
+    assert (
+        explicit_program_build_goal("build me a program that ingests invoices")
+        == "ingests invoices"
+    )
+    assert (
+        explicit_program_build_goal("build me a program node for stock tracking")
+        == "stock tracking"
+    )
+    # Bare "build me a program" matches with an empty goal (ask what to build).
+    assert explicit_program_build_goal("build me a program") == ""
+
+
+def test_topological_does_not_hang_on_an_unvalidated_cycle():
+    # Unreachable through build (the parser rejects cycles), but a direct
+    # caller on a hand-built cyclic spec must not spin forever.
+    from oolu.programbuilder import ProgramAuthor
+    from oolu.skills.program import ModuleSpec, ProgramSpec
+
+    spec = ProgramSpec(
+        modules=[
+            ModuleSpec(path="lib/a.py", depends=["lib/b.py"]),
+            ModuleSpec(path="lib/b.py", depends=["lib/a.py"]),
+        ]
+    )
+    order = ProgramAuthor._topological(spec)
+    assert {m.path for m in order} == {"lib/a.py", "lib/b.py"}  # returned, not hung

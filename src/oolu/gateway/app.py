@@ -276,22 +276,30 @@ def explicit_node_build_goal(message: str | None) -> str | None:
 # "build me a program (node) that …" routes to the program pipeline and
 # never pays for a discarded single-file authoring. This is the v1
 # trigger by decision: no plan-sniffing fork, no tax on the common path.
+# After "program" (or "program node") the head noun must END or be
+# followed by a CONNECTOR (F1.1) — otherwise "build me a program manager
+# node" would be hijacked as a program build of "manager node"; that is a
+# single node about program management, and falls through to the node
+# regex.
 _PROGRAM_BUILD_RE = re.compile(
     r"(?:(?:build|create|make|write|set\s+up)\s+(?:me\s+)?"
     r"(?:a|an|the|another|my)\s+"
     r"|i\s+(?:need|want)\s+(?:a|an|another)\s+)"
     r"program(?:\s+node)?\b"
-    r"\s*(?:for|that|to|which|:)?\s*(?P<goal>.*)$",
+    r"(?:\s*(?:for|that|to|which|:)\s*(?P<goal>.*)|\s*)$",
     re.IGNORECASE | re.DOTALL,
 )
 
 
 def explicit_program_build_goal(message: str | None) -> str | None:
-    """The goal in an explicit program-build request, or ``None``."""
+    """The goal in an explicit program-build request, or ``None``. A bare
+    "build me a program" matches with an empty goal (so the builder can
+    ask what to build); "build me a program manager node" does NOT match
+    (the head noun is followed by a word, not a connector)."""
     match = _PROGRAM_BUILD_RE.match(message or "")
     if match is None:
         return None
-    return match.group("goal").strip(" .!?")
+    return (match.group("goal") or "").strip(" .!?")
 
 
 def _program_tree_path_unsafe(path: str) -> bool:
@@ -8143,10 +8151,12 @@ class GatewayApp:
         # harness or the run-time side channels; it may not escape the
         # tree; and ``program.json`` is the door's to write, not the
         # author's. Refuse by name — a hostile key never reaches staging.
+        from ..runtime.contract import SHIM_MODULE_NAME
+
         reserved_tree_keys = {
             "main.py",
             "user_script.py",
-            "_oolu_runtime.py",
+            f"{SHIM_MODULE_NAME}.py",  # derive the shim name, never drift
             "bindings.json",
             "records.json",
             "program.json",
@@ -8296,6 +8306,22 @@ class GatewayApp:
                 "problem": f"module '{module.path}' failed its check "
                 f"({module.check}): " + str(report.get("error", "")),
             }
+        # The ENTRY's dispatcher reads ./bindings.json when the program
+        # declares inputs (F1) — so birth must STAGE one, or the entry
+        # dies on the open() before it ever dispatches or checks a port,
+        # and the whole-program contract goes unverified (F1.1). An empty
+        # object is the honest birth binding: the same no-real-data birth
+        # a single-file node gets — the entry dispatches, and a function
+        # that needs a value it wasn't given names it via emit_error (the
+        # honest-error rule), never a FileNotFoundError.
+        entry_kwargs = dict(stage_kwargs)
+        if inputs:
+            import json as _json
+
+            entry_kwargs["files"] = {
+                **entry_kwargs.get("files", {}),
+                "bindings.json": _json.dumps({}),
+            }
         report = _verify(
             goal,
             script,
@@ -8304,7 +8330,7 @@ class GatewayApp:
                 {"name": str(p.get("name")), "type": str(p.get("type", "str"))}
                 for p in outputs
             ],
-            **stage_kwargs,
+            **entry_kwargs,
         )
         healed.extend(report.get("healed") or [])
         if not report.get("ok"):

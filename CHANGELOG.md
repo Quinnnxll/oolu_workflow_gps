@@ -49,6 +49,16 @@ time (docs/algorithm-barriers-plan.md, Part I):
   for a discarded single-file authoring; the explicit ask is the
   consent, mirroring the node build. The build carries an honest
   consultation count (`1 + M×(1 author + ≤2 repairs)`), metered.
+- **F1.1** (adversarial review): birth verification stages an empty
+  `bindings.json` for the entry when a program declares inputs, so the
+  dispatcher's read succeeds and the whole-program port contract is
+  actually verified (before this, an inputs program refused outright on
+  the subprocess backend and passed unverified-as-honest-error on
+  Docker); the program-request regex no longer hijacks
+  "build me a program manager node" (the head noun must end or be
+  followed by a connector); `_topological` cannot hang on an
+  unvalidated cyclic spec; and the reserved harness tree-key derives
+  from `SHIM_MODULE_NAME`.
 
 Program nodes (F0.1) — hardening from the adversarial review of the F0
 diff, landed before F1 wired the door to a surface:

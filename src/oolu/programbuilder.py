@@ -400,6 +400,14 @@ class ProgramAuthor:
                 for path, module in remaining.items()
                 if set(module.depends) <= done
             ]
+            if not ready:
+                # The parser rejects every cycle, so this is unreachable
+                # through ``build`` — but a direct caller on an unvalidated
+                # spec must not spin. Append the remainder in a stable order
+                # rather than hang; the per-module gate will surface any
+                # broken import.
+                order.extend(remaining[path] for path in sorted(remaining))
+                break
             for path in ready:
                 order.append(remaining.pop(path))
                 done.add(path)
