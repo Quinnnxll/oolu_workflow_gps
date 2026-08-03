@@ -164,3 +164,105 @@ def test_deliver_surfaces_a_hold_without_firing_around_it():
     )
     result = router.deliver(_payload())
     assert result.status == "held" and "reserved" in result.reason
+
+
+# --------------------------------------------------------------------------- #
+# W4.1 — transient failures retry; the fan-out cap is real.                    #
+# --------------------------------------------------------------------------- #
+def test_transient_failure_releases_the_claim_and_retries():
+    # A transient "failed" fire must RAISE DeliveryRetry with its claim
+    # released, so the outbox leaves the message pending and a later drain
+    # re-takes the claim and fires — the cascade is never silently lost.
+    from oolu.paver import DeliveryRetry
+
+    import pytest
+
+    claimed: set = set()
+    released: list = []
+    attempts: list = []
+
+    def claim(stamp, target):
+        key = (stamp, target)
+        if key in claimed:
+            return False
+        claimed.add(key)
+        return True
+
+    def release(stamp, target):
+        claimed.discard((stamp, target))
+        released.append(target)
+
+    def fire_web(tenant, web_id, stamp, hop):
+        attempts.append(web_id)
+        if len(attempts) == 1:
+            return FireResult(web_id, "failed", reason="transient 503")
+        return FireResult(web_id, "fired", fired=2, run_id="r")
+
+    router = WebTriggerRouter(
+        consent=lambda t, w: True,
+        claim=claim,
+        webs_at=lambda t, n: [],
+        fire_web=fire_web,
+        release=release,
+    )
+    with pytest.raises(DeliveryRetry):
+        router.deliver(_payload())
+    assert released == ["web-a"]  # the claim went back
+    # The retry (a later drain) re-takes the claim and fires.
+    second = router.deliver(_payload())
+    assert second.status == "fired"
+    assert attempts == ["web-a", "web-a"]
+
+
+def test_final_delivery_settles_a_failure_without_retry():
+    # attempts exhausted => final=True: the failure SETTLES (no raise, the
+    # claim kept) so a permanently-broken web never retries forever.
+    claimed: set = set()
+
+    def claim(stamp, target):
+        key = (stamp, target)
+        if key in claimed:
+            return False
+        claimed.add(key)
+        return True
+
+    router = WebTriggerRouter(
+        consent=lambda t, w: True,
+        claim=claim,
+        webs_at=lambda t, n: [],
+        fire_web=lambda t, w, s, h: FireResult(w, "failed", reason="still broken"),
+        release=lambda s, t: claimed.discard((s, t)),
+    )
+    result = router.deliver(_payload(), final=True)
+    assert result.status == "failed"
+    assert ("node-1:run-9", "web-a") in claimed  # the claim stands — settled
+
+
+def test_max_fires_per_trigger_is_enforced_at_both_sides():
+    # Enqueue side: one trigger stages at most max_fires webs.
+    enqueued: list = []
+    webs = [_web(f"web-{i}", "node-1") for i in range(5)]
+    router = WebTriggerRouter(
+        consent=lambda t, w: True,
+        claim=lambda s, t: True,
+        webs_at=lambda t, n: webs,
+        fire_web=lambda t, w, s, h: FireResult(w, "fired"),
+        enqueue=enqueued.append,
+        max_fires=3,
+    )
+    out = router.on_trigger("t1", "node-1", "run-1")
+    assert len(out) == 3  # capped, not 5
+
+    # Deliver side: the durable fires counter refuses past the cap.
+    fired: list = []
+    counter = {"n": 3}  # this trigger already fired 3 targets
+    router2 = WebTriggerRouter(
+        consent=lambda t, w: True,
+        claim=lambda s, t: True,
+        webs_at=lambda t, n: [],
+        fire_web=lambda t, w, s, h: fired.append(w) or FireResult(w, "fired"),
+        fires=lambda stamp: counter["n"],
+        max_fires=3,
+    )
+    result = router2.deliver(_payload())
+    assert result.status == "bounded" and fired == []

@@ -42,6 +42,16 @@ bounded, consent-gated cascade (docs/algorithm-barriers-plan.md, Part II):
   path re-runs the whole paved web, which for the effect-free deterministic
   webs the Paver paves is identical to firing downstream off the anchor's
   output.
+- **W4.1 (review fixes)** — two defects: (1) a TRANSIENTLY-failed web fire
+  was silently lost forever (claim burned before the fire; a returned
+  `failed` never raised, so the relay marked the message sent) — `deliver`
+  now releases the claim and raises `DeliveryRetry` on a non-final
+  failure, the message stays pending, and a later drain retries; after 5
+  delivery attempts the failure settles as FINAL (audited, claim kept).
+  (2) `MAX_FIRES_PER_TRIGGER` was declared but unenforced — now applied at
+  both the enqueue side (at most `max_fires` webs staged per trigger) and
+  the deliver side (the durable claims table doubles as the per-trigger
+  fan-out counter, held across processes).
 
 Adapter synthesis (W3) — the coding-agent half breaks the exact-name
 wall: a junction becomes a tested, accountable citizen

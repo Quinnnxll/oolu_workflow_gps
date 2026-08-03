@@ -39,11 +39,21 @@ __all__ = [
     "MAX_FIRES_PER_TRIGGER",
     "MAX_HOPS",
     "PROPAGATION_TOPIC",
+    "DeliveryRetry",
     "FireResult",
     "PropagationConsentStore",
     "TriggerClaimStore",
     "WebTriggerRouter",
 ]
+
+
+class DeliveryRetry(RuntimeError):
+    """A TRANSIENT delivery failure (W4.1): the web's fire errored in a way
+    a later drain may succeed at. The router releases the fire-once claim
+    and raises this so the outbox relay leaves the message PENDING
+    (attempts incremented) — the at-least-once retry the outbox promises
+    actually happens. A FINAL delivery (attempts exhausted) keeps the
+    claim and settles the failure instead."""
 
 # The outbox topic W4's enqueue stages under and the drain sink filters on
 # — so a blind relay never sweeps the unrelated ``workflow.*`` checkpoint
@@ -176,6 +186,30 @@ class TriggerClaimStore:
             )
         return int(getattr(cursor, "rowcount", 0) or 0) > 0
 
+    def release(self, trigger_stamp: str, target: str) -> None:
+        """Give a claim back (W4.1) — called ONLY by the claim's own taker
+        on a TRANSIENT fire failure, so the outbox's retry can re-take it
+        on a later drain. A definitive outcome never releases: fire-once
+        stands for everything that actually settled."""
+        with self._conn.transaction() as db:
+            db.execute(
+                "DELETE FROM paver_trigger_claims"
+                " WHERE trigger_stamp = ? AND target = ?",
+                (trigger_stamp, target),
+            )
+
+    def count(self, trigger_stamp: str) -> int:
+        """How many targets this trigger has fired so far — the durable
+        per-trigger fan-out counter ``MAX_FIRES_PER_TRIGGER`` is enforced
+        against (W4.1), shared across processes like the claims it counts."""
+        with self._conn.lock:
+            row = self._conn.db.execute(
+                "SELECT COUNT(*) AS n FROM paver_trigger_claims"
+                " WHERE trigger_stamp = ?",
+                (trigger_stamp,),
+            ).fetchone()
+        return int(row["n"] if row is not None else 0)
+
 
 # --------------------------------------------------------------------------- #
 # The router.                                                                  #
@@ -239,6 +273,8 @@ class WebTriggerRouter:
         fire_web: Callable[[str, str, str, int], FireResult],
         enqueue: Callable[[dict], None] | None = None,
         audit: Callable[[str, dict], None] | None = None,
+        release: Callable[[str, str], None] | None = None,
+        fires: Callable[[str], int] | None = None,
         max_hops: int = MAX_HOPS,
         max_fires: int = MAX_FIRES_PER_TRIGGER,
     ) -> None:
@@ -248,6 +284,15 @@ class WebTriggerRouter:
         self._fire_web = fire_web
         self._enqueue = enqueue
         self._audit = audit
+        # W4.1 ports: ``release(stamp, target)`` gives a claim back on a
+        # TRANSIENT failure (so the outbox retry can re-take it);
+        # ``fires(stamp) -> int`` is the durable per-trigger fan-out
+        # counter MAX_FIRES_PER_TRIGGER is enforced against. Without a
+        # release port a transient failure settles as final (no retry —
+        # honest, never lost silently); without a fires port only the
+        # enqueue-side cap holds.
+        self._release = release
+        self._fires = fires
         self._max_hops = max(1, max_hops)
         self._max_fires = max(1, max_fires)
 
@@ -266,6 +311,22 @@ class WebTriggerRouter:
         stamp = f"{node_id}:{run_id}"
         enqueued: list[Enqueued] = []
         for web in self._webs_at(tenant, node_id):
+            # The fan-out cap, enforced at the enqueue side too (W4.1): one
+            # trigger stages at most max_fires webs — the runaway backstop
+            # is real, not declared.
+            if len(enqueued) >= self._max_fires:
+                if self._audit is not None:
+                    self._audit(
+                        "paver.propagation_bounded",
+                        {
+                            "run_id": "paver:propagation",
+                            "tenant": tenant,
+                            "web_id": web.web_id,
+                            "trigger_stamp": stamp,
+                            "reason": f"max fires per trigger ({self._max_fires})",
+                        },
+                    )
+                break
             if web.web_id in {e.web_id for e in enqueued}:
                 continue
             if not self._consent(tenant, web.web_id):
@@ -292,12 +353,19 @@ class WebTriggerRouter:
         return enqueued
 
     # ------------------------------------------------------------------ #
-    def deliver(self, payload: dict) -> FireResult:
+    def deliver(self, payload: dict, *, final: bool = False) -> FireResult:
         """The drain sink — deliver ONE staged propagation message. Bounds
         first, then consent RE-CHECKED (a revoke since enqueue stops it
         cold), then a durable fire-once claim, then the web fires. Idempotent:
         a re-delivered message whose claim was already taken is a no-op, so
-        the at-least-once outbox never fires a web twice."""
+        the at-least-once outbox never fires a web twice.
+
+        A ``failed`` fire is TRANSIENT unless ``final`` (W4.1): the claim
+        is RELEASED and :class:`DeliveryRetry` raised, so the outbox relay
+        leaves the message pending and a later drain retries — a flaky run
+        never silently loses the cascade. The caller passes ``final=True``
+        when the message's retry budget is spent; the failure then settles
+        (claim kept, audited) instead of retrying forever."""
         tenant = str(payload.get("tenant") or "")
         web_id = str(payload.get("web_id") or "")
         stamp = str(payload.get("trigger_stamp") or "")
@@ -306,6 +374,15 @@ class WebTriggerRouter:
             return FireResult(web_id, "skipped", reason="malformed message")
         if hop > self._max_hops:
             return FireResult(web_id, "bounded", reason=f"max hops ({self._max_hops})")
+        # The fan-out cap (W4.1): a trigger that already fired max_fires
+        # targets fires no more — the durable claims table is the counter,
+        # so the bound holds across processes.
+        if self._fires is not None and self._fires(stamp) >= self._max_fires:
+            self._audit_fire("paver.propagation_bounded", tenant, web_id, stamp)
+            return FireResult(
+                web_id, "bounded",
+                reason=f"max fires per trigger ({self._max_fires})",
+            )
         # Consent re-checked at delivery — the revoke-stops-the-next gate.
         if not self._consent(tenant, web_id):
             self._audit_fire("paver.propagation_no_consent", tenant, web_id, stamp)
@@ -314,6 +391,15 @@ class WebTriggerRouter:
         if not self._claim(stamp, web_id):
             return FireResult(web_id, "skipped", reason="already fired this trigger")
         result = self._fire_web(tenant, web_id, stamp, hop)
+        if result.status == "failed" and not final and self._release is not None:
+            # Transient: give the claim back and make the relay RETRY —
+            # a returned failure would be marked sent and silently lost
+            # (the exact at-least-once promise the outbox exists for).
+            self._release(stamp, web_id)
+            self._audit_fire("paver.propagation_retry", tenant, web_id, stamp)
+            raise DeliveryRetry(
+                f"web {web_id} fire failed transiently: {result.reason[:200]}"
+            )
         event = {
             "fired": "paver.propagation_fired",
             "held": "paver.propagation_held",

@@ -1126,6 +1126,26 @@ web deep; (3) BILLED propagation on a market install (fire via
 `execute_contract` with attribution) and the reserved-hold AUTO-RESUME
 (approver releases → the web completes) — the halt is built, the resume
 is not. Each is a named follow-up, not a silent gap.
+**Amended (W4.1)** — adversarial review of the W4 diff confirmed two
+defects (five findings, deduplicated), fixed: (1) a TRANSIENTLY-failed
+web fire was silently, permanently lost — the fire-once claim was taken
+BEFORE the fire and a `failed` FireResult returned without raising, so
+the relay marked the message SENT (no retry) while the burned claim
+blocked any re-fire. `deliver` now RELEASES the claim on a non-final
+failure and raises `DeliveryRetry`, so the relay leaves the message
+pending and a later drain re-takes the claim and retries; after
+`_PROPAGATION_MAX_ATTEMPTS` (5) deliveries the failure settles as FINAL
+(claim kept, audited `paver.propagation_settled`) — never retried
+forever, never lost on the first flake. (2) `MAX_FIRES_PER_TRIGGER` was
+declared but never consulted — now enforced at BOTH sides: `on_trigger`
+stages at most `max_fires` webs per trigger (audit
+`paver.propagation_bounded`), and `deliver` checks the durable claims
+table as a per-trigger fan-out counter (`TriggerClaimStore.count`),
+which holds across processes. Tests: a transient failure releases the
+claim, raises, and the retry fires (router + a gateway drain
+loop-closure where the message survives the failed drain as PENDING and
+the next drain fires it); a final delivery settles without retry; the
+fan-out cap enforced at both enqueue and deliver.
 
 **W5 — Gate-aware paving (after G2).** *The Paver speaks gates.*
 Changes: the negotiator may propose guard edges (e.g. "only invoice

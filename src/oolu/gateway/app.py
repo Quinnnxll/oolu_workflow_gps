@@ -249,6 +249,12 @@ NODE_REVIVAL_DAYS = 7.0
 # outputs never collide with a live tenant's standing port values.
 _PAVER_REHEARSAL_TENANT = "__paver_rehearsal__"
 
+# A propagation message's retry budget (W4.1): a transiently-failing web
+# fire is retried on later drains until this many delivery attempts, then
+# settles as a FINAL audited failure — never retried forever, never lost
+# silently on the first flake.
+_PROPAGATION_MAX_ATTEMPTS = 5
+
 # The principal every Paver-authored node is contributed under — paved-web
 # nodes and W3 adapter citizens alike. The survey EXCLUDES this principal
 # (W3.1): the Paver's own products are the OUTPUT of paving, not raw
@@ -13997,6 +14003,11 @@ class GatewayApp:
                 PROPAGATION_TOPIC, payload
             ),
             audit=self._durable.audit.append,
+            # W4.1: a transient fire failure releases its claim and retries
+            # on a later drain; the claims table doubles as the durable
+            # per-trigger fan-out counter.
+            release=self._trigger_claims.release,
+            fires=self._trigger_claims.count,
         )
 
     def _on_anchor_filed(self, state) -> None:
@@ -14030,14 +14041,24 @@ class GatewayApp:
         tick's drain. Relays ONLY the propagation topic (the outbox also
         carries unrelated workflow.* checkpoint messages a blind relay
         would wrongly mark sent). A host without a contract runtime never
-        fires a web, so it never drains."""
+        fires a web, so it never drains.
+
+        Retry discipline (W4.1): a TRANSIENT fire failure raises out of the
+        sink (its claim released), so the relay leaves the message pending
+        and a later drain retries; once a message's attempts reach the
+        budget, delivery is FINAL — the failure settles (audited, claim
+        kept) instead of retrying forever."""
         from ..paver import PROPAGATION_TOPIC
 
         if self._values is None or self._contract_runner is None:
             return
         router = self._web_router(now)
         self._durable.outbox.relay(
-            lambda message: router.deliver(message.payload), topic=PROPAGATION_TOPIC
+            lambda message: router.deliver(
+                message.payload,
+                final=message.attempts >= _PROPAGATION_MAX_ATTEMPTS - 1,
+            ),
+            topic=PROPAGATION_TOPIC,
         )
 
     def _fire_web(self, tenant: str, web_id: str, trigger_stamp: str, hop: int, now):

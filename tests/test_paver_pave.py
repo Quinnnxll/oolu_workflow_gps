@@ -805,3 +805,53 @@ def test_unconsented_web_never_enqueues(tmp_path):
         if r.event_type == "paver.propagation_fired"
     ]
     conn.close()
+
+
+def test_transient_fire_failure_retries_on_a_later_drain(tmp_path):
+    # W4.1: a transiently-failing web fire leaves its outbox message
+    # PENDING (the sink raised, the claim released); a later drain
+    # re-takes the claim and fires — the cascade is never silently lost.
+    app, conn, web_id, anchor = _paved_web_app(tmp_path)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    app._propagation_consent.grant("t1", web_id, granted_by="quinn", now=now)
+    app._web_router(now).on_trigger("t1", anchor, "run-1")
+
+    # First drain: the fire fails transiently (the runner errors).
+    real_fire = app._fire_web
+    calls = {"n": 0}
+
+    def flaky_fire(tenant, wid, stamp, hop, when):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            from oolu.paver import FireResult
+
+            return FireResult(wid, "failed", reason="transient backend error")
+        return real_fire(tenant, wid, stamp, hop, when)
+
+    app._fire_web = flaky_fire
+    try:
+        app._drain_propagation(now)
+        fired = [
+            r for r in app._durable.audit.records()
+            if r.event_type == "paver.propagation_fired"
+        ]
+        assert not fired  # first attempt failed — nothing fired yet
+        pending = app._durable.outbox.pending(topic="paver.propagation")
+        assert len(pending) == 1  # the message SURVIVED the failure
+        retried = [
+            r for r in app._durable.audit.records()
+            if r.event_type == "paver.propagation_retry"
+        ]
+        assert retried  # the transient failure was audited as a retry
+
+        # Second drain: the fire succeeds; the message settles sent.
+        app._drain_propagation(now)
+        fired = [
+            r for r in app._durable.audit.records()
+            if r.event_type == "paver.propagation_fired"
+        ]
+        assert len(fired) == 1 and fired[0].payload["web_id"] == web_id
+        assert app._durable.outbox.pending(topic="paver.propagation") == []
+    finally:
+        app._fire_web = real_fire
+    conn.close()
