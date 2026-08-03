@@ -422,6 +422,24 @@ class ActionExecutorRouteRunner:
     ) -> ExecutionRecord:
         started = datetime.now(UTC)
         outcomes: list[ExecutionOutcome] = []
+        for edge in route.chosen.edges:
+            if edge.relation in ("guard", "loop"):
+                # This runner executes a fixed sequence and reads no edges —
+                # silently dropping a gate would be the silent pass the gate
+                # design forbids. Loud refusal: gate blueprints need the
+                # DAG runner.
+                return ExecutionRecord(
+                    idempotency_key=idempotency_key,
+                    attempt=attempt,
+                    status=ExecutionStatus.BLOCKED,
+                    error=(
+                        f"{edge.relation} edges need the DAG runner: this "
+                        "sequential runner would silently ignore "
+                        f"{edge.source}->{edge.target}"
+                    ),
+                    started_at=started,
+                    completed_at=datetime.now(UTC),
+                )
         for item in route.chosen.actions:
             label = f"{item.action.adapter}/{item.action.operation}"
             executor = self._executors.get(item.action.adapter)

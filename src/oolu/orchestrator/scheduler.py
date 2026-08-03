@@ -320,13 +320,19 @@ class DagRouteRunner:
             reason — loud, never a silent pass — and prior iterations'
             outcomes stay in the append-only record either way.
             """
-            nonlocal first_error, first_failed
             progressed = False
             for i in loop_order:
                 if i not in tail_events:
                     continue
                 tail_events.discard(i)
                 spec = loops[i]
+                if status.get(spec.tail) is not ExecutionStatus.SUCCEEDED:
+                    # Stale event: the settle it recorded was overridden
+                    # before this spec's turn — an inner loop sharing the
+                    # tail exhausted (FAILED now stands), or a reset popped
+                    # the status. An enclosing loop must never continue on
+                    # a success that no longer exists.
+                    continue
                 loop_passes[i] += 1
                 verdict = gates.loop_decision(
                     spec, evidence.get(spec.tail), loop_passes[i]
@@ -348,14 +354,21 @@ class DagRouteRunner:
                             tail_events.discard(j)
                 elif verdict == "exhausted":
                     loops_done.add(i)
-                    status[spec.tail] = ExecutionStatus.FAILED
-                    reason = (
-                        "loop budget exhausted after "
-                        f"{spec.budget} iterations"
+                    # A real FAILED outcome through settle() — same iteration
+                    # key as the pass's success, appended after it, so
+                    # last-write-wins surfaces the loop's verdict in the plan
+                    # view and the record carries the worded reason. Also
+                    # invalidates any sibling spec's stale event on this tail.
+                    settle(
+                        spec.tail,
+                        _unrun_outcome(
+                            actions[spec.tail],
+                            key_for(spec.tail),
+                            ExecutionStatus.FAILED,
+                            "loop budget exhausted after "
+                            f"{spec.budget} iterations",
+                        ),
                     )
-                    if first_error is None:
-                        first_error = reason
-                        first_failed = spec.tail
                 else:  # exit — clean, the region stands as it settled
                     loops_done.add(i)
             return progressed
@@ -419,9 +432,21 @@ class DagRouteRunner:
                             rewritten.append(edge)
                             continue
                         for repair in sorted(repair_targets):
-                            rewritten.append(
-                                edge.model_copy(update={"source": repair})
-                            )
+                            update: dict = {"source": repair}
+                            if edge.guard is not None:
+                                # A substituted guard reads the REPAIR's
+                                # evidence — a repair reporting a different
+                                # shape declines conservatively, and the
+                                # worded reason must say the predicate was
+                                # judged against a substitute, not the
+                                # source it was authored for.
+                                update["guard"] = edge.guard.model_copy(
+                                    update={
+                                        "name": f"{edge.guard.name} "
+                                        f"[substituted for {edge.source}]"
+                                    }
+                                )
+                            rewritten.append(edge.model_copy(update=update))
                     in_edges[node] = rewritten
             return progressed
 

@@ -661,6 +661,10 @@ def test_loop_budget_exhaustion_fails_loudly():
     assert record.error == "loop budget exhausted after 2 iterations"
     assert executor.order == ["work", "work"]  # budget spent, never silent
     assert _statuses(record)[ids["after"]] is ExecutionStatus.CANCELLED
+    # The exhaustion is a real outcome: the last record for the tail is the
+    # loop's FAILED verdict, so the plan view never shows a green tail on a
+    # red route.
+    assert _statuses(record)[ids["work"]] is ExecutionStatus.FAILED
 
 
 def test_guardless_loop_runs_exactly_budget_times():
@@ -921,3 +925,119 @@ def test_skip_propagates_through_a_retired_fallback():
     statuses = _statuses(record)
     assert statuses[ids["t"]] is ExecutionStatus.SKIPPED
     assert statuses[ids["d"]] is ExecutionStatus.SKIPPED
+
+
+# --------------------------------------------------------------------------- #
+# G1.1 — review fixes.                                                         #
+# --------------------------------------------------------------------------- #
+def test_nested_shared_tail_exhaustion_is_final_not_overridden_by_outer():
+    # Inner and outer loops share tail x. The inner exhausts (guard stays
+    # true at budget) — the outer's stale tail event must NOT continue on a
+    # success the exhaustion just overrode, and the exhaustion attribution
+    # must stand.
+    executor = StubExecutor(
+        {"w", "x"}, evidence={"x": {"inner_more": 1, "outer_more": 1}}
+    )
+    blueprint = Blueprint(
+        name="sharedtail", actions=[_action("w"), _action("x")], ordering="graph"
+    )
+    ids = _ids(blueprint)
+    blueprint = blueprint.model_copy(
+        update={
+            "edges": [
+                BlueprintEdge(source=ids["w"], target=ids["x"]),
+                _loop_edge(
+                    ids["x"],
+                    ids["x"],
+                    max_iterations=2,
+                    guard=_guard("inner_more", ">", 0, name="inner-more"),
+                ),
+                _loop_edge(
+                    ids["x"],
+                    ids["w"],
+                    max_iterations=3,
+                    guard=_guard("outer_more", ">", 0, name="outer-more"),
+                ),
+            ]
+        }
+    )
+    record = DagRouteRunner({"stub": executor}).execute(
+        _route(blueprint), idempotency_key="k", attempt=1
+    )
+    assert record.status is ExecutionStatus.FAILED
+    assert record.error == "loop budget exhausted after 2 iterations"
+    # The outer loop never resurrected the region after the inner exhausted.
+    assert executor.order == ["w", "x", "x"]
+    assert _statuses(record)[ids["x"]] is ExecutionStatus.FAILED
+
+
+def test_substituted_guard_names_the_substitution_in_its_reason():
+    # t fails; its repair r succeeds with a DIFFERENT evidence shape. The
+    # guard authored against t's schema is re-anchored onto r, declines
+    # conservatively, and the worded reason says the predicate was judged
+    # against a substitute.
+    executor = StubExecutor(
+        {"t", "r", "d"}, fail_operations={"t"}, evidence={"r": {"fixed": True}}
+    )
+    blueprint = Blueprint(
+        name="subguard",
+        actions=[_action("t"), _action("r"), _action("d")],
+        ordering="graph",
+    )
+    ids = _ids(blueprint)
+    blueprint = blueprint.model_copy(
+        update={
+            "edges": [
+                BlueprintEdge(source=ids["t"], target=ids["r"], relation="fallback"),
+                BlueprintEdge(
+                    source=ids["t"],
+                    target=ids["d"],
+                    relation="guard",
+                    guard=_guard("rows", ">", 0, name="has-rows"),
+                ),
+            ]
+        }
+    )
+    record = DagRouteRunner({"stub": executor}).execute(
+        _route(blueprint), idempotency_key="k", attempt=1
+    )
+    # t failed but its repair verified: the route is repaired; d's branch
+    # was not taken (the substituted guard declined on the repair's shape).
+    assert record.status is ExecutionStatus.SUCCEEDED
+    assert executor.order == ["t", "r"]
+    statuses = _statuses(record)
+    assert statuses[ids["d"]] is ExecutionStatus.SKIPPED
+    reason = next(
+        o.error
+        for o in record.action_outcomes
+        if o.idempotency_key.rsplit(":", 1)[-1] == ids["d"]
+    )
+    assert "has-rows [substituted for" in (reason or "")
+
+
+def test_legacy_sequential_runner_refuses_gate_blueprints_loudly():
+    from oolu.orchestrator import ActionExecutorRouteRunner
+
+    executor = StubExecutor({"a", "b"})
+    blueprint = Blueprint(
+        name="legacygate", actions=[_action("a"), _action("b")], ordering="graph"
+    )
+    ids = _ids(blueprint)
+    blueprint = blueprint.model_copy(
+        update={
+            "edges": [
+                BlueprintEdge(
+                    source=ids["a"],
+                    target=ids["b"],
+                    relation="guard",
+                    guard=_guard("rows", ">", 0, name="has-rows"),
+                )
+            ]
+        }
+    )
+    record = ActionExecutorRouteRunner({"stub": executor}).execute(
+        _route(blueprint), idempotency_key="k", attempt=1
+    )
+    assert record.status is ExecutionStatus.BLOCKED
+    assert "need the DAG runner" in (record.error or "")
+    assert executor.order == []  # nothing ran — refusal, not a silent pass

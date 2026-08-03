@@ -1119,6 +1119,19 @@ validators and region derivation in `tests/test_gates.py`; repeat-until
 with honest per-pass traces, exhaustion, guard-less, nested,
 five refusals-by-name, memoized replay under normalized comparison, and
 the backstop in `tests/test_dag_scheduler.py`; full suite green.
+**Amended (G1.1)** — adversarial review of the landed G0/G1 diffs
+confirmed three more defects, fixed: (1) a stale tail event let an
+enclosing loop `continue` on a success a nested exhaustion had just
+overridden — events are now validated against the tail's CURRENT
+status before judging; (2) exhaustion settled only the internal status
+map, so the plan view showed a green tail on a red route — it now
+settles a real FAILED outcome through `settle()` (same iteration key,
+last-write-wins); (3) fallback substitution re-anchored a guard onto
+the repair silently — the substituted guard's name now carries
+`[substituted for <source>]` so the decline reason says the predicate
+was judged against a substitute; and the legacy sequential
+`ActionExecutorRouteRunner` now refuses gate blueprints loudly instead
+of silently ignoring their edges.
 Changes: `state.py` (+loop relation, `max_iterations`, validator);
 `gates.py` (LoopSpec, derive_loops incl. the fallback-in-region
 refusal, loop_decision, structural_edges); `scheduler.py` (preflight

@@ -39,6 +39,14 @@ error (docs/algorithm-barriers-plan.md, Part III):
   the graceful-ceiling-inside-hard-backstop pattern from the inner
   loop's `max_recalcs`; tripping it cancels loudly by name
   ("route budget exhausted: max_total_actions=N").
+- **G1.1** (adversarial review of the landed diffs): loop tail events
+  are validated against the tail's CURRENT status, so an enclosing
+  loop can never continue on a success a nested exhaustion overrode;
+  exhaustion settles a real FAILED outcome (the plan view never shows
+  a green tail on a red route); a guard re-anchored onto a repair by
+  fallback substitution carries `[substituted for <source>]` in its
+  worded reason; and the legacy sequential runner refuses gate
+  blueprints loudly instead of silently dropping their edges.
 
 Gate edges (G0) — the scheduler learns to not take a branch
 (docs/algorithm-barriers-plan.md, Part III):
