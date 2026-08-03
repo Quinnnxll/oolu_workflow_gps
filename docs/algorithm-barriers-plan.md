@@ -1069,6 +1069,13 @@ preflight; malformed gates refuse at construction. Pure-gate tests in
 `tests/test_gates.py`, runner-level battery (diamond OR-split,
 decline+veto, retired-fallback no-evidence decline, trace hygiene) in
 `tests/test_dag_scheduler.py`; full suite green.
+**Amended (G0.1)** — adversarial review caught a skip-propagation hole:
+a fallback whose triggers were ALL skipped retired as SUCCEEDED, so a
+`before`-dependent of the repair ran even though the branch was never
+taken (while a guard on the same retired repair declined — inconsistent
+by construction). Fixed: such a fallback retires SKIPPED, so skip
+propagates through the repair hop exactly as it does through the step
+itself; a mixed or verified trigger set still retires SUCCEEDED.
 Changes: `skills/models.py` (+SKIPPED), `orchestrator/state.py`
 (guard relation + field, `join`, validators), new
 `orchestrator/gates.py` (Admission incl. the no-evidence rule,

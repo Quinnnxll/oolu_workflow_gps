@@ -885,3 +885,39 @@ def test_max_total_actions_backstop_trips_loudly():
     assert record.status is ExecutionStatus.FAILED
     assert "max_total_actions=3" in (record.error or "")
     assert executor.order == ["work", "work", "work"]  # the backstop held
+
+
+def test_skip_propagates_through_a_retired_fallback():
+    # G0.1: t is guard-declined; its repair r retires NOT-TAKEN, so d —
+    # a plain before-dependent of the repair — skips exactly as it would
+    # had it depended on t directly. A repair hop must not resurrect a
+    # branch that was never taken.
+    executor = StubExecutor({"a", "t", "r", "d"}, evidence={"a": {"rows": 0}})
+    blueprint = Blueprint(
+        name="skiprepair",
+        actions=[_action("a"), _action("t"), _action("r"), _action("d")],
+        ordering="graph",
+    )
+    ids = _ids(blueprint)
+    blueprint = blueprint.model_copy(
+        update={
+            "edges": [
+                BlueprintEdge(
+                    source=ids["a"],
+                    target=ids["t"],
+                    relation="guard",
+                    guard=_guard("rows", ">", 0, name="has-rows"),
+                ),
+                BlueprintEdge(source=ids["t"], target=ids["r"], relation="fallback"),
+                BlueprintEdge(source=ids["r"], target=ids["d"]),
+            ]
+        }
+    )
+    record = DagRouteRunner({"stub": executor}).execute(
+        _route(blueprint), idempotency_key="k", attempt=1
+    )
+    assert record.status is ExecutionStatus.SUCCEEDED
+    assert executor.order == ["a"]  # neither t, nor r, nor d ever ran
+    statuses = _statuses(record)
+    assert statuses[ids["t"]] is ExecutionStatus.SKIPPED
+    assert statuses[ids["d"]] is ExecutionStatus.SKIPPED

@@ -73,6 +73,11 @@ Gate edges (G0) — the scheduler learns to not take a branch
   either trace recorder (`orchestrator/scheduler.py`,
   `nodeplace/execution.py`): a branch not taken is not evidence about
   the node, and must never move the posterior the planner picks by.
+- **G0.1** — skip propagates through retired fallbacks: a repair whose
+  triggers were ALL skipped retires SKIPPED (not SUCCEEDED), so a
+  dependent of the repair skips exactly as a dependent of the step
+  would — a repair hop must not resurrect a branch that was never
+  taken. (Caught by adversarial review of the G0 diff.)
 
 Life books (L1) — one shared function, one private book per member:
 

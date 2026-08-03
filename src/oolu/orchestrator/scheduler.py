@@ -395,7 +395,18 @@ class DagRouteRunner:
                     for t in triggers
                 ):
                     dormant.discard(target)
-                    status[target] = ExecutionStatus.SUCCEEDED
+                    if all(
+                        status.get(t) is ExecutionStatus.SKIPPED
+                        for t in triggers
+                    ):
+                        # Every trigger was a branch not taken: the repair is
+                        # not taken either. Retiring it SKIPPED keeps skip
+                        # propagating through the repair hop — a dependent of
+                        # the repair must not run when a dependent of the
+                        # step itself would have skipped.
+                        status[target] = ExecutionStatus.SKIPPED
+                    else:
+                        status[target] = ExecutionStatus.SUCCEEDED
                     progressed = True
             if substitutions:
                 for node, node_edges in in_edges.items():
