@@ -4,10 +4,14 @@
 ``ActionExecutorRouteRunner``) that executes a blueprint's actions as a
 dependency DAG instead of a fixed sequence:
 
-- actions whose ``before`` dependencies have all verified run concurrently;
-- a failure cascades: every transitive dependent is cancelled, never
-  deadlocked (pending nodes whose ancestors can no longer verify are resolved
-  eagerly, so the ready-set is never silently empty);
+- actions whose ordering edges all admit run concurrently (``gates.py`` holds
+  the pure admission semantics: ``before`` edges admit on success, ``guard``
+  edges admit on success plus a passing evidence predicate, and a target's
+  ``join`` mode combines them — ``"all"`` or first-of ``"any"``);
+- a branch legitimately not taken settles SKIPPED (a guard declined) and the
+  route still succeeds; a failure cascades: every transitive dependent is
+  CANCELLED, never deadlocked (pending nodes whose ancestors can no longer
+  verify are resolved eagerly, so the ready-set is never silently empty);
 - ``fallback`` edges are dormant routes: the target runs only if its source
   failed, giving a plan a repair branch without a re-synthesis round-trip;
 - an optional per-action timeout kills the action through the executor's
@@ -16,6 +20,8 @@ dependency DAG instead of a fixed sequence:
 When a ``TraceStore`` is attached, every completed route is recorded as an
 execution trace (completion order, per-action verdicts, measured cost), which
 is how the planner's statistics grow with use — no separate training step.
+SKIPPED actions leave no observation: a branch not taken is not evidence
+about the node.
 """
 
 from __future__ import annotations
@@ -33,13 +39,12 @@ from ..skills.models import (
     verify_postconditions,
 )
 from ..skills.ports import ActionExecutor
+from . import gates
 from .state import Blueprint, ExecutionRecord, RoutePlan
 
 logger = logging.getLogger(__name__)
 
-_TERMINAL_BAD = frozenset(
-    {ExecutionStatus.FAILED, ExecutionStatus.BLOCKED, ExecutionStatus.CANCELLED}
-)
+_TERMINAL_BAD = gates.TERMINAL_BAD
 
 
 def action_node_key(blueprint_name: str, action: ActionEvent) -> str:
@@ -61,12 +66,16 @@ def _action_label(blueprint: Blueprint, action_id: str | None) -> str | None:
     return None
 
 
-def _skipped_outcome(action: ActionEvent, key: str, reason: str) -> ExecutionOutcome:
+def _unrun_outcome(
+    action: ActionEvent, key: str, status: ExecutionStatus, reason: str
+) -> ExecutionOutcome:
+    """The settled record of an action that never ran — CANCELLED when a
+    dependency failed, SKIPPED when a branch was legitimately not taken."""
     now = datetime.now(UTC)
     return ExecutionOutcome(
         idempotency_key=key,
         skill_id=str(action.parameters.get("skill_id", "uncompiled")),
-        status=ExecutionStatus.CANCELLED,
+        status=status,
         error=reason,
         started_at=now,
         completed_at=now,
@@ -165,38 +174,18 @@ class DagRouteRunner:
                     f"edge references unknown action: {edge.source}->{edge.target}",
                     None,
                 )
+        if blueprint.ordering == "sequential":
+            for edge in blueprint.edges:
+                if edge.relation == "guard":
+                    return (
+                        "guard edges require ordering='graph': guard "
+                        f"'{edge.guard.name}' on {edge.source}->{edge.target} "
+                        "cannot ride the sequential chain",
+                        None,
+                    )
         if self._has_cycle(blueprint):
             return "blueprint dependency graph has a cycle", None
         return None, None
-
-    @staticmethod
-    def _dependencies(blueprint: Blueprint) -> dict[str, set[str]]:
-        """``before`` dependencies per action id.
-
-        ``ordering="sequential"`` chains actions in list order and layers any
-        explicit edges on top (a contradicting SOP edge then surfaces as a
-        cycle). ``ordering="graph"`` uses exactly the edges: unrelated actions
-        are independent. Fallback targets never join the sequential chain —
-        they are dormant repair branches, not steps.
-        """
-        deps: dict[str, set[str]] = {
-            item.action.id: set() for item in blueprint.actions
-        }
-        for edge in blueprint.edges:
-            if edge.relation == "before":
-                deps[edge.target].add(edge.source)
-        if blueprint.ordering == "sequential":
-            fallback_ids = {
-                edge.target for edge in blueprint.edges if edge.relation == "fallback"
-            }
-            previous: str | None = None
-            for item in blueprint.actions:
-                if item.action.id in fallback_ids:
-                    continue
-                if previous is not None:
-                    deps[item.action.id].add(previous)
-                previous = item.action.id
-        return deps
 
     @staticmethod
     def _fallbacks(blueprint: Blueprint) -> dict[str, set[str]]:
@@ -208,7 +197,10 @@ class DagRouteRunner:
         return triggers
 
     def _has_cycle(self, blueprint: Blueprint) -> bool:
-        deps = self._dependencies(blueprint)
+        deps = {
+            target: {edge.source for edge in edges}
+            for target, edges in gates.dependency_edges(blueprint).items()
+        }
         resolved: set[str] = set()
         while True:
             ready = [n for n, d in deps.items() if n not in resolved and d <= resolved]
@@ -223,7 +215,8 @@ class DagRouteRunner:
         self, blueprint: Blueprint, idempotency_key: str
     ) -> tuple[list[ExecutionOutcome], str | None, str | None, bool]:
         actions = {item.action.id: item.action for item in blueprint.actions}
-        deps = self._dependencies(blueprint)
+        joins = {item.action.id: item.join for item in blueprint.actions}
+        in_edges = gates.dependency_edges(blueprint)
         fallback_triggers = self._fallbacks(blueprint)
         fallback_ids = set(fallback_triggers)
         fallbacks_of: dict[str, set[str]] = {}
@@ -232,6 +225,10 @@ class DagRouteRunner:
                 fallbacks_of.setdefault(trigger, set()).add(target)
 
         status: dict[str, ExecutionStatus] = {}
+        # Recorded evidence per settled action — what guards read. A node
+        # whose status was written without an outcome (a retired fallback)
+        # has no entry here, which is exactly the no-evidence decline rule.
+        evidence: dict[str, dict] = {}
         pending: set[str] = set(actions) - fallback_ids
         dormant: set[str] = set(fallback_ids)
         outcomes: list[ExecutionOutcome] = []
@@ -246,21 +243,33 @@ class DagRouteRunner:
         def settle(action_id: str, outcome: ExecutionOutcome) -> None:
             nonlocal first_error, first_failed
             status[action_id] = outcome.status
+            evidence[action_id] = outcome.evidence
             outcomes.append(outcome)
-            if outcome.status is not ExecutionStatus.SUCCEEDED and first_error is None:
+            bad = (
+                outcome.status is not ExecutionStatus.SUCCEEDED
+                and outcome.status is not ExecutionStatus.SKIPPED
+            )
+            if bad and first_error is None:
                 first_error = outcome.error or f"action {action_id} failed"
                 first_failed = action_id
+
+        def node_readiness(node: str) -> gates.Readiness:
+            return gates.readiness(
+                node, in_edges[node], joins[node], status, evidence
+            )
 
         def activate_fallbacks() -> bool:
             """Resolve dormant fallback targets whose triggers have settled.
 
             A trigger that terminally failed activates its fallback branch,
-            and every node that depended on the failed trigger is rewritten
-            to depend on ALL of that trigger's fallback targets
-            (substitution: the branch downstream of a failure waits for the
-            *whole* repair — a multi-step repair gates dependents on its last
-            step, not its first). A trigger set that fully verified retires
-            its fallback as satisfied.
+            and every ordering edge sourced on the failed trigger is rewritten
+            onto ALL of that trigger's fallback targets (substitution: the
+            branch downstream of a failure waits for the *whole* repair — a
+            multi-step repair gates dependents on its last step, not its
+            first). A trigger set that fully verified — or was legitimately
+            never taken — retires its fallback as satisfied, with no outcome
+            recorded: a guard sourced on a retired fallback declines by the
+            no-evidence rule.
             """
             progressed = False
             substitutions: dict[str, set[str]] = {}
@@ -273,41 +282,70 @@ class DagRouteRunner:
                     for trigger in failed:
                         substitutions.setdefault(trigger, set()).add(target)
                     progressed = True
-                elif all(status.get(t) is ExecutionStatus.SUCCEEDED for t in triggers):
-                    # Every trigger verified: the fallback is not needed.
+                elif all(
+                    status.get(t)
+                    in (ExecutionStatus.SUCCEEDED, ExecutionStatus.SKIPPED)
+                    for t in triggers
+                ):
                     dormant.discard(target)
                     status[target] = ExecutionStatus.SUCCEEDED
                     progressed = True
             if substitutions:
-                for node_deps in deps.values():
-                    for trigger, targets in substitutions.items():
-                        if trigger in node_deps:
-                            node_deps.discard(trigger)
-                            node_deps |= targets
+                for node, node_edges in in_edges.items():
+                    if not any(e.source in substitutions for e in node_edges):
+                        continue
+                    rewritten: list = []
+                    for edge in node_edges:
+                        repair_targets = substitutions.get(edge.source)
+                        if repair_targets is None:
+                            rewritten.append(edge)
+                            continue
+                        for repair in sorted(repair_targets):
+                            rewritten.append(
+                                edge.model_copy(update={"source": repair})
+                            )
+                    in_edges[node] = rewritten
             return progressed
 
-        def cascade_skips() -> bool:
-            """Cancel every pending node with a terminally-failed dependency.
+        def resolve_unrunnable() -> bool:
+            """Settle every pending node whose gates have decided it will
+            never run — CANCELLED on a veto, SKIPPED on an all-declined.
 
             Fallback activation runs first, so a failed dependency with a
             repair branch is substituted rather than cancelled. Runs to a
-            fixed point, so the cascade is transitive — a grandchild of a
-            failed node is cancelled instead of deadlocking the loop.
+            fixed point, so cascades are transitive — a grandchild of a
+            failed node cancels, a consumer of a skipped branch skips,
+            instead of deadlocking the loop.
             """
             progressed = False
             changed = True
             while changed:
                 changed = activate_fallbacks()
                 for node in sorted(pending):
-                    bad = [d for d in deps[node] if status.get(d) in _TERMINAL_BAD]
-                    if bad:
+                    verdict = node_readiness(node)
+                    if verdict.verdict == "cancel":
                         pending.discard(node)
-                        outcome = _skipped_outcome(
-                            actions[node],
-                            key_for(node),
-                            f"dependency failed: {', '.join(sorted(bad))}",
+                        settle(
+                            node,
+                            _unrun_outcome(
+                                actions[node],
+                                key_for(node),
+                                ExecutionStatus.CANCELLED,
+                                verdict.reason,
+                            ),
                         )
-                        settle(node, outcome)
+                        changed = True
+                    elif verdict.verdict == "skip":
+                        pending.discard(node)
+                        settle(
+                            node,
+                            _unrun_outcome(
+                                actions[node],
+                                key_for(node),
+                                ExecutionStatus.SKIPPED,
+                                verdict.reason,
+                            ),
+                        )
                         changed = True
                 progressed = progressed or changed
             return progressed
@@ -316,14 +354,12 @@ class DagRouteRunner:
             max_workers=self._max_workers
         ) as pool:
             while pending or running or dormant:
-                progressed = cascade_skips()
+                progressed = resolve_unrunnable()
 
                 ready = sorted(
                     node
                     for node in pending
-                    if all(
-                        status.get(d) is ExecutionStatus.SUCCEEDED for d in deps[node]
-                    )
+                    if node_readiness(node).verdict == "ready"
                 )
                 for node in ready:
                     pending.discard(node)
@@ -344,9 +380,10 @@ class DagRouteRunner:
                         dormant.discard(node)
                         settle(
                             node,
-                            _skipped_outcome(
+                            _unrun_outcome(
                                 actions[node],
                                 key_for(node),
+                                ExecutionStatus.CANCELLED,
                                 "unsatisfiable dependencies",
                             ),
                         )
@@ -392,19 +429,7 @@ class DagRouteRunner:
                     deadlines.pop(future, None)
                     settle(node, future.result())
 
-        def effective_ok(node: str, seen: frozenset[str] = frozenset()) -> bool:
-            """A node counts as ok if it verified, or its ENTIRE fallback
-            branch did — a half-finished repair is not a repair."""
-            if status.get(node) is ExecutionStatus.SUCCEEDED:
-                return True
-            if node in seen:
-                return False
-            targets = fallbacks_of.get(node)
-            if not targets:
-                return False
-            return all(effective_ok(target, seen | {node}) for target in targets)
-
-        succeeded = all(effective_ok(node) for node in status)
+        succeeded = gates.route_verdict(status, fallbacks_of)
         return outcomes, first_error, first_failed, succeeded
 
     def _run_action(self, action: ActionEvent, key: str) -> ExecutionOutcome:
@@ -444,6 +469,10 @@ class DagRouteRunner:
         for outcome in record.action_outcomes:  # completion order
             action = by_key.get(outcome.idempotency_key)
             if action is None:
+                continue
+            if outcome.status is ExecutionStatus.SKIPPED:
+                # A branch not taken is not an observation of the node —
+                # recording it would poison the posterior the planner picks by.
                 continue
             cost = None
             if outcome.completed_at is not None:

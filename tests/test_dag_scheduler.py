@@ -14,11 +14,17 @@ from oolu.orchestrator import (
     ReservedAction,
     RoutePlan,
 )
-from oolu.skills.models import ActionEvent, ExecutionOutcome, ExecutionStatus
+from oolu.skills.models import (
+    ActionEvent,
+    ExecutionOutcome,
+    ExecutionStatus,
+    Postcondition,
+)
 
 
 class StubExecutor:
-    """Deterministic executor: per-operation verdicts, delays, call recording."""
+    """Deterministic executor: per-operation verdicts, delays, evidence,
+    call recording."""
 
     name = "stub"
 
@@ -28,10 +34,12 @@ class StubExecutor:
         *,
         fail_operations: set[str] | None = None,
         delays: dict[str, float] | None = None,
+        evidence: dict[str, dict] | None = None,
     ):
         self._caps = frozenset(capabilities)
         self._fail = set(fail_operations or ())
         self._delays = dict(delays or {})
+        self._evidence = dict(evidence or {})
         self.order: list[str] = []
         self._lock = threading.Lock()
 
@@ -48,6 +56,7 @@ class StubExecutor:
             idempotency_key=idempotency_key,
             skill_id="s",
             status=ExecutionStatus.SUCCEEDED if ok else ExecutionStatus.FAILED,
+            evidence=self._evidence.get(action.operation, {}),
             error=None if ok else f"{action.operation} exploded",
             started_at=now,
             completed_at=now,
@@ -57,11 +66,22 @@ class StubExecutor:
         pass
 
 
-def _action(operation: str) -> ReservedAction:
+def _action(operation: str, join: str = "all") -> ReservedAction:
     return ReservedAction(
         action=ActionEvent(correlation_id="c", adapter="stub", operation=operation),
         required_capabilities=frozenset({operation}),
+        join=join,
     )
+
+
+def _guard(pointer: str, op: str, value=None, name: str = "gate") -> Postcondition:
+    return Postcondition(name=name, pointer=pointer, op=op, value=value)
+
+
+def _statuses(record) -> dict[str, ExecutionStatus]:
+    return {
+        o.idempotency_key.rsplit(":", 1)[-1]: o.status for o in record.action_outcomes
+    }
 
 
 def _route(blueprint: Blueprint) -> RoutePlan:
@@ -263,3 +283,275 @@ def test_runner_records_traces_so_statistics_grow():
     b_post = store.posterior("traced:stub/b")
     assert (a_post.successes, a_post.failures) == (1, 0)
     assert (b_post.successes, b_post.failures) == (0, 1)
+
+
+# --------------------------------------------------------------------------- #
+# G0 — gate edges: guards, joins, SKIPPED.                                     #
+# --------------------------------------------------------------------------- #
+def test_guard_admits_and_runs_target():
+    executor = StubExecutor({"a", "b"}, evidence={"a": {"rows": 3}})
+    blueprint = Blueprint(
+        name="guarded", actions=[_action("a"), _action("b")], ordering="graph"
+    )
+    ids = _ids(blueprint)
+    blueprint = blueprint.model_copy(
+        update={
+            "edges": [
+                BlueprintEdge(
+                    source=ids["a"],
+                    target=ids["b"],
+                    relation="guard",
+                    guard=_guard("rows", ">", 0, name="has-rows"),
+                )
+            ]
+        }
+    )
+    record = DagRouteRunner({"stub": executor}).execute(
+        _route(blueprint), idempotency_key="k", attempt=1
+    )
+    assert record.status is ExecutionStatus.SUCCEEDED
+    assert executor.order == ["a", "b"]
+
+
+def test_guard_diamond_takes_exactly_one_branch_and_route_succeeds():
+    # a -> (b if rows>0 | c if rows==0) -> d(join="any"): one branch runs.
+    executor = StubExecutor({"a", "b", "c", "d"}, evidence={"a": {"rows": 3}})
+    blueprint = Blueprint(
+        name="diamond",
+        actions=[_action("a"), _action("b"), _action("c"), _action("d", join="any")],
+        ordering="graph",
+    )
+    ids = _ids(blueprint)
+    blueprint = blueprint.model_copy(
+        update={
+            "edges": [
+                BlueprintEdge(
+                    source=ids["a"],
+                    target=ids["b"],
+                    relation="guard",
+                    guard=_guard("rows", ">", 0, name="has-rows"),
+                ),
+                BlueprintEdge(
+                    source=ids["a"],
+                    target=ids["c"],
+                    relation="guard",
+                    guard=_guard("rows", "==", 0, name="empty"),
+                ),
+                BlueprintEdge(source=ids["b"], target=ids["d"]),
+                BlueprintEdge(source=ids["c"], target=ids["d"]),
+            ]
+        }
+    )
+    record = DagRouteRunner({"stub": executor}).execute(
+        _route(blueprint), idempotency_key="k", attempt=1
+    )
+    assert record.status is ExecutionStatus.SUCCEEDED
+    assert record.error is None
+    statuses = _statuses(record)
+    assert statuses[ids["c"]] is ExecutionStatus.SKIPPED
+    assert executor.order == ["a", "b", "d"]  # c never ran
+
+
+def test_all_declined_propagates_skip_through_all_join():
+    executor = StubExecutor({"a", "b", "c"}, evidence={"a": {"rows": 0}})
+    blueprint = Blueprint(
+        name="skipchain",
+        actions=[_action("a"), _action("b"), _action("c")],
+        ordering="graph",
+    )
+    ids = _ids(blueprint)
+    blueprint = blueprint.model_copy(
+        update={
+            "edges": [
+                BlueprintEdge(
+                    source=ids["a"],
+                    target=ids["b"],
+                    relation="guard",
+                    guard=_guard("rows", ">", 0, name="has-rows"),
+                ),
+                BlueprintEdge(source=ids["b"], target=ids["c"]),
+            ]
+        }
+    )
+    record = DagRouteRunner({"stub": executor}).execute(
+        _route(blueprint), idempotency_key="k", attempt=1
+    )
+    # The whole branch was legitimately not taken; the route still succeeds.
+    assert record.status is ExecutionStatus.SUCCEEDED
+    assert record.error is None
+    statuses = _statuses(record)
+    assert statuses[ids["b"]] is ExecutionStatus.SKIPPED
+    assert statuses[ids["c"]] is ExecutionStatus.SKIPPED
+    assert executor.order == ["a"]
+    # The audit reads WHY each branch didn't run, in words.
+    by_id = {
+        o.idempotency_key.rsplit(":", 1)[-1]: o.error for o in record.action_outcomes
+    }
+    assert "not taken: guard 'has-rows' declined" in (by_id[ids["b"]] or "")
+    assert "observed 0" in (by_id[ids["b"]] or "")
+    assert "not taken" in (by_id[ids["c"]] or "")
+    assert "was not taken" in (by_id[ids["c"]] or "")
+
+
+def test_decline_plus_veto_cancels_under_all_join():
+    # d waits on a declined guard AND a failed dependency: the veto wins —
+    # d is CANCELLED (a failure upstream), never SKIPPED (a branch not taken).
+    executor = StubExecutor(
+        {"a", "f", "d"}, fail_operations={"f"}, evidence={"a": {"rows": 0}}
+    )
+    blueprint = Blueprint(
+        name="vetowins",
+        actions=[_action("a"), _action("f"), _action("d")],
+        ordering="graph",
+    )
+    ids = _ids(blueprint)
+    blueprint = blueprint.model_copy(
+        update={
+            "edges": [
+                BlueprintEdge(
+                    source=ids["a"],
+                    target=ids["d"],
+                    relation="guard",
+                    guard=_guard("rows", ">", 0, name="has-rows"),
+                ),
+                BlueprintEdge(source=ids["f"], target=ids["d"]),
+            ]
+        }
+    )
+    record = DagRouteRunner({"stub": executor}).execute(
+        _route(blueprint), idempotency_key="k", attempt=1
+    )
+    assert record.status is ExecutionStatus.FAILED
+    statuses = _statuses(record)
+    assert statuses[ids["d"]] is ExecutionStatus.CANCELLED
+
+
+def test_any_join_all_declined_skips_the_target():
+    executor = StubExecutor({"a", "d"}, evidence={"a": {"rows": 0}})
+    blueprint = Blueprint(
+        name="anyskip",
+        actions=[_action("a"), _action("d", join="any")],
+        ordering="graph",
+    )
+    ids = _ids(blueprint)
+    blueprint = blueprint.model_copy(
+        update={
+            "edges": [
+                BlueprintEdge(
+                    source=ids["a"],
+                    target=ids["d"],
+                    relation="guard",
+                    guard=_guard("rows", ">", 0, name="has-rows"),
+                ),
+                BlueprintEdge(
+                    source=ids["a"],
+                    target=ids["d"],
+                    relation="guard",
+                    guard=_guard("rows", "<", 0, name="negative"),
+                ),
+            ]
+        }
+    )
+    record = DagRouteRunner({"stub": executor}).execute(
+        _route(blueprint), idempotency_key="k", attempt=1
+    )
+    assert record.status is ExecutionStatus.SUCCEEDED
+    assert _statuses(record)[ids["d"]] is ExecutionStatus.SKIPPED
+
+
+def test_guard_on_retired_fallback_declines_by_no_evidence_rule():
+    # a succeeds, so its fallback `repair` retires satisfied WITHOUT an
+    # outcome. A guard sourced on the retired repair has no evidence to
+    # read — it declines by the named rule, and the route still succeeds.
+    executor = StubExecutor({"a", "repair", "g"})
+    blueprint = Blueprint(
+        name="noevidence",
+        actions=[_action("a"), _action("repair"), _action("g")],
+        ordering="graph",
+    )
+    ids = _ids(blueprint)
+    blueprint = blueprint.model_copy(
+        update={
+            "edges": [
+                BlueprintEdge(
+                    source=ids["a"], target=ids["repair"], relation="fallback"
+                ),
+                BlueprintEdge(
+                    source=ids["repair"],
+                    target=ids["g"],
+                    relation="guard",
+                    guard=_guard("anything", "exists", name="ran"),
+                ),
+            ]
+        }
+    )
+    record = DagRouteRunner({"stub": executor}).execute(
+        _route(blueprint), idempotency_key="k", attempt=1
+    )
+    assert record.status is ExecutionStatus.SUCCEEDED
+    assert executor.order == ["a"]
+    statuses = _statuses(record)
+    assert statuses[ids["g"]] is ExecutionStatus.SKIPPED
+    reason = next(
+        o.error
+        for o in record.action_outcomes
+        if o.idempotency_key.rsplit(":", 1)[-1] == ids["g"]
+    )
+    assert "no recorded evidence" in (reason or "")
+
+
+def test_guard_requires_graph_ordering():
+    executor = StubExecutor({"a", "b"})
+    blueprint = Blueprint(name="seqguard", actions=[_action("a"), _action("b")])
+    ids = _ids(blueprint)
+    blueprint = blueprint.model_copy(
+        update={
+            "edges": [
+                BlueprintEdge(
+                    source=ids["a"],
+                    target=ids["b"],
+                    relation="guard",
+                    guard=_guard("rows", ">", 0, name="has-rows"),
+                )
+            ]
+        }
+    )
+    record = DagRouteRunner({"stub": executor}).execute(
+        _route(blueprint), idempotency_key="k", attempt=1
+    )
+    assert record.status is ExecutionStatus.BLOCKED
+    assert "guard edges require ordering='graph'" in (record.error or "")
+    assert executor.order == []
+
+
+def test_skipped_actions_leave_no_trace_observation():
+    store = TraceStore(":memory:")
+    executor = StubExecutor({"a", "b"}, evidence={"a": {"rows": 0}})
+    blueprint = Blueprint(
+        name="skiptrace", actions=[_action("a"), _action("b")], ordering="graph"
+    )
+    ids = _ids(blueprint)
+    blueprint = blueprint.model_copy(
+        update={
+            "edges": [
+                BlueprintEdge(
+                    source=ids["a"],
+                    target=ids["b"],
+                    relation="guard",
+                    guard=_guard("rows", ">", 0, name="has-rows"),
+                )
+            ]
+        }
+    )
+    runner = DagRouteRunner({"stub": executor}, trace_store=store)
+    record = runner.execute(_route(blueprint), idempotency_key="k1", attempt=1)
+    assert record.status is ExecutionStatus.SUCCEEDED
+
+    # The route succeeded and a's run counts; the skipped b left NOTHING —
+    # a branch not taken must never move the posterior the planner picks by.
+    route_post = store.posterior(route_node_key("skiptrace"))
+    assert (route_post.successes, route_post.failures) == (1, 0)
+    a_post = store.posterior("skiptrace:stub/a")
+    b_post = store.posterior("skiptrace:stub/b")
+    assert (a_post.successes, a_post.failures) == (1, 0)
+    assert (b_post.successes, b_post.failures) == (0, 0)

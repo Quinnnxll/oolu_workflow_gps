@@ -1,8 +1,8 @@
 # The three algorithm barriers — review and build plan
 
-Status: Proposed. Three phase series, one per barrier: **F0–F3** (the
+Status: In build. Three phase series, one per barrier: **F0–F3** (the
 program node), **W0–W5** (route paving — the Paver), **G0–G3** (gate
-edges). Every phase Proposed; each lands as one commit titled
+edges). G0 LANDED; every other phase Proposed. Each lands as one commit titled
 `<CODE> landed: <name> — <subtitle>` with its loop-closure test, the
 plan-doc status flip, and the CHANGELOG entry in the same commit.
 
@@ -1056,6 +1056,19 @@ Modeled on `graph/edges.py`'s pure-function pattern:
 
 **G0 — Guard edges, joins, SKIPPED (blueprint level only).** *The
 scheduler learns to not take a branch.*
+**Status: LANDED** — `orchestrator/gates.py` holds the pure admission
+semantics (ADMIT/DECLINE/VETO/WAIT per edge, all/any join combination,
+the no-evidence rule, `route_verdict`); the scheduler settles declined
+branches as SKIPPED with the worded reason, cancels on vetoes, and
+keeps skipped branches out of both trace recorders. One determinism
+rule landed sharper than the plan text: under an all-join a DECLINE
+defers until every edge settles (a veto must win the race it should
+win), while a VETO cancels immediately — skipped-vs-cancelled never
+rides thread timing. Guard edges refuse `ordering="sequential"` at
+preflight; malformed gates refuse at construction. Pure-gate tests in
+`tests/test_gates.py`, runner-level battery (diamond OR-split,
+decline+veto, retired-fallback no-evidence decline, trace hygiene) in
+`tests/test_dag_scheduler.py`; full suite green.
 Changes: `skills/models.py` (+SKIPPED), `orchestrator/state.py`
 (guard relation + field, `join`, validators), new
 `orchestrator/gates.py` (Admission incl. the no-evidence rule,

@@ -87,6 +87,7 @@ from .replay import (
     replay,
     synthetic_semantic_runs,
 )
+from .gates import Admission, Readiness, admit, dependency_edges, readiness, route_verdict
 from .scheduler import DagRouteRunner, action_node_key
 from .state import (
     ORCHESTRATOR_SCHEMA_VERSION,
@@ -132,6 +133,7 @@ __all__ = [
     "parse_plan_steps",
     "ActionExecutorRouteRunner",
     "AdaptivePlanner",
+    "Admission",
     "Blueprint",
     "BlueprintEdge",
     "BoundedRetryRecovery",
@@ -144,9 +146,14 @@ __all__ = [
     "GoalSpec",
     "Proposal",
     "ProposalModel",
+    "Readiness",
     "action_node_key",
+    "admit",
     "apply_sop_to_blueprint",
     "compile_with_owners",
+    "dependency_edges",
+    "readiness",
+    "route_verdict",
     "contract_from_registered",
     "contract_to_blueprint",
     "CapabilityGrounder",

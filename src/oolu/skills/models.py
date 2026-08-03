@@ -39,6 +39,10 @@ class ExecutionStatus(str, Enum):
     FAILED = "failed"
     BLOCKED = "blocked"
     CANCELLED = "cancelled"
+    # A branch legitimately not taken (a guard declined) — terminal,
+    # not-bad, not-success. Distinct from CANCELLED, which means a
+    # dependency failed: a route with SKIPPED actions still succeeds.
+    SKIPPED = "skipped"
 
 
 class Postcondition(BaseModel):

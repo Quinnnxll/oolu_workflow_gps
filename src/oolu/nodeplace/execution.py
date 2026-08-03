@@ -414,6 +414,10 @@ def _record_contract_trace(
             # the run executes and settles normally, but this child leaves
             # no observation behind for the growth loop.
             continue
+        if outcome.status is ExecutionStatus.SKIPPED:
+            # A branch not taken is not an observation of the child —
+            # recording it would poison the posterior the assembler picks by.
+            continue
         ok = outcome.status is ExecutionStatus.SUCCEEDED
         child_ok[owner] = child_ok.get(owner, True) and ok
         last_done[owner] = index

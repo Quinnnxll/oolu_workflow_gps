@@ -4,6 +4,40 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Gate edges (G0) — the scheduler learns to not take a branch
+(docs/algorithm-barriers-plan.md, Part III):
+
+- **The gate vocabulary** (`src/oolu/orchestrator/gates.py`) — pure
+  `recorded state -> decision` functions, the same discipline as the
+  inner loop's `graph/edges.py` one layer up: an ordering edge renders
+  ADMIT / DECLINE / VETO / WAIT from the source's recorded status and
+  evidence, and the target's `join` mode (`"all"`, or first-of
+  `"any"` — the OR-join) combines them into ready / wait / skip /
+  cancel. Guards are `Postcondition`s judged by `predicates.check` —
+  the one predicate language; no model ever routes.
+- **`relation="guard"`** on `BlueprintEdge` — a `before` edge that
+  admits only if the source verified AND its evidence satisfies the
+  predicate. A guard that fails *declines*; a target whose every edge
+  declines settles **SKIPPED** (new `ExecutionStatus`) — terminal,
+  not-bad, not-success — with the worded reason in its outcome
+  ("not taken: guard 'has-rows' declined (rows > 0, observed 0)"),
+  and the route still succeeds. Failures still cancel: a veto beats
+  a decline, and under an all-join a decline defers until every edge
+  settles, so skipped-vs-cancelled never rides a thread race.
+- **Guards require recorded evidence, by named rule** — a source whose
+  status says SUCCEEDED but recorded no outcome (a fallback retired as
+  not-needed) declines its guard edges: a predicate over evidence
+  nobody wrote is not a decision.
+- **Loud refusals** — a guard edge without a predicate (or a predicate
+  on a non-guard edge) refuses at construction; guard edges on
+  `ordering="sequential"` refuse at preflight by name. Legacy
+  blueprints behave identically: defaults preserve every stored
+  RunState (ADR-0002 round-trip), pinned by the existing suite.
+- **Posterior hygiene** — SKIPPED actions leave no observation in
+  either trace recorder (`orchestrator/scheduler.py`,
+  `nodeplace/execution.py`): a branch not taken is not evidence about
+  the node, and must never move the posterior the planner picks by.
+
 Life books (L1) — one shared function, one private book per member:
 
 - **The architecture** (`src/oolu/lifebooks.py`) — the prebuilt

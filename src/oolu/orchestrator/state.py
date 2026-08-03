@@ -15,13 +15,14 @@ from enum import Enum
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..skills.models import (
     ActionEvent,
     ApprovalRecord,
     ExecutionOutcome,
     ExecutionStatus,
+    Postcondition,
 )
 from ..skills.requirements import CompilationResult, RequirementBrief
 
@@ -108,6 +109,10 @@ class ReservedAction(BaseModel):
 
     ``reserved`` marks an action whose risk requires explicit human authorization
     before it may run (the orchestrator's "reserved actions").
+
+    ``join`` is how this action's incoming ordering edges combine:
+    ``"all"`` (the default, and the only pre-gate behaviour) waits for every
+    edge to admit; ``"any"`` runs on the first admitting edge — the OR-join.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -116,6 +121,7 @@ class ReservedAction(BaseModel):
     required_capabilities: frozenset[str] = Field(default_factory=frozenset)
     reserved: bool = False
     risk: str = "read"
+    join: Literal["all", "any"] = "all"
 
 
 class BlueprintEdge(BaseModel):
@@ -123,6 +129,12 @@ class BlueprintEdge(BaseModel):
 
     ``relation="before"``: the target may run only after the source verified.
     ``relation="fallback"``: the target runs only if the source failed.
+    ``relation="guard"``: a ``before`` edge that admits only if the source
+    verified AND its recorded evidence satisfies ``guard`` — a source that
+    verified but fails the predicate *declines* the edge, and a target every
+    edge of which declines is SKIPPED, not cancelled. The predicate speaks
+    the one predicate language (``predicates.check`` over the outcome's
+    evidence), so no model ever routes.
 
     ``provenance`` keeps human-authored structure distinguishable from learned
     structure: ``"sop"`` edges may only be changed by the human who owns the
@@ -133,8 +145,25 @@ class BlueprintEdge(BaseModel):
 
     source: str
     target: str
-    relation: Literal["before", "fallback"] = "before"
+    relation: Literal["before", "fallback", "guard"] = "before"
     provenance: Literal["sop", "learned", "data"] = "learned"
+    guard: Postcondition | None = None
+
+    @model_validator(mode="after")
+    def _guard_rides_guard_edges_only(self) -> "BlueprintEdge":
+        """Loud refusal at construction, not at run time."""
+        if self.relation == "guard" and self.guard is None:
+            raise ValueError(
+                f"guard edge {self.source}->{self.target} declares no "
+                "predicate — relation='guard' requires a guard"
+            )
+        if self.relation != "guard" and self.guard is not None:
+            raise ValueError(
+                f"edge {self.source}->{self.target} carries a guard predicate "
+                f"but relation={self.relation!r} — a predicate rides only "
+                "relation='guard'"
+            )
+        return self
 
 
 class Blueprint(BaseModel):
