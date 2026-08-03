@@ -13571,27 +13571,84 @@ class GatewayApp:
 
     def _paver_webs(self, request, session, params) -> Response:
         """The caller's own tenant's surveyed map — every web, its edges,
-        and the near-misses a paver would have to bridge."""
+        the near-misses a paver would have to bridge, and (W5) the GATES
+        its paved contract carries."""
         if self._pave_store is None:
             raise GatewayError(404, "not_found", "the Paver is not enabled")
         webs = self._pave_store.webs(session.tenant_id)
         return json_response(
             200,
             {
-                "webs": [web.model_dump(mode="json") for web in webs],
+                "webs": [
+                    {
+                        **web.model_dump(mode="json"),
+                        "gates": self._web_gates_view(
+                            session.tenant_id, web.web_id
+                        ),
+                    }
+                    for web in webs
+                ],
                 "count": len(webs),
             },
         )
 
     def _paver_webs_for_anchor(self, request, session, params) -> Response:
-        """The webs a single anchor node fans out — the trigger-door view."""
+        """The webs a single anchor node fans out — the trigger-door view,
+        gates included (W5)."""
         if self._pave_store is None:
             raise GatewayError(404, "not_found", "the Paver is not enabled")
         webs = self._pave_store.webs(session.tenant_id, anchor=params["anchor"])
         return json_response(
             200,
-            {"webs": [web.model_dump(mode="json") for web in webs]},
+            {
+                "webs": [
+                    {
+                        **web.model_dump(mode="json"),
+                        "gates": self._web_gates_view(
+                            session.tenant_id, web.web_id
+                        ),
+                    }
+                    for web in webs
+                ]
+            },
         )
+
+    def _web_gates_view(self, tenant: str, web_id: str) -> list[dict]:
+        """The gate edges a web's PAVED contract carries (W5) — a read
+        projection over ``paver_paved``, child ids resolved to names so
+        the map reads in words. Empty for an unpaved or gate-free web;
+        best-effort (a bad row renders no gates, never an error)."""
+        stored = self._pave_store.paved(tenant, web_id)
+        if stored is None:
+            return []
+        try:
+            contract = NodeContract.model_validate_json(stored["contract_json"])
+            body = contract.body
+            if not isinstance(body, SubgraphBody):
+                return []
+            names = {child.id: child.name for child in body.nodes}
+            gates = []
+            for edge in body.edges:
+                if edge.relation not in ("guard", "loop"):
+                    continue
+                view: dict = {
+                    "source": names.get(edge.source, edge.source),
+                    "target": names.get(edge.target, edge.target),
+                    "relation": edge.relation,
+                }
+                if edge.guard is not None:
+                    view["guard"] = {
+                        "name": edge.guard.name,
+                        "pointer": edge.guard.pointer,
+                        "op": edge.guard.op,
+                        "value": edge.guard.value,
+                    }
+                if edge.max_iterations is not None:
+                    view["max_iterations"] = edge.max_iterations
+                gates.append(view)
+            return gates
+        except Exception:  # noqa: BLE001 - the map renders what it can
+            return []
 
     # -- trigger propagation consent (W4) --------------------------------- #
     def _propagation_list(self, request, session, params) -> Response:
@@ -13846,7 +13903,30 @@ class GatewayApp:
             build_adapter=lambda tenant, miss, src, tgt: self._build_adapter(
                 tenant, miss, src, tgt, now
             ),
+            gate_candidates=self._web_gate_candidates,
         )
+
+    def _web_gate_candidates(self, tenant, web, children):
+        """The gate candidates a web must carry (W5): the tenant's SOP
+        ``require_guard`` rules projected onto the web's children by NODE
+        NAME — pure, deterministic, never model advice. A web that cannot
+        express an applicable rule is refused by the agent (negative-
+        noted), never paved unguarded."""
+        from ..paver import derive_gate_candidates
+
+        sops = self._paver_sops(tenant)
+        if not sops:
+            return [], ""
+        return derive_gate_candidates(sops, children)
+
+    def _paver_sops(self, tenant: str) -> list:
+        """The tenant's standing SOPs, for the Paver's gate projection —
+        the ONE seam a tenant SOP store wires into when it lands. Today no
+        gateway-level YAML SOP store exists (the desk's ``sop_edges_for``
+        is Supernode ORDERING, not the SOP schema), so this returns empty
+        and webs pave gate-free — named in the plan, not faked. Tests and
+        embedders may override or monkeypatch this seam."""
+        return []
 
     def _build_adapter(self, tenant, miss, src, tgt, now):
         """Bridge ONE near-miss junction into an adapter citizen (W3).

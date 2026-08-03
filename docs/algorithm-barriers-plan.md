@@ -2,10 +2,11 @@
 
 Status: In build. Three phase series, one per barrier: **F0–F3** (the
 program node), **W0–W5** (route paving — the Paver), **G0–G3** (gate
-edges). G0, G1, G2, G3, W0, W1, W2, W3, W4, F0, F1, F2, and F3 LANDED (plus
-review amendments G0.1, G1.1, G2.1, W0.1, W2.1, W3.1, W4.1, F0.1, F1.1,
-F3.1; W4's fast path landed, its slow-path / chaining / billed
-complements named-deferred). Remaining: W5. Each lands as one commit titled
+edges). ALL PHASES LANDED — G0–G3, W0–W5, F0–F3, plus review amendments G0.1,
+G1.1, G2.1, G3.1, W0.1, W2.1, W3.1, W4.1, F0.1, F1.1, F2.1, F3.1 (W4's
+fast path landed with its slow-path / chaining / billed complements
+named-deferred; W5's tenant SOP store and the flaky-adapter retry-loop
+author named-deferred). Each landed as one commit titled
 `<CODE> landed: <name> — <subtitle>` with its loop-closure test, the
 plan-doc status flip, and the CHANGELOG entry in the same commit.
 
@@ -1261,6 +1262,44 @@ loop-paved junction exhausts its budget loudly in rehearsal and is
 refused promotion.
 Done when: a paved web can carry `guard` and `loop` edges end-to-end.
 *(The only W-phase with a G dependency; W0–W4 need none.)*
+**Status: LANDED** — `paver/gates.py::derive_gate_candidates` is the
+deterministic candidate source: the HUMAN's SOP ``require_guard`` rules
+projected onto a web's children by NODE NAME (case-folded fnmatch — web
+children are nodes, every function node's action is ``script/run``, so
+names are the web-side analog of route operations). The route discipline
+carries over: source + gated child present → a guard ContractEdge poured
+VERBATIM (the same Postcondition the scheduler evaluates); gated child
+present WITHOUT its source → the web is REFUSED (negative-noted, never
+paved unguarded); gated child absent → the rule does not apply. The
+`PaverAgent` grew a ``gate_candidates`` port — called after adapters,
+BEFORE composition and budget spend; a refusal is a ``gate-refused``
+outcome with audit ``paver.gate_refused``; accepted edges ride
+``_web_contract``'s SubgraphBody through the SAME rehearsal every web
+earns promotion by, so the G-series gate scheduler judges them in
+rehearsal exactly as at every later trigger: a guard-declined child
+rehearses as an honest SKIP (still a clean pass), and a loop that
+exhausts ``max_iterations`` FAILS the rehearsal loudly — negative note,
+no promotion. A promoted gated web stores its gates in the paved
+contract, W4's ``_fire_web`` compiles them again at trigger time, and
+``/v1/paver/webs`` (+ the anchor view) renders each web's gates from the
+paved contract in words (child names, predicate, bounds). Model advice
+never mints a gate — candidates come from the human's SOPs or an
+explicit caller, the same containment as W3. The gateway wires the port
+through ``_paver_sops``, the ONE seam a tenant SOP store plugs into —
+today no gateway-level YAML SOP store exists (the desk's
+``sop_edges_for`` is Supernode ordering, not the SOP schema), so
+production webs pave gate-free until that store lands: named here, not
+faked. Automatic flaky-adapter retry-loop AUTHORING is likewise named
+future work — the G-series loop is repeat-WHILE-EVIDENCE; a
+retry-on-FAILURE loop needs semantics the gate machinery deliberately
+does not have. Tests: the name-matched projection and both refusal
+shapes; a guarded web rehearsing BOTH branches under scripted evidence
+through the real compiler+scheduler (admit → both run; decline → honest
+skip, clean pass); the agent promoting a gated web with its guard edge
+INTACT in the promoted contract; the cannot-express web refused before
+any sandbox spend; a loop exhausting its budget refused promotion with
+the negative note filed; and ``/v1/paver/webs`` rendering a paved
+contract's gates in words.
 
 ## II.4 Risks and invariants
 

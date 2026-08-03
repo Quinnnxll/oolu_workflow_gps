@@ -34,6 +34,7 @@ from .contracts import (
     WebEdge,
 )
 from .discovery import SurveyNode, WebSurveyor
+from .gates import derive_gate_candidates
 from .negotiator import ContractNegotiator, NegotiationResult
 from .propagation import (
     MAX_FIRES_PER_TRIGGER,
@@ -76,5 +77,6 @@ __all__ = [
     "WebEdge",
     "WebSurveyor",
     "WebTriggerRouter",
+    "derive_gate_candidates",
     "render_mapping_adapter",
 ]

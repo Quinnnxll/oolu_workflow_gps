@@ -95,7 +95,8 @@ class PaveOutcome:
 
     web_id: str
     anchor: str | None
-    # "paved" | "rehearsal-failed" | "adapter-failed" | "deferred" | "skipped"
+    # "paved" | "rehearsal-failed" | "adapter-failed" | "gate-refused"
+    # | "deferred" | "skipped"
     status: str
     node_id: str | None = None
     reason: str = ""
@@ -172,6 +173,10 @@ class PaverAgent:
             Callable[[str, NearMiss, SurveyNode, SurveyNode], AdapterBuild | None]
             | None
         ) = None,
+        gate_candidates: (
+            Callable[[str, RouteWeb, list[NodeContract]], tuple[list, str]]
+            | None
+        ) = None,
         surveyor: WebSurveyor | None = None,
     ):
         self._rehearse = rehearse
@@ -184,6 +189,14 @@ class PaverAgent:
         # means this Paver paves only fully-direct webs (the W2 posture);
         # a web with near-misses is then skipped, never forced.
         self._build_adapter = build_adapter
+        # The gate port (W5): ``(tenant, web, children) -> (edges, reason)``
+        # — the gate CANDIDATES this web must carry (the human's SOP guards
+        # projected onto the children, an explicit loop, …). A non-empty
+        # reason REFUSES the web (it cannot express a rule that applies —
+        # never paved unguarded); the edges ride the composed SubgraphBody
+        # through rehearsal, so the gate scheduler judges them before any
+        # promotion. None paves gate-free (the W2–W4 posture).
+        self._gate_candidates = gate_candidates
         # Idempotence ports (W2.1): a web already paved (unchanged) is not
         # re-paved; a web a prior failure blocked is not re-ground. Without
         # these the tick would re-rehearse and re-promote every web every
@@ -257,7 +270,11 @@ class PaverAgent:
             adapters_built += outcome.adapters
             if outcome.status == "paved":
                 paved.append(web.web_id)
-            elif outcome.status in ("rehearsal-failed", "adapter-failed"):
+            elif outcome.status in (
+                "rehearsal-failed",
+                "adapter-failed",
+                "gate-refused",
+            ):
                 refused.append(
                     {"web_id": web.web_id, "reason": outcome.reason}
                 )
@@ -343,7 +360,34 @@ class PaverAgent:
                 )
             adapters = [build.contract for build in bridged]
 
-        contract = self._web_contract(tenant, web, children + adapters)
+        # Gate candidates (W5): the human's rules projected onto the web
+        # BEFORE composition — a web that cannot express an applicable
+        # rule is refused (negative-noted), never paved unguarded.
+        gate_edges: list = []
+        if self._gate_candidates is not None:
+            gate_edges, gate_problem = self._gate_candidates(
+                tenant, web, children + adapters
+            )
+            if gate_problem:
+                if self._negative is not None:
+                    self._negative(tenant, web, gate_problem)
+                if self._audit is not None:
+                    self._audit(
+                        "paver.gate_refused",
+                        {
+                            "run_id": "paver:schedule",
+                            "tenant": tenant,
+                            "web_id": web.web_id,
+                            "reason": gate_problem[:200],
+                        },
+                    )
+                return PaveOutcome(
+                    web.web_id, web.anchor, "gate-refused", reason=gate_problem
+                )
+
+        contract = self._web_contract(
+            tenant, web, children + adapters, gate_edges=gate_edges
+        )
         rehearsal = self._rehearse(contract)
         if not rehearsal.ok:
             if self._negative is not None:
@@ -438,13 +482,19 @@ class PaverAgent:
 
     @staticmethod
     def _web_contract(
-        tenant: str, web: RouteWeb, children: list[NodeContract]
+        tenant: str,
+        web: RouteWeb,
+        children: list[NodeContract],
+        *,
+        gate_edges: list | None = None,
     ) -> NodeContract:
         """The ONE SubgraphBody contract that fires the web — the survey's
         children composed, ordering left to ``derive_data_edges`` (the
-        slot flow IS the order, node-generation §5). The compiler wires the
-        dataflow and stamps the tenant at run time; this is just the
-        composition.
+        slot flow IS the order, node-generation §5), plus any GATE edges
+        the candidates port imposed (W5) — explicit logic, legitimately so
+        (the §5 gate amendment), rehearsed by the gate scheduler before
+        any promotion. The compiler wires the dataflow and stamps the
+        tenant at run time; this is just the composition.
 
         The web's EXTERNAL interface is its boundary (W2.1): it consumes
         the inputs no child inside the web produces, and produces the
@@ -469,5 +519,7 @@ class PaverAgent:
             provenance="synthesized",
             consumes=consumes,
             produces=produces,
-            body=SubgraphBody(nodes=list(children)),
+            body=SubgraphBody(
+                nodes=list(children), edges=list(gate_edges or [])
+            ),
         )

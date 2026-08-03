@@ -4,6 +4,34 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Gate-aware paving (W5) — the Paver speaks gates
+(docs/algorithm-barriers-plan.md, Part II; the FINAL phase of the
+three-barrier plan — all of G0–G3, W0–W5, F0–F3 are now landed):
+
+- **The candidate source** (`src/oolu/paver/gates.py`,
+  `derive_gate_candidates`) — the HUMAN's SOP `require_guard` rules
+  projected onto a web's children by NODE NAME (case-folded fnmatch;
+  names are the web-side analog of route operations). Source + gated
+  child present → a guard `ContractEdge` poured VERBATIM; gated child
+  without its source → the web is REFUSED, never paved unguarded; rule
+  not applicable → no edges. Model advice never mints a gate.
+- **The agent** — `PaverAgent.gate_candidates` port, called after
+  adapters and before any sandbox spend; a refusal is a `gate-refused`
+  outcome (audit `paver.gate_refused`, negative-noted); accepted edges
+  ride the composed SubgraphBody through the SAME rehearsal every web
+  earns promotion by — a guard-declined child rehearses as an honest
+  SKIP; a loop that exhausts its budget FAILS the rehearsal loudly and
+  the web is refused promotion.
+- **End-to-end** — a promoted gated web stores its gates in the paved
+  contract; W4's `_fire_web` compiles them again at trigger time; and
+  `/v1/paver/webs` (+ the anchor view) renders each web's gates from the
+  paved contract in words (child names, predicate, bounds).
+- **Named, not faked** — no gateway-level tenant SOP store exists yet
+  (`_paver_sops` is the one seam it plugs into; production webs pave
+  gate-free until it lands), and automatic flaky-adapter retry-loop
+  authoring needs retry-on-FAILURE semantics the G-series loop
+  (repeat-while-evidence) deliberately does not have.
+
 SOP emitters + doctrine (G3) — SOPs and the docs speak gates
 (docs/algorithm-barriers-plan.md, Part III):
 
