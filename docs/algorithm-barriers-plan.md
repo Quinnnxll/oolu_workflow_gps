@@ -2,7 +2,7 @@
 
 Status: In build. Three phase series, one per barrier: **F0–F3** (the
 program node), **W0–W5** (route paving — the Paver), **G0–G3** (gate
-edges). G0 LANDED; every other phase Proposed. Each lands as one commit titled
+edges). G0 and G1 LANDED; every other phase Proposed. Each lands as one commit titled
 `<CODE> landed: <name> — <subtitle>` with its loop-closure test, the
 plan-doc status flip, and the CHANGELOG entry in the same commit.
 
@@ -1089,6 +1089,29 @@ as ok. Depends on nothing from the other barriers.
 
 **G1 — Loop edges with termination guarantees.** *A cycle becomes a
 bounded region, not a preflight error.*
+**Status: LANDED** — `relation="loop"` back-edges (tail→head) with a
+mandatory budget and an optional CONTINUE guard; `derive_loops`
+validates back-edges, disjoint-or-nested regions, and the
+fallback-in-region refusal; `loop_decision` judges continue / clean
+exit / loud exhaustion from recorded evidence alone. Iteration keys
+`{run}#i{n}:{action_id}` keep the plan-view parse whole, and
+`strip_iteration_marker` folds passes back onto the one action in
+BOTH trace recorders — every pass is one honest observation. Three
+things landed sharper than the plan text: (1) an ordering edge leaving
+a loop region from a mid-region node is refused by name at the
+blueprint level too ("a region exits only through its tail") — whether
+such an exit fires would depend on settle-vs-reset timing, and the
+outcome set must never ride a race; (2) a guard-less loop's budget IS
+the plan — it runs exactly `max_iterations` passes and exits clean;
+only a guarded loop that exhausts its budget fails loudly; (3) the
+per-node iteration counter is a monotone idempotency counter, distinct
+from the per-loop pass count, so nested resets can never collide keys,
+and an inner loop's budget resets on each enclosing pass. Runner
+backstop `max_total_actions=1000` trips loudly by name. Tests: loop
+validators and region derivation in `tests/test_gates.py`; repeat-until
+with honest per-pass traces, exhaustion, guard-less, nested,
+five refusals-by-name, memoized replay under normalized comparison, and
+the backstop in `tests/test_dag_scheduler.py`; full suite green.
 Changes: `state.py` (+loop relation, `max_iterations`, validator);
 `gates.py` (LoopSpec, derive_loops incl. the fallback-in-region
 refusal, loop_decision, structural_edges); `scheduler.py` (preflight

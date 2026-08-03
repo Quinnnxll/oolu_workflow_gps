@@ -56,11 +56,15 @@ from .state import Blueprint, BlueprintEdge
 
 __all__ = [
     "Admission",
+    "LoopSpec",
     "Readiness",
     "admit",
     "dependency_edges",
+    "derive_loops",
+    "loop_decision",
     "readiness",
     "route_verdict",
+    "structural_edges",
 ]
 
 # Statuses through which a source can never admit its dependents.
@@ -214,6 +218,153 @@ def dependency_edges(blueprint: Blueprint) -> dict[str, list[BlueprintEdge]]:
                 )
             previous = item.action.id
     return edges
+
+
+def structural_edges(blueprint: Blueprint) -> list[BlueprintEdge]:
+    """The ordering skeleton: every ``before`` and ``guard`` edge, including
+    the synthesized sequential chain. Guards ARE ordering edges; ``loop``
+    back-edges and dormant ``fallback`` branches are not — the cycle
+    preflight and loop-region derivation both walk exactly this skeleton."""
+    return [edge for edges in dependency_edges(blueprint).values() for edge in edges]
+
+
+@dataclass(frozen=True)
+class LoopSpec:
+    """One validated loop: a back-edge tail→head over a bounded region.
+
+    ``region`` is every node on a structural path head→tail (head and tail
+    included) — the nodes that re-enter on a continue. ``guard`` is the
+    CONTINUE condition over the tail's recorded evidence (``None`` = run to
+    budget); ``budget`` is the mandatory iteration ceiling."""
+
+    head: str
+    tail: str
+    region: frozenset[str]
+    guard: Postcondition | None
+    budget: int
+
+
+def _reachability(edges: list[BlueprintEdge]) -> dict[str, set[str]]:
+    """node -> every node reachable from it over the structural skeleton."""
+    children: dict[str, set[str]] = {}
+    for edge in edges:
+        children.setdefault(edge.source, set()).add(edge.target)
+    reach: dict[str, set[str]] = {}
+
+    def walk(node: str) -> set[str]:
+        if node in reach:
+            return reach[node]
+        reach[node] = set()  # cycle backstop; preflight rejects real cycles
+        found: set[str] = set()
+        for child in children.get(node, ()):
+            found.add(child)
+            found |= walk(child)
+        reach[node] = found
+        return found
+
+    for edge in edges:
+        walk(edge.source)
+    return reach
+
+
+def derive_loops(blueprint: Blueprint) -> tuple[list[LoopSpec], str | None]:
+    """Validate every loop edge and derive its region — ``(loops, problem)``
+    in the refusal style: a problem string means the blueprint must not run,
+    with the reason by name.
+
+    Refusals: a loop edge whose head does not reach its tail through the
+    structural skeleton (not a back-edge); two loop regions that overlap
+    without proper nesting (one must contain the other whole, or they must
+    share nothing); a fallback edge whose source or target lies inside any
+    loop region — the substitution's in-place rewiring cannot be soundly
+    rewound by a region reset; and an ordering edge that leaves a region
+    from any node but its tail — whether a mid-region exit fires would
+    depend on settle-vs-reset timing, and an outcome set must never ride a
+    race. A region exits only through its tail."""
+    loop_edges = [e for e in blueprint.edges if e.relation == "loop"]
+    if not loop_edges:
+        return [], None
+
+    skeleton = structural_edges(blueprint)
+    reach = _reachability(skeleton)
+    loops: list[LoopSpec] = []
+    for edge in loop_edges:
+        tail, head = edge.source, edge.target
+        if head == tail:
+            region = frozenset({head})
+        elif tail in reach.get(head, set()):
+            between = {
+                node
+                for node in reach.get(head, set())
+                if node == tail or tail in reach.get(node, set())
+            }
+            region = frozenset(between | {head, tail})
+        else:
+            return [], (
+                f"loop edge {tail}->{head} is not a back-edge: "
+                f"{head} does not reach {tail}"
+            )
+        loops.append(
+            LoopSpec(
+                head=head,
+                tail=tail,
+                region=region,
+                guard=edge.guard,
+                budget=edge.max_iterations or 1,
+            )
+        )
+
+    for i, a in enumerate(loops):
+        for b in loops[i + 1 :]:
+            shared = a.region & b.region
+            if shared and not (a.region < b.region or b.region < a.region):
+                return [], (
+                    f"loop regions overlap without nesting: "
+                    f"{a.tail}->{a.head} and {b.tail}->{b.head} share "
+                    f"{len(shared)} node(s) and neither contains the other"
+                )
+
+    in_regions: set[str] = set().union(*(spec.region for spec in loops))
+    for edge in blueprint.edges:
+        if edge.relation != "fallback":
+            continue
+        if edge.source in in_regions or edge.target in in_regions:
+            return [], (
+                f"fallback edge {edge.source}->{edge.target} touches a loop "
+                "region — fallbacks inside loop regions are refused: a "
+                "repair's rewiring cannot be rewound by a region reset"
+            )
+    for spec in loops:
+        for edge in skeleton:
+            if (
+                edge.source in spec.region
+                and edge.source != spec.tail
+                and edge.target not in spec.region
+            ):
+                return [], (
+                    f"edge {edge.source}->{edge.target} leaves the loop "
+                    f"region of {spec.tail}->{spec.head} from a mid-region "
+                    "node — a region exits only through its tail"
+                )
+    return loops, None
+
+
+def loop_decision(
+    spec: LoopSpec,
+    tail_evidence: dict[str, Any] | None,
+    completed_passes: int,
+) -> Literal["continue", "exit", "exhausted"]:
+    """One loop's verdict after its tail verified, from recorded state alone.
+
+    Guard ``None`` means the budget IS the plan: run ``budget`` passes, then
+    exit clean. A guard is the CONTINUE condition: when it stops holding the
+    loop exits clean; when it still holds with no budget left, the loop is
+    EXHAUSTED — a loud failure, never a silent pass."""
+    if spec.guard is None:
+        return "continue" if completed_passes < spec.budget else "exit"
+    if not _check_guard(spec.guard, tail_evidence or {}):
+        return "exit"
+    return "continue" if completed_passes < spec.budget else "exhausted"
 
 
 def route_verdict(

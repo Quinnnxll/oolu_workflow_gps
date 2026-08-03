@@ -4,6 +4,42 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Gate edges (G1) — a cycle becomes a bounded region, not a preflight
+error (docs/algorithm-barriers-plan.md, Part III):
+
+- **`relation="loop"`** on `BlueprintEdge` — a back-edge tail→head with
+  a **mandatory `max_iterations`** (an unbounded loop is
+  unconstructible, refused at the model door) and an optional CONTINUE
+  guard in the one predicate language. While the tail verifies, the
+  guard holds, and budget remains, the loop **region** — every node on
+  a structural path head→tail — re-enters with a fresh iteration
+  index. A guard-less loop's budget IS the plan: it runs exactly N
+  passes and exits clean; a guarded loop that exhausts its budget
+  settles its tail FAILED with "loop budget exhausted after N
+  iterations" — loud, never a silent pass.
+- **Regions are validated, by name** (`gates.derive_loops`): a loop
+  edge whose head does not reach its tail refuses ("not a back-edge");
+  regions must be disjoint or properly nested; fallback edges may not
+  touch a region (a repair's rewiring cannot be rewound by a reset);
+  and an ordering edge may not leave a region from a mid-region node —
+  whether it fired would depend on settle-vs-reset timing, and an
+  outcome set must never ride a race. **A region exits only through
+  its tail.**
+- **Iteration keys** — pass 0 keys byte-identical to today's
+  (`{run}:{action_id}`); pass n keys `{run}#i{n}:{action_id}`, so the
+  plan view's `rsplit(":", 1)` parse holds and the latest pass wins its
+  dict. `strip_iteration_marker` folds passes back onto the one action
+  in BOTH trace recorders (`orchestrator/scheduler.py`,
+  `nodeplace/execution.py`) — a loop that ran three times is three
+  honest observations of the SAME node, and replay from memoized
+  outcomes reproduces the record. Nested loops: the per-node iteration
+  counter is monotone (keys never collide), and an inner loop's budget
+  resets on each enclosing pass.
+- **The hard backstop** — `DagRouteRunner(max_total_actions=1000)`:
+  the graceful-ceiling-inside-hard-backstop pattern from the inner
+  loop's `max_recalcs`; tripping it cancels loudly by name
+  ("route budget exhausted: max_total_actions=N").
+
 Gate edges (G0) — the scheduler learns to not take a branch
 (docs/algorithm-barriers-plan.md, Part III):
 

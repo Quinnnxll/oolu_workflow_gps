@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..knowledge.traces import NodeObservation, TraceStore, route_node_key
 from ..metering.models import NoderShare, RunBinding
 from ..orchestrator.contract import compile_with_owners
+from ..orchestrator.scheduler import strip_iteration_marker
 from ..orchestrator.state import Blueprint, ExecutionRecord, RoutePlan
 from ..skills.contract import NodeContract, SubgraphBody
 from ..skills.models import ExecutionStatus
@@ -405,7 +406,7 @@ def _record_contract_trace(
     child_ok: dict[str, bool] = {}
     last_done: dict[str, int] = {}
     for index, outcome in enumerate(record.action_outcomes):  # completion order
-        action_id = action_of.get(outcome.idempotency_key)
+        action_id = action_of.get(strip_iteration_marker(outcome.idempotency_key))
         owner = compiled.owners.get(action_id or "")
         if owner is None or owner == contract.name:
             continue  # unattributable, or the contract's own glue actions

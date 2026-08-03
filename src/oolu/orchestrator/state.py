@@ -135,6 +135,13 @@ class BlueprintEdge(BaseModel):
     edge of which declines is SKIPPED, not cancelled. The predicate speaks
     the one predicate language (``predicates.check`` over the outcome's
     evidence), so no model ever routes.
+    ``relation="loop"``: a back-edge tail→head (``source`` is the tail,
+    ``target`` the head). While the tail verifies, the CONTINUE condition in
+    ``guard`` holds (``None`` = run to budget), and ``max_iterations``
+    remains, the loop region — every node on a path head→tail — re-enters
+    with a fresh iteration index. The budget is mandatory: an unbounded loop
+    is unconstructible, and a guarded loop that exhausts its budget fails
+    LOUDLY, never silently passes.
 
     ``provenance`` keeps human-authored structure distinguishable from learned
     structure: ``"sop"`` edges may only be changed by the human who owns the
@@ -145,23 +152,42 @@ class BlueprintEdge(BaseModel):
 
     source: str
     target: str
-    relation: Literal["before", "fallback", "guard"] = "before"
+    relation: Literal["before", "fallback", "guard", "loop"] = "before"
     provenance: Literal["sop", "learned", "data"] = "learned"
     guard: Postcondition | None = None
+    max_iterations: int | None = None
 
     @model_validator(mode="after")
-    def _guard_rides_guard_edges_only(self) -> "BlueprintEdge":
+    def _gate_fields_ride_gate_edges_only(self) -> "BlueprintEdge":
         """Loud refusal at construction, not at run time."""
         if self.relation == "guard" and self.guard is None:
             raise ValueError(
                 f"guard edge {self.source}->{self.target} declares no "
                 "predicate — relation='guard' requires a guard"
             )
-        if self.relation != "guard" and self.guard is not None:
+        if self.relation not in ("guard", "loop") and self.guard is not None:
             raise ValueError(
                 f"edge {self.source}->{self.target} carries a guard predicate "
                 f"but relation={self.relation!r} — a predicate rides only "
-                "relation='guard'"
+                "relation='guard' or relation='loop'"
+            )
+        if self.relation == "loop":
+            if self.max_iterations is None:
+                raise ValueError(
+                    f"loop edge {self.source}->{self.target} declares no "
+                    "max_iterations — an unbounded loop is unconstructible"
+                )
+            if self.max_iterations < 1:
+                raise ValueError(
+                    f"loop edge {self.source}->{self.target} declares "
+                    f"max_iterations={self.max_iterations} — the budget "
+                    "must be >= 1"
+                )
+        elif self.max_iterations is not None:
+            raise ValueError(
+                f"edge {self.source}->{self.target} carries max_iterations "
+                f"but relation={self.relation!r} — a budget rides only "
+                "relation='loop'"
             )
         return self
 

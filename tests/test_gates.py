@@ -185,3 +185,128 @@ def test_route_verdict_counts_skipped_as_ok_and_failures_as_not():
     assert route_verdict(repaired, {"a": {"r"}}) is True
     half = {"a": ExecutionStatus.FAILED, "r": ExecutionStatus.FAILED}
     assert route_verdict(half, {"a": {"r"}}) is False
+
+
+# --------------------------------------------------------------------------- #
+# G1 — loop edges: validators, regions, decisions, key normalization.          #
+# --------------------------------------------------------------------------- #
+from oolu.orchestrator.gates import derive_loops, loop_decision, LoopSpec
+from oolu.orchestrator.scheduler import strip_iteration_marker
+
+
+def test_loop_edge_without_budget_refuses_by_name():
+    with pytest.raises(ValueError, match="unbounded loop is unconstructible"):
+        BlueprintEdge(source="b", target="a", relation="loop")
+
+
+def test_loop_edge_with_zero_budget_refuses_by_name():
+    with pytest.raises(ValueError, match="must be >= 1"):
+        BlueprintEdge(source="b", target="a", relation="loop", max_iterations=0)
+
+
+def test_budget_on_non_loop_edge_refuses_by_name():
+    with pytest.raises(ValueError, match="rides only relation='loop'"):
+        BlueprintEdge(source="a", target="b", max_iterations=3)
+
+
+def test_loop_edge_carries_an_optional_continue_guard():
+    edge = BlueprintEdge(
+        source="b",
+        target="a",
+        relation="loop",
+        guard=_guard("remaining", ">", 0),
+        max_iterations=3,
+    )
+    assert edge.guard is not None
+    bare = BlueprintEdge(source="b", target="a", relation="loop", max_iterations=3)
+    assert bare.guard is None
+
+
+def _chain_blueprint(*ops: str) -> tuple[Blueprint, dict[str, str]]:
+    blueprint = Blueprint(
+        name="chain", actions=[_action(op) for op in ops], ordering="graph"
+    )
+    ids = {item.action.operation: item.action.id for item in blueprint.actions}
+    edges = [
+        BlueprintEdge(source=ids[a], target=ids[b])
+        for a, b in zip(ops, ops[1:])
+    ]
+    return blueprint.model_copy(update={"edges": edges}), ids
+
+
+def test_derive_loops_computes_the_region_between_head_and_tail():
+    blueprint, ids = _chain_blueprint("a", "b", "c")
+    blueprint = blueprint.model_copy(
+        update={
+            "edges": list(blueprint.edges)
+            + [
+                BlueprintEdge(
+                    source=ids["c"],
+                    target=ids["a"],
+                    relation="loop",
+                    max_iterations=2,
+                )
+            ]
+        }
+    )
+    loops, problem = derive_loops(blueprint)
+    assert problem is None
+    assert len(loops) == 1
+    assert loops[0].region == frozenset({ids["a"], ids["b"], ids["c"]})
+    assert loops[0].head == ids["a"] and loops[0].tail == ids["c"]
+
+
+def test_derive_loops_allows_proper_nesting():
+    blueprint, ids = _chain_blueprint("a", "b", "c")
+    blueprint = blueprint.model_copy(
+        update={
+            "edges": list(blueprint.edges)
+            + [
+                BlueprintEdge(
+                    source=ids["b"],
+                    target=ids["b"],
+                    relation="loop",
+                    max_iterations=2,
+                ),
+                BlueprintEdge(
+                    source=ids["c"],
+                    target=ids["a"],
+                    relation="loop",
+                    max_iterations=2,
+                ),
+            ]
+        }
+    )
+    loops, problem = derive_loops(blueprint)
+    assert problem is None
+    regions = sorted((loop.region for loop in loops), key=len)
+    assert regions[0] < regions[1]  # proper nesting
+
+
+def test_loop_decision_guardless_runs_to_budget_then_exits_clean():
+    spec = LoopSpec(head="a", tail="a", region=frozenset({"a"}), guard=None, budget=3)
+    assert loop_decision(spec, {}, 1) == "continue"
+    assert loop_decision(spec, {}, 2) == "continue"
+    assert loop_decision(spec, {}, 3) == "exit"
+
+
+def test_loop_decision_guarded_exits_on_condition_or_exhausts_loudly():
+    spec = LoopSpec(
+        head="a",
+        tail="a",
+        region=frozenset({"a"}),
+        guard=_guard("remaining", ">", 0),
+        budget=2,
+    )
+    assert loop_decision(spec, {"remaining": 4}, 1) == "continue"
+    assert loop_decision(spec, {"remaining": 0}, 1) == "exit"
+    assert loop_decision(spec, {"remaining": 4}, 2) == "exhausted"
+    # No evidence reads as an empty payload: the continue condition fails.
+    assert loop_decision(spec, None, 1) == "exit"
+
+
+def test_strip_iteration_marker_folds_passes_onto_the_action():
+    assert strip_iteration_marker("run:aid") == "run:aid"
+    assert strip_iteration_marker("run#i2:aid") == "run:aid"
+    assert strip_iteration_marker("run:exec:1#i13:aid") == "run:exec:1:aid"
+    assert strip_iteration_marker("bare") == "bare"

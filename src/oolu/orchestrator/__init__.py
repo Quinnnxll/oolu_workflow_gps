@@ -87,8 +87,19 @@ from .replay import (
     replay,
     synthetic_semantic_runs,
 )
-from .gates import Admission, Readiness, admit, dependency_edges, readiness, route_verdict
-from .scheduler import DagRouteRunner, action_node_key
+from .gates import (
+    Admission,
+    LoopSpec,
+    Readiness,
+    admit,
+    dependency_edges,
+    derive_loops,
+    loop_decision,
+    readiness,
+    route_verdict,
+    structural_edges,
+)
+from .scheduler import DagRouteRunner, action_node_key, strip_iteration_marker
 from .state import (
     ORCHESTRATOR_SCHEMA_VERSION,
     Blueprint,
@@ -146,14 +157,19 @@ __all__ = [
     "GoalSpec",
     "Proposal",
     "ProposalModel",
+    "LoopSpec",
     "Readiness",
     "action_node_key",
     "admit",
     "apply_sop_to_blueprint",
     "compile_with_owners",
     "dependency_edges",
+    "derive_loops",
+    "loop_decision",
     "readiness",
     "route_verdict",
+    "strip_iteration_marker",
+    "structural_edges",
     "contract_from_registered",
     "contract_to_blueprint",
     "CapabilityGrounder",

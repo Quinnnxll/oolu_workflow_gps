@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
+import re
 import time
 from datetime import UTC, datetime
 
@@ -54,6 +55,24 @@ def action_node_key(blueprint_name: str, action: ActionEvent) -> str:
     so statistics accumulate across runs of the same route.
     """
     return f"{blueprint_name}:{action.adapter}/{action.operation}"
+
+
+_ITERATION_MARKER = re.compile(r"#i\d+$")
+
+
+def strip_iteration_marker(key: str) -> str:
+    """Normalize a per-action idempotency key to its iteration-0 form.
+
+    Loop passes key as ``{run}#i{n}:{action_id}`` so every pass settles its
+    own outcome; joins over outcomes must fold the passes back onto the one
+    action — a loop that ran three times is three observations of the SAME
+    node, not one observation each of three strangers. The marker rides the
+    run segment, so ``rsplit(":", 1)`` consumers never see it.
+    """
+    prefix, sep, action_id = key.rpartition(":")
+    if not sep:
+        return key
+    return f"{_ITERATION_MARKER.sub('', prefix)}{sep}{action_id}"
 
 
 def _action_label(blueprint: Blueprint, action_id: str | None) -> str | None:
@@ -98,12 +117,18 @@ class DagRouteRunner:
         action_timeout_s: float | None = None,
         trace_store: TraceStore | None = None,
         trace_context: str = "",
+        max_total_actions: int = 1000,
     ):
         self._executors = dict(executors)
         self._max_workers = max(1, max_workers)
         self._timeout = action_timeout_s
         self._traces = trace_store
         self._context = trace_context
+        # The hard backstop behind the per-loop budgets — the same
+        # graceful-ceiling-inside-hard-backstop pattern as the inner loop's
+        # max_recalcs inside LangGraph's recursion_limit. Loop budgets halt
+        # gracefully with a worded reason long before this trips.
+        self._max_total_actions = max(1, max_total_actions)
 
     def capabilities(self) -> frozenset[str]:
         caps: set[str] = set()
@@ -183,8 +208,18 @@ class DagRouteRunner:
                         "cannot ride the sequential chain",
                         None,
                     )
+                if edge.relation == "loop":
+                    return (
+                        "loop edges require ordering='graph': loop "
+                        f"{edge.source}->{edge.target} cannot ride the "
+                        "sequential chain",
+                        None,
+                    )
         if self._has_cycle(blueprint):
             return "blueprint dependency graph has a cycle", None
+        _, loop_problem = gates.derive_loops(blueprint)
+        if loop_problem is not None:
+            return loop_problem, None
         return None, None
 
     @staticmethod
@@ -223,6 +258,10 @@ class DagRouteRunner:
         for target, triggers in fallback_triggers.items():
             for trigger in triggers:
                 fallbacks_of.setdefault(trigger, set()).add(target)
+        # Preflight already refused malformed loops; innermost-first order so
+        # a nested loop settles its own passes before its encloser looks.
+        loops, _ = gates.derive_loops(blueprint)
+        loop_order = sorted(range(len(loops)), key=lambda i: len(loops[i].region))
 
         status: dict[str, ExecutionStatus] = {}
         # Recorded evidence per settled action — what guards read. A node
@@ -236,15 +275,33 @@ class DagRouteRunner:
         first_failed: str | None = None
         deadlines: dict[concurrent.futures.Future, float] = {}
         running: dict[concurrent.futures.Future, str] = {}
+        # Loop bookkeeping. iteration: a monotone per-node reset counter that
+        # keys each pass's outcomes uniquely (nested resets keep bumping it —
+        # it is an idempotency counter, not a pass number). loop_passes: the
+        # per-spec count of completed passes, judged against the budget.
+        iteration: dict[str, int] = {}
+        loop_passes: dict[int, int] = {i: 0 for i in range(len(loops))}
+        loops_done: set[int] = set()
+        tail_events: set[int] = set()
+        submitted = 0
 
         def key_for(action_id: str) -> str:
-            return f"{idempotency_key}:{action_id}"
+            n = iteration.get(action_id, 0)
+            if n == 0:
+                return f"{idempotency_key}:{action_id}"
+            # The marker rides the run segment, so rsplit(":", 1) still
+            # yields the action id — the plan view's parse holds unmodified.
+            return f"{idempotency_key}#i{n}:{action_id}"
 
         def settle(action_id: str, outcome: ExecutionOutcome) -> None:
             nonlocal first_error, first_failed
             status[action_id] = outcome.status
             evidence[action_id] = outcome.evidence
             outcomes.append(outcome)
+            if outcome.status is ExecutionStatus.SUCCEEDED:
+                for i, spec in enumerate(loops):
+                    if spec.tail == action_id and i not in loops_done:
+                        tail_events.add(i)
             bad = (
                 outcome.status is not ExecutionStatus.SUCCEEDED
                 and outcome.status is not ExecutionStatus.SKIPPED
@@ -252,6 +309,56 @@ class DagRouteRunner:
             if bad and first_error is None:
                 first_error = outcome.error or f"action {action_id} failed"
                 first_failed = action_id
+
+        def resolve_loops() -> bool:
+            """Judge every loop whose tail just verified — innermost first.
+
+            A continue clears the region's statuses and evidence, re-adds it
+            to pending with fresh iteration keys, and resets any loop nested
+            inside (a fresh enclosing pass grants the inner loop a fresh
+            budget). Exhaustion settles the TAIL as FAILED with the worded
+            reason — loud, never a silent pass — and prior iterations'
+            outcomes stay in the append-only record either way.
+            """
+            nonlocal first_error, first_failed
+            progressed = False
+            for i in loop_order:
+                if i not in tail_events:
+                    continue
+                tail_events.discard(i)
+                spec = loops[i]
+                loop_passes[i] += 1
+                verdict = gates.loop_decision(
+                    spec, evidence.get(spec.tail), loop_passes[i]
+                )
+                progressed = True
+                if verdict == "continue":
+                    for node in sorted(spec.region):
+                        status.pop(node, None)
+                        evidence.pop(node, None)
+                        pending.add(node)
+                        iteration[node] = iteration.get(node, 0) + 1
+                    for j, other in enumerate(loops):
+                        if j == i:
+                            continue
+                        if other.region <= spec.region:
+                            loop_passes[j] = 0
+                            loops_done.discard(j)
+                        if other.tail in spec.region:
+                            tail_events.discard(j)
+                elif verdict == "exhausted":
+                    loops_done.add(i)
+                    status[spec.tail] = ExecutionStatus.FAILED
+                    reason = (
+                        "loop budget exhausted after "
+                        f"{spec.budget} iterations"
+                    )
+                    if first_error is None:
+                        first_error = reason
+                        first_failed = spec.tail
+                else:  # exit — clean, the region stands as it settled
+                    loops_done.add(i)
+            return progressed
 
         def node_readiness(node: str) -> gates.Readiness:
             return gates.readiness(
@@ -353,8 +460,15 @@ class DagRouteRunner:
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=self._max_workers
         ) as pool:
-            while pending or running or dormant:
-                progressed = resolve_unrunnable()
+            # tail_events keeps the loop alive: a tail that settles on the
+            # last in-flight future must still get its continue/exit verdict.
+            while pending or running or dormant or tail_events:
+                # Loops first: a continue must clear its region BEFORE any
+                # readiness pass could hand the tail's success to a node
+                # downstream of the loop — the main loop is single-threaded,
+                # so nothing observes the tail between its settle and here.
+                looped = resolve_loops()
+                progressed = resolve_unrunnable() or looped
 
                 ready = sorted(
                     node
@@ -363,6 +477,21 @@ class DagRouteRunner:
                 )
                 for node in ready:
                     pending.discard(node)
+                    if submitted >= self._max_total_actions:
+                        # The hard backstop tripped: refuse to run more,
+                        # loudly — dependents cascade-cancel from here.
+                        settle(
+                            node,
+                            _unrun_outcome(
+                                actions[node],
+                                key_for(node),
+                                ExecutionStatus.CANCELLED,
+                                "route budget exhausted: max_total_actions="
+                                f"{self._max_total_actions}",
+                            ),
+                        )
+                        continue
+                    submitted += 1
                     status[node] = ExecutionStatus.PLANNED
                     future = pool.submit(self._run_action, actions[node], key_for(node))
                     running[future] = node
@@ -467,7 +596,7 @@ class DagRouteRunner:
         }
         steps: list[NodeObservation] = []
         for outcome in record.action_outcomes:  # completion order
-            action = by_key.get(outcome.idempotency_key)
+            action = by_key.get(strip_iteration_marker(outcome.idempotency_key))
             if action is None:
                 continue
             if outcome.status is ExecutionStatus.SKIPPED:
