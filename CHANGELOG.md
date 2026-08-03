@@ -4,6 +4,43 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Program nodes (F1) — the builder writes trees, one verified module at a
+time (docs/algorithm-barriers-plan.md, Part I):
+
+- **The program author** (`src/oolu/programbuilder.py`) — `plan_program`
+  returns the whole spec in ONE consultation; `author_module` writes
+  each module in dependency order, screened (safety + mock) and its own
+  check run in the sandbox with the PARTIAL TREE staged, ≤2 repair
+  rounds per module before the next is authored (fail fast, never
+  whole-program repair); `render_dispatcher` is the one face — a
+  deterministic template, never model-written, that omits the
+  `bindings.json` read for a zero-input program and dispatches
+  operations by importlib. New seat `node.plan_program`.
+- **The explicit trigger** — "build me a program …" routes to the
+  program pipeline BEFORE the node regex, so a program build never pays
+  for a discarded single-file authoring; the explicit ask is the
+  consent, mirroring the node build. The build carries an honest
+  consultation count (`1 + M×(1 author + ≤2 repairs)`), metered.
+
+Program nodes (F0.1) — hardening from the adversarial review of the F0
+diff, landed before F1 wired the door to a surface:
+
+- **Harness-shadow refused at the sandbox boundary** — a bundle member
+  named like the harness (`_oolu_runtime.py`, `user_script.py`) is
+  refused in `_unpack_into` (it unpacks AFTER the shim is written), the
+  same wall inline staging holds — a large tree is not a trust bypass.
+- **Every tree key validated at the door** — `main.py` (would override
+  the verified entry and ride unscreened), the harness names, the
+  run-time side channels, `program.json`, `state/*`, and escaping paths
+  all refuse by name; not just declared module paths.
+- **A check may not be a module source** — the mock-screen exemption
+  for checks can't be turned on a module's own fabricated code.
+- **Honest partial-landing + no crashes** — `_land_tree`'s miss names
+  the whole tree and what did/didn't land (audit + receipt); a verify
+  backend failure refuses with a reason instead of crashing; the
+  inline-wall freeze leaves headroom for the two files a run stages so
+  births never judge a tree its runs can't stage.
+
 Program nodes (F0) — the tree becomes a first-class thing a build can
 produce and a birth can judge (docs/algorithm-barriers-plan.md, Part I):
 

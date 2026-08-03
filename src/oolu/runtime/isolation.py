@@ -58,11 +58,21 @@ _MAX_STAGED_BYTES = 2_000_000
 
 def _unpack_into(root: Path, archive: bytes) -> None:
     """Extract a bundle tar under ``root``, refusing any escaping member —
-    the subprocess backend's one-pass staging of a large tree."""
+    the subprocess backend's one-pass staging of a large tree.
+
+    A bundle member may not SHADOW the harness either: it unpacks AFTER
+    the shim and ``user_script.py`` are written, so a member of either
+    name would overwrite the sandbox's own code with unverified bytes.
+    The same wall inline staging holds, at the same boundary — a large
+    tree is not a trust bypass."""
     from .bundle import unpack_tar
 
     base = root.resolve()
+    reserved = {f"{SHIM_MODULE_NAME}.py", "user_script.py"}
     for name, data in unpack_tar(archive).items():
+        head = str(name).replace("\\", "/").split("/", 1)[0]
+        if head in reserved:
+            raise BackendError(f"bundle member may not shadow the harness: {name!r}")
         target = (root / name).resolve()
         if base not in target.parents:
             raise BackendError(f"bundle path escapes the workspace: {name!r}")

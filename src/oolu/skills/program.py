@@ -210,6 +210,18 @@ def parse_program_spec(raw: Any) -> tuple[ProgramSpec | None, str]:
         return None, f"duplicate module path(s): {', '.join(dupes)}"
 
     known = set(paths)
+    # A check may not BE a module source (F0.1): the birth door exempts
+    # check paths from the mock screen — a module that named its own
+    # source as its check would exempt genuinely mockable code from the
+    # one screen that catches fabrication.
+    module_paths = set(paths)
+    for module in spec.modules:
+        if module.check is not None and module.check in module_paths:
+            return None, (
+                f"module '{module.path}' names a module source "
+                f"('{module.check}') as its check — a check must be a "
+                "separate script that asserts against the module"
+            )
     for module in spec.modules:
         for dep in module.depends:
             if dep not in known:
@@ -235,6 +247,13 @@ def parse_program_spec(raw: Any) -> tuple[ProgramSpec | None, str]:
     operation_names = {op.name for op in spec.operations}
     if len(operation_names) != len(spec.operations):
         return None, "duplicate operation names"
+    for op in spec.operations:
+        module_part, _, func_part = op.entry.partition(":")
+        if not module_part or not func_part or "/" in op.entry:
+            return None, (
+                f"operation '{op.name}' entry must be "
+                f"'dotted.module:function', got '{op.entry}'"
+            )
     if spec.operations and spec.interface.operation not in operation_names:
         return None, (
             f"the interface invokes operation '{spec.interface.operation}', "

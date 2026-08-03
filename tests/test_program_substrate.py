@@ -400,3 +400,129 @@ def test_over_wall_tree_refuses_honestly_without_a_bundle_store(tmp_path):
     assert not result["ok"]
     assert "no bundle store" in result["problem"]
     conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# F0.1 — hardening (adversarial review of the F0 diff).                        #
+# --------------------------------------------------------------------------- #
+def test_door_refuses_reserved_and_escaping_tree_keys(tmp_path):
+    app, conn, ident, runner = _program_app(tmp_path)
+    session = _session(app, ident)
+    for bad_key in ("main.py", "_oolu_runtime.py", "user_script.py",
+                    "bindings.json", "program.json", "state/x.json",
+                    "../evil.py", "/abs.py"):
+        result = app.publish_program_node(
+            session,
+            goal="compute the answer",
+            script=ENTRY,
+            files={**LIB, bad_key: "print('x')\n"},
+            program=SPEC,
+        )
+        assert not result["ok"], bad_key
+        assert (
+            "reserved" in result["problem"] or "escapes" in result["problem"]
+        ), bad_key
+    conn.close()
+
+
+def test_bundle_member_cannot_shadow_the_harness(tmp_path):
+    # The over-wall path packs the tree into a bundle; a member named
+    # like the harness must be refused at the sandbox boundary, not
+    # overwrite the shim after it is written.
+    from oolu.runtime.bundle import freeze_tree
+    from oolu.runtime.isolation import _unpack_into
+    import pytest
+
+    manifest, blobs = freeze_tree(
+        {"lib/ok.py": "X = 1\n", "_oolu_runtime.py": "evil = True\n"}
+    )
+    # Reassemble the tar the store would ship and unpack it — the boundary
+    # refuses the harness-shadowing member by name.
+    from oolu.runtime.bundle import pack_tar
+
+    archive = pack_tar(
+        {"lib/ok.py": b"X = 1\n", "_oolu_runtime.py": b"evil = True\n"}
+    )
+    with pytest.raises(Exception) as exc:
+        _unpack_into(tmp_path, archive)
+    assert "shadow the harness" in str(exc.value)
+
+
+def test_check_may_not_be_a_module_source():
+    _, problem = parse_program_spec(
+        {
+            "modules": [
+                {"path": "lib/fetch.py", "check": "lib/fetch.py"},
+                {"path": "lib/other.py"},
+            ]
+        }
+    )
+    assert "names a module source" in problem
+
+
+def test_operation_entry_format_is_enforced():
+    _, problem = parse_program_spec(
+        {"operations": [{"name": "main", "entry": "not-dotted"}]}
+    )
+    assert "dotted.module:function" in problem
+
+
+def test_partial_landing_names_what_did_and_did_not_land(tmp_path):
+    # A file-store that accepts the first write then refuses the second
+    # leaves a half-written drawer — the miss must name the tree honestly,
+    # never read as a lone main.py miss.
+    app, conn, ident, runner = _program_app(tmp_path)
+    session = _session(app, ident)
+
+    class HalfStore:
+        def __init__(self, real):
+            self._real = real
+            self._writes = 0
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+        def save(self, *args, **kwargs):
+            self._writes += 1
+            if self._writes >= 2:
+                raise RuntimeError("disk full")
+            return self._real.save(*args, **kwargs)
+
+    app._files = HalfStore(app._files)
+    note = app._land_tree(
+        session,
+        "node-x",
+        {"src/main.py": "a\n", "src/lib/helper.py": "b\n", "src/program.json": "{}"},
+        goal="g",
+    )
+    assert "program's drawer tree" in note
+    events = [
+        r for r in app._durable.audit.records()
+        if r.event_type == "node.src_unlanded"
+    ]
+    assert events
+    payload = events[-1].payload
+    assert "landed" in payload and "missed" in payload
+    assert payload["missed"]  # something did not land, and it is named
+    conn.close()
+
+
+def test_verify_backend_failure_refuses_not_crashes(tmp_path):
+    app, conn, ident, runner = _program_app(tmp_path)
+    session = _session(app, ident)
+
+    class ExplodingRunner:
+        def verify_function(self, *args, **kwargs):
+            raise RuntimeError("backend down")
+
+    app._contract_executors["script"] = ExplodingRunner()
+    result = app.publish_program_node(
+        session,
+        goal="compute the answer",
+        script=ENTRY,
+        files=dict(LIB),
+        program=SPEC,
+    )
+    assert not result["ok"]
+    assert "verification failed" in result["problem"]
+    conn.close()

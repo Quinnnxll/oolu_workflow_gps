@@ -2,7 +2,7 @@
 
 Status: In build. Three phase series, one per barrier: **F0–F3** (the
 program node), **W0–W5** (route paving — the Paver), **G0–G3** (gate
-edges). G0, G1, W0, and F0 LANDED; every other phase Proposed. Each lands as one commit titled
+edges). G0, G1, W0, F0, and F1 LANDED; every other phase Proposed. Each lands as one commit titled
 `<CODE> landed: <name> — <subtitle>` with its loop-closure test, the
 plan-doc status flip, and the CHANGELOG entry in the same commit.
 
@@ -430,6 +430,24 @@ artifact runs will. Loop-closure: a hand-authored multi-module program
 publishes, its checks run in-sandbox against the staged tree, and the
 bundle round-trips freeze → run → cache hit on the real subprocess
 backend.
+**Amended (F0.1)** — adversarial review of the F0 diff reproduced two
+blockers and majors, fixed before F1 wired the door to a surface:
+(1) a bundle member could SHADOW the harness (`_oolu_runtime.py`,
+`user_script.py`) because bundle staging skipped the harness-shadow
+rule inline staging enforces — now refused at the sandbox boundary
+(`_unpack_into`), protecting every caller; (2) the door now validates
+EVERY tree key (not just declared modules): `main.py` (would override
+the verified entry AND ride unscreened), the harness names, the
+run-time side channels (`bindings.json`/`records.json`),
+`program.json`, `state/*`, and escaping paths all refuse by name;
+(3) a check may no longer BE a module source — the mock-screen exemption
+for checks can't be turned on a module's own fabricated code (parser
+rule); (4) `_land_tree`'s partial-write miss names the WHOLE tree and
+what did/didn't land (audit + receipt), never a lone-main.py lie; a
+verify backend failure refuses with a reason instead of crashing; and
+the inline-wall freeze leaves headroom for the two files a RUN stages
+(`bindings.json` + `records.json`) so births never judge a tree its
+runs can't stage.
 Changes: `skills/program.py` (models, `parse_program_spec`, refusals
 including reserved payload keys and module-dependency cycles);
 `verify_function` gains `files=`/`bundle=`; `_land_tree`; the
@@ -451,6 +469,30 @@ other barriers; buildable today.**
 
 **F1 — The program author: plan → module loop → deterministic
 dispatcher.** *The builder writes trees, one verified module at a time.*
+**Status: LANDED** — `src/oolu/programbuilder.py` (`ProgramAuthor`):
+`plan_program` returns the whole `ProgramSpec` in ONE consultation
+(refusing by the parser's words, plus a two-module floor and an
+operation floor); `author_module` writes each module in dependency-
+topological order, gated the moment it arrives (safety screen, mock
+screen, then its own check run in the sandbox with the PARTIAL TREE
+staged — the F0 seam), with ≤2 edit-don't-rewrite repair rounds
+per module before the next is authored; `render_dispatcher` is the
+one face — a deterministic template, never model-written, that OMITS
+the `bindings.json` read entirely for a zero-input program (the static
+birth wall's rule) and dispatches operations by importlib. New seat
+`node.plan_program`. The explicit "build me a program …" request routes
+(via `explicit_program_build_goal`) to `_build_program_node` BEFORE the
+node regex, so a program build never pays for a discarded single-file
+authoring; the explicit ask is the consent, mirroring
+`_build_function_node`. The build result carries an honest consultation
+count (`1 + M×(1 author + ≤2 repairs)`), metered and surfaced. Sharper
+than the plan text: check scripts are exempt from the mock screen (an
+assert-and-emit-status check is a constant by nature) but never from
+the safety screen; and the whole tree re-verifies against the declared
+ports at the F0 door on top of the per-module checks. Tests: scripted-
+model builds through the real subprocess backend — 3-module program,
+dependency-ordered authoring, module-check repair-then-proceed, repair
+exhaustion, mock refusal, dispatcher shape, and the routing regex.
 Changes: `programbuilder.py`; program hands on `NodeAuthorAgent` +
 mirrored one-shot fallback; explicit-request regex routed **before**
 single-file authoring; `node.plan_program` seat; per-module ledger

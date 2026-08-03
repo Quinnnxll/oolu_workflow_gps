@@ -272,6 +272,37 @@ def explicit_node_build_goal(message: str | None) -> str | None:
     return match.group("goal").strip(" .!?")
 
 
+# The explicit PROGRAM request (F1) — checked BEFORE the node regex, so
+# "build me a program (node) that …" routes to the program pipeline and
+# never pays for a discarded single-file authoring. This is the v1
+# trigger by decision: no plan-sniffing fork, no tax on the common path.
+_PROGRAM_BUILD_RE = re.compile(
+    r"(?:(?:build|create|make|write|set\s+up)\s+(?:me\s+)?"
+    r"(?:a|an|the|another|my)\s+"
+    r"|i\s+(?:need|want)\s+(?:a|an|another)\s+)"
+    r"program(?:\s+node)?\b"
+    r"\s*(?:for|that|to|which|:)?\s*(?P<goal>.*)$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def explicit_program_build_goal(message: str | None) -> str | None:
+    """The goal in an explicit program-build request, or ``None``."""
+    match = _PROGRAM_BUILD_RE.match(message or "")
+    if match is None:
+        return None
+    return match.group("goal").strip(" .!?")
+
+
+def _program_tree_path_unsafe(path: str) -> bool:
+    """A program tree key must be POSIX-relative and inside the tree —
+    the same wall the spec applies to declared module paths, applied to
+    EVERY key the author supplies (F0.1)."""
+    if not path or path.startswith("/") or "\\" in path or ":" in path:
+        return True
+    return any(part in ("", "..", ".") for part in path.split("/"))
+
+
 def _drawer_function(function: dict) -> dict:
     """The drawer's ``src/main.py`` IS the node's function when present.
 
@@ -2259,7 +2290,25 @@ class GatewayApp:
         # An explicit "build me a node …" is executed by the REAL builder, not
         # narrated by the model: it writes the function and persists the node
         # to My nodes (or refuses in words), so the reply can never claim a
-        # build that no code performed.
+        # build that no code performed. A "build me a program …" routes to
+        # the program pipeline FIRST (F1) — before any single-file authoring
+        # could be paid for and discarded.
+        if turn is None and not in_node and self._nodeplace is not None:
+            program_goal = explicit_program_build_goal(message)
+            if program_goal is not None:
+                built = self._build_program_node(session, program_goal)
+                if built.startswith("error:"):
+                    turn = ChatTurn(
+                        say="I couldn't build that program: "
+                        + built[6:].strip(),
+                        source="tool",
+                    )
+                else:
+                    turn = ChatTurn(
+                        say=built,
+                        source="tool",
+                        actions=[{"tool": "build_program"}],
+                    )
         if turn is None and not in_node and self._nodeplace is not None:
             build_goal = explicit_node_build_goal(message)
             if build_goal is not None:
@@ -7380,6 +7429,86 @@ class GatewayApp:
             "its runs verify." + decided_note + src_note + web_note + cost_note
         )
 
+    def _build_program_node(self, session, goal: str) -> str:
+        """Author and publish ONE program node (F1) — the explicit-request
+        counterpart to :meth:`_build_function_node`. The explicit "build me
+        a program …" IS the consent (one goal, one build), exactly as the
+        explicit node request is; the model plans the spec, writes each
+        module verified one at a time, and the deterministic dispatcher is
+        the one face — then the F0 door verifies the whole tree and lands
+        it. Returns words; an ``error: …`` prefix means refusal."""
+        from ..programbuilder import ProgramAuthor
+
+        goal = (goal or "").strip()
+        if not goal:
+            return "error: tell me what the program should do"
+        if obviously_chat(goal):
+            return (
+                "error: that reads as conversation, not a buildable "
+                "program"
+            )
+        if self._nodeplace is None or self._desk is None:
+            return "error: nodes are not enabled on this host"
+        author = self._seat_actor(
+            self._seated_program_planner(session.tenant_id),
+            session.principal_id,
+        )
+        if author is None:
+            return (
+                "error: building a program means a model to plan and write "
+                "it, and none is configured — add a model key (or a local "
+                "model) in Settings"
+            )
+        runner = self._contract_executors.get("script")
+        verify_fn = getattr(runner, "verify_function", None) if runner else None
+        if not callable(verify_fn):
+            return (
+                "error: this host has no script runtime to verify a "
+                "program against — a program node is verified by execution "
+                "before it can be trusted"
+            )
+        meter = getattr(self, "_model_meter", None)
+        spent_before = len(meter.charges()) if meter is not None else 0
+        # The birth-verify primitive itself (the F0 seam), so each module's
+        # check runs with the partial tree staged; the door re-verifies the
+        # whole tree against its declared ports at publish.
+        builder = ProgramAuthor(author, verify=verify_fn)
+        build = builder.build(goal)
+        cost_note = self._build_cost_note(meter, spent_before)
+        if not build.ok:
+            return f"error: {build.problem}"
+        result = self.publish_program_node(
+            session,
+            goal=goal,
+            script=build.script,
+            files=build.files,
+            program=build.spec,
+            io=build.io,
+        )
+        if not result.get("ok"):
+            return f"error: {result.get('problem', 'the program did not publish')}"
+        modules = len(build.spec.modules) if build.spec else 0
+        note = (
+            (" " + "; ".join(build.notes[:2])) if build.notes else ""
+        )
+        return (
+            f"Built a NEW program node “{concise_name(goal)}” "
+            f"({result['node_id'][:8]}) — {modules} internal modules behind "
+            "one interface, each verified as it was written, the whole tree "
+            f"verified in the sandbox. It authored across {build.consultations} "
+            "model consultations. It starts needs-verification and becomes a "
+            "callable, routable step as its runs verify."
+            + note
+            + result.get("receipt_note", "")
+            + cost_note
+        )
+
+    def _seated_program_planner(self, tenant: str):
+        """The model that plans and writes a program's modules — routed
+        under the ``node.plan_program`` purpose so its spend and audit
+        stand apart, a seam tests can supply their own for."""
+        return self._tenant_model(tenant, purpose="node.plan_program")
+
     def _land_src(
         self,
         session,
@@ -7424,8 +7553,10 @@ class GatewayApp:
         it). ``tree`` maps drawer paths (``src/main.py``,
         ``src/lib/ingest.py``, ``src/program.json``) to content. Returns
         the receipt's note: empty on success, the warning sentence on a
-        miss."""
+        miss (naming the WHOLE tree and what did land, F0.1 — a
+        multi-file miss must not read as a lone main.py miss)."""
         problem = None
+        landed: list[str] = []
         if self._files is None:
             problem = "this host keeps no file store"
         else:
@@ -7442,6 +7573,7 @@ class GatewayApp:
                 )
                 for path in sorted(tree):
                     desk_files.write(path, tree[path])
+                    landed.append(path)
                 if transaction is not None:
                     transaction.append("published")
                 self._durable.audit.append(
@@ -7472,6 +7604,12 @@ class GatewayApp:
                 problem = str(exc)
         if transaction is not None:
             transaction.append("src-unlanded")
+        # A tree may have landed PARTIALLY before the miss — the audit
+        # names exactly what did (so the operator inbox and any heal see
+        # the divergence), never a blanket "nothing landed" that a
+        # half-written drawer would make a lie.
+        expected = sorted(tree)
+        missed = [p for p in expected if p not in landed]
         try:
             self._durable.audit.append(
                 "node.src_unlanded",
@@ -7480,14 +7618,25 @@ class GatewayApp:
                     "node_id": node_id,
                     "goal": str(goal)[:200],
                     "problem": str(problem)[:400],
+                    "landed": landed,
+                    "missed": missed,
                 },
             )
         except Exception:  # noqa: BLE001 - the audit chain outranks nothing here
             pass
+        if len(expected) == 1:
+            what = "the function's drawer copy (src/main.py)"
+        elif landed:
+            what = (
+                f"part of the program's drawer tree ({len(missed)} of "
+                f"{len(expected)} files, incl. {missed[0]})"
+            )
+        else:
+            what = "the program's drawer tree"
         return (
-            " One thing to know: the function's drawer copy (src/main.py) "
-            f"did not land — {problem}. The node still runs from its "
-            "registered version, and the copy heals on its next run."
+            f" One thing to know: {what} did not land — {problem}. The "
+            "node still runs from its registered version, and the copy "
+            "heals on its next run."
         )
 
     def _heal_drawer_src(self, session, node_id: str, script: str) -> None:
@@ -7938,10 +8087,13 @@ class GatewayApp:
            transactionally (B2, ``_land_tree``).
 
         Zero model consultations — this door verifies and lands what it
-        was handed; authoring is F1's job. Returns ``{"ok": False,
-        "problem": ...}`` on refusal, else ``{"ok": True, "node_id",
-        "skill_id", "version_id", "bundle_id", "healed", "notes",
-        "receipt_note"}``."""
+        was handed; authoring is F1's job. It carries no twin guard: like
+        every internal builder, reuse-vs-new is the CALLER's decision (the
+        explicit "build me a program …" request is that decision, the same
+        way the explicit node request is for ``_build_function_node``).
+        Returns ``{"ok": False, "problem": ...}`` on refusal, else
+        ``{"ok": True, "node_id", "skill_id", "version_id", "bundle_id",
+        "healed", "notes", "receipt_note"}``."""
         import hashlib
         from uuid import uuid4 as _uuid4
 
@@ -7966,7 +8118,38 @@ class GatewayApp:
         spec, problem = parse_program_spec(program)
         if problem:
             return {"ok": False, "problem": problem}
-        tree = {str(path): str(content) for path, content in (files or {}).items()}
+        # Every tree key is validated BEFORE anything stages (F0.1): the
+        # entry is ``script``, distinct from the tree, so the tree may not
+        # carry ``main.py`` (it would override the verified entry in the
+        # drawer AND ride the sandbox unscreened); it may not shadow the
+        # harness or the run-time side channels; it may not escape the
+        # tree; and ``program.json`` is the door's to write, not the
+        # author's. Refuse by name — a hostile key never reaches staging.
+        reserved_tree_keys = {
+            "main.py",
+            "user_script.py",
+            "_oolu_runtime.py",
+            "bindings.json",
+            "records.json",
+            "program.json",
+        }
+        tree: dict[str, str] = {}
+        for raw_path, content in (files or {}).items():
+            path = str(raw_path).replace("\\", "/")
+            if _program_tree_path_unsafe(path):
+                return {
+                    "ok": False,
+                    "problem": f"tree path '{raw_path}' escapes the tree — "
+                    "paths are POSIX-relative, inside the drawer, no '..'",
+                }
+            if path in reserved_tree_keys or path.startswith("state/"):
+                return {
+                    "ok": False,
+                    "problem": f"tree path '{path}' is reserved — the entry, "
+                    "the harness, program.json, and run-time side channels "
+                    "are not author-supplied files",
+                }
+            tree[path] = str(content)
         tree["program.json"] = canonical_program_json(spec)
         for module in spec.modules:
             if module.path not in tree:
@@ -7988,16 +8171,18 @@ class GatewayApp:
         # screen but skip the mock screen: a check's emit_result is a
         # status constant by nature — its worth is in the asserts it
         # makes against the real modules, not in the answer it emits.
+        # The entry is distinct from the tree (main.py is a refused tree
+        # key), so ``(None, script)`` screens it and each tree file once.
         check_paths = {m.check for m in spec.modules if m.check is not None}
-        for path in ("main.py", *sorted(tree)):
-            text = script if path == "main.py" else tree[path]
-            if not path.endswith(".py"):
+        for path, text in ((None, script), *sorted(tree.items())):
+            label = path or "main.py"
+            if path is not None and not path.endswith(".py"):
                 continue
             flags = screen_script(text)
             if flags:
                 return {
                     "ok": False,
-                    "problem": f"'{path}' refused by the safety screen: "
+                    "problem": f"'{label}' refused by the safety screen: "
                     + "; ".join(flags),
                 }
             if path in check_paths:
@@ -8006,7 +8191,7 @@ class GatewayApp:
             if smells:
                 return {
                     "ok": False,
-                    "problem": f"'{path}' smells mocked: " + "; ".join(smells),
+                    "problem": f"'{label}' smells mocked: " + "; ".join(smells),
                 }
 
         io = dict(io or {})
@@ -8026,7 +8211,14 @@ class GatewayApp:
         total_bytes = sum(len(v.encode("utf-8", "replace")) for v in tree.values())
         bundle_id: str | None = None
         stage_kwargs: dict = {"files": tree}
-        if len(tree) + 1 > _MAX_STAGED_FILES or total_bytes > _MAX_STAGED_BYTES:
+        # Headroom for the two files a RUN stages that birth does not:
+        # bindings.json and the node's own records.json (script_node.py).
+        # A tree that fits birth but not its runs would pass here and fail
+        # every run — freeze earlier so births judge a stage-able tree.
+        if (
+            len(tree) + 2 > _MAX_STAGED_FILES
+            or total_bytes > _MAX_STAGED_BYTES
+        ):
             bundle_id = self._freeze_tree(tree)
             prepared = (
                 self._bundle_store.prepare(bundle_id)
@@ -8049,13 +8241,24 @@ class GatewayApp:
         digest = hashlib.sha256(
             (script + tree["program.json"]).encode()
         ).hexdigest()[:16]
+
+        def _verify(label, code, session_id, **kw):
+            """Wrap the birth primitive: an infrastructure failure (the
+            backend down, a bad stage) is a REFUSAL with the reason
+            named, never a crash that escapes the door — matching
+            _author_verifier's discipline (F0.1)."""
+            try:
+                return verify(label, code, session_id=session_id, **kw)
+            except Exception as exc:  # noqa: BLE001 - answered, never fatal
+                return {"ok": False, "error": f"verification failed: {exc}"}
+
         for module in spec.modules:
             if module.check is None:
                 continue
-            report = verify(
+            report = _verify(
                 f"check module {module.path}",
                 tree[module.check],
-                session_id=f"program-birth:{digest}:{module.path}",
+                f"program-birth:{digest}:{module.path}",
                 **stage_kwargs,
             )
             healed.extend(report.get("healed") or [])
@@ -8075,10 +8278,10 @@ class GatewayApp:
                 "problem": f"module '{module.path}' failed its check "
                 f"({module.check}): " + str(report.get("error", "")),
             }
-        report = verify(
+        report = _verify(
             goal,
             script,
-            session_id=f"program-birth:{digest}",
+            f"program-birth:{digest}",
             ports=[
                 {"name": str(p.get("name")), "type": str(p.get("type", "str"))}
                 for p in outputs

@@ -121,6 +121,18 @@ SEATS: dict[str, Seat] = {
             audited=True,
         ),
         Seat(
+            purpose="node.plan_program",
+            charge=(
+                "plan a program node: internal modules with checks, "
+                "operations behind one deterministic dispatcher, ONE "
+                "unified interface — the plan is a spec the parser "
+                "refuses by name, never code"
+            ),
+            reads=("src/", "lessons/"),
+            consent_key="account.autobuild_consent",
+            audited=True,
+        ),
+        Seat(
             purpose="node.repair",
             charge=(
                 "edit a node's failing function to close the exact "
