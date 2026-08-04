@@ -47,7 +47,10 @@ split), `docs/REWARD_PRICING_DESIGN.md`.
 
 ## Part I — honest review of the current build
 
-What stands today (all verified against the tree at this commit):
+What stood when this roadmap was written — the baseline its phases
+close gaps against. A phase's own **Status: LANDED** line supersedes
+the rows it closes (N0 has landed: the metrics, block-persistence,
+reader, and arrival rows below describe the before-state).
 
 **The contribution spine (A1) — solid.** Members drop material into the
 News thread; intake detects article-shaped text or attachments, asks at
@@ -217,10 +220,25 @@ whole pipeline blind.
 
 ### N0 — the metrics spine and the expandable story block
 
+**Status: LANDED** — `press/metrics.py` (`StoryMetricsStore`: one
+receipt per (story, member) with max-dwell/sticky-completion upsert,
+idempotent likes, the k-anonymous `aggregate`, per-member erasure wired
+into account deletion); the feedback door carries `read` measurements
+(`dwell_ms`, `completed`) and counts likes once; the metrics door
+`GET /v1/press/stories/{id}/metrics`; blocks persist with turns
+(`assistant_turns.block`, migrated in place) so the edition pulse
+lands a `story` block of previews beside its words; the frontend
+`StoryReader` takes the pane (the FileView pattern) with honest
+dwell/scroll-completion measurement sent once on leaving, the like tap,
+and the k-anonymous metrics line; the News thread re-reads on a 30 s
+rhythm so a pushed edition is SEEN. Pinned by the N0 cases in
+`tests/test_newsroom.py`, `tests/test_roster.py` (block round-trip),
+and `Agents.test.tsx` (the reader flow).
+
 Goal: the three benchmark signals exist, honestly measured, and the
 story is finally something a member can OPEN.
 
-- **The story message block.** A sixth block kind
+- **The story message block.** A fifth block kind
   `{ kind: "story", items: [...] }` in the two block unions; the
   edition pulse writes it. Blocks must survive reload: a `block` column
   on `assistant_turns` (the `files` column's migration pattern,
@@ -240,8 +258,10 @@ story is finally something a member can OPEN.
   opens, likes, mean attention, completion rate — rendered to
   EDITORIAL decisions only above a k-anonymity floor (law 4). The
   per-story like count becomes real.
-- **Arrival.** The News thread gains the OoLu thread's 30-second
-  refresh so a pushed edition is seen without a manual click.
+- **Arrival.** The News thread gains a 30-second history refresh so a
+  pushed edition is seen without a manual click. (The OoLu thread's
+  standing 30-second interval polls only reminders — the history
+  re-read is new here.)
 
 Exit gate: a story pushed on the pulse renders as an expandable block
 on every device (history reload included); opening/finishing/liking it

@@ -24,7 +24,7 @@ from pathlib import Path
 
 from ..persistence import Migration, migrate
 
-DURABLE_SCHEMA_VERSION = 2
+DURABLE_SCHEMA_VERSION = 3
 
 
 def _create_durable_schema(conn: sqlite3.Connection) -> None:

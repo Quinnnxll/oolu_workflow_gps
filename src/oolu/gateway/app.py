@@ -1295,6 +1295,13 @@ class GatewayApp:
         # shapes it. The reasons render on demand from the detail door.
         r.add("GET", "/v1/press/stories", self._press_stories)
         r.add("GET", "/v1/press/stories/{story_id}", self._press_story_detail)
+        # The benchmark read (N0): k-anonymous aggregates, or an honest
+        # "not enough readers yet".
+        r.add(
+            "GET",
+            "/v1/press/stories/{story_id}/metrics",
+            self._press_story_metrics,
+        )
         r.add(
             "POST",
             "/v1/press/stories/{story_id}/feedback",
@@ -2156,6 +2163,7 @@ class GatewayApp:
                     principal=session.principal_id,
                     kind="assistant",
                     body=say,
+                    block=block if isinstance(block, dict) else None,
                 )
             return json_response(
                 200,
@@ -2676,6 +2684,7 @@ class GatewayApp:
                 kind="assistant",
                 body=say,
                 agent=card.agent_id,
+                block=block if isinstance(block, dict) else None,
             )
         return json_response(
             200,
@@ -3795,6 +3804,21 @@ class GatewayApp:
                     )
         return payload
 
+    @staticmethod
+    def _story_preview(story) -> dict:
+        """The story as the pushed block carries it: a pointer and the
+        first lines — the FULL story is fetched through the detail door
+        when the reader opens it (which is also the honest moment the
+        reading measurement starts). Never the whole prose twice."""
+        preview = " ".join(story.prose.split())
+        return {
+            "story_id": story.story_id,
+            "headline": story.headline,
+            "preview": preview[:280] + ("…" if len(preview) > 280 else ""),
+            "genres": list(story.genres),
+            "bylines": list(dict.fromkeys(s.author for s in story.lineage)),
+        }
+
     def _press_personalized(self, session) -> bool:
         """The consent switch, read where it is enforced: personalization
         exists only while `press.personalize` is on."""
@@ -3889,7 +3913,16 @@ class GatewayApp:
         """One tap, honestly handled: recorded only under the member's
         own consent — and the answer says which it was. The tap keeps
         the story's own words next to the signal, so it adjusts the
-        member's SEMANTIC taste, not just their genre leaning."""
+        member's SEMANTIC taste, not just their genre leaning.
+
+        The benchmark's spine (N0) rides the same door: a ``read``
+        carries the honest measurements from the reading surface —
+        ``dwell_ms`` (how long the open story held the reader) and
+        ``completed`` (they reached the end) — into one receipt per
+        (story, member); a ``like`` also counts once, idempotently,
+        toward the story's aggregate. Same consent switch for all of
+        it: off means NOTHING per-member is written, and the answer
+        says so."""
         from ..press import taste_snippet
 
         press = self._require_newsroom()
@@ -3898,7 +3931,8 @@ class GatewayApp:
         )
         if story is None:
             raise GatewayError(404, "not_found", "no such story")
-        signal = str((request.body or {}).get("signal") or "").strip()
+        body = request.body or {}
+        signal = str(body.get("signal") or "").strip()
         if signal not in ("like", "read", "skip"):
             raise GatewayError(
                 400, "invalid_request", "signal must be like, read, or skip"
@@ -3915,7 +3949,47 @@ class GatewayApp:
             genres=story.genres,
             snippet=taste_snippet(story.headline, story.prose),
         )
+        if press.metrics is not None:
+            if signal == "read":
+                try:
+                    dwell_ms = int(body.get("dwell_ms") or 0)
+                except (TypeError, ValueError):
+                    dwell_ms = 0
+                press.metrics.read_receipt(
+                    tenant=session.tenant_id,
+                    story_id=story.story_id,
+                    principal=session.principal_id,
+                    dwell_ms=dwell_ms,
+                    completed=body.get("completed") is True,
+                )
+            elif signal == "like":
+                press.metrics.like(
+                    tenant=session.tenant_id,
+                    story_id=story.story_id,
+                    principal=session.principal_id,
+                )
         return json_response(200, {"recorded": True})
+
+    def _press_story_metrics(self, request, session, params) -> Response:
+        """The benchmark numbers for one story — opens, likes, mean
+        attention, completion rate — revealed only above the k-anonymity
+        floor; below it the honest answer is "not enough readers yet"."""
+        press = self._require_newsroom()
+        if press.metrics is None:
+            raise GatewayError(
+                404, "not_found", "this host keeps no reader metrics"
+            )
+        story = press.stories.get(
+            params["story_id"], tenant=session.tenant_id
+        )
+        if story is None:
+            raise GatewayError(404, "not_found", "no such story")
+        return json_response(
+            200,
+            press.metrics.aggregate(
+                tenant=session.tenant_id, story_id=story.story_id
+            ),
+        )
 
     def _press_newsroom_run(self, request, session, params) -> Response:
         """The editor's crank: judge the shelf, tell the untold. The
@@ -4038,12 +4112,25 @@ class GatewayApp:
             )
             message = edition_message(edition, skipped=skipped)
             if self._assistant_history is not None:
+                # The words stay for old clients; the STORY BLOCK rides
+                # beside them (N0) — previews the thread renders as an
+                # expandable block on every device, reload included.
                 self._assistant_history.append(
                     tenant=schedule.tenant,
                     principal=schedule.principal,
                     kind="assistant",
                     body=message,
                     agent="news",
+                    block=(
+                        {
+                            "kind": "story",
+                            "items": [
+                                self._story_preview(s) for s in edition
+                            ],
+                        }
+                        if edition
+                        else None
+                    ),
                 )
             if self._reminders is not None and edition:
                 try:
@@ -4090,8 +4177,9 @@ class GatewayApp:
     def _press_preferences_export(self, request, session, params) -> Response:
         """The member's own pairwise preferences in the DPO dataset
         shape — consent-gated, per-member, scrubbed on the way out.
-        The book outlived the poll floor: story feedback and future
-        survey instruments write it now."""
+        The book outlived the poll floor; the reader-survey desk
+        (roadmap N3) is its next writer — until then it exports the
+        standing rows and honestly answers empty."""
         press = self._require_press()
         if press.pairwise is None:
             raise GatewayError(
@@ -9494,6 +9582,12 @@ class GatewayApp:
             )
         if self._press is not None and self._press.pairwise is not None:
             erased["preference_pairs"] = self._press.pairwise.erase(
+                tenant=tenant, principal=principal
+            )
+        if self._press is not None and self._press.metrics is not None:
+            # Reading receipts and likes go with the account; the
+            # story aggregates honestly shrink.
+            erased["reader_metrics"] = self._press.metrics.erase(
                 tenant=tenant, principal=principal
             )
         erased["calendar_events"] = self._calendar.erase(

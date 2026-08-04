@@ -71,6 +71,7 @@ def _press_desk(conn):
         PairwiseStore,
         PreferenceStore,
         PressDesk,
+        StoryMetricsStore,
         StoryStore,
     )
 
@@ -81,6 +82,7 @@ def _press_desk(conn):
         preferences=PreferenceStore(conn),
         pairwise=PairwiseStore(conn),
         intake=IntakeStore(conn),
+        metrics=StoryMetricsStore(conn),
     )
 
 

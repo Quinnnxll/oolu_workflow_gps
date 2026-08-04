@@ -39,6 +39,7 @@ from oolu.press import (
     PressDesk,
     PressError,
     Story,
+    StoryMetricsStore,
     StoryStore,
     Taste,
     edition_message,
@@ -388,6 +389,7 @@ def _host(tmp_path):
         stories=StoryStore(conn),
         preferences=PreferenceStore(conn),
         pairwise=PairwiseStore(conn),
+        metrics=StoryMetricsStore(conn),
     )
     gateway = GatewayApp(
         app._durable,
@@ -729,6 +731,145 @@ def test_the_edition_arrives_on_the_pulse_as_news_own_message(tmp_path):
     assert history, "the edition should land in the News thread"
     assert "your edition" in history[-1]["body"].lower()
     assert "Harbor" in history[-1]["body"]
+    # N0: the STORY BLOCK rides beside the words and survives reload —
+    # previews with a pointer, never the whole prose twice.
+    story_block = history[-1]["block"]
+    assert story_block["kind"] == "story"
+    first = story_block["items"][0]
+    assert first["story_id"] and first["headline"] and first["bylines"]
+    assert len(first["preview"]) <= 281
+    conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# N0 — the benchmark's measuring stick.                                        #
+# --------------------------------------------------------------------------- #
+def _read(gateway, token, story_id, *, dwell_ms, completed):
+    return gateway.handle(
+        _req(
+            "POST",
+            f"/v1/press/stories/{story_id}/feedback",
+            token=token,
+            body={"signal": "read", "dwell_ms": dwell_ms, "completed": completed},
+        )
+    )
+
+
+def test_reading_is_measured_only_under_consent_and_reveals_over_the_floor(
+    tmp_path,
+):
+    from oolu.press import METRICS_K_FLOOR
+
+    gateway, conn, ident = _host(tmp_path)
+    users = gateway._accounts
+    for i in range(METRICS_K_FLOOR + 1):
+        users.create_user(f"reader{i}", f"reader{i}-password-1", tenant="t1")
+    alice, _ = _seed_and_compose(gateway, ident)
+    story = gateway.handle(
+        _req("GET", "/v1/press/stories", token=alice)
+    ).body["items"][0]
+    sid = story["story_id"]
+
+    # Consent off: the read is honestly NOT recorded — no receipt, no
+    # count, and the answer says so.
+    cold = _read(gateway, ident.token("reader0"), sid, dwell_ms=9_000, completed=True)
+    assert cold.body == {"recorded": False, "reason": "personalization is off"}
+
+    # K_FLOOR consented readers open the story; some finish, some not.
+    for i in range(METRICS_K_FLOOR):
+        token = ident.token(f"reader{i}")
+        assert (
+            gateway.handle(
+                _req(
+                    "PUT",
+                    "/v1/settings",
+                    token=token,
+                    body={"changes": {"press.personalize": True}},
+                )
+            ).status
+            == 200
+        )
+        assert _read(
+            gateway,
+            token,
+            sid,
+            dwell_ms=10_000 + i * 1_000,
+            completed=i % 2 == 0,
+        ).body == {"recorded": True}
+    # Below the floor first: one receipt short refuses to reveal.
+    # (Simulate by asking for a story nobody read.)
+    other = gateway.handle(
+        _req("GET", "/v1/press/stories", token=alice)
+    ).body["items"][1]
+    veiled = gateway.handle(
+        _req(
+            "GET", f"/v1/press/stories/{other['story_id']}/metrics", token=alice
+        )
+    )
+    assert veiled.body == {
+        "story_id": other["story_id"],
+        "revealed": False,
+        "reason": "not enough readers yet",
+    }
+
+    # At the floor: the three benchmark numbers, exactly.
+    likes = 2
+    for i in range(likes):
+        assert (
+            gateway.handle(
+                _req(
+                    "POST",
+                    f"/v1/press/stories/{sid}/feedback",
+                    token=ident.token(f"reader{i}"),
+                    body={"signal": "like"},
+                )
+            ).body["recorded"]
+            is True
+        )
+    # A double like counts once — the first tap is the tap.
+    gateway.handle(
+        _req(
+            "POST",
+            f"/v1/press/stories/{sid}/feedback",
+            token=ident.token("reader0"),
+            body={"signal": "like"},
+        )
+    )
+    revealed = gateway.handle(
+        _req("GET", f"/v1/press/stories/{sid}/metrics", token=alice)
+    ).body
+    assert revealed["revealed"] is True
+    assert revealed["opens"] == METRICS_K_FLOOR
+    assert revealed["likes"] == likes
+    completions = sum(1 for i in range(METRICS_K_FLOOR) if i % 2 == 0)
+    assert revealed["completion_rate"] == round(
+        completions / METRICS_K_FLOOR, 4
+    )
+    dwells = [10_000 + i * 1_000 for i in range(METRICS_K_FLOOR)]
+    assert revealed["mean_attention_ms"] == int(
+        round(sum(dwells) / len(dwells))
+    )
+
+    # A re-read never inflates: the longest dwell stands, completion
+    # sticks, and opens stay one per reader.
+    assert _read(
+        gateway, ident.token("reader1"), sid, dwell_ms=500, completed=False
+    ).body == {"recorded": True}
+    again = gateway.handle(
+        _req("GET", f"/v1/press/stories/{sid}/metrics", token=alice)
+    ).body
+    assert again["opens"] == METRICS_K_FLOOR
+    assert again["mean_attention_ms"] == revealed["mean_attention_ms"]
+    assert again["completion_rate"] == revealed["completion_rate"]
+
+    # Erasure outranks the aggregate: a reader's rows go, the numbers
+    # honestly shrink below the floor and the reveal closes.
+    erased = StoryMetricsStore(conn).erase(tenant="t1", principal="reader0")
+    assert erased == 2  # the receipt and the like
+    closed = gateway.handle(
+        _req("GET", f"/v1/press/stories/{sid}/metrics", token=alice)
+    ).body
+    assert closed["revealed"] is False
     conn.close()
 
 

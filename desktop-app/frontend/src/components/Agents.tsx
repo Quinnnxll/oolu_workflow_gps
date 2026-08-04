@@ -9,6 +9,8 @@ import type {
   PressGenre,
   RosterAgent,
   Story,
+  StoryMetrics,
+  StoryPreview,
   TravelBrief,
   TurnFileRef,
 } from "../api";
@@ -27,10 +29,12 @@ import { MarketPanel } from "./Market";
 // cache exactly like the OoLu chat.
 
 // A structured piece riding an agent's reply — rendered in the bubble:
-// genre chips, the Explorer's followable categories (a tap speaks
-// "follow …"), or the closest products with the comparison's own
-// deadline.
+// the pushed edition's story previews (each expandable to the full
+// story), genre chips, the Explorer's followable categories (a tap
+// speaks "follow …"), or the closest products with the comparison's
+// own deadline.
 type ChatBlock =
+  | { kind: "story"; items: StoryPreview[] }
   | { kind: "genres"; items: PressGenre[] }
   | { kind: "categories"; items: { category: string; followed: boolean }[] }
   | {
@@ -247,6 +251,194 @@ export function GenreChipsBlock({
           {g.label}
         </button>
       ))}
+    </div>
+  );
+}
+
+// The pushed edition, as a MESSAGE BLOCK (N0): each story a preview
+// card — headline, first lines, bylines — expandable to the full story.
+// The tap is the honest moment the reading measurement starts.
+export function StoryPreviewBlock({
+  items,
+  onOpen,
+}: {
+  items: StoryPreview[];
+  onOpen: (storyId: string) => void;
+}) {
+  const tr = useT();
+  return (
+    <div className="story-block">
+      {items.map((s) => (
+        <button
+          key={s.story_id}
+          type="button"
+          className="story-preview"
+          title={tr("press.open")}
+          onClick={() => onOpen(s.story_id)}
+        >
+          <span className="press-title">{s.headline}</span>
+          <span className="press-body muted">{s.preview}</span>
+          <span className="story-preview-meta muted">
+            {s.bylines.join(", ")}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// The full story, as the pane (the FileView pattern: the reader IS the
+// view, with a way back — never a window popping on top). The reading
+// is measured honestly while it is open: dwell from open to leave,
+// completion when the reader reaches the end — sent ONCE as a `read`
+// receipt on the way out, recorded server-side only under the member's
+// own consent. The like tap and the story's k-anonymous benchmark
+// numbers live here too.
+export function StoryReader({
+  storyId,
+  onBack,
+}: {
+  storyId: string;
+  onBack: () => void;
+}) {
+  const tr = useT();
+  const [story, setStory] = useState<Story | null>(null);
+  const [metrics, setMetrics] = useState<StoryMetrics | null>(null);
+  const [error, setError] = useState("");
+  const [noted, setNoted] = useState("");
+  const openedAt = useRef(Date.now());
+  const finished = useRef(false);
+  const receiptSent = useRef(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .pressStoryDetail(storyId)
+      .then((s) => {
+        if (!cancelled) setStory(s);
+      })
+      .catch((e) => {
+        if (!cancelled) setError((e as Error).message);
+      });
+    api
+      .pressStoryMetrics(storyId)
+      .then((m) => {
+        if (!cancelled) setMetrics(m);
+      })
+      .catch(() => {}); // a host without metrics keeps an honest silence
+    return () => {
+      cancelled = true;
+    };
+  }, [storyId]);
+
+  // A story short enough to show whole was read whole.
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (story && el && el.scrollHeight <= el.clientHeight + 8) {
+      finished.current = true;
+    }
+  }, [story]);
+
+  function sendReceipt() {
+    if (receiptSent.current) return;
+    receiptSent.current = true;
+    void api
+      .pressStoryFeedback(storyId, "read", {
+        dwellMs: Date.now() - openedAt.current,
+        completed: finished.current,
+      })
+      .catch(() => {}); // consent-off or offline: the server said its piece
+  }
+
+  // Leaving by ANY road (back, unmount) sends the one receipt.
+  useEffect(() => sendReceipt, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (error) return <div className="pane-empty">{error}</div>;
+  if (!story) return <div className="pane-empty muted">…</div>;
+  return (
+    <div className="story-reader">
+      <div className="file-head">
+        <button
+          className="linklike"
+          onClick={() => {
+            sendReceipt();
+            onBack();
+          }}
+        >
+          {tr("press.backToThread")}
+        </button>
+        <span className="press-title">{story.headline}</span>
+      </div>
+      <div
+        ref={bodyRef}
+        className="story-reader-body"
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          if (el.scrollTop + el.clientHeight >= el.scrollHeight - 8) {
+            finished.current = true;
+          }
+        }}
+      >
+        {story.prose.split(/\n{2,}/).map((block, i) => (
+          <p key={i}>{block}</p>
+        ))}
+        {(story.media ?? []).length > 0 && (
+          <div className="press-media-strip">
+            {(story.media ?? []).map((m) => (
+              <PressMedia
+                key={`${m.contribution_id}:${m.index}`}
+                contributionId={m.contribution_id}
+                index={m.index}
+                mediaType={m.media_type}
+                name={m.name}
+              />
+            ))}
+          </div>
+        )}
+        <div className="press-bylines">
+          {[...new Set(story.lineage.map((share) => share.author))].map(
+            (author) => (
+              <Byline key={author} username={author} size={20} />
+            ),
+          )}
+        </div>
+        {/* The end marker: reaching it IS completion. */}
+        <div className="story-end" aria-hidden="true" />
+      </div>
+      <div className="press-meta story-reader-foot">
+        <button
+          className="linklike press-tap"
+          title={tr("press.like")}
+          aria-label={tr("press.like")}
+          onClick={() =>
+            void api
+              .pressStoryFeedback(storyId, "like")
+              .then((v) =>
+                setNoted(
+                  v.recorded ? tr("press.noted") : tr("press.notRecorded"),
+                ),
+              )
+              .catch(() => {})
+          }
+        >
+          👍
+        </button>
+        {noted && <span className="muted">{noted}</span>}
+        {/* The benchmark numbers, k-anonymous — or the honest reason. */}
+        {metrics &&
+          (metrics.revealed ? (
+            <span className="muted">
+              {tf("press.metricsLine", {
+                opens: metrics.opens ?? 0,
+                pct: Math.round(100 * (metrics.completion_rate ?? 0)),
+                likes: metrics.likes ?? 0,
+              })}
+            </span>
+          ) : (
+            <span className="muted">{metrics.reason}</span>
+          ))}
+      </div>
     </div>
   );
 }
@@ -608,14 +800,16 @@ function PressMedia({
   const [blob, setBlob] = useState<Blob | null>(null);
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
+    let cancelled = false;
     let held: string | null = null;
     void api.pressMediaBlob(contributionId, index).then((bytes) => {
-      if (!bytes) return;
+      if (!bytes || cancelled) return;
       held = URL.createObjectURL(bytes);
       setBlob(bytes);
       setUrl(held);
     });
     return () => {
+      cancelled = true;
       if (held) URL.revokeObjectURL(held);
     };
   }, [contributionId, index]);
@@ -667,7 +861,14 @@ function PressMedia({
 // There is NO contribute form: publishing happens in the conversation
 // below — the desk detects raw material, reviews it, and a plain yes
 // publishes (the OoLu build-a-node shape, applied to the press).
-export function PressPanel() {
+export function PressPanel({
+  onOpenStory,
+}: {
+  // Opening a story swaps the pane for the reader (N0) — where the
+  // reading is honestly measured. Optional: a panel without a reader
+  // still lists the edition.
+  onOpenStory?: (storyId: string) => void;
+} = {}) {
   const tr = useT();
   const [genres, setGenres] = useState<PressGenre[] | null>(null);
   const [shelf, setShelf] = useState<Contribution[]>([]);
@@ -769,7 +970,18 @@ export function PressPanel() {
           )}
           {stories.map((story) => (
             <div key={story.story_id} className="press-card story">
-              <div className="press-title">{story.headline}</div>
+              {onOpenStory ? (
+                <button
+                  type="button"
+                  className="linklike press-title story-open"
+                  title={tr("press.open")}
+                  onClick={() => onOpenStory(story.story_id)}
+                >
+                  {story.headline}
+                </button>
+              ) : (
+                <div className="press-title">{story.headline}</div>
+              )}
               <div className="press-body">{story.prose}</div>
               {/* The lineage's attached media — photos, clips, sound —
                   by reference through the press media door. */}
@@ -891,6 +1103,21 @@ export function PressPanel() {
   );
 }
 
+// One server turn as the thread renders it — kinds filtered, block and
+// files riding along (they persist with the turn now).
+function fromServerTurns(items: import("../api").ChatHistoryTurn[]): AgentMsg[] {
+  return items
+    .filter((t) => t.kind === "user" || t.kind === "assistant")
+    .map(
+      (t): AgentMsg => ({
+        kind: t.kind as "user" | "assistant",
+        text: t.body,
+        files: t.files,
+        block: (t.block as ChatBlock | null | undefined) ?? null,
+      }),
+    );
+}
+
 export function AgentThread({ agent }: { agent: RosterAgent }) {
   const tr = useT();
   const [thread, setThread] = useState<AgentMsg[]>(() =>
@@ -900,6 +1127,9 @@ export function AgentThread({ agent }: { agent: RosterAgent }) {
     loadCompose(`agent-${agent.agent_id}`),
   );
   const [busy, setBusy] = useState(false);
+  // The open story: when set, the reader IS the pane (a way back, the
+  // FileView discipline) and the reading measurement is running.
+  const [reading, setReading] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -918,21 +1148,32 @@ export function AgentThread({ agent }: { agent: RosterAgent }) {
       .chatHistory(agent.agent_id)
       .then(({ items }) => {
         if (items && items.length > 0) {
-          setThread(
-            items
-              .filter((t) => t.kind === "user" || t.kind === "assistant")
-              .map(
-                (t): AgentMsg => ({
-                  kind: t.kind as "user" | "assistant",
-                  text: t.body,
-                  files: t.files,
-                }),
-              ),
-          );
+          setThread(fromServerTurns(items));
         }
       })
       .catch(() => {});
   }, [agent.agent_id]);
+
+  // Arrival (N0): a pushed edition (or brief) lands as the agent's own
+  // turn server-side — the thread re-reads on a quiet rhythm so it is
+  // SEEN without a manual click. Never while a send is in flight, and
+  // only a real change re-renders.
+  useEffect(() => {
+    if (busy || reading !== null) return;
+    const t = setInterval(() => {
+      void api
+        .chatHistory(agent.agent_id)
+        .then(({ items }) => {
+          if (!items || items.length === 0) return;
+          const mapped = fromServerTurns(items);
+          setThread((current) =>
+            mapped.length !== current.length ? mapped : current,
+          );
+        })
+        .catch(() => {});
+    }, 30_000);
+    return () => clearInterval(t);
+  }, [agent.agent_id, busy, reading]);
 
   // Attachments on the News thread: raw material for the desk — a
   // photo, a clip, a song — uploaded from the device (the blob door
@@ -1032,6 +1273,18 @@ export function AgentThread({ agent }: { agent: RosterAgent }) {
     }
   }
 
+  // An open story replaces the thread with the reader — the whole pane
+  // for the whole story, with a way back (the FileView pattern).
+  if (reading !== null) {
+    return (
+      <StoryReader
+        key={reading}
+        storyId={reading}
+        onBack={() => setReading(null)}
+      />
+    );
+  }
+
   return (
     <div className="chat">
       <div className="chat-head">
@@ -1045,7 +1298,7 @@ export function AgentThread({ agent }: { agent: RosterAgent }) {
         {/* The press (A1) lives at the head of the News thread: the
             contribution shelf and the contribute form — in-thread, the
             inlineBlock pattern, never a window popping on top. */}
-        {agent.agent_id === "news" && <PressPanel />}
+        {agent.agent_id === "news" && <PressPanel onOpenStory={setReading} />}
         {/* The marketplace: every function block as a form block IN
             this conversation — shop, requests, approvals, orders,
             sell — plus the brief and the list-out. */}
@@ -1067,6 +1320,15 @@ export function AgentThread({ agent }: { agent: RosterAgent }) {
             {m.text}
             {/* What rode along: previews with a lossless download. */}
             {m.kind === "user" && <AttachmentStrip files={m.files} />}
+            {/* The pushed edition (N0): previews expandable to the
+                full story — opening one starts the honest reading
+                measurement. */}
+            {m.block?.kind === "story" && (
+              <StoryPreviewBlock
+                items={m.block.items}
+                onOpen={setReading}
+              />
+            )}
             {/* The block in the bubble: the genre chips whose tap
                 speaks back into the conversation. */}
             {m.block?.kind === "genres" && (

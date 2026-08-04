@@ -120,7 +120,15 @@ function loadThread(): Msg[] {
 function fromServer(items: ChatHistoryTurn[]): Msg[] {
   return items.map((turn): Msg => {
     if (turn.kind === "run") return { kind: "run", runId: turn.body };
-    if (turn.kind === "assistant") return { kind: "assistant", text: turn.body };
+    if (turn.kind === "assistant") {
+      return {
+        kind: "assistant",
+        text: turn.body,
+        // A persisted chart block re-renders after reload — the same
+        // bubble on every device.
+        block: turn.block?.kind === "chart" ? turn.block : null,
+      };
+    }
     return { kind: "user", text: turn.body, files: turn.files };
   });
 }

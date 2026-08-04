@@ -9,10 +9,12 @@ vi.mock("../device", () => ({
   pickLocalFiles: vi.fn(async () => [
     new File(["x"], "pier.jpg", { type: "image/jpeg" }),
   ]),
+  // The inline fallback saveToDrawer takes on a blob-less host.
   fileToDrawerContent: vi.fn(async () => ({
     content: "data:image/jpeg;base64,eA==",
     mediaType: "image/jpeg",
   })),
+  saveToDevice: vi.fn(),
 }));
 
 // The press panel (A1): the shelf and the contribute form live at the
@@ -87,6 +89,98 @@ const GENRES = {
     ],
   },
 };
+
+describe("The story reader (N0)", () => {
+  it("expands the pushed story block into the reader and measures the read", async () => {
+    routes["GET /v1/press/genres"] = GENRES;
+    routes["GET /v1/press/contributions"] = { status: 200, body: { items: [] } };
+    routes["GET /v1/press/stories"] = { status: 200, body: { items: [] } };
+    // The edition landed server-side as the News agent's own turn — the
+    // story block PERSISTED with it, so a fresh device renders it.
+    routes["GET /v1/chat/history"] = {
+      status: 200,
+      body: {
+        items: [
+          {
+            seq: 1,
+            kind: "assistant",
+            body: "Good morning — your edition:",
+            at: "t",
+            agent: "news",
+            block: {
+              kind: "story",
+              items: [
+                {
+                  story_id: "s1",
+                  headline: "The pier queues again",
+                  preview: "Forty stalls…",
+                  genres: ["local"],
+                  bylines: ["alice"],
+                },
+              ],
+            },
+          },
+        ],
+      },
+    };
+    routes["GET /v1/press/stories/s1"] = {
+      status: 200,
+      body: {
+        story_id: "s1",
+        headline: "The pier queues again",
+        prose: "Forty stalls this morning.",
+        genres: ["local"],
+        lineage: [{ contribution_id: "c1", author: "alice", weight: 1 }],
+        rubric_version: 1,
+        source: "desk",
+        created_at: "t",
+        media: [],
+      },
+    };
+    routes["GET /v1/press/stories/s1/metrics"] = {
+      status: 200,
+      body: { story_id: "s1", revealed: false, reason: "not enough readers yet" },
+    };
+    routes["GET /v1/profiles/alice"] = {
+      status: 200,
+      body: { username: "alice", display_name: "Alice", has_photo: false },
+    };
+    routes["POST /v1/press/stories/s1/feedback"] = {
+      status: 200,
+      body: { recorded: true },
+    };
+    render(<AgentThread agent={NEWS} />);
+
+    // The block renders from the persisted history; the tap opens the
+    // reader — the pane, with a way back.
+    fireEvent.click(await screen.findByText("The pier queues again"));
+    expect(
+      await screen.findByText("Forty stalls this morning."),
+    ).toBeTruthy();
+    // Below the floor, the benchmark line is the honest reason.
+    expect(await screen.findByText("not enough readers yet")).toBeTruthy();
+
+    // The like tap counts (and echoes the verdict).
+    fireEvent.click(screen.getByLabelText("Like"));
+    expect(await screen.findByText("noted")).toBeTruthy();
+
+    // Leaving sends ONE read receipt with the honest measurements: the
+    // dwell, and completion (the whole story was visible).
+    fireEvent.click(screen.getByText("← back"));
+    const read = calls.find(
+      (c) =>
+        c.method === "POST" &&
+        c.path === "/v1/press/stories/s1/feedback" &&
+        (c.body as { signal?: string }).signal === "read",
+    );
+    expect(read).toBeTruthy();
+    const receipt = read!.body as { dwell_ms: number; completed: boolean };
+    expect(receipt.completed).toBe(true);
+    expect(typeof receipt.dwell_ms).toBe("number");
+    // And the thread is back, block still standing.
+    expect(await screen.findByText(/your edition/)).toBeTruthy();
+  });
+});
 
 describe("PressPanel (inside the News thread)", () => {
   it("renders the shelf with bylines and credits a retelling", async () => {

@@ -2,10 +2,11 @@
 
 Born on the poll floor (A3) and OUTLIVING it: the ``press_pairwise``
 table was always the generic store — the source column names who wrote
-the row so story feedback, reader surveys, and future instruments share
-one book in the DPO trainer's own vocabulary. The poll floor is gone
-(the Poll agent is removed); the book, and the member's right to export
-and erase it, stand.
+the row so any future instrument shares one book in the DPO trainer's
+own vocabulary. The poll floor is gone (the Poll agent is removed); the
+book, and the member's right to export and erase it, stand. Its next
+WRITER is the reader-survey desk (news-agent-benchmark-roadmap N3) —
+today nothing writes it, and the export honestly answers empty.
 
 Every row is written ONLY under the member's ``press.personalize``
 consent (checked at the doors), scrub-checked again at export (defense

@@ -48,6 +48,7 @@ from .intake import (
     looks_like_material,
     review,
 )
+from .metrics import METRICS_K_FLOOR, StoryMetricsStore
 from .newsroom import LineageShare, Newsroom, Story, StoryStore
 from .pairwise import PairwiseStore
 from .personalize import (
@@ -72,6 +73,7 @@ __all__ = [
     "MAX_BODY_CHARS",
     "MAX_MEDIA",
     "MAX_TITLE_CHARS",
+    "METRICS_K_FLOOR",
     "RUBRIC_VERSION",
     "SEMANTIC_PULL",
     "SIMILARITY_FLAG",
@@ -91,6 +93,7 @@ __all__ = [
     "PressError",
     "RubricBreakdown",
     "Story",
+    "StoryMetricsStore",
     "StoryStore",
     "draft_from_material",
     "edition_message",

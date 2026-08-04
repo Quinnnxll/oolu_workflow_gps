@@ -4,6 +4,33 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+N0 landed — the benchmark's measuring stick
+(docs/news-agent-benchmark-roadmap.md, phase N0):
+
+- **Reading is measured, honestly** — `press/metrics.py`: one read
+  receipt per (story, member) — the longest dwell stands, completion
+  once true stays true — and one idempotent like; recorded ONLY under
+  `press.personalize` (consent off → nothing per-member is written and
+  the door says so); erasure rides account deletion and the aggregates
+  honestly shrink. The three benchmark numbers (opens, likes, mean
+  attention, completion rate) answer at
+  `GET /v1/press/stories/{id}/metrics` — revealed only above the
+  k-anonymity floor, "not enough readers yet" below it.
+- **The story is finally something a member can OPEN** — the edition
+  pulse lands a `story` block of previews beside its words; blocks now
+  PERSIST with their turns (`assistant_turns.block`, migrated in
+  place — genre chips and charts survive reload too); tapping a
+  preview swaps the pane for the full-story reader (the FileView
+  pattern — a way back, never a popped window), which measures dwell
+  and scroll-completion and sends ONE `read` receipt on the way out.
+  The News thread re-reads on a quiet 30-second rhythm, so a pushed
+  edition is seen without a manual click.
+- **Review fixes ridden along** — `saveToDrawer` falls back inline
+  ONLY when the host keeps no blob store (404); a real refusal (413,
+  5xx) propagates instead of silently degrading; the poll tables drop
+  on the production Postgres adapter too (durable schema version 3);
+  media components adopt the cancelled-fetch guard.
+
 The Poll agent removed; attachments become first-class; the News-agent
 benchmark roadmap (docs/news-agent-benchmark-roadmap.md):
 

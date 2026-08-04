@@ -593,6 +593,9 @@ export interface ChatHistoryTurn {
   at: string;
   agent?: string;
   files?: TurnFileRef[];
+  // The turn's structured block, persisted with it — the same bubble
+  // on every device, reload included.
+  block?: ChatTurnBlock | null;
 }
 
 // ---- the agent roster (A0) --------------------------------------------------
@@ -621,9 +624,34 @@ export interface PressGenre {
   description: string;
 }
 
+// A story as the pushed block carries it (N0): a pointer and the first
+// lines — the full story is fetched through the detail door when the
+// reader opens it.
+export interface StoryPreview {
+  story_id: string;
+  headline: string;
+  preview: string;
+  genres: string[];
+  bylines: string[];
+}
+
+// The benchmark numbers for one story — revealed only above the
+// k-anonymity floor; below it the honest reason and nothing else.
+export interface StoryMetrics {
+  story_id: string;
+  revealed: boolean;
+  reason?: string;
+  opens?: number;
+  likes?: number;
+  mean_attention_ms?: number;
+  completion_rate?: number;
+}
+
 // A structured piece riding a roster agent's reply — e.g. the genre
-// chips whose tap speaks back into the conversation.
+// chips whose tap speaks back into the conversation, or the pushed
+// edition's story previews.
 export type ChatTurnBlock =
+  | { kind: "story"; items: StoryPreview[] }
   | { kind: "genres"; items: PressGenre[] }
   | { kind: "categories"; items: { category: string; followed: boolean }[] }
   | {
@@ -1524,11 +1552,33 @@ export const api = {
       personalized: boolean;
       edition_schedule: EditionSchedule | null;
     }>("GET", "/v1/press/stories"),
-  pressStoryFeedback: (storyId: string, signal: "like" | "read" | "skip") =>
+  // A read carries the honest measurements from the reading surface —
+  // how long the open story held the reader, and whether they reached
+  // the end (the benchmark's spine, N0).
+  pressStoryFeedback: (
+    storyId: string,
+    signal: "like" | "read" | "skip",
+    measure?: { dwellMs: number; completed: boolean },
+  ) =>
     req<{ recorded: boolean; reason?: string }>(
       "POST",
       `/v1/press/stories/${encodeURIComponent(storyId)}/feedback`,
-      { signal },
+      {
+        signal,
+        ...(measure
+          ? { dwell_ms: Math.round(measure.dwellMs), completed: measure.completed }
+          : {}),
+      },
+    ),
+  pressStoryDetail: (storyId: string) =>
+    req<Story>(
+      "GET",
+      `/v1/press/stories/${encodeURIComponent(storyId)}`,
+    ),
+  pressStoryMetrics: (storyId: string) =>
+    req<StoryMetrics>(
+      "GET",
+      `/v1/press/stories/${encodeURIComponent(storyId)}/metrics`,
     ),
   pressNewsroomRun: () =>
     req<{ composed: number; items: Story[] }>(
@@ -1927,7 +1977,14 @@ export const api = {
     const text = await res.text();
     const data = text ? JSON.parse(text) : {};
     if (!res.ok) {
-      throw new Error(data?.error?.message ?? data?.error ?? `${res.status}`);
+      // The status rides the error so callers can tell "this host keeps
+      // no blob store" (404 — fall back inline) from a real refusal
+      // (413 too large, 5xx — propagate, never silently degrade).
+      const error = new Error(
+        data?.error?.message ?? data?.error ?? `${res.status}`,
+      ) as Error & { status?: number };
+      error.status = res.status;
+      throw error;
     }
     return data as FileMeta;
   },
@@ -1941,10 +1998,12 @@ export const api = {
   },
   // The ONE way a device file lands in the drawer: the blob door first —
   // TRUE bytes, no downscale, no base64, so what comes back down is
-  // exactly what went up (lossless by construction). Only a host without
-  // a blob store falls back to the inline row, within its 1 MB budget;
-  // there an image is downscaled and an oversized file refuses in words —
-  // an honest limit, never a silently degraded copy on a capable host.
+  // exactly what went up (lossless by construction). ONLY a host that
+  // keeps no blob store (the door 404s) falls back to the inline row,
+  // within its 1 MB budget — there an image is downscaled and an
+  // oversized file refuses in words. Every other blob failure (413 too
+  // large, a 5xx, a dead network) propagates: a real refusal must never
+  // become a silently degraded copy.
   saveToDrawer: async (
     file: File,
     nodeId?: string,
@@ -1952,7 +2011,8 @@ export const api = {
   ): Promise<FileMeta> => {
     try {
       return await api.uploadFileBytes(file, nodeId, folder);
-    } catch {
+    } catch (e) {
+      if ((e as { status?: number }).status !== 404) throw e;
       const { content, mediaType } = await fileToDrawerContent(file);
       return await api.createFile(file.name, content, nodeId, folder, mediaType);
     }

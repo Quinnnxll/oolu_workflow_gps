@@ -66,14 +66,16 @@ function ListingMediaItem({
   const [blob, setBlob] = useState<Blob | null>(null);
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
+    let cancelled = false;
     let held: string | null = null;
     void api.commerceListingMediaBlob(listingId, index).then((bytes) => {
-      if (!bytes) return;
+      if (!bytes || cancelled) return;
       held = URL.createObjectURL(bytes);
       setBlob(bytes);
       setUrl(held);
     });
     return () => {
+      cancelled = true;
       if (held) URL.revokeObjectURL(held);
     };
   }, [listingId, index]);

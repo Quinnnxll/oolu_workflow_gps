@@ -306,6 +306,26 @@ const STRINGS: Record<string, Entry> = {
     es: "no registrado: la personalización está desactivada",
     fr: "non enregistré — la personnalisation est désactivée",
   },
+  // The reading surface (N0): the expandable story and its honest
+  // benchmark numbers.
+  "press.open": {
+    en: "Read the full story",
+    zh: "阅读全文",
+    es: "Leer la historia completa",
+    fr: "Lire l'histoire complète",
+  },
+  "press.backToThread": {
+    en: "← back",
+    zh: "← 返回",
+    es: "← volver",
+    fr: "← retour",
+  },
+  "press.metricsLine": {
+    en: "{opens} readers · {pct}% finished · {likes} 👍",
+    zh: "{opens} 位读者 · {pct}% 读完 · {likes} 👍",
+    es: "{opens} lectores · {pct}% terminaron · {likes} 👍",
+    fr: "{opens} lecteurs · {pct}% terminé · {likes} 👍",
+  },
   // The ad house (A4): the consent card and the sponsored slot.
   "ads.consentTitle": {
     en: "Sponsored placements — with your say",
@@ -3244,6 +3264,9 @@ const ZH_HANT: Record<string, string> = {
   "press.skip": "略過",
   "press.noted": "已記錄",
   "press.notRecorded": "未記錄——個人化未開啟",
+  "press.open": "閱讀全文",
+  "press.backToThread": "← 返回",
+  "press.metricsLine": "{opens} 位讀者 · {pct}% 讀完 · {likes} 👍",
   "ads.consentTitle": "贊助內容——由你決定",
   "ads.consentBody":
     "隱私政策已更新（第 3 版）：News 可能出現明確標註的贊助內容，匹配在平台內部完成，收入與投稿者分享。個人資料絕不出售或提供給廣告主。你接受之前不會顯示任何廣告——拒絕也不會失去任何功能。",

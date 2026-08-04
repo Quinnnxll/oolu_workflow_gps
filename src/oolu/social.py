@@ -217,6 +217,7 @@ _TURNS_SCHEMA = """CREATE TABLE IF NOT EXISTS assistant_turns (
     at TEXT NOT NULL,
     agent TEXT NOT NULL DEFAULT 'oolu',
     files TEXT NOT NULL DEFAULT '[]',
+    block TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (tenant_id, principal, seq)
 )"""
 
@@ -240,6 +241,7 @@ class AssistantHistoryStore:
             db.execute(_TURNS_SCHEMA)
         self._migrate_agent_column()
         self._migrate_files_column()
+        self._migrate_block_column()
 
     def _migrate_agent_column(self) -> None:
         # Tables born before the roster lack the agent column. The probe
@@ -272,6 +274,21 @@ class AssistantHistoryStore:
                 " ADD COLUMN files TEXT NOT NULL DEFAULT '[]'"
             )
 
+    def _migrate_block_column(self) -> None:
+        # Tables born before persistent blocks lack the column; old
+        # turns were words (and files) only.
+        try:
+            with self._conn.transaction() as db:
+                db.execute("SELECT block FROM assistant_turns LIMIT 1")
+            return
+        except Exception:
+            pass
+        with self._conn.transaction() as db:
+            db.execute(
+                "ALTER TABLE assistant_turns"
+                " ADD COLUMN block TEXT NOT NULL DEFAULT ''"
+            )
+
     def append(
         self,
         *,
@@ -281,6 +298,7 @@ class AssistantHistoryStore:
         body: str,
         agent: str = DEFAULT_AGENT,
         files: list[dict] | None = None,
+        block: dict | None = None,
     ) -> int:
         if kind not in ("user", "assistant", "run"):
             raise ValueError(f"unknown turn kind: {kind}")
@@ -298,6 +316,15 @@ class AssistantHistoryStore:
             for f in (files or [])
             if isinstance(f, dict) and f.get("file_id")
         ]
+        # The turn's structured block (a story block, genre chips, a
+        # chart) persists WITH the turn, so every device renders the
+        # same bubble after a reload — a block that only lived in one
+        # response was a block only one screen ever saw.
+        block_json = (
+            json.dumps(block)
+            if isinstance(block, dict) and block.get("kind")
+            else ""
+        )
         with self._conn.transaction() as db:
             row = db.execute(
                 "SELECT COALESCE(MAX(seq), 0) AS top FROM assistant_turns"
@@ -307,8 +334,9 @@ class AssistantHistoryStore:
             seq = int(row["top"]) + 1
             db.execute(
                 """INSERT INTO assistant_turns
-                     (tenant_id, principal, seq, kind, body, at, agent, files)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                     (tenant_id, principal, seq, kind, body, at, agent,
+                      files, block)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     tenant,
                     principal,
@@ -318,6 +346,7 @@ class AssistantHistoryStore:
                     self._clock().isoformat(),
                     agent,
                     json.dumps(refs),
+                    block_json,
                 ),
             )
             # The messenger cap, per thread: each agent's old turns fall
@@ -372,7 +401,7 @@ class AssistantHistoryStore:
             args.append(str(agent))
         with self._conn.lock:
             rows = self._conn.db.execute(
-                f"""SELECT seq, kind, body, at, agent, files
+                f"""SELECT seq, kind, body, at, agent, files, block
                     FROM assistant_turns
                    WHERE {where}
                    ORDER BY seq DESC LIMIT ?""",
@@ -386,6 +415,7 @@ class AssistantHistoryStore:
                 "at": row["at"],
                 "agent": row["agent"],
                 "files": self._files_of(row),
+                "block": self._block_of(row),
             }
             for row in reversed(rows)
         ]
@@ -399,6 +429,16 @@ class AssistantHistoryStore:
         except Exception:
             return []
         return parsed if isinstance(parsed, list) else []
+
+    @staticmethod
+    def _block_of(row) -> dict | None:
+        # A row from before the column, an empty one, or junk reads as
+        # no block — never a crash on old history.
+        try:
+            parsed = json.loads(row["block"] or "")
+        except Exception:
+            return None
+        return parsed if isinstance(parsed, dict) and parsed.get("kind") else None
 
 
 # --------------------------------------------------------------------------- #

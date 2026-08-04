@@ -249,8 +249,9 @@ describe("FilesPane", () => {
   });
 
   it("a refused upload lands as words next to the successes", async () => {
-    // The blob door said no AND the inline budget can't hold it either:
-    // the refusal is the inline door's honest words, never a silent skip.
+    // The blob door said no with a REAL refusal (413): it propagates as
+    // the door's own honest words — the inline row is never attempted,
+    // because a too-large refusal must not become a degraded copy.
     routes["GET /v1/files"] = { status: 200, body: FILES };
     routes["POST /v1/files/upload"] = {
       status: 413,
@@ -259,9 +260,7 @@ describe("FilesPane", () => {
     vi.mocked(pickLocalFiles).mockResolvedValue([
       new File(["x"], "huge.bin"),
     ]);
-    vi.mocked(fileToDrawerContent).mockRejectedValue(
-      new Error("huge.bin is too large for the drawer (1 MB cap)"),
-    );
+    vi.mocked(fileToDrawerContent).mockClear();
     render(<FilesPane />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Add" }));
@@ -269,7 +268,8 @@ describe("FilesPane", () => {
       screen.getByRole("button", { name: "Upload from device" }),
     );
 
-    expect(await screen.findByText(/too large for the drawer/)).toBeTruthy();
+    expect(await screen.findByText(/file exceeds/)).toBeTruthy();
+    expect(vi.mocked(fileToDrawerContent)).not.toHaveBeenCalled();
     expect(
       calls.some((c) => c.method === "POST" && c.path === "/v1/files"),
     ).toBe(false);

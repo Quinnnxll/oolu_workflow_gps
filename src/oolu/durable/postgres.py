@@ -250,6 +250,18 @@ def _migrate_pg(pg: Any) -> None:
     current = int(row["version"]) if row else 0
     if current < DURABLE_SCHEMA_VERSION:
         _create_pg_schema(pg)
+        if current < 3:
+            # Version 3: the poll floor is closed (the Poll agent was
+            # removed) — its tables leave on the production adapter
+            # exactly as on the local one, so no member's vote lingers
+            # unreachable. The pairwise preference book stays.
+            for table in (
+                "poll_pairs",
+                "poll_votes",
+                "poll_genre_stats",
+                "poll_findings",
+            ):
+                pg.execute(f"DROP TABLE IF EXISTS {table}")
         pg.execute(
             "INSERT INTO durable_schema_version (label, version) VALUES (%s, %s)"
             " ON CONFLICT (label) DO UPDATE SET version = EXCLUDED.version",

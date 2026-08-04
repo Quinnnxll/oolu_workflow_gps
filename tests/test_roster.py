@@ -231,6 +231,34 @@ def test_attachments_ride_the_turn_as_refs_and_survive_reload(tmp_path):
     conn.close()
 
 
+def test_blocks_persist_with_the_turn_and_junk_reads_as_none(tmp_path):
+    conn, store = _history(tmp_path)
+    # A structured block rides the turn — the same bubble on every
+    # device, reload included.
+    store.append(
+        tenant="t1",
+        principal="alice",
+        kind="assistant",
+        body="your edition",
+        agent="news",
+        block={"kind": "story", "items": [{"story_id": "s1", "headline": "H"}]},
+    )
+    # A kindless dict is no block; words-only turns read as None.
+    store.append(
+        tenant="t1",
+        principal="alice",
+        kind="assistant",
+        body="plain words",
+        agent="news",
+        block={"items": []},
+    )
+    turns = store.history(tenant="t1", principal="alice", agent="news")
+    assert turns[0]["block"]["kind"] == "story"
+    assert turns[0]["block"]["items"][0]["story_id"] == "s1"
+    assert turns[1]["block"] is None
+    conn.close()
+
+
 def test_a_pre_attachment_table_migrates_and_old_turns_read_clean(tmp_path):
     conn = DurableConnection(tmp_path / "old.db")
     # A table born before attachments: agent column, no files column.

@@ -331,8 +331,9 @@ def test_the_ad_flow_end_to_end(tmp_path):
     assert balances["ad_budget_liability"] == -1_000_000
     assert sum(balances.values()) == 0
 
-    # Consent first: before accepting privacy v2, the surface holds no
-    # ads for bob — the reason is named, nothing renders.
+    # Consent first: before accepting the current privacy version,
+    # the surface holds no ads for bob — the reason is named,
+    # nothing renders.
     held = gateway.handle(
         _req(
             "GET",
