@@ -11,6 +11,8 @@ import type {
   Story,
   StoryMetrics,
   StoryPreview,
+  SurveyRow,
+  SurveyVerdict,
   TravelBrief,
   TurnFileRef,
 } from "../api";
@@ -35,6 +37,7 @@ import { MarketPanel } from "./Market";
 // own deadline.
 type ChatBlock =
   | { kind: "story"; items: StoryPreview[] }
+  | { kind: "survey"; survey: SurveyRow }
   | { kind: "genres"; items: PressGenre[] }
   | { kind: "categories"; items: { category: string; followed: boolean }[] }
   | {
@@ -283,6 +286,62 @@ export function StoryPreviewBlock({
           </span>
         </button>
       ))}
+    </div>
+  );
+}
+
+// The desk's question, as a MESSAGE BLOCK (N3): one question, typed
+// options, the honest "why am I seeing this". One answer per member —
+// idempotent server-side; the reveal follows the floor's law verbatim.
+export function SurveyBlock({ survey }: { survey: SurveyRow }) {
+  const tr = useT();
+  const [verdict, setVerdict] = useState<SurveyVerdict | null>(null);
+  const [busy, setBusy] = useState(false);
+  const mine = verdict?.choice || survey.mine || "";
+
+  async function answer(choice: string) {
+    if (busy || mine) return;
+    setBusy(true);
+    try {
+      setVerdict(await api.pressSurveyAnswer(survey.survey_id, choice));
+    } catch {
+      /* the desk's next words tell the truth */
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="survey-block">
+      <div className="press-title">{survey.question}</div>
+      <div className="muted survey-reason">{survey.reason}</div>
+      <div className="survey-options">
+        {survey.options.map((option) => (
+          <button
+            key={option.key}
+            type="button"
+            className={`survey-option${mine === option.key ? " chosen" : ""}`}
+            disabled={busy || mine !== ""}
+            onClick={() => void answer(option.key)}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+      {verdict && (
+        <div className="muted survey-verdict">
+          {verdict.recorded === false
+            ? tr("press.notRecorded")
+            : verdict.revealed && verdict.counts
+              ? survey.options
+                  .map(
+                    (o) =>
+                      `${o.label}: ${verdict.counts?.[o.key] ?? 0}`,
+                  )
+                  .join(" · ")
+              : (verdict.reason ?? tr("press.noted"))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1328,6 +1387,11 @@ export function AgentThread({ agent }: { agent: RosterAgent }) {
                 items={m.block.items}
                 onOpen={setReading}
               />
+            )}
+            {/* The desk's question (N3): one answer, counted above
+                the floor — never a feed. */}
+            {m.block?.kind === "survey" && (
+              <SurveyBlock survey={m.block.survey} />
             )}
             {/* The block in the bubble: the genre chips whose tap
                 speaks back into the conversation. */}

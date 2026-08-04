@@ -406,6 +406,29 @@ holds over the press package.
 
 ### N3 — the survey desk (ask the members, honestly)
 
+**Status: LANDED** — `press/surveys.py`: `compose_survey` derives ONE
+question deterministically from a topic brief (a corroborated cluster
+asks "which telling serves the reader better?" with the two pieces as
+options — the `telling` kind; every other brief asks "is this worth a
+full story?" — the `editorial` kind, fixed typed options); the desk
+tick (on the pulse) closes expired questions (48 h TTL) and opens ONE
+survey at a time for the top not-yet-surveyed brief — research, not a
+feed. The random sample is bounded (12), drawn from the consented
+edition subscribers with a RECORDED seed (the desk doctrine), and the
+question block lands in each sampled member's News thread with the
+honest "why am I seeing this"; any member volunteers through
+`GET /v1/press/surveys` or the "surveys" ask. The answer laws:
+consent first (off → unrecorded, and the door says so), one answer
+once (idempotent; changing refused), the reveal above `SURVEY_K_FLOOR`
+only (counts, never a name), erasure removes answers AND sample rows
+so aggregates honestly shrink. A consented `telling` answer writes the
+member's own `press_pairwise` row — the book's first writer since the
+poll floor closed; the DPO export door needed no change. The typed
+SOURCE ROW (`SurveyDesk.result_row`: survey id, topic key, question,
+sample size, floored aggregate) stands ready for N4 to cite, and the
+respondent set is retained pseudonymously for N6's split. Pinned by
+`tests/test_survey_desk.py` and the survey case in `Agents.test.tsx`.
+
 Goal: the pipeline's one instrument for what records cannot tell —
 reader opinion — rebuilt on the News desk, without the poll floor's
 social-feed shape.

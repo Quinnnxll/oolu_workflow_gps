@@ -67,6 +67,18 @@ from .personalize import (
     taste_snippet,
 )
 from .standards import RUBRIC_VERSION, RubricBreakdown, score, select
+from .surveys import (
+    SURVEY_K_FLOOR,
+    SURVEY_SAMPLE_SIZE,
+    SURVEY_TTL_HOURS,
+    SURVEY_VERSION,
+    Survey,
+    SurveyDesk,
+    SurveyOption,
+    SurveyStore,
+    compose_survey,
+    draw_sample,
+)
 from .taxonomy import GENRES, TAXONOMY_VERSION, Genre, taxonomy_items
 from .topics import (
     TOPIC_VERSION,
@@ -107,6 +119,10 @@ __all__ = [
     "RUBRIC_VERSION",
     "SEMANTIC_PULL",
     "SIMILARITY_FLAG",
+    "SURVEY_K_FLOOR",
+    "SURVEY_SAMPLE_SIZE",
+    "SURVEY_TTL_HOURS",
+    "SURVEY_VERSION",
     "TAXONOMY_VERSION",
     "TOPIC_VERSION",
     "TOPICS_PER_RUN",
@@ -130,11 +146,17 @@ __all__ = [
     "Story",
     "StoryMetricsStore",
     "StoryStore",
+    "Survey",
+    "SurveyDesk",
+    "SurveyOption",
+    "SurveyStore",
     "TopicBrief",
     "TopicBriefStore",
     "TopicCandidate",
+    "compose_survey",
     "demand_line",
     "draft_from_material",
+    "draw_sample",
     "edition_message",
     "fold_answer",
     "rank_demand",

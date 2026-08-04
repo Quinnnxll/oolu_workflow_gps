@@ -684,6 +684,33 @@ export interface TopicBriefRow {
   computed_at: string;
 }
 
+// The survey desk (N3): one open question with typed options — every
+// answer voluntary, consent-gated, counted anonymously above a floor.
+export interface SurveyRow {
+  survey_id: string;
+  topic_key: string;
+  kind: string; // "telling" | "editorial"
+  question: string;
+  reason: string; // the honest "why am I seeing this"
+  status: string;
+  options: { key: string; label: string }[];
+  opened_at: string;
+  // The caller's own standing answer ("" when none) — a device never
+  // offers a second one.
+  mine?: string;
+}
+
+export interface SurveyVerdict {
+  recorded: boolean;
+  reason?: string;
+  survey_id?: string;
+  answered?: boolean;
+  choice?: string;
+  revealed?: boolean;
+  counts?: Record<string, number>;
+  total?: number;
+}
+
 // The benchmark numbers for one story — revealed only above the
 // k-anonymity floor; below it the honest reason and nothing else.
 export interface StoryMetrics {
@@ -701,6 +728,7 @@ export interface StoryMetrics {
 // edition's story previews.
 export type ChatTurnBlock =
   | { kind: "story"; items: StoryPreview[] }
+  | { kind: "survey"; survey: SurveyRow }
   | { kind: "genres"; items: PressGenre[] }
   | { kind: "categories"; items: { category: string; followed: boolean }[] }
   | {
@@ -1637,6 +1665,16 @@ export const api = {
   // factors, disclosures born with the topic.
   pressTopics: () =>
     req<{ items: TopicBriefRow[] }>("GET", "/v1/press/topics"),
+  // The survey desk (N3): what is open, and one idempotent answer —
+  // consent-gated server-side, the floor guarding every reveal.
+  pressSurveys: () =>
+    req<{ items: SurveyRow[] }>("GET", "/v1/press/surveys"),
+  pressSurveyAnswer: (surveyId: string, choice: string) =>
+    req<SurveyVerdict>(
+      "POST",
+      `/v1/press/surveys/${encodeURIComponent(surveyId)}/answer`,
+      { choice },
+    ),
   pressNewsroomRun: () =>
     req<{ composed: number; items: Story[] }>(
       "POST",

@@ -2809,6 +2809,46 @@ button.ghost {
   text-align: left;
 }
 
+/* The survey block (N3): one question, typed options, the honest why. */
+.survey-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.survey-reason {
+  font-size: 0.85em;
+}
+
+.survey-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.survey-option {
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.survey-option:hover:not(:disabled) {
+  border-color: hsl(210 45% 44%);
+}
+
+.survey-option.chosen {
+  border-color: hsl(210 45% 44%);
+  box-shadow: 0 0 0 1px hsl(210 45% 44%);
+}
+
+.survey-verdict {
+  font-size: 0.9em;
+}
+
 /* The taps speak emoji — a touch larger than the words they replaced. */
 .press-tap {
   font-size: 1.15em;

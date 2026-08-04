@@ -74,19 +74,23 @@ def _press_desk(conn):
         PressDesk,
         StoryMetricsStore,
         StoryStore,
+        SurveyDesk,
+        SurveyStore,
         TopicBriefStore,
     )
 
     contributions = ContributionStore(conn)
+    pairwise = PairwiseStore(conn)
     return PressDesk(
         contributions,
         stories=StoryStore(conn),
         preferences=PreferenceStore(conn),
-        pairwise=PairwiseStore(conn),
+        pairwise=pairwise,
         intake=IntakeStore(conn),
         metrics=StoryMetricsStore(conn),
         demand=GenreDemandStore(conn),
         topics=TopicBriefStore(conn),
+        surveys=SurveyDesk(SurveyStore(conn), pairwise),
     )
 
 

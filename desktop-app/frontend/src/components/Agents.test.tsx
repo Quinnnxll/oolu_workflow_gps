@@ -182,6 +182,79 @@ describe("The story reader (N0)", () => {
   });
 });
 
+describe("The survey block (N3)", () => {
+  it("asks once, answers once, and echoes the floor's honest words", async () => {
+    routes["GET /v1/press/genres"] = GENRES;
+    routes["GET /v1/press/contributions"] = { status: 200, body: { items: [] } };
+    routes["GET /v1/press/stories"] = { status: 200, body: { items: [] } };
+    // The desk's question landed as a persisted block — a sampled
+    // member's thread renders it on any device.
+    routes["GET /v1/chat/history"] = {
+      status: 200,
+      body: {
+        items: [
+          {
+            seq: 1,
+            kind: "assistant",
+            body: "You're one of 1 members drawn at random for a desk question.",
+            at: "t",
+            agent: "news",
+            block: {
+              kind: "survey",
+              survey: {
+                survey_id: "s1",
+                topic_key: "cluster:c1",
+                kind: "telling",
+                question: "Which telling serves the reader better?",
+                reason: "Counted anonymously — nothing renders below 5.",
+                status: "open",
+                options: [
+                  { key: "left", label: "“Harbor market reopened” by alice" },
+                  { key: "right", label: "“Market back at the harbor” by bob" },
+                ],
+                opened_at: "t",
+                mine: "",
+              },
+            },
+          },
+        ],
+      },
+    };
+    routes["POST /v1/press/surveys/s1/answer"] = {
+      status: 200,
+      body: {
+        recorded: true,
+        survey_id: "s1",
+        answered: true,
+        choice: "left",
+        revealed: false,
+        reason: "not enough answers yet",
+      },
+    };
+    render(<AgentThread agent={NEWS} />);
+
+    // The question block renders with the honest why…
+    expect(
+      await screen.findByText("Which telling serves the reader better?"),
+    ).toBeTruthy();
+    expect(screen.getByText(/Counted anonymously/)).toBeTruthy();
+    // …one tap answers…
+    fireEvent.click(
+      screen.getByText("“Harbor market reopened” by alice"),
+    );
+    expect(await screen.findByText("not enough answers yet")).toBeTruthy();
+    const posted = calls.find(
+      (c) => c.method === "POST" && c.path === "/v1/press/surveys/s1/answer",
+    );
+    expect(posted?.body).toMatchObject({ choice: "left" });
+    // …and the options lock: one answer, once, on this device too.
+    expect(
+      (screen.getByText("“Market back at the harbor” by bob") as
+        HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+});
+
 describe("PressPanel (inside the News thread)", () => {
   it("renders the shelf with bylines and credits a retelling", async () => {
     routes["GET /v1/press/genres"] = GENRES;

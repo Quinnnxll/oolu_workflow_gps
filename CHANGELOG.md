@@ -4,6 +4,34 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+N3 landed — the survey desk
+(docs/news-agent-benchmark-roadmap.md, phase N3):
+
+- **Ask the members what the records cannot tell** —
+  `press/surveys.py`: one question per topic brief, composed
+  deterministically (a corroborated cluster asks WHICH TELLING serves
+  the reader, with the two pieces as options; everything else asks
+  whether the subject is worth a full story). The desk tick opens ONE
+  survey at a time for the slate's top unsurveyed brief and closes
+  questions past their 48-hour TTL — research, not a feed.
+- **Two collection modes, both in conversation** — a bounded random
+  sample (12) of consented edition subscribers, drawn with a RECORDED
+  seed (the desk doctrine), gets the question block landed in their
+  News thread with the honest "why am I seeing this"; any member
+  volunteers through `GET /v1/press/surveys` or the "surveys" ask.
+- **The answer laws** — consent first (`press.personalize` off means
+  UNRECORDED, and the door says so); one answer once (idempotent,
+  changing refused — the first answer is the answer); the reveal only
+  at or above the k-floor (counts, never a name, never an individual
+  answer anywhere); erasure removes the member's answers and sample
+  rows and the aggregates honestly shrink.
+- **The pairwise book gains its writer** — a consented telling-kind
+  answer writes the member's own DPO-shaped `press_pairwise` row; the
+  export door needed no change. The typed survey SOURCE ROW (id,
+  topic, question, sample size, floored aggregate) stands ready for
+  N4 to cite, and the respondent set is retained pseudonymously for
+  N6's revenue split.
+
 The desk doctrine — Thompson sampling lands in the genre and topic
 desks (N1 v2 / N2 v2; docs/news-agent-benchmark-roadmap.md, Part III):
 

@@ -1279,6 +1279,14 @@ class GatewayApp:
         # The topic desk (N2): the standing slate — typed evidence,
         # named factors, disclosures born with the topic.
         r.add("GET", "/v1/press/topics", self._press_topics)
+        # The survey desk (N3): open questions and one idempotent,
+        # consent-gated answer per member — results above the floor.
+        r.add("GET", "/v1/press/surveys", self._press_surveys)
+        r.add(
+            "POST",
+            "/v1/press/surveys/{survey_id}/answer",
+            self._press_survey_answer,
+        )
         r.add("GET", "/v1/press/contributions", self._press_list)
         r.add("POST", "/v1/press/contributions", self._press_publish)
         r.add(
@@ -2718,6 +2726,11 @@ class GatewayApp:
     _NEWS_TOPIC_ASKS = frozenset(
         {"topics", "topic", "slate", "the slate", "beat", "the beat"}
     )
+    # The survey desk's ask (N3): what is open, and the newest question
+    # as a block any member can volunteer an answer to.
+    _NEWS_SURVEY_ASKS = frozenset(
+        {"surveys", "survey", "open surveys", "questions"}
+    )
 
     def _news_intake_turn(self, session, body, message):
         """The News desk's hand on one thread message — or None when the
@@ -2794,6 +2807,41 @@ class GatewayApp:
 
                 briefs = self._topic_reading(session.tenant_id)
                 return (topics_line(briefs), None, "desk")
+            if (
+                normal in self._NEWS_SURVEY_ASKS
+                and press.surveys is not None
+            ):
+                open_surveys = press.surveys.store.list(
+                    tenant=session.tenant_id, status="open"
+                )
+                if not open_surveys:
+                    return (
+                        "No question is open right now — the desk opens "
+                        "one when the slate has a subject worth asking "
+                        "about.",
+                        None,
+                        "desk",
+                    )
+                newest = open_surveys[0]
+                return (
+                    f"One question is open ({len(open_surveys)} total). "
+                    "Every answer is voluntary, counted anonymously "
+                    "above the floor.",
+                    None,
+                    "desk",
+                    {
+                        "kind": "survey",
+                        "survey": self._survey_dict(
+                            newest,
+                            mine=press.surveys.store.answer_of(
+                                newest.survey_id,
+                                tenant=session.tenant_id,
+                                principal=session.principal_id,
+                            )
+                            or "",
+                        ),
+                    },
+                )
             # A named stream: the tap is an ANONYMOUS interest count —
             # no principal rides the row — and the desk answers with
             # that stream's standing in the demand reading.
@@ -4040,6 +4088,156 @@ class GatewayApp:
             )
         return briefs
 
+    @staticmethod
+    def _survey_dict(survey, *, mine: str | None = None) -> dict:
+        payload = {
+            "survey_id": survey.survey_id,
+            "topic_key": survey.topic_key,
+            "kind": survey.kind,
+            "question": survey.question,
+            "reason": survey.reason,
+            "status": survey.status,
+            "options": [
+                {"key": o.key, "label": o.label} for o in survey.options
+            ],
+            "opened_at": survey.opened_at.isoformat(),
+        }
+        if mine is not None:
+            payload["mine"] = mine
+        return payload
+
+    def _survey_tick(self, tenant: str) -> None:
+        """The survey desk's housekeeping (N3), on the pulse: expired
+        surveys close; with none open and a slate standing, ONE survey
+        opens for the top not-yet-surveyed brief — the question composed
+        deterministically, the random sample drawn from the consented
+        edition subscribers with a RECORDED seed, and the question
+        block landed in each sampled member's News thread with the
+        honest "why am I seeing this". One survey at a time: research,
+        not a feed."""
+        import random as _random
+
+        from ..press import EDITION_PULSE_GOAL, compose_survey, draw_sample
+
+        press = self._press
+        if press is None or press.surveys is None or press.topics is None:
+            return
+        desk = press.surveys
+        desk.close_expired(tenant=tenant)
+        if desk.store.list(tenant=tenant, status="open"):
+            return
+        briefs = press.topics.reading(tenant=tenant)
+        surveyed = {
+            s.topic_key for s in desk.store.list(tenant=tenant, limit=100)
+        }
+        brief = next(
+            (b for b in briefs if b["topic_key"] not in surveyed), None
+        )
+        if brief is None:
+            return
+        seed = self._draw_seed()
+        survey = compose_survey(
+            {**brief, "tenant_id": tenant},
+            survey_id=str(uuid4()),
+            opened_at=self._clock(),
+            draw_seed=seed,
+        )
+        desk.store.insert(survey)
+        # The sample frame: this tenant's edition subscribers who hold
+        # the personalization consent — the members who already asked
+        # the News desk to speak to them.
+        frame: list[str] = []
+        for schedule in self._pulse.all_enabled():
+            if (
+                schedule.tenant != tenant
+                or schedule.goal != EDITION_PULSE_GOAL
+            ):
+                continue
+            effective = (
+                self._settings.effective(tenant, schedule.principal)
+                if self._settings is not None
+                else {}
+            )
+            if effective.get("press.personalize") is True:
+                frame.append(schedule.principal)
+        sampled = draw_sample(frame, rng=_random.Random(seed))
+        desk.store.record_sample(
+            survey.survey_id, tenant=tenant, principals=sampled
+        )
+        if self._assistant_history is not None:
+            for principal in sampled:
+                self._assistant_history.append(
+                    tenant=tenant,
+                    principal=principal,
+                    kind="assistant",
+                    body=(
+                        "You're one of "
+                        f"{len(sampled)} members drawn at random for a "
+                        f"desk question. {survey.reason}"
+                    ),
+                    agent="news",
+                    block={
+                        "kind": "survey",
+                        "survey": self._survey_dict(survey),
+                    },
+                )
+
+    def _press_surveys(self, request, session, params) -> Response:
+        """The open surveys — any member may volunteer an answer; the
+        caller's own standing answer rides along so a device never
+        offers a second one."""
+        press = self._require_press()
+        if press.surveys is None:
+            raise GatewayError(
+                404, "not_found", "this host keeps no survey desk"
+            )
+        desk = press.surveys
+        items = [
+            self._survey_dict(
+                survey,
+                mine=desk.store.answer_of(
+                    survey.survey_id,
+                    tenant=session.tenant_id,
+                    principal=session.principal_id,
+                )
+                or "",
+            )
+            for survey in desk.store.list(
+                tenant=session.tenant_id, status="open"
+            )
+        ]
+        return json_response(200, {"items": items})
+
+    def _press_survey_answer(self, request, session, params) -> Response:
+        """One idempotent answer, consent first: participation requires
+        the member's own `press.personalize` — off means UNRECORDED,
+        and the answer says so. A telling-kind answer also writes the
+        member's own pairwise preference row (the book's writer)."""
+        from ..press import PressError
+
+        press = self._require_press()
+        if press.surveys is None:
+            raise GatewayError(
+                404, "not_found", "this host keeps no survey desk"
+            )
+        if not self._press_personalized(session):
+            return json_response(
+                200, {"recorded": False, "reason": "personalization is off"}
+            )
+        choice = str((request.body or {}).get("choice") or "").strip()
+        try:
+            verdict = press.surveys.answer(
+                params["survey_id"],
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+                choice=choice,
+                learning=True,
+            )
+        except PressError as exc:
+            raise self._press_refused(exc) from exc
+        verdict["recorded"] = True
+        return json_response(200, verdict)
+
     def _press_topics(self, request, session, params) -> Response:
         """The standing slate — every brief with its evidence rows,
         factor breakdown, and disclosure. The second editorial
@@ -4417,6 +4615,10 @@ class GatewayApp:
             try:
                 self._genre_demand_reading(schedule.tenant)
                 self._topic_reading(schedule.tenant)
+                # The survey desk's tick (N3): expired questions close;
+                # a fresh one opens for the slate's top unsurveyed
+                # brief, its sample drawn and its blocks landed.
+                self._survey_tick(schedule.tenant)
             except Exception:  # noqa: BLE001 - the edition already landed
                 logging.getLogger("oolu.gateway").exception(
                     "desk reading failed for %s", schedule.schedule_id
@@ -9864,6 +10066,13 @@ class GatewayApp:
             # Reading receipts and likes go with the account; the
             # story aggregates honestly shrink.
             erased["reader_metrics"] = self._press.metrics.erase(
+                tenant=tenant, principal=principal
+            )
+        if self._press is not None and self._press.surveys is not None:
+            # Survey answers and sample memberships go with the account
+            # — the aggregates honestly shrink, the sample honestly
+            # narrows.
+            erased["survey_rows"] = self._press.surveys.store.erase(
                 tenant=tenant, principal=principal
             )
         erased["calendar_events"] = self._calendar.erase(
