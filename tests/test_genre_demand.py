@@ -1,18 +1,22 @@
-"""The genre desk (N1): which genre are readers interested in, on evidence.
+"""The genre desk (N1 v2): which genre are readers interested in, on evidence.
 
-Exit gate (news-agent-benchmark-roadmap, phase N1): the ranking is
-reproducible from its recorded inputs; every rank carries its factor
-breakdown and raw evidence; a genre with zero evidence ranks by the
-exploration rule and SAYS so (the one bounded trial slot promotes the
-best explorer to second place, deterministically — never a random
-draw); the reader floor gates the engagement factor — a number is
-never faked from two receipts; the interest book is anonymous by
-schema (no principal column exists to leak); and no model call happens
-anywhere in the decision — the desk answers on a host with no brain at
-all.
+Exit gate (news-agent-benchmark-roadmap, phase N1, amended): the
+ranking THOMPSON-SAMPLES the completion posterior — cold start
+explores by construction, an unlucky early record keeps earning
+re-tests, and the desk never locks into a cumulative suboptimal
+choice — while staying auditable: the same seed replays the same
+reading exactly, and the gateway records every reading's seed. Every
+rank carries its factor breakdown and raw evidence; below the reader
+floor the row is flagged ``explored`` (ranked on a draw, honestly
+named); rng=None is the deterministic posterior-mean reading; the
+interest book is anonymous by schema (no principal column exists to
+leak); and no model call happens anywhere in the decision — the desk
+answers on a host with no brain at all.
 """
 
 from __future__ import annotations
+
+import random
 
 from test_http_gateway import _app, _req
 
@@ -52,7 +56,7 @@ def _evidenced(readers=DEMAND_READER_FLOOR, opens=None, completions=0,
     )
 
 
-def test_the_ranking_is_reproducible_and_explains_itself():
+def test_a_seeded_reading_replays_exactly_and_explains_itself():
     inputs = dict(
         genres=GENRE_SET,
         engagement={
@@ -62,28 +66,69 @@ def test_the_ranking_is_reproducible_and_explains_itself():
         taps={"food": 2, "science": 6},
         supply={"food": 4, "local": 2, "science": 1},
     )
-    first = rank_demand(**inputs)
-    second = rank_demand(**inputs)
-    # Same inputs, same order, same breakdowns — reproducibility IS the
-    # audit.
-    assert first == second
+    first = rank_demand(**inputs, rng=random.Random(7))
+    replay = rank_demand(**inputs, rng=random.Random(7))
+    # Stored inputs + stored seed = the SAME reading — auditable
+    # stochasticity, the amended reproducibility law.
+    assert first == replay
     assert [d.rank for d in first] == [1, 2, 3]
     for item in first:
         assert set(item.factors) == {"engagement", "interest", "supply"}
+        assert isinstance(item.factors["engagement"], float)
         assert set(item.evidence) == {
             "readers", "opens", "completions", "likes", "taps", "pieces",
         }
-    # Food's finished, lingered-over, liked stories lead; the unmeasured
-    # science stream takes the trial slot at SECOND place and says so.
-    assert first[0].genre == "food" and first[0].explored is False
-    assert first[1].genre == "science" and first[1].explored is True
-    assert first[1].factors["engagement"] is None
-    assert first[2].genre == "local" and first[2].explored is False
+    # Below the reader floor the rank rests on a draw — and says so.
+    by_genre = {d.genre: d for d in first}
+    assert by_genre["food"].explored is False
+    assert by_genre["science"].explored is True
+    # A different seed may order differently: the draw is the draw.
+    other = rank_demand(**inputs, rng=random.Random(8))
+    assert {d.genre for d in other} == {d.genre for d in first}
 
 
-def test_the_reader_floor_gates_the_engagement_factor():
-    # One reader short of the floor: the engagement factor is honestly
-    # ABSENT — never a number faked from a handful of receipts.
+def test_cold_start_explores_and_never_locks_in():
+    # One incumbent with a mediocre record vs one stone-cold genre.
+    inputs = dict(
+        genres=("food", "science"),
+        engagement={
+            "food": _evidenced(readers=20, opens=20, completions=8),
+        },
+        taps={},
+        supply={"food": 1, "science": 1},
+    )
+    leaders = [
+        rank_demand(**inputs, rng=random.Random(seed))[0].genre
+        for seed in range(100)
+    ]
+    # The cold genre wins SOME mornings (cold start explores) and the
+    # evidenced incumbent wins others (evidence still counts): the desk
+    # neither starves the newcomer nor abandons the record. A
+    # deterministic rule would pick one winner 100 times out of 100 —
+    # the cumulative suboptimal lock-in this amendment removes.
+    assert 0 < leaders.count("science") < 100
+
+
+def test_evidence_narrows_the_posterior_and_earns_the_lead():
+    # A strong, well-read record leads almost always — sampling is not
+    # noise: the posterior tightens as the evidence grows.
+    inputs = dict(
+        genres=("food", "science"),
+        engagement={
+            "food": _evidenced(readers=60, opens=60, completions=55),
+        },
+        taps={},
+        supply={"food": 1, "science": 1},
+    )
+    leaders = [
+        rank_demand(**inputs, rng=random.Random(seed))[0].genre
+        for seed in range(100)
+    ]
+    assert leaders.count("food") > 80
+
+
+def test_the_reader_floor_flags_the_draw_and_rng_none_is_the_mean():
+    # Below the floor: flagged explored — ranked on a draw, named.
     short = rank_demand(
         genres=("food",),
         engagement={
@@ -92,44 +137,29 @@ def test_the_reader_floor_gates_the_engagement_factor():
         },
         taps={},
         supply={"food": 1},
+        rng=random.Random(1),
     )
     assert short[0].explored is True
-    assert short[0].factors["engagement"] is None
     at_floor = rank_demand(
         genres=("food",),
         engagement={"food": _evidenced(completions=3)},
         taps={},
         supply={"food": 1},
+        rng=random.Random(1),
     )
     assert at_floor[0].explored is False
-    assert at_floor[0].factors["engagement"] is not None
-
-
-def test_a_floor_with_no_evidence_is_exploration_end_to_end():
-    items = rank_demand(
-        genres=GENRE_SET,
-        engagement={},
-        taps={"local": 3},
-        supply={"food": 1},
+    # rng=None: the deterministic posterior-mean reading — same call,
+    # twice, identical; the opt-out for certain-and-specific callers.
+    mean_one = rank_demand(
+        genres=GENRE_SET, engagement={}, taps={"local": 3}, supply={}
     )
-    assert all(item.explored for item in items)
-    # Partial scores order the explorers; ties break by name — still
-    # deterministic, still explained.
-    assert items[0].genre == "local"  # taps lead the partial blend
-    words = demand_line(items, {"local": "Around me"})
-    assert "Around me (trial)" in words
-
-
-def test_the_trial_slot_is_bounded_to_one():
-    items = rank_demand(
-        genres=("food", "local", "science", "results"),
-        engagement={"food": _evidenced(completions=5)},
-        taps={"science": 2, "results": 1},
-        supply={"local": 3},
+    mean_two = rank_demand(
+        genres=GENRE_SET, engagement={}, taps={"local": 3}, supply={}
     )
-    # One evidenced leader, ONE promoted explorer, the rest behind.
-    assert [d.genre for d in items[:2]] == ["food", "science"]
-    assert [d.explored for d in items] == [False, True, True, True]
+    assert mean_one == mean_two
+    assert all(item.explored for item in mean_one)
+    words = demand_line(mean_one, {mean_one[0].genre: "Around me"})
+    assert "(trial)" in words
 
 
 # --------------------------------------------------------------------------- #
@@ -192,8 +222,9 @@ def test_the_standing_reading_replaces_whole(tmp_path):
     reading = store.reading(tenant="t1")
     # Never a mixed vintage: the second reading replaced the first.
     assert [r["genre"] for r in reading] == ["food"]
-    assert reading[0]["factors"]["engagement"] is None
     assert reading[0]["evidence"]["taps"] == 1
+    # No seed was passed: the reading honestly records none.
+    assert reading[0]["draw_seed"] is None
     conn.close()
 
 
@@ -253,7 +284,8 @@ def test_the_demand_door_and_the_news_desk_speak_the_reading(tmp_path):
     )
 
     # The door: a full reading, ranks 1..N, every row explained. With
-    # no readers anywhere, every genre honestly explores.
+    # no readers anywhere, every genre honestly explores — and the
+    # reading records the seed its draws replay from.
     reading = gateway.handle(
         _req("GET", "/v1/press/genres/demand", token=alice)
     )
@@ -261,9 +293,10 @@ def test_the_demand_door_and_the_news_desk_speak_the_reading(tmp_path):
     items = reading.body["items"]
     assert [r["rank"] for r in items] == list(range(1, len(items) + 1))
     assert all(r["explored"] for r in items)
-    assert items[0]["genre"] == "food"  # supply leads the partial blend
-    assert items[0]["factors"]["engagement"] is None
-    assert items[0]["evidence"]["pieces"] == 1
+    assert all(isinstance(r["factors"]["engagement"], float) for r in items)
+    assert all(isinstance(r["draw_seed"], int) for r in items)
+    food = next(r for r in items if r["genre"] == "food")
+    assert food["evidence"]["pieces"] == 1
 
     # Naming a stream in the News thread is an ANONYMOUS tap — counted,
     # answered with the stream's standing, no principal anywhere.

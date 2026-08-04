@@ -4,6 +4,39 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The desk doctrine — Thompson sampling lands in the genre and topic
+desks (N1 v2 / N2 v2; docs/news-agent-benchmark-roadmap.md, Part III):
+
+- **Deterministic route, thinking insides.** The determinism law splits
+  along its true seam: the ROUTE between desks (slots, gates, SOP
+  edges) stays exact and model-free; INSIDE a desk, sampled decisions
+  are legitimate — and recorded. The first cut's deterministic trial
+  slot had a real defect: tie-broken exploration locks onto the same
+  cold genre forever, and an unlucky early record never earns a
+  re-test — cumulative suboptimal choice.
+- **N1 v2 (`DEMAND_VERSION = 2`)** — the completion evidence is a Beta
+  posterior and `rank_demand` THOMPSON-SAMPLES it: cold start explores
+  by construction, wide posteriors keep earning re-tests, tight ones
+  converge (both statistically pinned in tests). Below the reader
+  floor the row is flagged `explored` — ranked on a draw, honestly
+  named. Every reading records its draw seed, so a sampled decision
+  replays exactly from stored inputs plus stored seed; `rng=None` is
+  the deterministic posterior-mean reading.
+- **N2 v2 (`TOPIC_VERSION = 2`)** — the last slate slot is an
+  exploration draw: a Thompson sample over the topic kinds waiting
+  outside the slate, from each kind's served/engaged book
+  (`press_topic_kind_stats`; the engaged writer arrives with N4). The
+  chosen row is flagged `explored`, the reading records its seed, and
+  the slate never locks into the same shapes on early luck.
+- **The observer seat, named** — each desk node will carry an observing
+  agentic model reading the desk's non-numeric residue and filing
+  issue proposals with fix plans; the owner's approval (the standing
+  approval path) turns a proposal into a node replacement and a
+  re-pave. Builds with N7/P4 — named in the doctrine, not faked. And
+  the node-hood criterion: work that is fully deterministic over
+  certain, specific data opts OUT of the route — library code inside a
+  desk, never a routed node.
+
 N2 landed — the topic desk and the marketplace beat
 (docs/news-agent-benchmark-roadmap.md, phase N2):
 

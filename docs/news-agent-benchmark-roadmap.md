@@ -184,6 +184,41 @@ Paver re-bridges, re-derives the gates, REHEARSES the new web
 end-to-end in the sandbox, and only a clean pass promotes. The stale
 desk never limps along silently.
 
+**The desk doctrine, amended (2026-08): deterministic route, thinking
+insides.** The first cut of N1/N2 made the desks deterministic end to
+end and paid for it with a real defect: a tie-broken trial slot locks
+onto the same cold genre forever, and an unlucky early record never
+earns a re-test — cumulative suboptimal choice. The amendment splits
+the determinism law along its true seam:
+
+1. **The ROUTE is deterministic.** Which desk feeds which, the slot
+   contracts, the gates, the SOP edges — exact matching, no model, no
+   draw. Unchanged.
+2. **Inside a desk, sampled decisions are legitimate — and recorded.**
+   Where evidence is a posterior, the desk THOMPSON-SAMPLES it (cold
+   start explores by construction; wide posteriors keep earning
+   re-tests; tight ones converge). Every reading records its draw
+   seed, so a sampled decision replays exactly from its stored inputs
+   plus its stored seed: auditable stochasticity, not forbidden
+   stochasticity. Landed in N1 v2 (the completion posterior) and
+   N2 v2 (the slate's exploration slot over topic kinds).
+3. **Inside a desk, model judgment over non-numeric data is
+   legitimate — behind the observer seat.** Each desk node carries an
+   OBSERVING agentic model: it reads the desk's readings and its
+   non-numeric residue (member words, subjects, refusal logs, the
+   things no threshold can type), and when it finds an issue it files
+   a PROPOSAL with a fix plan. The proposal is words plus evidence
+   refs; the OWNER's approval — the standing approval path, never a
+   silent adoption — turns it into a node replacement and a re-pave.
+   Models propose, the owner disposes, the type system enforces.
+   (The observer seat builds with N7/P4 — named here, not faked.)
+4. **Fully deterministic work opts OUT of the route.** Work that needs
+   and only needs deterministic operation — certain, specific data in,
+   one right answer out (a rollup, a schema migration, a normalizer) —
+   is library code inside a desk, not a routed node. Node-hood is for
+   work that carries uncertainty worth observing; giving a pure
+   function a node's costume wastes an observer on nothing.
+
 **Platform prerequisites (P-series)** — real gaps in today's machinery
 that this build needs, named so nothing is faked:
 
@@ -271,13 +306,16 @@ erasure removes the member's rows and the aggregate honestly shrinks.
 
 ### N1 — the genre desk (which genre are people interested in)
 
-**Status: LANDED** — `press/demand.py`: `rank_demand`, the
-deterministic, model-free ranking (engagement 0.5 / interest 0.3 /
-supply 0.2, versioned `DEMAND_VERSION`), every rank carrying its factor
-breakdown and raw evidence; the reader floor gates the engagement
-factor (below it the factor is honestly absent); ONE bounded trial
-slot promotes the best unevidenced genre to second place,
-deterministically. `GenreDemandStore` holds the standing reading
+**Status: LANDED (v2)** — `press/demand.py`: `rank_demand`
+(engagement 0.5 / interest 0.3 / supply 0.2, `DEMAND_VERSION = 2`),
+every rank carrying its factor breakdown and raw evidence. **v2
+amendment (the desk doctrine):** the completion evidence is a Beta
+posterior and the desk THOMPSON-SAMPLES it — cold start explores by
+construction, unlucky records keep earning re-tests, no cumulative
+lock-in; every reading records its draw seed so the sampled decision
+replays exactly; below the reader floor the row is flagged `explored`
+(ranked on a draw, honestly named); `rng=None` gives the deterministic
+posterior-mean reading. `GenreDemandStore` holds the standing reading
 (whole-replacement, never a mixed vintage) and the anonymous interest
 book — no principal column exists by schema.
 `StoryMetricsStore.genre_evidence` rolls N0's signals up per genre
@@ -296,24 +334,28 @@ Goal: the first editorial decision reads evidence, not keyword hints.
   genre-affinity distributions across consented members, contribution
   supply per genre, and the genre-chips asks members tap in the News
   thread (landed with this commit — the chips re-homed from the poll).
-- The decision: a deterministic ranking with named factors (the
-  Explorer brief's discipline — every factor shown, the breakdown
-  stored), refreshed on the pulse. Exploration is principled: an
-  under-evidenced genre gets a bounded trial slot, on evidence, never
-  on an editor's hunch.
+- The decision: a ranking with named factors (the Explorer brief's
+  discipline — every factor shown, the breakdown stored), refreshed on
+  the pulse. Exploration is principled: the completion posterior is
+  Thompson-sampled (the desk doctrine), so cold genres explore by
+  construction and no early record locks the order in — with every
+  reading's draw seed recorded.
 - Output: `press_genre_demand` — ranked genres, each with its evidence
   breakdown, queryable and rendered in the News thread on ask
   ("genres" answers with the chips AND the current demand reading).
 
-Exit gate: the ranking is reproducible from its recorded inputs; every
-rank carries its breakdown; a genre with zero evidence ranks by the
-exploration rule and says so; no model call anywhere in the decision.
+Exit gate: a reading replays exactly from its recorded inputs plus its
+recorded draw seed; every rank carries its breakdown; a genre below the
+reader floor is flagged as exploring and says so; cold start explores
+and strong evidence converges (both statistically pinned); no model
+call anywhere in the decision.
 
 ### N2 — the topic desk and the marketplace beat
 
-**Status: LANDED** — `press/topics.py`: four deterministic miners over
-typed rows (the gateway hands them in; the press package imports no
-marketplace module and the import scan holds): `mine_price_moves` (the
+**Status: LANDED (v2)** — `press/topics.py` (`TOPIC_VERSION = 2`):
+four deterministic miners over typed rows (the gateway hands them in;
+the press package imports no marketplace module and the import scan
+holds): `mine_price_moves` (the
 discount FACT past a 10% floor), `mine_trust_bands` (order-book trust
 in the concern/proven bands, only with a real book behind the number),
 `mine_measured_gaps` (lab vs verified-review factors splitting ≥0.35,
@@ -324,8 +366,14 @@ twinned). Law 3 from birth: the gateway stamps advertiser/promoted
 flags onto the beat rows (`_beat_rows`) and every candidate carries
 its named disclosure before selection. `select_topics` blends demand
 (N1's standing reading) 0.4 / evidence 0.35 / freshness 0.25 with the
-breakdown stored; `TopicBriefStore` refuses a brief without facts
-(provenance mandatory) and replaces the slate whole. Doors:
+breakdown stored. **v2 amendment (the desk doctrine):** the last slate
+slot is an exploration draw — a Thompson sample over the topic kinds
+waiting outside the slate, from each kind's served/engaged book
+(`press_topic_kind_stats`; the engaged side's writer arrives with N4).
+The chosen row is flagged `explored`, the reading records its draw
+seed, and `rng=None` keeps the pure ranked slate. `TopicBriefStore`
+refuses a brief without facts (provenance mandatory) and replaces the
+slate whole. Doors:
 `GET /v1/press/topics`; "topics"/"slate"/"beat" in the News thread
 speaks the slate with every disclosure; the edition pulse re-mines the
 beat after the demand refresh. Pinned by `tests/test_topic_desk.py`
@@ -497,7 +545,13 @@ in words on `/v1/paver/webs`.
    nobody measures yet would be built blind.
 6. **The closed loop does not open.** "Research" means the platform's
    own typed records — the import-scan law is untouched in every phase.
-7. **Node-first is the architecture, not a precondition.** Each desk
+7. **The desk doctrine (amended 2026-08).** The route between desks
+   is deterministic; INSIDE a desk, Thompson-sampled decisions (seed
+   recorded, replayable) and observer-model judgment over non-numeric
+   data (proposal → owner approval → re-pave) are legitimate; work
+   that is fully deterministic over certain, specific data opts out of
+   the route as library code. Landed as N1 v2 / N2 v2.
+8. **Node-first is the architecture, not a precondition.** Each desk
    ships as an ordinary testable stage and is contributed as a node
    when the P-series lands; the slot vocabulary is fixed NOW so the
    later paving is a survey, not a rewrite.

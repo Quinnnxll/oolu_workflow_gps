@@ -3872,13 +3872,26 @@ class GatewayApp:
                     )
         return payload
 
+    @staticmethod
+    def _draw_seed() -> int:
+        """A fresh seed for a desk's Thompson draws — minted from the
+        system's entropy, RECORDED with the reading it steered, so the
+        sampled decision replays exactly. Auditable stochasticity: the
+        route stays deterministic; the desk's insides may explore."""
+        import random as _random
+
+        return _random.SystemRandom().getrandbits(32)
+
     def _genre_demand_reading(self, tenant: str):
-        """The genre desk's decision (N1), computed fresh from its
+        """The genre desk's decision (N1 v2), computed fresh from its
         recorded inputs and RECORDED as the standing reading: N0's
-        engagement rolled up per genre, the anonymous interest taps,
-        and live supply. Deterministic end to end — no model call
-        anywhere in the decision. Returns [] on a host without the
-        desk's stores."""
+        engagement rolled up per genre (Thompson-sampled from its
+        posterior — cold start explores by construction), the anonymous
+        interest taps, and live supply. No model call anywhere in the
+        decision; the draw seed rides the reading. Returns [] on a
+        host without the desk's stores."""
+        import random as _random
+
         from ..press import GENRES, rank_demand
 
         press = self._press
@@ -3901,13 +3914,15 @@ class GatewayApp:
         for record in press.store.list(tenant=tenant, limit=500):
             for genre in record.genres:
                 supply[genre] = supply.get(genre, 0) + 1
+        seed = self._draw_seed()
         items = rank_demand(
             genres=sorted(GENRES),
             engagement=evidence,
             taps=press.demand.taps(tenant=tenant),
             supply=supply,
+            rng=_random.Random(seed),
         )
-        press.demand.record(tenant=tenant, items=items)
+        press.demand.record(tenant=tenant, items=items, seed=seed)
         return items
 
     def _beat_rows(self, tenant: str):
@@ -4004,8 +4019,25 @@ class GatewayApp:
                 else []
             )
         }
-        briefs = select_topics(candidates, demand_rank=demand_rank, now=now)
-        press.topics.record(tenant=tenant, briefs=briefs)
+        import random as _random
+
+        seed = self._draw_seed()
+        briefs = select_topics(
+            candidates,
+            demand_rank=demand_rank,
+            now=now,
+            rng=_random.Random(seed),
+            kind_book=press.topics.kind_book(tenant=tenant),
+        )
+        press.topics.record(tenant=tenant, briefs=briefs, seed=seed)
+        # The kind book's served side: every kind that made the slate
+        # is one more deal; the engaged side arrives with N4, when a
+        # composed story cites its brief and the receipts flow back.
+        if briefs:
+            press.topics.bump_served(
+                tenant=tenant,
+                kinds=sorted({b.key.split(":", 1)[0] for b in briefs}),
+            )
         return briefs
 
     def _press_topics(self, request, session, params) -> Response:

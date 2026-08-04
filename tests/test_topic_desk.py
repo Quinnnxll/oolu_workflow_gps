@@ -277,6 +277,65 @@ def test_the_slate_words_speak_every_disclosure():
     assert "Disclosure: seller kettleworks" in words
 
 
+def test_the_exploration_slot_draws_a_waiting_kind_and_replays():
+    import random
+
+    # Three price deals fill the slate; a cluster and a trust story wait
+    # outside it. With a cold kind book, the Thompson draw rotates a
+    # waiting KIND into the last slot — the slate never locks into the
+    # same shapes on early luck.
+    deals = mine_price_moves(
+        [
+            _row(listing_id=f"l{i}", list_price_micros=40_000_000,
+                 discount_percent=30 - i)
+            for i in range(3)
+        ],
+        now=NOW,
+    )
+    waiting = [
+        *mine_clusters(
+            [
+                _piece("c1", "alice", "Harbor market reopened", HARBOR),
+                _piece("c2", "bob", "Market back at the harbor", HARBOR_AGREE),
+            ]
+        ),
+        *mine_trust_bands(
+            [
+                _row(
+                    listing_id="l9",
+                    trust={"score": 0.2, "finished": 2, "refunded": 2,
+                           "disputed": 1, "basis": "book"},
+                )
+            ],
+            now=NOW,
+        ),
+    ]
+    candidates = [*deals, *waiting]
+    inputs = dict(
+        demand_rank={"products": 1, "local": 2},
+        now=NOW,
+        kind_book={"cluster": (0, 0), "trust": (0, 0)},
+    )
+    drawn = select_topics(candidates, **inputs, rng=random.Random(3))
+    # The last slot went to a waiting kind, flagged and explained.
+    assert drawn[-1].explored is True
+    assert drawn[-1].key.split(":")[0] in {"cluster", "trust"}
+    assert "exploration_draw" in drawn[-1].factors
+    assert [b.explored for b in drawn[:-1]] == [False, False]
+    # The same seed replays the same slate exactly.
+    assert drawn == select_topics(candidates, **inputs, rng=random.Random(3))
+    # Across seeds, BOTH waiting kinds get their mornings — no lock-in.
+    trial_kinds = {
+        select_topics(candidates, **inputs, rng=random.Random(seed))[-1]
+        .key.split(":")[0]
+        for seed in range(40)
+    }
+    assert {"cluster", "trust"} <= trial_kinds
+    # rng=None stays the pure ranked slate — no draw, nothing explored.
+    plain = select_topics(candidates, demand_rank=inputs["demand_rank"], now=NOW)
+    assert all(b.explored is False for b in plain)
+
+
 # --------------------------------------------------------------------------- #
 # The store: provenance mandatory, whole vintages.                             #
 # --------------------------------------------------------------------------- #
@@ -367,6 +426,10 @@ def test_the_topics_door_and_the_news_desk_speak_the_slate(tmp_path):
     assert {f["kind"] for f in items[0]["facts"]} == {"contribution"}
     assert set(items[0]["factors"]) == {"demand", "evidence", "freshness"}
     assert items[0]["disclosure"] == ""
+    # The reading records its draw seed, and the kind book counted the
+    # served slate — the exploration ledger the draws will read.
+    assert isinstance(items[0]["draw_seed"], int)
+    assert press.topics.kind_book(tenant="t1") == {"cluster": (1, 0)}
 
     spoken = gateway.handle(
         _req(

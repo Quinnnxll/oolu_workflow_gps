@@ -21,14 +21,22 @@ The laws, from the roadmap:
   carries the named disclosure on the candidate itself, before any
   selection, composition, or rendering.
 - **Selection is a blend of named factors** — demand (N1's reading),
-  evidence weight, freshness — versioned, recorded with its breakdown,
-  reproducible from its inputs.
+  evidence weight, freshness — versioned, recorded with its breakdown.
+
+Version 2's amendment (the route/desk doctrine): the last slate slot
+is an EXPLORATION DRAW — a Thompson sample over the topic kinds still
+waiting outside the slate, from each kind's served/engaged book. A
+cold kind draws from the wide prior (cold start explores by
+construction); a kind over-served on early luck decays. The chosen
+row is flagged ``explored`` and every draw replays from the reading's
+recorded seed — auditable stochasticity, never a locked-in slate.
 """
 
 from __future__ import annotations
 
 import json
 import math
+import random
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Callable, Mapping, Sequence
@@ -36,7 +44,7 @@ from typing import Callable, Mapping, Sequence
 from .contributions import PressError
 from .standards import AGREE_MIN, agreement
 
-TOPIC_VERSION = 1
+TOPIC_VERSION = 2
 # How many briefs a reading selects — a slate, not a firehose.
 TOPICS_PER_RUN = 3
 # The discount fact becomes a story at or past this floor.
@@ -120,6 +128,7 @@ class TopicBrief:
     rank: int
     score: float
     factors: dict = field(default_factory=dict)
+    explored: bool = False  # took the exploration slot on a draw
 
 
 def _disclosure(row: BeatRow) -> str:
@@ -350,16 +359,31 @@ def mine_clusters(pieces: Sequence[ClusterPiece]) -> list[TopicCandidate]:
 # --------------------------------------------------------------------------- #
 # Selection — demand, evidence, freshness; every factor named.                 #
 # --------------------------------------------------------------------------- #
+def _kind_of(key: str) -> str:
+    return key.split(":", 1)[0]
+
+
 def select_topics(
     candidates: Sequence[TopicCandidate],
     *,
     demand_rank: Mapping[str, int],
     now: datetime,
     limit: int = TOPICS_PER_RUN,
+    rng: random.Random | None = None,
+    kind_book: Mapping[str, tuple[int, int]] | None = None,
 ) -> list[TopicBrief]:
-    """The slate: deterministic, explained, reproducible. ``demand_rank``
-    is the genre desk's standing reading (genre → rank); an unranked
-    genre honestly scores zero demand."""
+    """The slate: explained and replayable. ``demand_rank`` is the genre
+    desk's standing reading (genre → rank; the reading itself is
+    Thompson-sampled upstream, so exploration propagates); an unranked
+    genre honestly scores zero demand.
+
+    With ``rng`` and a ``kind_book`` ({kind: (served, engaged)} — how
+    often each topic KIND made the slate vs earned reading), the LAST
+    slate slot is an exploration draw: a Thompson sample over the kinds
+    still waiting outside the slate. Cold kinds draw from the wide
+    prior, over-served kinds with nothing to show decay — the slate
+    never locks into the same shapes on early luck. The chosen row is
+    flagged ``explored``; every draw replays from the recorded seed."""
     ranks = {g: int(r) for g, r in demand_rank.items() if int(r) > 0}
     top = max(ranks.values(), default=0)
     scored = []
@@ -388,6 +412,38 @@ def select_topics(
         }
         scored.append((score, candidate, factors))
     scored.sort(key=lambda s: (-s[0], s[1].key))
+    slate = list(scored[:limit])
+    explored_key: str | None = None
+    rest = scored[limit:]
+    if rng is not None and rest and slate:
+        # The exploration slot: Thompson over the WAITING kinds' books.
+        # served/engaged is the kind's record; a cold kind is the wide
+        # prior — cold start explores by construction.
+        book = kind_book or {}
+        waiting_kinds = sorted({_kind_of(c.key) for _, c, _ in rest})
+        draws = {
+            kind: rng.betavariate(
+                book.get(kind, (0, 0))[1] + 1,
+                max(book.get(kind, (0, 0))[0] - book.get(kind, (0, 0))[1], 0)
+                + 1,
+            )
+            for kind in waiting_kinds
+        }
+        slate_kinds = {_kind_of(c.key) for _, c, _ in slate}
+        challenger_kind = max(draws, key=lambda k: (draws[k], k))
+        if challenger_kind not in slate_kinds:
+            challenger = next(
+                entry
+                for entry in rest
+                if _kind_of(entry[1].key) == challenger_kind
+            )
+            score, candidate, factors = challenger
+            factors = {
+                **factors,
+                "exploration_draw": round(draws[challenger_kind], 4),
+            }
+            slate[-1] = (score, candidate, factors)
+            explored_key = candidate.key
     return [
         TopicBrief(
             key=candidate.key,
@@ -398,8 +454,9 @@ def select_topics(
             rank=index + 1,
             score=score,
             factors=factors,
+            explored=candidate.key == explored_key,
         )
-        for index, (score, candidate, factors) in enumerate(scored[:limit])
+        for index, (score, candidate, factors) in enumerate(slate)
     ]
 
 
@@ -414,6 +471,8 @@ def topics_line(briefs: Sequence[TopicBrief]) -> str:
     lines = ["The slate, on evidence:"]
     for brief in briefs:
         line = f"{brief.rank}. {brief.subject}"
+        if brief.explored:
+            line += " (trial)"
         if brief.disclosure:
             line += f" ({brief.disclosure})"
         lines.append(line)
@@ -435,7 +494,21 @@ _TOPICS_SCHEMA = """CREATE TABLE IF NOT EXISTS press_topic_briefs (
     factors TEXT NOT NULL,
     topic_version INTEGER NOT NULL,
     computed_at TEXT NOT NULL,
+    explored INTEGER NOT NULL DEFAULT 0,
+    draw_seed INTEGER,
     PRIMARY KEY (tenant_id, topic_key)
+)"""
+
+# The kind book: how often each topic KIND made the slate (served) vs
+# earned reading (engaged — the writer arrives with N4, when composed
+# stories cite their briefs and N0's receipts flow back per kind).
+# Anonymous by construction — a kind, never a member.
+_KIND_SCHEMA = """CREATE TABLE IF NOT EXISTS press_topic_kind_stats (
+    tenant_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    served INTEGER NOT NULL DEFAULT 0,
+    engaged INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (tenant_id, kind)
 )"""
 
 
@@ -450,8 +523,73 @@ class TopicBriefStore:
         self._clock = clock or (lambda: datetime.now(UTC))
         with self._conn.transaction() as db:
             db.execute(_TOPICS_SCHEMA)
+            db.execute(_KIND_SCHEMA)
+        self._migrate_v2_columns()
 
-    def record(self, *, tenant: str, briefs: Sequence[TopicBrief]) -> None:
+    def _migrate_v2_columns(self) -> None:
+        # Tables born at v1 lack the exploration columns; old slates
+        # read as what they were — no draw, nothing explored.
+        try:
+            with self._conn.transaction() as db:
+                db.execute("SELECT explored FROM press_topic_briefs LIMIT 1")
+            return
+        except Exception:
+            pass
+        with self._conn.transaction() as db:
+            db.execute(
+                "ALTER TABLE press_topic_briefs"
+                " ADD COLUMN explored INTEGER NOT NULL DEFAULT 0"
+            )
+            db.execute(
+                "ALTER TABLE press_topic_briefs ADD COLUMN draw_seed INTEGER"
+            )
+
+    # -- the kind book -------------------------------------------------- #
+    def bump_served(self, *, tenant: str, kinds: Sequence[str]) -> None:
+        with self._conn.transaction() as db:
+            for kind in kinds:
+                db.execute(
+                    """INSERT INTO press_topic_kind_stats
+                         (tenant_id, kind, served, engaged)
+                       VALUES (?, ?, 1, 0)
+                       ON CONFLICT (tenant_id, kind) DO UPDATE SET
+                         served = press_topic_kind_stats.served + 1""",
+                    (tenant, kind),
+                )
+
+    def note_engaged(self, *, tenant: str, kind: str) -> None:
+        """The success side of the book — N4's writer: a composed story
+        citing a brief of this kind earned a completed read."""
+        with self._conn.transaction() as db:
+            db.execute(
+                """INSERT INTO press_topic_kind_stats
+                     (tenant_id, kind, served, engaged)
+                   VALUES (?, ?, 0, 1)
+                   ON CONFLICT (tenant_id, kind) DO UPDATE SET
+                     engaged = press_topic_kind_stats.engaged + 1""",
+                (tenant, kind),
+            )
+
+    def kind_book(self, *, tenant: str) -> dict[str, tuple[int, int]]:
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                "SELECT kind, served, engaged FROM press_topic_kind_stats"
+                " WHERE tenant_id = ?",
+                (tenant,),
+            ).fetchall()
+        return {
+            str(row["kind"]): (int(row["served"]), int(row["engaged"]))
+            for row in rows
+        }
+
+    # -- the standing slate --------------------------------------------- #
+    def record(
+        self,
+        *,
+        tenant: str,
+        briefs: Sequence[TopicBrief],
+        seed: int | None = None,
+    ) -> None:
         for brief in briefs:
             if not brief.facts:
                 raise PressError(
@@ -469,8 +607,8 @@ class TopicBriefStore:
                     """INSERT INTO press_topic_briefs
                          (tenant_id, topic_key, genre, subject, facts,
                           disclosure, rank, score, factors, topic_version,
-                          computed_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                          computed_at, explored, draw_seed)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         tenant,
                         brief.key,
@@ -493,6 +631,8 @@ class TopicBriefStore:
                         json.dumps(brief.factors),
                         TOPIC_VERSION,
                         stamp,
+                        1 if brief.explored else 0,
+                        seed,
                     ),
                 )
 
@@ -515,6 +655,12 @@ class TopicBriefStore:
                 "factors": json.loads(row["factors"]),
                 "topic_version": int(row["topic_version"]),
                 "computed_at": row["computed_at"],
+                "explored": bool(row["explored"]),
+                "draw_seed": (
+                    int(row["draw_seed"])
+                    if row["draw_seed"] is not None
+                    else None
+                ),
             }
             for row in rows
         ]
