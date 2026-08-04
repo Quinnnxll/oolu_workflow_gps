@@ -32,6 +32,7 @@ from oolu.press import (
     EDITION_PULSE_GOAL,
     LICENSES,
     ContributionStore,
+    GenreDemandStore,
     LineageShare,
     Newsroom,
     PairwiseStore,
@@ -390,6 +391,7 @@ def _host(tmp_path):
         preferences=PreferenceStore(conn),
         pairwise=PairwiseStore(conn),
         metrics=StoryMetricsStore(conn),
+        demand=GenreDemandStore(conn),
     )
     gateway = GatewayApp(
         app._durable,
@@ -738,6 +740,12 @@ def test_the_edition_arrives_on_the_pulse_as_news_own_message(tmp_path):
     first = story_block["items"][0]
     assert first["story_id"] and first["headline"] and first["bylines"]
     assert len(first["preview"]) <= 281
+    # N1: the fire also refreshed the genre desk's standing reading —
+    # the benchmark loop closing on the pulse.
+    demand = gateway._press.demand.reading(tenant="t1")
+    assert demand and [r["rank"] for r in demand] == list(
+        range(1, len(demand) + 1)
+    )
     conn.close()
 
 

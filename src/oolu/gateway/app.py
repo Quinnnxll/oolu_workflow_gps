@@ -1273,6 +1273,9 @@ class GatewayApp:
         # The press (A1): the contribution spine. Members publish under a
         # stated license; every read excludes superseded records by law.
         r.add("GET", "/v1/press/genres", self._press_genres)
+        # The genre desk (N1): the standing demand reading, every
+        # factor named — the first editorial decision, on evidence.
+        r.add("GET", "/v1/press/genres/demand", self._press_genre_demand)
         r.add("GET", "/v1/press/contributions", self._press_list)
         r.add("POST", "/v1/press/contributions", self._press_publish)
         r.add(
@@ -2751,20 +2754,73 @@ class GatewayApp:
         if standing is None and not refs:
             # The genre chips — only when no draft is mid-review, so an
             # intake answer never doubles as a stream switch.
-            from ..press import taxonomy_items
+            from ..press import GENRES, demand_line, taxonomy_items
 
             normal = re.sub(
                 r"\s+", " ", str(message or "").strip().casefold()
             ).rstrip(".!?")
             if normal in self._NEWS_GENRE_ASKS:
-                return (
+                # The chips AND the current demand reading (N1) — the
+                # desk's answer to "which genre are people interested
+                # in", every factor recorded behind it.
+                say = (
                     "The streams members publish into — name one and "
                     "your edition leans that way (with personalization "
-                    "on).",
+                    "on)."
+                )
+                reading = self._genre_demand_reading(session.tenant_id)
+                if reading:
+                    labels = {
+                        item["key"]: item["label"] for item in taxonomy_items()
+                    }
+                    say = (
+                        demand_line(reading, labels) + " " + say
+                    )
+                return (
+                    say,
                     None,
                     "desk",
                     {"kind": "genres", "items": taxonomy_items()},
                 )
+            # A named stream: the tap is an ANONYMOUS interest count —
+            # no principal rides the row — and the desk answers with
+            # that stream's standing in the demand reading.
+            named = None
+            if normal in GENRES:
+                named = normal
+            else:
+                for item in taxonomy_items():
+                    if normal == item["label"].casefold():
+                        named = item["key"]
+                        break
+            if named is not None and press.demand is not None:
+                press.demand.tap(tenant=session.tenant_id, genre=named)
+                reading = self._genre_demand_reading(session.tenant_id)
+                labels = {
+                    item["key"]: item["label"] for item in taxonomy_items()
+                }
+                standing_row = next(
+                    (r for r in reading if r.genre == named), None
+                )
+                name = labels.get(named, named)
+                if standing_row is None:
+                    say = f"Noted — {name}."
+                elif standing_row.explored:
+                    from ..press import DEMAND_READER_FLOOR
+
+                    say = (
+                        f"Noted — {name}. That stream is still "
+                        f"unmeasured (rank {standing_row.rank}, a trial "
+                        "candidate): fewer than "
+                        f"{DEMAND_READER_FLOOR} readers so far."
+                    )
+                else:
+                    say = (
+                        f"Noted — {name}. It stands at rank "
+                        f"{standing_row.rank} of the demand reading "
+                        f"(score {standing_row.score})."
+                    )
+                return (say, None, "desk")
 
         def _staged(staged, say):
             # A dropped review (a leak) leaves NOTHING standing: fixed
@@ -3804,6 +3860,58 @@ class GatewayApp:
                     )
         return payload
 
+    def _genre_demand_reading(self, tenant: str):
+        """The genre desk's decision (N1), computed fresh from its
+        recorded inputs and RECORDED as the standing reading: N0's
+        engagement rolled up per genre, the anonymous interest taps,
+        and live supply. Deterministic end to end — no model call
+        anywhere in the decision. Returns [] on a host without the
+        desk's stores."""
+        from ..press import GENRES, rank_demand
+
+        press = self._press
+        if (
+            press is None
+            or press.demand is None
+            or press.metrics is None
+            or press.stories is None
+        ):
+            return []
+        story_genres = {
+            s.story_id: tuple(s.genres)
+            for s in press.stories.list(tenant=tenant, limit=500)
+        }
+        evidence = press.metrics.genre_evidence(
+            tenant=tenant,
+            genres_of=lambda sid: story_genres.get(sid, ()),
+        )
+        supply: dict[str, int] = {}
+        for record in press.store.list(tenant=tenant, limit=500):
+            for genre in record.genres:
+                supply[genre] = supply.get(genre, 0) + 1
+        items = rank_demand(
+            genres=sorted(GENRES),
+            engagement=evidence,
+            taps=press.demand.taps(tenant=tenant),
+            supply=supply,
+        )
+        press.demand.record(tenant=tenant, items=items)
+        return items
+
+    def _press_genre_demand(self, request, session, params) -> Response:
+        """The standing demand reading, rank order — every row carries
+        its factor breakdown and raw evidence, so the first editorial
+        decision explains itself."""
+        press = self._require_press()
+        if press.demand is None:
+            raise GatewayError(
+                404, "not_found", "this host keeps no demand desk"
+            )
+        self._genre_demand_reading(session.tenant_id)
+        return json_response(
+            200, {"items": press.demand.reading(tenant=session.tenant_id)}
+        )
+
     @staticmethod
     def _story_preview(story) -> dict:
         """The story as the pushed block carries it: a pointer and the
@@ -4145,6 +4253,16 @@ class GatewayApp:
                     )
                 except ValueError:
                     pass  # a full reminder book is not a failed edition
+            # The genre desk reads the fresh engagement book (N1): the
+            # demand reading refreshes with every edition fire — the
+            # benchmark loop starts closing. A broken desk is its own
+            # story, never a failed edition.
+            try:
+                self._genre_demand_reading(schedule.tenant)
+            except Exception:  # noqa: BLE001 - the edition already landed
+                logging.getLogger("oolu.gateway").exception(
+                    "demand reading failed for %s", schedule.schedule_id
+                )
             self._durable.audit.append(
                 "pulse.fired",
                 {

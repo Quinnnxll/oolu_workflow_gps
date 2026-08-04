@@ -635,6 +635,32 @@ export interface StoryPreview {
   bylines: string[];
 }
 
+// The genre desk's standing reading (N1): ranked demand, every row
+// carrying its factor breakdown and raw evidence — the first editorial
+// decision, explained. `explored` marks the rows ranked by the
+// exploration rule (no engagement evidence yet).
+export interface GenreDemandRow {
+  genre: string;
+  rank: number;
+  score: number;
+  explored: boolean;
+  factors: {
+    engagement: number | null;
+    interest: number;
+    supply: number;
+  };
+  evidence: {
+    readers: number;
+    opens: number;
+    completions: number;
+    likes: number;
+    taps: number;
+    pieces: number;
+  };
+  demand_version: number;
+  computed_at: string;
+}
+
 // The benchmark numbers for one story — revealed only above the
 // k-anonymity floor; below it the honest reason and nothing else.
 export interface StoryMetrics {
@@ -1580,6 +1606,10 @@ export const api = {
       "GET",
       `/v1/press/stories/${encodeURIComponent(storyId)}/metrics`,
     ),
+  // The genre desk (N1): the standing demand reading, every factor
+  // named — computed fresh from recorded inputs on each read.
+  pressGenreDemand: () =>
+    req<{ items: GenreDemandRow[] }>("GET", "/v1/press/genres/demand"),
   pressNewsroomRun: () =>
     req<{ composed: number; items: Story[] }>(
       "POST",

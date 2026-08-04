@@ -4,6 +4,31 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+N1 landed — the genre desk
+(docs/news-agent-benchmark-roadmap.md, phase N1):
+
+- **The first editorial decision reads evidence, not keyword hints** —
+  `press/demand.py`: a deterministic, model-free demand ranking over
+  the taxonomy from three typed inputs: N0's engagement rolled up per
+  genre (distinct readers, completion, dwell, likes — aggregated
+  INSIDE the metrics store, per-member rows never leave it), the
+  anonymous genre-interest taps (no principal column exists by
+  schema — nothing to consent to, nothing to erase), and live
+  contribution supply. Every rank carries its factor breakdown and
+  raw evidence; same inputs, same order — reproducibility is the
+  audit.
+- **Honest floors and bounded exploration** — below the reader floor a
+  genre's engagement factor is ABSENT, never a number faked from two
+  receipts; the best unevidenced genre is promoted to one trial slot
+  at second place, chosen deterministically (score, then name) — never
+  an editor's hunch, never a random draw.
+- **The reading is standing and spoken** — `GET /v1/press/genres/demand`
+  answers the whole reading (recorded whole, never a mixed vintage);
+  "genres" in the News thread answers with the chips AND the demand
+  line; naming a stream is an anonymous tap answered with that
+  stream's standing; the edition pulse refreshes the reading — the
+  benchmark loop's first closure (engagement report → genre desk).
+
 N0 landed — the benchmark's measuring stick
 (docs/news-agent-benchmark-roadmap.md, phase N0):
 

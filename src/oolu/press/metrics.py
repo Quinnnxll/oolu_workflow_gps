@@ -144,6 +144,60 @@ class StoryMetricsStore:
             "completion_rate": round(int(row["completions"]) / opens, 4),
         }
 
+    def genre_evidence(
+        self,
+        *,
+        tenant: str,
+        genres_of: Callable[[str], tuple[str, ...]],
+    ) -> dict:
+        """The N0 signals rolled up PER GENRE for the demand desk (N1):
+        distinct readers, opens, completions, dwell, likes — aggregates
+        only; the per-member rows never leave this store. ``genres_of``
+        resolves a story to its genres (a story can carry several; its
+        evidence counts toward each)."""
+        from .demand import GenreEvidence
+
+        with self._conn.lock:
+            receipts = self._conn.db.execute(
+                """SELECT story_id, principal, dwell_ms, completed
+                     FROM press_read_receipts WHERE tenant_id = ?""",
+                (tenant,),
+            ).fetchall()
+            likes = self._conn.db.execute(
+                """SELECT story_id FROM press_story_likes
+                    WHERE tenant_id = ?""",
+                (tenant,),
+            ).fetchall()
+        readers: dict[str, set[str]] = {}
+        tally: dict[str, dict[str, int]] = {}
+        for row in receipts:
+            for genre in genres_of(str(row["story_id"])):
+                readers.setdefault(genre, set()).add(str(row["principal"]))
+                book = tally.setdefault(
+                    genre,
+                    {"opens": 0, "completions": 0, "dwell_ms": 0, "likes": 0},
+                )
+                book["opens"] += 1
+                book["completions"] += int(row["completed"])
+                book["dwell_ms"] += int(row["dwell_ms"])
+        for row in likes:
+            for genre in genres_of(str(row["story_id"])):
+                book = tally.setdefault(
+                    genre,
+                    {"opens": 0, "completions": 0, "dwell_ms": 0, "likes": 0},
+                )
+                book["likes"] += 1
+        return {
+            genre: GenreEvidence(
+                readers=len(readers.get(genre, ())),
+                opens=book["opens"],
+                completions=book["completions"],
+                dwell_ms=book["dwell_ms"],
+                likes=book["likes"],
+            )
+            for genre, book in tally.items()
+        }
+
     # -- the data subject's right --------------------------------------- #
     def erase(self, *, tenant: str, principal: str) -> int:
         """The member's reading and likes, gone — the aggregates

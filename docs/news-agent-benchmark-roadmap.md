@@ -271,6 +271,24 @@ erasure removes the member's rows and the aggregate honestly shrinks.
 
 ### N1 — the genre desk (which genre are people interested in)
 
+**Status: LANDED** — `press/demand.py`: `rank_demand`, the
+deterministic, model-free ranking (engagement 0.5 / interest 0.3 /
+supply 0.2, versioned `DEMAND_VERSION`), every rank carrying its factor
+breakdown and raw evidence; the reader floor gates the engagement
+factor (below it the factor is honestly absent); ONE bounded trial
+slot promotes the best unevidenced genre to second place,
+deterministically. `GenreDemandStore` holds the standing reading
+(whole-replacement, never a mixed vintage) and the anonymous interest
+book — no principal column exists by schema.
+`StoryMetricsStore.genre_evidence` rolls N0's signals up per genre
+(distinct readers; per-member rows never leave the store). Doors: the
+reading at `GET /v1/press/genres/demand` (computed fresh from recorded
+inputs, recorded on read); "genres" in the News thread answers with
+the chips AND the demand line; a named stream is an anonymous tap plus
+that stream's standing in words; the edition pulse refreshes the
+reading — the benchmark loop's first closure. Pinned by
+`tests/test_genre_demand.py` and the N1 case in `tests/test_newsroom.py`.
+
 Goal: the first editorial decision reads evidence, not keyword hints.
 
 - Inputs (typed, all existing or from N0): per-genre engagement

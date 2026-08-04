@@ -67,6 +67,7 @@ def _press_desk(conn):
     survey instruments write it; the DPO export reads it)."""
     from .press import (
         ContributionStore,
+        GenreDemandStore,
         IntakeStore,
         PairwiseStore,
         PreferenceStore,
@@ -83,6 +84,7 @@ def _press_desk(conn):
         pairwise=PairwiseStore(conn),
         intake=IntakeStore(conn),
         metrics=StoryMetricsStore(conn),
+        demand=GenreDemandStore(conn),
     )
 
 

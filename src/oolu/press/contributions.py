@@ -331,6 +331,7 @@ class PressDesk:
         pairwise=None,
         intake=None,
         metrics=None,
+        demand=None,
     ) -> None:
         self._store = store
         self._stories = stories  # newsroom.StoryStore | None
@@ -338,6 +339,7 @@ class PressDesk:
         self._pairwise = pairwise  # pairwise.PairwiseStore | None
         self._intake = intake  # intake.IntakeStore | None
         self._metrics = metrics  # metrics.StoryMetricsStore | None
+        self._demand = demand  # demand.GenreDemandStore | None
 
     @property
     def store(self) -> ContributionStore:
@@ -362,6 +364,10 @@ class PressDesk:
     @property
     def metrics(self):
         return self._metrics
+
+    @property
+    def demand(self):
+        return self._demand
 
     def publish(
         self,
