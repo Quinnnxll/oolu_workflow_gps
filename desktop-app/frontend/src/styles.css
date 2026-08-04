@@ -2849,6 +2849,22 @@ button.ghost {
   font-size: 0.9em;
 }
 
+/* The notary's records (N4): the disclosure line and the expandable
+   source table inside the reader. */
+.story-disclosure {
+  margin: 12px 0 4px;
+}
+
+.story-sources ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.story-sources li {
+  font-size: 0.9em;
+  margin-bottom: 4px;
+}
+
 /* The taps speak emoji — a touch larger than the words they replaced. */
 .press-tap {
   font-size: 1.15em;

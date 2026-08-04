@@ -3897,6 +3897,16 @@ class GatewayApp:
             "source": story.source,
             "created_at": story.created_at.isoformat(),
             "media": [],
+            # The composition desk's records (N4): the topic pointer,
+            # the disclosure VERBATIM, and the stored source table —
+            # the rendered "Sources" section is exactly these rows.
+            "topic_key": story.topic_key,
+            "disclosure": story.disclosure,
+            "sources": (
+                self._press.stories.sources_of(story.story_id)
+                if self._press is not None and self._press.stories is not None
+                else []
+            ),
         }
         # The lineage's attached media, addressable through the press
         # media door — refs, never copies: a contribution the author has
@@ -4182,6 +4192,62 @@ class GatewayApp:
                     },
                 )
 
+    def _compose_topic_posts(self, tenant: str, *, model=None) -> int:
+        """The composition desk (N4): every CLOSED survey whose topic
+        has not been told becomes one post — composed from the survey's
+        brief snapshot (the research bundle), its floored result row
+        (the opinion aggregate), and the cited contributions resolved
+        live. The seat's model voices it under the hard contract; the
+        desk's plain facts otherwise. The full source table stores
+        beside the post and the disclosure rides verbatim (law 3).
+        Returns how many posts landed."""
+        from ..press import Story, compose_story_parts
+
+        press = self._press
+        if (
+            press is None
+            or press.surveys is None
+            or press.stories is None
+        ):
+            return 0
+        told = press.stories.told_topic_keys(tenant=tenant)
+        composed = 0
+        for survey in press.surveys.store.list(
+            tenant=tenant, status="closed", limit=50
+        ):
+            if not survey.brief or survey.topic_key in told:
+                continue
+            result = press.surveys.result_row(
+                survey.survey_id, tenant=tenant
+            )
+            parts = compose_story_parts(
+                survey.brief,
+                result,
+                contribution_of=lambda cid: press.store.get(
+                    cid, tenant=tenant
+                ),
+                model=model,
+            )
+            genre = str(survey.brief.get("genre") or "products")
+            story = Story(
+                story_id=str(uuid4()),
+                tenant_id=tenant,
+                headline=parts["headline"],
+                prose=parts["prose"],
+                genres=(genre,),
+                lineage=tuple(parts["lineage"]),
+                breakdown=dict(survey.brief.get("factors") or {}),
+                rubric_version=0,  # a topic post: the brief, not the rubric
+                source=parts["source"],
+                created_at=press.stories.now(),
+                topic_key=survey.topic_key,
+                disclosure=parts["disclosure"],
+            )
+            press.stories.insert(story, sources=parts["sources"])
+            told.add(survey.topic_key)
+            composed += 1
+        return composed
+
     def _press_surveys(self, request, session, params) -> Response:
         """The open surveys — any member may volunteer an answer; the
         caller's own standing answer rides along so a device never
@@ -4424,6 +4490,18 @@ class GatewayApp:
                     dwell_ms=dwell_ms,
                     completed=body.get("completed") is True,
                 )
+                # The kind book's success side (N2 v2's named writer):
+                # a COMPLETED read of a topic post is the engagement
+                # its kind's exploration draws learn from.
+                if (
+                    body.get("completed") is True
+                    and story.topic_key
+                    and press.topics is not None
+                ):
+                    press.topics.note_engaged(
+                        tenant=session.tenant_id,
+                        kind=story.topic_key.split(":", 1)[0],
+                    )
             elif signal == "like":
                 press.metrics.like(
                     tenant=session.tenant_id,
@@ -4558,6 +4636,10 @@ class GatewayApp:
             Newsroom(press.store, press.stories).run(
                 tenant=schedule.tenant, model=model
             )
+            # The composition desk (N4): closed surveys become posts
+            # BEFORE the edition assembles, so today's post rides
+            # today's edition.
+            self._compose_topic_posts(schedule.tenant, model=model)
             stories = press.stories.list(tenant=schedule.tenant, limit=100)
             affinity = None
             taste = None

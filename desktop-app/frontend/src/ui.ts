@@ -326,6 +326,12 @@ const STRINGS: Record<string, Entry> = {
     es: "{opens} lectores · {pct}% terminaron · {likes} 👍",
     fr: "{opens} lecteurs · {pct}% terminé · {likes} 👍",
   },
+  "press.sources": {
+    en: "Sources",
+    zh: "信息来源",
+    es: "Fuentes",
+    fr: "Sources",
+  },
   // The ad house (A4): the consent card and the sponsored slot.
   "ads.consentTitle": {
     en: "Sponsored placements — with your say",
@@ -3267,6 +3273,7 @@ const ZH_HANT: Record<string, string> = {
   "press.open": "閱讀全文",
   "press.backToThread": "← 返回",
   "press.metricsLine": "{opens} 位讀者 · {pct}% 讀完 · {likes} 👍",
+  "press.sources": "資訊來源",
   "ads.consentTitle": "贊助內容——由你決定",
   "ads.consentBody":
     "隱私政策已更新（第 3 版）：News 可能出現明確標註的贊助內容，匹配在平台內部完成，收入與投稿者分享。個人資料絕不出售或提供給廣告主。你接受之前不會顯示任何廣告——拒絕也不會失去任何功能。",

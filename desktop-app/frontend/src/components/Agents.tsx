@@ -462,6 +462,26 @@ export function StoryReader({
             ),
           )}
         </div>
+        {/* Law 3, rendered: the disclosure rides the post verbatim. */}
+        {story.disclosure && (
+          <div className="story-disclosure">
+            <span className="ad-label">{story.disclosure}</span>
+          </div>
+        )}
+        {/* The notary's records (N4): the stored source table, row for
+            row — expandable, never trimmed. */}
+        {(story.sources ?? []).length > 0 && (
+          <details className="press-why story-sources">
+            <summary>{tr("press.sources")}</summary>
+            <ul>
+              {(story.sources ?? []).map((row) => (
+                <li key={`${row.kind}:${row.ref}`} className="muted">
+                  [{row.kind}] {row.summary}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
         {/* The end marker: reaching it IS completion. */}
         <div className="story-end" aria-hidden="true" />
       </div>

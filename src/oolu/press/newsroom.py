@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from typing import Callable
+from typing import Callable, Sequence
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict
@@ -63,6 +63,11 @@ class Story(BaseModel):
     rubric_version: int
     source: str  # "model" (the seat composed) | "desk" (verbatim, credited)
     created_at: datetime
+    # The composition desk (N4): a post composed FROM a topic brief
+    # carries the brief's key and its disclosure VERBATIM — law 3
+    # survives from mining to rendering, never trimmed downstream.
+    topic_key: str = ""
+    disclosure: str = ""
 
 
 _STORIES_SCHEMA = """CREATE TABLE IF NOT EXISTS press_stories (
@@ -74,7 +79,9 @@ _STORIES_SCHEMA = """CREATE TABLE IF NOT EXISTS press_stories (
     breakdown TEXT NOT NULL,
     rubric_version INTEGER NOT NULL,
     source TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    topic_key TEXT NOT NULL DEFAULT '',
+    disclosure TEXT NOT NULL DEFAULT ''
 )"""
 
 # The lineage is its own table — queryable (which pieces are already
@@ -87,9 +94,22 @@ _LINEAGE_SCHEMA = """CREATE TABLE IF NOT EXISTS press_story_lineage (
     PRIMARY KEY (story_id, contribution_id)
 )"""
 
+# The source table (N4): every claim's record, queryable per post —
+# contributions beside marketplace research rows beside survey
+# aggregates. One provenance surface; the rendered "Sources" section
+# is exactly these rows.
+_SOURCES_SCHEMA = """CREATE TABLE IF NOT EXISTS press_story_sources (
+    story_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    ref TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    PRIMARY KEY (story_id, kind, ref)
+)"""
+
 
 class StoryStore:
-    """Durable, tenant-scoped stories with queryable lineage."""
+    """Durable, tenant-scoped stories with queryable lineage and, for
+    composed topic posts (N4), a queryable source table."""
 
     def __init__(self, conn, *, clock: Callable[[], datetime] | None = None) -> None:
         self._conn = conn
@@ -97,23 +117,54 @@ class StoryStore:
         with self._conn.transaction() as db:
             db.execute(_STORIES_SCHEMA)
             db.execute(_LINEAGE_SCHEMA)
+            db.execute(_SOURCES_SCHEMA)
+        self._migrate_topic_columns()
+
+    def _migrate_topic_columns(self) -> None:
+        # Tables born before N4 lack the topic columns; old stories
+        # read as what they were — member stories, no topic, no
+        # disclosure.
+        try:
+            with self._conn.transaction() as db:
+                db.execute("SELECT topic_key FROM press_stories LIMIT 1")
+            return
+        except Exception:
+            pass
+        with self._conn.transaction() as db:
+            db.execute(
+                "ALTER TABLE press_stories"
+                " ADD COLUMN topic_key TEXT NOT NULL DEFAULT ''"
+            )
+            db.execute(
+                "ALTER TABLE press_stories"
+                " ADD COLUMN disclosure TEXT NOT NULL DEFAULT ''"
+            )
 
     def now(self) -> datetime:
         return self._clock()
 
-    def insert(self, story: Story) -> None:
-        # The provenance law: a story with no lineage cannot be stored.
-        if not story.lineage:
+    def insert(self, story: Story, *, sources: Sequence[dict] = ()) -> None:
+        # The provenance law, N4-extended: a story must carry
+        # contribution lineage OR a typed source table — a post nothing
+        # resolves to cannot be stored, whichever desk wrote it.
+        if not story.lineage and not sources:
             raise PressError(
-                "a story with no contribution lineage cannot publish — "
-                "provenance is mandatory"
+                "a story with no contribution lineage and no source "
+                "table cannot publish — provenance is mandatory"
             )
+        for row in sources:
+            if not (row.get("kind") and row.get("ref") and row.get("summary")):
+                raise PressError(
+                    "a source row needs kind, ref, and summary — "
+                    "provenance is mandatory"
+                )
         with self._conn.transaction() as db:
             db.execute(
                 """INSERT INTO press_stories
                      (story_id, tenant_id, headline, prose, genres,
-                      breakdown, rubric_version, source, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                      breakdown, rubric_version, source, created_at,
+                      topic_key, disclosure)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     story.story_id,
                     story.tenant_id,
@@ -124,6 +175,8 @@ class StoryStore:
                     story.rubric_version,
                     story.source,
                     story.created_at.isoformat(),
+                    story.topic_key,
+                    story.disclosure,
                 ),
             )
             for share in story.lineage:
@@ -138,6 +191,46 @@ class StoryStore:
                         share.weight,
                     ),
                 )
+            for row in sources:
+                db.execute(
+                    """INSERT INTO press_story_sources
+                         (story_id, kind, ref, summary)
+                       VALUES (?, ?, ?, ?)""",
+                    (
+                        story.story_id,
+                        str(row["kind"]),
+                        str(row["ref"]),
+                        str(row["summary"]),
+                    ),
+                )
+
+    def sources_of(self, story_id: str) -> list[dict]:
+        """The post's source table, exactly as stored — the rendered
+        "Sources" section is these rows and nothing else."""
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                """SELECT kind, ref, summary FROM press_story_sources
+                   WHERE story_id = ? ORDER BY kind, ref""",
+                (story_id,),
+            ).fetchall()
+        return [
+            {
+                "kind": row["kind"],
+                "ref": row["ref"],
+                "summary": row["summary"],
+            }
+            for row in rows
+        ]
+
+    def told_topic_keys(self, *, tenant: str) -> set[str]:
+        """Which topics already became posts — composition never twins."""
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                """SELECT DISTINCT topic_key FROM press_stories
+                   WHERE tenant_id = ? AND topic_key != ''""",
+                (tenant,),
+            ).fetchall()
+        return {str(row["topic_key"]) for row in rows}
 
     def get(self, story_id: str, *, tenant: str) -> Story | None:
         with self._conn.lock:
@@ -198,6 +291,8 @@ class StoryStore:
             rubric_version=int(row["rubric_version"]),
             source=row["source"],
             created_at=datetime.fromisoformat(row["created_at"]),
+            topic_key=str(row["topic_key"] or ""),
+            disclosure=str(row["disclosure"] or ""),
         )
 
 

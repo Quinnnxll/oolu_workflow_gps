@@ -462,6 +462,28 @@ from any post that cites it.
 
 ### N4 — the composition desk (the final post, every claim sourced)
 
+**Status: LANDED** — `press/composer.py`: `compose_story_parts`
+consumes exactly the survey's BRIEF SNAPSHOT (the research bundle as
+it stood when the question opened — the slate replaces whole, so the
+survey carries its own copy), the survey's floored result row, and the
+cited contributions resolved live. The seat's model voices the post
+under the hard HEADLINE:/PROSE: contract over numbered sources only; a
+broken contract or a dead model falls back to the DESK POST — the
+typed facts rendered plainly with the survey line, publishable on a
+host with no brain. The disclosure is appended by the desk and stored
+on the story row — law 3 survives verbatim, never entrusted to the
+model. `StoryStore` grows the source table (`press_story_sources`, one
+provenance surface: the rendered "Sources" section IS these rows) and
+the N4-extended refusal law: no lineage AND no sources → no stored
+post; contribution sources still produce lineage shares summing
+exactly to 1.0 (the dividend keeps paying), while a pure-market post
+stores with sources and no lineage. The pulse composes every closed
+survey's untold topic BEFORE the edition assembles; the reader renders
+the disclosure line and the expandable Sources section; and the kind
+book's ENGAGED side gains its named writer — a consented completed
+read of a topic post teaches the exploration draws. Pinned by
+`tests/test_composer.py`.
+
 Goal: sum research + survey into the post — the reporter's voice, the
 notary's records.
 

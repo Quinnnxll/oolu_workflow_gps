@@ -795,6 +795,12 @@ export interface Story {
   source: string; // "model" (the seat composed) | "desk" (verbatim, credited)
   created_at: string;
   media?: PressMediaRef[];
+  // The composition desk (N4): a topic post's pointer, its disclosure
+  // verbatim, and the stored source table — the rendered "Sources"
+  // section is exactly these rows.
+  topic_key?: string;
+  disclosure?: string;
+  sources?: { kind: string; ref: string; summary: string }[];
 }
 
 export interface EditionSchedule {

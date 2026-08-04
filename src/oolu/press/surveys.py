@@ -89,6 +89,10 @@ class Survey:
     opened_at: datetime
     closed_at: datetime | None = None
     draw_seed: int | None = None
+    # The BRIEF SNAPSHOT: the topic brief exactly as it stood when the
+    # survey opened — the slate replaces whole, so composition (N4)
+    # reads the survey's own copy, never a vanished row.
+    brief: dict | None = None
 
 
 def compose_survey(
@@ -140,6 +144,7 @@ def compose_survey(
             status="open",
             opened_at=opened_at,
             draw_seed=draw_seed,
+            brief=dict(brief),
         )
     return Survey(
         survey_id=survey_id,
@@ -162,6 +167,7 @@ def compose_survey(
         status="open",
         opened_at=opened_at,
         draw_seed=draw_seed,
+        brief=dict(brief),
     )
 
 
@@ -189,7 +195,8 @@ _SURVEYS_SCHEMA = """CREATE TABLE IF NOT EXISTS press_surveys (
     opened_at TEXT NOT NULL,
     closed_at TEXT,
     draw_seed INTEGER,
-    survey_version INTEGER NOT NULL
+    survey_version INTEGER NOT NULL,
+    brief TEXT NOT NULL DEFAULT '{}'
 )"""
 
 # The respondent frame actually drawn — pseudonymous rows, erasable,
@@ -223,6 +230,22 @@ class SurveyStore:
             db.execute(_SURVEYS_SCHEMA)
             db.execute(_SAMPLE_SCHEMA)
             db.execute(_ANSWERS_SCHEMA)
+        self._migrate_brief_column()
+
+    def _migrate_brief_column(self) -> None:
+        # Tables born before the snapshot column: old surveys read an
+        # empty brief — composition honestly skips them.
+        try:
+            with self._conn.transaction() as db:
+                db.execute("SELECT brief FROM press_surveys LIMIT 1")
+            return
+        except Exception:
+            pass
+        with self._conn.transaction() as db:
+            db.execute(
+                "ALTER TABLE press_surveys"
+                " ADD COLUMN brief TEXT NOT NULL DEFAULT '{}'"
+            )
 
     def now(self) -> datetime:
         return self._clock()
@@ -234,8 +257,8 @@ class SurveyStore:
                 """INSERT INTO press_surveys
                      (survey_id, tenant_id, topic_key, kind, question,
                       options, reason, status, opened_at, closed_at,
-                      draw_seed, survey_version)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                      draw_seed, survey_version, brief)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     survey.survey_id,
                     survey.tenant_id,
@@ -258,6 +281,7 @@ class SurveyStore:
                     None,
                     survey.draw_seed,
                     SURVEY_VERSION,
+                    json.dumps(survey.brief or {}),
                 ),
             )
 
@@ -405,6 +429,8 @@ class SurveyStore:
             draw_seed=(
                 int(row["draw_seed"]) if row["draw_seed"] is not None else None
             ),
+            brief=(json.loads(row["brief"]) if row["brief"] else None)
+            or None,
         )
 
 

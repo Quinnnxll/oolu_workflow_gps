@@ -15,6 +15,15 @@ reaches a web-search or external-content seam — pinned by the import
 scan in ``tests/test_press.py``.
 """
 
+from .composer import (
+    COMPOSER_VERSION,
+    compose_post,
+    compose_story_parts,
+    desk_post,
+    lineage_from,
+    source_rows,
+    sources_summary,
+)
 from .contributions import (
     LICENSES,
     MAX_BODY_CHARS,
@@ -98,6 +107,7 @@ from .topics import (
 )
 
 __all__ = [
+    "COMPOSER_VERSION",
     "DEMAND_READER_FLOOR",
     "DEMAND_VERSION",
     "DROPPED",
@@ -153,14 +163,18 @@ __all__ = [
     "TopicBrief",
     "TopicBriefStore",
     "TopicCandidate",
+    "compose_post",
+    "compose_story_parts",
     "compose_survey",
     "demand_line",
+    "desk_post",
     "draft_from_material",
     "draw_sample",
     "edition_message",
     "fold_answer",
     "rank_demand",
     "leak_report",
+    "lineage_from",
     "looks_like_material",
     "mine_clusters",
     "mine_measured_gaps",
@@ -171,6 +185,8 @@ __all__ = [
     "score",
     "select",
     "select_topics",
+    "source_rows",
+    "sources_summary",
     "semantic_affinity",
     "taste_snippet",
     "taxonomy_items",

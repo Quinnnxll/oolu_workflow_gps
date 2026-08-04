@@ -4,6 +4,35 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+N4 landed — the composition desk
+(docs/news-agent-benchmark-roadmap.md, phase N4):
+
+- **The final post: reporter's voice, notary's records** —
+  `press/composer.py` composes from exactly three typed inputs: the
+  survey's brief snapshot (the research bundle as it stood when the
+  question opened), the survey's floored result row, and the cited
+  contributions resolved live. The seat's model voices it under a hard
+  HEADLINE:/PROSE: contract over numbered sources only; a broken
+  contract or a dead model falls back to the desk post — typed facts
+  rendered plainly, unfavorable numbers unedited, publishable on a
+  host with no brain at all.
+- **The source table is the contract** — `press_story_sources` stores
+  every source row beside the post (one provenance surface: the
+  rendered "Sources" section IS these rows), and the insert-refusal
+  law extends: no contribution lineage AND no source table → no stored
+  post; a malformed source row refuses. Contribution sources still
+  produce lineage shares summing exactly to 1.0, so the ad dividend
+  keeps paying; a pure-market post stores with sources and no lineage.
+- **Law 3 rendered** — the disclosure rides the story row and the
+  prose verbatim (appended by the desk, never entrusted to the model)
+  and renders as its own labeled line in the reader, above the
+  expandable Sources section.
+- **The loop closes another turn** — the pulse composes every closed
+  survey's untold topic BEFORE the edition assembles (today's post
+  rides today's edition), and a consented COMPLETED read of a topic
+  post writes the kind book's engaged side — N2 v2's exploration
+  draws now learn from real reading.
+
 N3 landed — the survey desk
 (docs/news-agent-benchmark-roadmap.md, phase N3):
 
