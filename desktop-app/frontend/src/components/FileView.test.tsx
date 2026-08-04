@@ -146,6 +146,74 @@ describe("FileView — sheets", () => {
   });
 });
 
+describe("FileView — blob-backed words", () => {
+  function blobRoutes(body: Record<string, unknown>, bytes: string) {
+    routes["GET /v1/files/f1"] = { status: 200, body };
+    // The bytes door: the mock Response gains a real .blob() for it;
+    // everything else keeps the routes-table behavior.
+    fetchMock.mockImplementation(async (input, init) => {
+      const u = new URL(String(input), "http://local.test");
+      const method = init?.method ?? "GET";
+      if (u.pathname === "/v1/files/f1/content") {
+        return {
+          ok: true,
+          status: 200,
+          blob: async () => new Blob([bytes], { type: "text/plain" }),
+        } as unknown as Response;
+      }
+      const hit = routes[`${method} ${u.pathname}`] ?? {
+        status: 200,
+        body: {},
+      };
+      return {
+        ok: hit.status >= 200 && hit.status < 300,
+        status: hit.status,
+        text: async () => JSON.stringify(hit.body),
+        json: async () => hit.body,
+      } as Response;
+    });
+  }
+
+  it("a blob-backed text file renders its fetched words, never the binary card", async () => {
+    blobRoutes(
+      doc({
+        name: "quarterly-notes.txt",
+        media_type: "text/plain",
+        content: "",
+        has_blob: true,
+        size: 40,
+      }),
+      "the drawer carries REAL bytes end to end",
+    );
+    render(<FileView fileId="f1" onChanged={vi.fn()} onDeleted={vi.fn()} />);
+
+    expect(
+      await screen.findByText("the drawer carries REAL bytes end to end"),
+    ).toBeTruthy();
+    expect(screen.queryByText(/binary file/)).toBeNull();
+    // Read-only: an inline save would shadow the blob the drawer
+    // reads first — edits belong to inline rows.
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+  });
+
+  it("a blob-backed CSV renders the read-only grid", async () => {
+    blobRoutes(
+      doc({
+        name: "budget.csv",
+        media_type: "text/csv",
+        content: "",
+        has_blob: true,
+      }),
+      "item,cost\ncoffee,3",
+    );
+    render(<FileView fileId="f1" onChanged={vi.fn()} onDeleted={vi.fn()} />);
+
+    expect(await screen.findByText("coffee")).toBeTruthy();
+    expect(document.querySelector("table.sheet")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+  });
+});
+
 describe("FileView — real file types", () => {
   it("an Office file gets an honest card and the download door, never base64 prose", async () => {
     routes["GET /v1/files/f1"] = {

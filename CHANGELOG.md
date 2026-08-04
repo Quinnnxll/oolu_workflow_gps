@@ -4,6 +4,17 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Fixed — blob-backed words render as words: a text/CSV/JSON file that
+took the drawer's blob door (every device upload since the blob-first
+fix) showed the "binary file" card instead of its content. The reading
+page now fetches the true bytes and renders them — documents as the
+reading page, CSVs as the read-only grid — never the binary card;
+storage shape is the drawer's business, not the reader's. Read-only by
+design: an inline save would shadow the blob the drawer reads first,
+so edits stay with inline rows and the download door carries the exact
+bytes either way. This was the standing CI failure (the shell E2E's
+anti-lie check); pinned now in both the vitest suite and the E2E.
+
 N7.1 landed — the boundary wired: the web run replaces the edition
 pulse's composition (docs/news-agent-benchmark-roadmap.md, N7 status):
 

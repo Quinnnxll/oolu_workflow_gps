@@ -55,6 +55,17 @@ function isBinary(file: FileDoc): boolean {
   return Boolean(file.has_blob) || file.content.startsWith("data:");
 }
 
+// A blob-backed file whose bytes ARE words (plain text, markdown, CSV,
+// JSON): the reading page renders them fetched, never the binary card —
+// storage shape is the drawer's business, not the reader's.
+function isTextual(file: FileDoc): boolean {
+  return (
+    file.media_type.startsWith("text/") ||
+    file.media_type === "application/json" ||
+    isSheet(file)
+  );
+}
+
 const KIND_WORDS: [string, string][] = [
   ["application/pdf", "PDF document"],
   ["wordprocessingml", "Word document"],
@@ -88,9 +99,11 @@ export function FileView({
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   // Blob-backed files keep their bytes behind /content: fetched once on
-  // open, held as an object URL for the viewer/player and the download.
+  // open, held as an object URL for the viewer/player and the download —
+  // and, for textual files, decoded so the reading page shows the words.
   const [blob, setBlob] = useState<Blob | null>(null);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [blobText, setBlobText] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -116,11 +129,20 @@ export function FileView({
     let url: string | null = null;
     api
       .fileBytes(file.file_id)
-      .then((bytes) => {
+      .then(async (bytes) => {
         if (cancelled) return;
-        url = URL.createObjectURL(bytes);
         setBlob(bytes);
-        setBlobUrl(url);
+        if (isTextual(file)) {
+          const words = await bytes.text();
+          if (!cancelled) setBlobText(words);
+        }
+        try {
+          url = URL.createObjectURL(bytes);
+          if (!cancelled) setBlobUrl(url);
+        } catch {
+          // No object URLs on this host: the viewer loses its inline
+          // player, but the reading page and the download blob stand.
+        }
       })
       .catch((e) => {
         if (!cancelled) setError((e as Error).message);
@@ -212,6 +234,35 @@ export function FileView({
           title={file.name}
           src={file.has_blob ? (blobUrl ?? "") : file.content}
         />
+      ) : Boolean(file.has_blob) && isTextual(file) ? (
+        // Blob-backed words read in place — fetched true bytes, shown as
+        // the same reading page an inline document gets. Read-only: an
+        // inline save would SHADOW the blob (the drawer reads blob-first),
+        // so edits stay with inline rows; the download door carries the
+        // exact bytes either way.
+        blobText === null ? (
+          <div className="pane-empty muted">{tr("file.fetching")}</div>
+        ) : isSheet(file) ? (
+          <div className="sheet-scroll">
+            <table className="sheet">
+              <tbody>
+                {parseCsv(blobText).map((row, r) => (
+                  <tr key={r}>
+                    {row.map((cell, c) => (
+                      <td key={c}>{cell}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="doc-page">
+            {blobText.split(/\n{2,}/).map((block, i) => (
+              <p key={i}>{block}</p>
+            ))}
+          </div>
+        )
       ) : isBinary(file) ? (
         <div className="doc-page binary-card">
           <p>
