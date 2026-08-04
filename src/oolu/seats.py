@@ -240,6 +240,20 @@ SEATS: dict[str, Seat] = {
             audited=False,  # the conversation is private, like chat.turn
         ),
         Seat(
+            purpose="news.observe",
+            charge=(
+                "read one desk's readings and non-numeric residue, and "
+                "when something is wrong file a PROPOSAL with a fix plan "
+                "— words plus evidence, decided by the owner, never "
+                "adopted silently; the observer holds no hands and "
+                "changes nothing itself"
+            ),
+            # The proposal trail is the point: every observation that
+            # files is inspectable, so the owner judges a record, not a
+            # rumor. No hands, no drawer scopes — judgement only.
+            audited=True,
+        ),
+        Seat(
             purpose="explore.brief",
             charge=(
                 "compare products on verified evidence — price, discount, "

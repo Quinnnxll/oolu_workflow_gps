@@ -55,11 +55,18 @@ def _files_port_values(contract: NodeContract) -> bool:
 class SurveyNode:
     """One node offered to the survey: its contract, its canonical key,
     and its trigger door (if any). ``anchor_kind`` is None for a node with
-    no external door — it can be a station on a web, never its anchor."""
+    no external door — it can be a station on a web, never its anchor.
+    ``content_hash`` is the registered version's content hash (P2 — the
+    web signature covers it, so an implementation edit re-paves);
+    ``owner`` is the registry's ``noder_principal`` (P4 — a web whose
+    members all belong to one agent is promoted as THAT agent's
+    standing property)."""
 
     key: str  # canonical producer key (desk node id)
     contract: NodeContract
     anchor_kind: str | None = None  # "webhook" | "pulse" | None
+    content_hash: str = ""
+    owner: str = ""
 
 
 def _near_miss_reason(produced: Slot, consumed: Slot) -> str | None:
@@ -242,6 +249,14 @@ class WebSurveyor:
                     anchor=anchor,
                     anchor_kind=anchor_kind,
                     node_ids=sorted(members),
+                    # The members' registered content hashes ride the web
+                    # (P2), so its signature moves when an implementation
+                    # does — a same-id function edit re-paves.
+                    node_content={
+                        key: by_key[key].content_hash
+                        for key in sorted(members)
+                        if by_key[key].content_hash
+                    },
                     edges=sorted(
                         web_edges, key=lambda e: (e.source, e.target, e.slot)
                     ),

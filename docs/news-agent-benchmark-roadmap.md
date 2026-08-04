@@ -211,7 +211,8 @@ the determinism law along its true seam:
    refs; the OWNER's approval — the standing approval path, never a
    silent adoption — turns it into a node replacement and a re-pave.
    Models propose, the owner disposes, the type system enforces.
-   (The observer seat builds with N7/P4 — named here, not faked.)
+   (Landed with N7: the `news.observe` seat, `press/observer.py`, and
+   the proposals doors.)
 4. **Fully deterministic work opts OUT of the route.** Work that needs
    and only needs deterministic operation — certain, specific data in,
    one right answer out (a rollup, a schema migration, a normalizer) —
@@ -220,7 +221,8 @@ the determinism law along its true seam:
    function a node's costume wastes an observer on nothing.
 
 **Platform prerequisites (P-series)** — real gaps in today's machinery
-that this build needs, named so nothing is faked:
+that this build needs, named so nothing is faked (ALL LANDED with N7 —
+see the N7 status block for what each became):
 
 - **P1 — the tenant SOP store.** `_paver_sops` returns `[]` today;
   production webs pave gate-free. The editorial law above cannot be
@@ -596,6 +598,63 @@ member's future shares stop while history stays balanced; nothing pays
 twice (idempotent settlement, the A5 law).
 
 ### N7 — the web assembled (the magazine company stands)
+
+**Status: LANDED**, with the whole P-series under it:
+
+- **P1** — `skills/sop_store.py` (`TenantSopStore`): human-authored
+  YAML SOPs per tenant, parsed STRICTLY at the door (a typo'd rule
+  refuses with the parser's own words), whole-replacement by name,
+  read back typed by `_paver_sops` — the one seam the plan named, now
+  real. Doors: `GET/POST /v1/paver/sops`, `DELETE /v1/paver/sops/{name}`.
+  Webs no longer pave gate-free where an authored law applies.
+- **P2** — `RouteWeb.node_content` carries each member's registered
+  version content hash (stamped by the survey) and `signature()`
+  covers it, so a same-id implementation edit re-paves; the promotion
+  RETIRES its predecessor — the prior node of the same web and any
+  promotion standing at the same anchor under a different web_id are
+  revoked in the registry (as their recorded owner) and dropped from
+  the paved book (`paver_paved` gains `owner_principal`/`anchor`,
+  migrated in place; audit `paver.web_retired`). One-time cost, named:
+  the strengthened signature re-paves each existing web once.
+- **P3** — `paver/propagation.py::WebHoldStore` (`paver_holds`): the
+  reserved-hop halt is a durable row; `POST /v1/paver/holds/{web_id}`
+  (approve-gated, policy `paver.release`) RELEASES it — the fire-once
+  claim is given back, the very message that halted is re-staged, and
+  `_fire_web` walks past the reserved check for exactly that (web,
+  trigger) — the web RESUMES, once, under a named approver. A denial
+  settles the trigger. The hold's second source: the tenant SOP's
+  `approval` rules projected onto web children by NAME (the W5
+  discipline) — the EDITORIAL hold, authored by the human.
+- **P4** — `_NEWS_PRINCIPAL` (`oolu-agent-news`): the desk nodes are
+  contributed under the News agent's principal, and a web whose
+  surveyed members ALL belong to one roster-agent principal is
+  promoted as THAT agent's standing property (owner recorded on the
+  paved row; the survey excludes promoted web nodes by ID, so an
+  agent-owned web is still the Paver's product, never raw material).
+
+The web itself: `press/desknodes.py` defines the six desks as ordinary
+node contracts — the Part III slot vocabulary verbatim, deterministic
+scripts (bindings.json in, emit_result out; the genre desk
+Thompson-samples with the report's recorded draw seed, so the sampled
+reading replays exactly), contributed by `POST /v1/press/desks` under
+the News principal with the default editorial SOP filed under the
+OWNER's name and (on request) the morning pulse whose goal names the
+genre desk — the anchor. The standing Paver does the rest: survey →
+derived edges from slot matches → SOP guards projected → severed
+rehearsal → promotion. The observer seat (doctrine 3) lands with it:
+`press/observer.py` (`news.observe` seat, audited) reads each desk's
+readings and residue under a hard ISSUE:/PLAN: contract and files at
+most one open proposal per desk (`press_desk_proposals`); the owner
+disposes at `POST /v1/press/desks/proposals/{id}` through the standing
+approval path — an approved proposal is the MANDATE for a successor
+desk version, which P2 then re-paves and retires. Pinned by
+`tests/test_news_web.py`: the web paves gated under the news
+principal with both guards rendered in words on `/v1/paver/webs`; one
+trigger runs all six desks end to end in slot order; a no-open-question
+morning honestly stops at the research desk (gates at trigger time);
+the editorial hold halts, lists, RESUMES on release, and settles on
+denial; replacing one desk re-paves without touching the other five;
+observer and proposal laws.
 
 Goal: with P1–P4 landed, the desks become the paved web.
 

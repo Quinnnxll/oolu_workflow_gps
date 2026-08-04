@@ -60,7 +60,9 @@ class RouteWeb(BaseModel):
     """One connected component of the tenant's node graph, anchored at a
     trigger door. ``anchor`` is the node whose door fans out; ``anchor_kind``
     names the door ("webhook" | "pulse"). ``node_ids`` is every node the
-    component touches. ``status="surveying"`` until W2 paves it."""
+    component touches; ``node_content`` carries each member's registered
+    CONTENT hash (P2), so the signature is content-sensitive. ``status=
+    "surveying"`` until W2 paves it."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -69,6 +71,7 @@ class RouteWeb(BaseModel):
     anchor: str | None = None
     anchor_kind: str | None = None
     node_ids: list[str] = Field(default_factory=list)
+    node_content: dict[str, str] = Field(default_factory=dict)
     edges: list[WebEdge] = Field(default_factory=list)
     near_misses: list[NearMiss] = Field(default_factory=list)
     status: Literal["surveying", "paving", "paved", "stale"] = "surveying"
@@ -78,9 +81,12 @@ class RouteWeb(BaseModel):
         return self.anchor is not None
 
     def signature(self) -> str:
-        """A stable content hash of the web's nodes and direct edges — two
-        surveys of the SAME web share it, so a paved web is skipped next
-        tick; a web whose shape moved gets a new signature and re-paves."""
+        """A stable content hash of the web's nodes, direct edges, AND each
+        member's registered content hash (P2) — two surveys of the SAME
+        web share it, so a paved web is skipped next tick; a web whose
+        shape OR any member's implementation moved gets a new signature
+        and re-paves. A same-id function edit re-paves; a superseded
+        promotion is retired by the promotion that replaces it."""
         import hashlib
 
         payload = "|".join(
@@ -88,6 +94,10 @@ class RouteWeb(BaseModel):
                 ",".join(sorted(self.node_ids)),
                 ";".join(
                     sorted(f"{e.source}>{e.target}:{e.slot}" for e in self.edges)
+                ),
+                ";".join(
+                    f"{key}={value}"
+                    for key, value in sorted(self.node_content.items())
                 ),
             ]
         )

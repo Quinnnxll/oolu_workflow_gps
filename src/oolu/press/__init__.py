@@ -46,6 +46,12 @@ from .demand import (
     demand_line,
     rank_demand,
 )
+from .desknodes import (
+    DESK_NODES,
+    DESKNODES_VERSION,
+    EDITORIAL_SOP,
+    DeskNode,
+)
 from .editions import (
     EDITION_LABEL,
     EDITION_PULSE_GOAL,
@@ -70,6 +76,11 @@ from .intake import (
 )
 from .metrics import METRICS_K_FLOOR, StoryMetricsStore
 from .newsroom import LineageShare, Newsroom, Story, StoryStore
+from .observer import (
+    OBSERVER_VERSION,
+    DeskProposalStore,
+    observe_desk,
+)
 from .pairwise import PairwiseStore
 from .personalize import (
     SEMANTIC_PULL,
@@ -122,10 +133,13 @@ __all__ = [
     "COMPOSER_VERSION",
     "DEMAND_READER_FLOOR",
     "DEMAND_VERSION",
+    "DESK_NODES",
+    "DESKNODES_VERSION",
     "DROPPED",
     "EDITION_LABEL",
     "EDITION_PULSE_GOAL",
     "EDITION_SIZE",
+    "EDITORIAL_SOP",
     "GATHER_ASK",
     "GATHER_ASK_WORDS",
     "GENRES",
@@ -139,6 +153,7 @@ __all__ = [
     "MATCH_FLOOR",
     "MAX_TITLE_CHARS",
     "METRICS_K_FLOOR",
+    "OBSERVER_VERSION",
     "REWARDS_VERSION",
     "RUBRIC_VERSION",
     "SEMANTIC_PULL",
@@ -158,6 +173,8 @@ __all__ = [
     "ClusterPiece",
     "ContentContribution",
     "ContributionStore",
+    "DeskNode",
+    "DeskProposalStore",
     "Genre",
     "IntakeDraft",
     "IntakeStore",
@@ -201,6 +218,7 @@ __all__ = [
     "mine_measured_gaps",
     "mine_price_moves",
     "mine_trust_bands",
+    "observe_desk",
     "rank_edition",
     "review",
     "score",

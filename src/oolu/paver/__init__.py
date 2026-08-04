@@ -41,9 +41,11 @@ from .propagation import (
     MAX_HOPS,
     PROPAGATION_TOPIC,
     DeliveryRetry,
+    Enqueued,
     FireResult,
     PropagationConsentStore,
     TriggerClaimStore,
+    WebHoldStore,
     WebTriggerRouter,
 )
 from .routine import PaverScheduleStore
@@ -60,6 +62,7 @@ __all__ = [
     "AdapterSynthesizer",
     "ContractNegotiator",
     "DeliveryRetry",
+    "Enqueued",
     "FireResult",
     "NearMiss",
     "NegotiationResult",
@@ -75,6 +78,7 @@ __all__ = [
     "SurveyReport",
     "TriggerClaimStore",
     "WebEdge",
+    "WebHoldStore",
     "WebSurveyor",
     "WebTriggerRouter",
     "derive_gate_candidates",

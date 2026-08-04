@@ -4,6 +4,53 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+N7 landed — the web assembled: the magazine company stands
+(docs/news-agent-benchmark-roadmap.md, phase N7 + the P-series):
+
+- **P1, the tenant SOP store** — `skills/sop_store.py`
+  (`TenantSopStore`) + `GET/POST/DELETE /v1/paver/sops`: the human
+  authors the standing law in the strict SOP YAML (a typo'd rule
+  refuses at the door with the parser's words, whole replacement by
+  name), and `_paver_sops` — the seam the barriers plan named — now
+  reads it. Webs no longer pave gate-free where an authored law
+  applies.
+- **P2, content-sensitive re-pave + retirement** — the web signature
+  covers each member's registered version content hash (stamped by
+  the survey onto `RouteWeb.node_content`), so a same-id
+  implementation edit re-paves; the promotion RETIRES its predecessor
+  (registry revoke as its recorded owner + `paver.web_retired` audit;
+  `paver_paved` gains `owner_principal`/`anchor`, migrated in place).
+  A stale desk never limps beside its successor.
+- **P3, reserved-hold resume** — the halt is a durable row
+  (`WebHoldStore`, `paver_holds`); `GET /v1/paver/holds` lists it and
+  `POST /v1/paver/holds/{web_id}` (approve-gated) decides it: a
+  RELEASE gives the fire-once claim back, re-stages the very message
+  that halted, and the fire walks past the reserved check for exactly
+  that (web, trigger) — the web resumes, once; a denial settles the
+  trigger. The editorial hold is real: the tenant SOP's `approval`
+  rules project onto web children by name at fire time.
+- **P4, the News agent as web owner** — desk nodes are contributed
+  under `oolu-agent-news`, and a web whose members all belong to one
+  roster-agent principal is promoted as that agent's standing
+  property; promoted web nodes are excluded from the survey by ID,
+  whoever owns them.
+- **The desks as nodes** — `press/desknodes.py`: the six desks with
+  the Part III slot vocabulary verbatim and deterministic scripts
+  (the genre desk Thompson-samples with the report's recorded draw
+  seed — auditable stochasticity, sandbox and production alike);
+  `POST /v1/press/desks` stands them up, files the default editorial
+  SOP under the owner's name, and (on request) creates the morning
+  pulse that anchors the web. The standing Paver surveys, guards,
+  rehearses, promotes — one trigger runs all six desks end to end,
+  gates enforced at trigger time.
+- **The observer seat** (desk doctrine 3) — `press/observer.py` +
+  the `news.observe` seat: each desk's readings and non-numeric
+  residue judged under a hard ISSUE:/PLAN: contract; at most one open
+  proposal per desk (`press_desk_proposals`); the owner disposes at
+  `POST /v1/press/desks/proposals/{id}` through the standing approval
+  path. Models propose, the owner disposes; a dead model observes
+  nothing.
+
 N6 landed — the revenue loop
 (docs/news-agent-benchmark-roadmap.md, phase N6):
 

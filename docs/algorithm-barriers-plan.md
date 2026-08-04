@@ -1229,7 +1229,10 @@ completion does not yet re-fire `on_trigger`, so today's cascade is one
 web deep; (3) BILLED propagation on a market install (fire via
 `execute_contract` with attribution) and the reserved-hold AUTO-RESUME
 (approver releases → the web completes) — the halt is built, the resume
-is not. Each is a named follow-up, not a silent gap.
+is not. Each is a named follow-up, not a silent gap. *(Amended: the
+reserved-hold resume LANDED as P3 of the news-agent roadmap —
+`WebHoldStore` + `POST /v1/paver/holds/{web_id}`; billed propagation
+remains named future work.)*
 **Amended (W4.1)** — adversarial review of the W4 diff confirmed two
 defects (five findings, deduplicated), fixed: (1) a TRANSIENTLY-failed
 web fire was silently, permanently lost — the fire-once claim was taken
@@ -1289,7 +1292,9 @@ through ``_paver_sops``, the ONE seam a tenant SOP store plugs into —
 today no gateway-level YAML SOP store exists (the desk's
 ``sop_edges_for`` is Supernode ordering, not the SOP schema), so
 production webs pave gate-free until that store lands: named here, not
-faked. Automatic flaky-adapter retry-loop AUTHORING is likewise named
+faked. *(Amended: the tenant SOP store LANDED as P1 of the news-agent
+roadmap — ``skills/sop_store.py`` + the ``/v1/paver/sops`` doors;
+``_paver_sops`` now reads it.)* Automatic flaky-adapter retry-loop AUTHORING is likewise named
 future work — the G-series loop is repeat-WHILE-EVIDENCE; a
 retry-on-FAILURE loop needs semantics the gate machinery deliberately
 does not have. Tests: the name-matched projection and both refusal

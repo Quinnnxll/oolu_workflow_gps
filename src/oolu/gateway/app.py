@@ -21,6 +21,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
+from fnmatch import fnmatchcase
 from html import escape as _escape
 from uuid import uuid4
 
@@ -263,6 +264,14 @@ _PROPAGATION_MAX_ATTEMPTS = 5
 # does not cover, re-grinding a junction already paved once; the web's
 # user-node children still carry the survey signal, so nothing is lost.
 _PAVER_PRINCIPAL = "oolu-paver"
+
+# The News agent's own paver principal (P4): the magazine's desk nodes are
+# contributed under it, and a web whose members ALL belong to it is
+# promoted as ITS standing property — listed under its name, retired
+# under its name. Only roster-agent principals earn web ownership this
+# way; a mixed or human-owned web stays the Paver's own product.
+_NEWS_PRINCIPAL = "oolu-agent-news"
+_AGENT_WEB_OWNERS = frozenset({_NEWS_PRINCIPAL})
 
 _NODE_BUILD_RE = re.compile(
     r"^\s*"
@@ -845,6 +854,7 @@ class GatewayApp:
             PaveStore,
             PropagationConsentStore,
             TriggerClaimStore,
+            WebHoldStore,
             WebSurveyor,
         )
 
@@ -852,11 +862,20 @@ class GatewayApp:
         self._pave_store = PaveStore(durable.conn)
         self._surveyor = WebSurveyor()
         self._paver_gate = 0.0
+        # The tenant SOP store (P1): the human's standing law, read by the
+        # Paver's gate projection on every pave. Webs no longer pave
+        # gate-free wherever an authored SOP applies.
+        from ..skills.sop_store import TenantSopStore
+
+        self._sop_store = TenantSopStore(durable.conn)
         # Trigger propagation (W4): per-web standing consent, the durable
         # fire-once claim (a cycle A→B→A fires each node once per trigger),
         # and the drain gate that delivers the outbox-deferred cascade.
         self._propagation_consent = PropagationConsentStore(durable.conn)
         self._trigger_claims = TriggerClaimStore(durable.conn)
+        # The propagation hold book (P3): a reserved hop's halt is a durable
+        # row the approver can RELEASE — the web then resumes, exactly once.
+        self._paver_holds = WebHoldStore(durable.conn)
         self._propagation_gate = 0.0
         # Retention's own gate: at most one pruning pass per hour per host.
         self._retention_gate = 0.0
@@ -1036,6 +1055,11 @@ class GatewayApp:
         self._assistant_history = assistant_history
         self._profile_photos = profile_photos
         self._press = press
+        # The observer seat's proposal book (N7): models propose, the
+        # owner disposes — one open proposal per desk, decided at a door.
+        from ..press.observer import DeskProposalStore
+
+        self._desk_proposals = DeskProposalStore(durable.conn)
         self._ad_dividend = ad_dividend
         self._representative = representative
         self._reminders = reminders
@@ -1323,6 +1347,16 @@ class GatewayApp:
         )
         r.add("POST", "/v1/press/newsroom/run", self._press_newsroom_run)
         r.add("POST", "/v1/press/edition/schedule", self._press_edition_schedule)
+        # The desks as nodes (N7): contribute the magazine's desk web
+        # under the News agent's principal, observe it, decide proposals.
+        r.add("POST", "/v1/press/desks", self._press_desks_contribute)
+        r.add("POST", "/v1/press/desks/observe", self._press_desks_observe)
+        r.add("GET", "/v1/press/desks/proposals", self._press_desk_proposals)
+        r.add(
+            "POST",
+            "/v1/press/desks/proposals/{proposal_id}",
+            self._press_desk_proposal_decide,
+        )
         # The member's own pairwise preferences, DPO-shaped (consented).
         r.add(
             "GET",
@@ -1937,6 +1971,11 @@ class GatewayApp:
         r.add("GET", "/v1/paver/propagation", self._propagation_list)
         r.add("POST", "/v1/paver/propagation/{web_id}", self._propagation_grant)
         r.add("DELETE", "/v1/paver/propagation/{web_id}", self._propagation_revoke)
+        r.add("GET", "/v1/paver/sops", self._paver_sops_list)
+        r.add("POST", "/v1/paver/sops", self._paver_sops_put)
+        r.add("DELETE", "/v1/paver/sops/{name}", self._paver_sops_delete)
+        r.add("GET", "/v1/paver/holds", self._paver_holds_list)
+        r.add("POST", "/v1/paver/holds/{web_id}", self._paver_hold_decide)
         # The platform's finance monitor: what every account DRAWS (model
         # API spend against its allowance) and what every noder EARNS
         # (execution revenue) — one screen for the operator, read straight
@@ -4617,6 +4656,289 @@ class GatewayApp:
                 )
             },
         )
+
+    # -- the desks as nodes (N7) --------------------------------------- #
+    def _news_desk_node_id(self, tenant: str, name: str) -> str | None:
+        """The News agent's standing desk node by name, if one lives —
+        so re-contributing a desk adds a VERSION to the same node (the
+        replacement path P2 re-paves) instead of minting a twin."""
+        try:
+            for node in self._nodeplace.all_nodes():
+                if (
+                    node.tenant_id != tenant
+                    or node.noder_principal != _NEWS_PRINCIPAL
+                    or node.revoked_at is not None
+                ):
+                    continue
+                version = self._nodeplace.latest_version(node.node_id)
+                if version is None:
+                    continue
+                listing = self._nodeplace.listing_for_version(
+                    version.version_id
+                )
+                if listing is not None and listing.title == name:
+                    return node.node_id
+        except Exception:  # noqa: BLE001 - not found is just not found
+            return None
+        return None
+
+    def _press_desks_contribute(self, request, session, params) -> Response:
+        """Stand the magazine's desks up as NODES (N7): each desk of the
+        pipeline contributed under the News agent's own principal (P4)
+        with the Part III slot vocabulary, the default editorial law
+        authored into the tenant SOP store (P1) under the CALLER's name,
+        and — when asked — the morning pulse schedule whose goal names
+        the genre desk, the web's anchor. Idempotent: a desk already
+        standing gains a version only when its script changed (the
+        replacement path the Paver re-paves, P2); the same call twice
+        changes nothing. The Paver's own survey tick paves the web —
+        this door contributes citizens, it never paves."""
+        from ..press.desknodes import DESK_NODES, EDITORIAL_SOP, GENRE_DESK
+
+        if self._nodeplace is None:
+            raise GatewayError(404, "not_found", "nodes are not enabled")
+        body = request.body or {}
+        now = request.now or self._clock()
+        desks = []
+        for desk in DESK_NODES:
+            standing = self._news_desk_node_id(session.tenant_id, desk.name)
+            result = self._nodeplace.contribute(
+                noder_principal=_NEWS_PRINCIPAL,
+                tenant_id=session.tenant_id,
+                skill=desk.skill(),
+                semver="1.0.0",
+                title=desk.name,
+                summary=desk.summary,
+                node_id=standing,
+                consumes=desk.slot_consumes(),
+                produces=desk.slot_produces(),
+            )
+            desks.append(
+                {"name": desk.name, "node_id": result.node.node_id}
+            )
+        sop = self._sop_store.put(
+            tenant=session.tenant_id,
+            text=EDITORIAL_SOP,
+            authored_by=session.principal_id,
+        )
+        schedule_row = None
+        if body.get("schedule"):
+            at_minute = int(body.get("at_minute", 7 * 60))
+            for standing in self._pulse.list_for(
+                session.tenant_id, session.principal_id
+            ):
+                if standing.goal == GENRE_DESK:
+                    self._pulse.delete(
+                        standing.schedule_id,
+                        tenant=session.tenant_id,
+                        principal=session.principal_id,
+                    )
+            try:
+                schedule = self._pulse.add(
+                    session.tenant_id,
+                    session.principal_id,
+                    cadence="daily",
+                    at_minute=at_minute,
+                    goal=GENRE_DESK,
+                    tz_offset_minutes=_tz_minutes(
+                        body.get("tz_offset_minutes")
+                    ),
+                    label="Morning press run",
+                    now=now,
+                )
+            except ValueError as exc:
+                raise GatewayError(400, "invalid_request", str(exc)) from exc
+            schedule_row = self._pulse_row(schedule, now)
+        self._durable.audit.append(
+            "press.desks_contributed",
+            {
+                "run_id": "paver:schedule",
+                "tenant": session.tenant_id,
+                "by": session.principal_id,
+                "desks": len(desks),
+                "sop": sop.name,
+            },
+        )
+        return json_response(
+            201,
+            {
+                "desks": desks,
+                "owner": _NEWS_PRINCIPAL,
+                "sop": sop.name,
+                "schedule": schedule_row,
+            },
+        )
+
+    def _desk_readings(self, tenant: str) -> dict[str, str]:
+        """Each desk's current reading plus non-numeric residue, in
+        plain lines — what the observer seat judges. Best-effort per
+        desk: a store that answers nothing yields no reading, and a
+        desk with no reading is not observed."""
+        from ..press.desknodes import (
+            COMPOSITION_DESK,
+            GENRE_DESK,
+            PUBLICATION_DESK,
+            SURVEY_DESK,
+            TOPIC_DESK,
+        )
+
+        press = self._press
+        readings: dict[str, list[str]] = {}
+        if press is None:
+            return {}
+        try:
+            if press.demand is not None:
+                lines = [
+                    f"rank {row['rank']}: {row['genre']}"
+                    + (" (trial)" if row.get("explored") else "")
+                    + f" evidence={row.get('evidence')}"
+                    for row in press.demand.reading(tenant=tenant)[:8]
+                ]
+                if lines:
+                    readings[GENRE_DESK] = lines
+        except Exception:  # noqa: BLE001 - no reading, no observation
+            pass
+        try:
+            if press.topics is not None:
+                lines = [
+                    f"brief: {row['subject']!r} kind={row['topic_key']}"
+                    + (" [explored]" if row.get("explored") else "")
+                    for row in press.topics.reading(tenant=tenant)[:8]
+                ]
+                if lines:
+                    readings[TOPIC_DESK] = lines
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if press.surveys is not None:
+                lines = [
+                    f"survey[{survey.status}]: {survey.question!r}"
+                    for survey in press.surveys.store.list(tenant=tenant)[:8]
+                ]
+                if lines:
+                    readings[SURVEY_DESK] = lines
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if press.stories is not None:
+                stories = press.stories.list(tenant=tenant, limit=8)
+                lines = [
+                    f"post[{story.source}]: {story.headline!r}"
+                    for story in stories
+                ]
+                if lines:
+                    readings[COMPOSITION_DESK] = lines
+                if press.metrics is not None:
+                    pushes = [
+                        f"{story.headline!r}: pushed to "
+                        f"{press.metrics.pushed_count(tenant=tenant, story_id=story.story_id)}"
+                        for story in stories
+                    ]
+                    if pushes:
+                        readings[PUBLICATION_DESK] = pushes
+        except Exception:  # noqa: BLE001
+            pass
+        return {
+            desk: "\n".join(lines)[:2000] for desk, lines in readings.items()
+        }
+
+    def _press_desks_observe(self, request, session, params) -> Response:
+        """One observation pass over the desks (N7, doctrine 3): each
+        desk's reading through the ``news.observe`` seat; an issue files
+        a PROPOSAL the owner decides at the proposals door. A dead model
+        or an empty reading observes nothing — degraded is honest. One
+        open proposal per desk, never a pile."""
+        from ..press.observer import observe_desk
+
+        model = self._seat_actor(
+            self._tenant_model(session.tenant_id, purpose="news.observe"),
+            session.principal_id,
+        )
+        filed, skipped = [], 0
+        for desk, reading in sorted(
+            self._desk_readings(session.tenant_id).items()
+        ):
+            found = observe_desk(desk, reading, model=model)
+            if found is None:
+                skipped += 1
+                continue
+            issue, plan = found
+            proposal_id = self._desk_proposals.file(
+                tenant=session.tenant_id,
+                desk=desk,
+                issue=issue,
+                plan=plan,
+                evidence=[f"reading:{desk}"],
+            )
+            if proposal_id is None:
+                skipped += 1  # one open proposal per desk
+                continue
+            filed.append(proposal_id)
+            self._durable.audit.append(
+                "press.desk_proposal_filed",
+                {
+                    "run_id": "paver:schedule",
+                    "tenant": session.tenant_id,
+                    "desk": desk,
+                    "proposal_id": proposal_id,
+                },
+            )
+        return json_response(200, {"filed": filed, "skipped": skipped})
+
+    def _press_desk_proposals(self, request, session, params) -> Response:
+        status = request.query.get("status") or None
+        return json_response(
+            200,
+            {
+                "proposals": self._desk_proposals.list(
+                    tenant=session.tenant_id, status=status
+                )
+            },
+        )
+
+    def _press_desk_proposal_decide(self, request, session, params) -> Response:
+        """The OWNER's decision on one proposal — the standing approval
+        path, never a silent adoption. An approved proposal is the
+        mandate for a desk replacement (re-contribute the desk with the
+        fix; the Paver re-paves and the promotion retires the old node,
+        P2) — the type system enforces the swap, this door records the
+        judgment."""
+        if self._approval is None:
+            raise GatewayError(
+                404, "not_found", "approval authority is not configured"
+            )
+        proposal_id = params["proposal_id"]
+        approved = bool((request.body or {}).get("approved"))
+        try:
+            self._approval.approve(
+                session,
+                run_id=f"press:desk-proposal:{proposal_id}",
+                policy="press.desks",
+                requester_id="",
+                now=request.now or self._clock(),
+            )
+        except AuthorizationError as exc:
+            raise GatewayError(403, "forbidden", str(exc)) from exc
+        row = self._desk_proposals.decide(
+            proposal_id,
+            tenant=session.tenant_id,
+            approved=approved,
+            by=session.principal_id,
+        )
+        if row is None:
+            raise GatewayError(404, "not_found", "no open proposal by that id")
+        self._durable.audit.append(
+            "press.desk_proposal_decided",
+            {
+                "run_id": "paver:schedule",
+                "tenant": session.tenant_id,
+                "proposal_id": proposal_id,
+                "desk": row["desk"],
+                "approved": approved,
+                "by": session.principal_id,
+            },
+        )
+        return json_response(200, row)
 
     def _fire_edition(self, schedule, occurrence: str, skipped: int) -> None:
         """The edition fires: compose what is untold, rank for THIS
@@ -14268,6 +14590,146 @@ class GatewayApp:
             )
         return json_response(200, {"web_id": web_id, "stands": False, "revoked": revoked})
 
+    # -- the tenant SOP store (P1) ---------------------------------------- #
+    def _paver_sops_list(self, request, session, params) -> Response:
+        """The tenant's standing SOPs, exactly as authored — name, the
+        YAML, who wrote it, when. The law is inspectable, not implied."""
+        return json_response(
+            200, {"sops": self._sop_store.rows(session.tenant_id)}
+        )
+
+    def _paver_sops_put(self, request, session, params) -> Response:
+        """Author (or re-author, whole) one SOP — the HUMAN's hand on the
+        editorial law. Parsed strictly at the door: a document that does
+        not compile refuses with the parser's own words, so nothing
+        half-valid ever gates a web. Future paves read it immediately."""
+        text = str((request.body or {}).get("sop") or "")
+        if not text.strip():
+            raise GatewayError(
+                400, "invalid_request", "an SOP document is required (key: sop)"
+            )
+        try:
+            sop = self._sop_store.put(
+                tenant=session.tenant_id,
+                text=text,
+                authored_by=session.principal_id,
+            )
+        except Exception as exc:  # noqa: BLE001 - the parser's words ARE the reason
+            raise GatewayError(
+                400, "invalid_request", f"the SOP does not parse: {exc}"
+            ) from exc
+        self._durable.audit.append(
+            "paver.sop_authored",
+            {
+                "run_id": "paver:schedule",
+                "tenant": session.tenant_id,
+                "name": sop.name,
+                "by": session.principal_id,
+                "guards": len(sop.require_guard),
+            },
+        )
+        return json_response(
+            201, {"name": sop.name, "guards": len(sop.require_guard)}
+        )
+
+    def _paver_sops_delete(self, request, session, params) -> Response:
+        removed = self._sop_store.delete(
+            tenant=session.tenant_id, name=params["name"]
+        )
+        if not removed:
+            raise GatewayError(404, "not_found", "no SOP by that name")
+        self._durable.audit.append(
+            "paver.sop_removed",
+            {
+                "run_id": "paver:schedule",
+                "tenant": session.tenant_id,
+                "name": params["name"],
+                "by": session.principal_id,
+            },
+        )
+        return json_response(200, {"name": params["name"], "removed": True})
+
+    # -- the propagation hold book (P3) ----------------------------------- #
+    def _paver_holds_list(self, request, session, params) -> Response:
+        """Every OPEN hold in the caller's tenant — which web, which
+        trigger, which reserved operations stopped it, since when."""
+        return json_response(
+            200, {"holds": self._paver_holds.open_holds(session.tenant_id)}
+        )
+
+    def _paver_hold_decide(self, request, session, params) -> Response:
+        """The approver's decision on one held (web, trigger). A RELEASE
+        gives the fire-once claim back and re-stages the very message
+        that halted, so the drain re-delivers and the fire walks past
+        the reserved check — the web RESUMES, exactly once, under the
+        approver's named authority. A DENIAL settles the trigger: the
+        claim stays taken, nothing fires. Either way the hold row is
+        consumed — a decided hold is never re-decided."""
+        from ..paver import PROPAGATION_TOPIC, Enqueued
+
+        if self._approval is None:
+            raise GatewayError(
+                404, "not_found", "approval authority is not configured"
+            )
+        web_id = params["web_id"]
+        body = request.body or {}
+        stamp = str(body.get("trigger_stamp") or "")
+        if not stamp:
+            raise GatewayError(
+                400, "invalid_request", "trigger_stamp is required"
+            )
+        approved = bool(body.get("approved"))
+        now = request.now or self._clock()
+        try:
+            self._approval.approve(
+                session,
+                run_id=f"paver:hold:{web_id}",
+                policy="paver.release",
+                requester_id="",
+                now=now,
+            )
+        except AuthorizationError as exc:
+            raise GatewayError(403, "forbidden", str(exc)) from exc
+        row = self._paver_holds.decide(
+            session.tenant_id,
+            web_id,
+            stamp,
+            approved=approved,
+            by=session.principal_id,
+            now=now,
+        )
+        if row is None:
+            raise GatewayError(
+                404, "not_found", "no open hold for that web and trigger"
+            )
+        if approved:
+            # Resume: give the fire-once claim back and re-stage the very
+            # message that halted — the lazy tick's drain delivers it and
+            # the released hold admits the fire.
+            self._trigger_claims.release(stamp, web_id)
+            stored = self._pave_store.paved(session.tenant_id, web_id)
+            self._durable.outbox.publish(
+                PROPAGATION_TOPIC,
+                Enqueued(
+                    tenant=session.tenant_id,
+                    web_id=web_id,
+                    anchor=(stored or {}).get("anchor") or "",
+                    trigger_stamp=stamp,
+                    hop=int(row["hop"]),
+                ).payload(),
+            )
+        self._durable.audit.append(
+            "paver.hold_released" if approved else "paver.hold_denied",
+            {
+                "run_id": "paver:propagation",
+                "tenant": session.tenant_id,
+                "web_id": web_id,
+                "trigger_stamp": stamp,
+                "by": session.principal_id,
+            },
+        )
+        return json_response(200, {**row, "resumed": approved})
+
     def _bundle_sweep_audit(self, request, session, params) -> Response:
         """The sweep's whole history, straight off the hash-chained audit
         log: consents granted and revoked, and every firing — manual or
@@ -14484,12 +14946,11 @@ class GatewayApp:
 
     def _paver_sops(self, tenant: str) -> list:
         """The tenant's standing SOPs, for the Paver's gate projection —
-        the ONE seam a tenant SOP store wires into when it lands. Today no
-        gateway-level YAML SOP store exists (the desk's ``sop_edges_for``
-        is Supernode ORDERING, not the SOP schema), so this returns empty
-        and webs pave gate-free — named in the plan, not faked. Tests and
-        embedders may override or monkeypatch this seam."""
-        return []
+        the ONE seam the plan named for a tenant SOP store, now landed
+        (P1): human-authored YAML rows, parsed strictly at the door,
+        read back typed here. A tenant with no authored law still paves
+        gate-free — absence of an SOP is absence of a rule, honestly."""
+        return self._sop_store.list(tenant)
 
     def _build_adapter(self, tenant, miss, src, tgt, now):
         """Bridge ONE near-miss junction into an adapter citizen (W3).
@@ -14791,10 +15252,23 @@ class GatewayApp:
     def _promote_web(self, tenant: str, web, contract, now) -> str:
         """Register a rehearsed web as ONE SubgraphBody node — body-
         preserving (W2), so a trigger fires the exact subgraph verified.
-        Persists the paved contract for the trigger path (W4)."""
+        Persists the paved contract for the trigger path (W4).
+
+        P2: the promotion RETIRES its predecessor — the prior node of the
+        same web (its content moved) and any promotion standing at the
+        same anchor under a different web_id (its membership moved) are
+        revoked in the registry and dropped from the paved book. The
+        stale desk never limps along beside its successor.
+
+        P4: a web whose surveyed members ALL belong to one roster-agent
+        principal is promoted as THAT agent's standing property; anything
+        else stays the Paver's own."""
+        prior = self._pave_store.paved(tenant, web.web_id)
+        siblings = self._pave_store.paved_at_anchor(tenant, web.anchor or "")
+        owner = self._web_owner(tenant, web)
         skill = contract.subgraph_to_skill()
         result = self._nodeplace.contribute(
-            noder_principal=_PAVER_PRINCIPAL,
+            noder_principal=owner,
             tenant_id=tenant,
             skill=skill,
             semver="1.0.0",
@@ -14808,7 +15282,7 @@ class GatewayApp:
             try:
                 self._desk.create_account(
                     node_id,
-                    principal=_PAVER_PRINCIPAL,
+                    principal=owner,
                     tenant=tenant,
                     policy_version=NODE_POLICY_VERSION,
                 )
@@ -14821,9 +15295,70 @@ class GatewayApp:
             version_id=result.version.version_id,
             contract_json=contract.model_dump_json(),
             signature=web.signature(),
+            owner_principal=owner,
+            anchor=web.anchor or "",
             now=now,
         )
+        superseded = []
+        if prior is not None and prior["node_id"] != node_id:
+            superseded.append({**prior, "web_id": web.web_id})
+        for row in siblings:
+            if row["web_id"] != web.web_id and row["node_id"] != node_id:
+                superseded.append(row)
+        for row in superseded:
+            self._retire_promotion(tenant, row, successor=node_id, web=web)
         return node_id
+
+    def _web_owner(self, tenant: str, web) -> str:
+        """The principal a promoted web belongs to (P4). When every
+        surveyed member is owned by ONE roster-agent principal, the web
+        is that agent's standing property; a mixed or human-owned web is
+        the Paver's own, exactly as before."""
+        owners: set[str] = set()
+        try:
+            by_id = {
+                node.node_id: node.noder_principal
+                for node in self._nodeplace.all_nodes()
+                if node.tenant_id == tenant
+            }
+            for key in web.node_ids:
+                owners.add(by_id.get(key, ""))
+        except Exception:  # noqa: BLE001 - ownership defaults, never fails
+            return _PAVER_PRINCIPAL
+        if len(owners) == 1 and next(iter(owners)) in _AGENT_WEB_OWNERS:
+            return next(iter(owners))
+        return _PAVER_PRINCIPAL
+
+    def _retire_promotion(
+        self, tenant: str, row: dict, *, successor: str, web
+    ) -> None:
+        """Revoke a superseded promotion's registry node and drop its
+        paved row (P2) — as its recorded owner, never a human's node.
+        The same-web replacement keeps its (already replaced) paved row;
+        an anchor-sibling's row is dropped so nothing fires it again."""
+        owner = row.get("owner_principal") or _PAVER_PRINCIPAL
+        try:
+            self._nodeplace.revoke(
+                row["node_id"], noder_principal=owner, tenant_id=tenant
+            )
+        except Exception:  # noqa: BLE001 - a failed revoke is audited, not fatal
+            logging.getLogger("oolu.gateway").warning(
+                "paver could not revoke superseded node %s",
+                row["node_id"],
+                exc_info=True,
+            )
+        if row["web_id"] != web.web_id:
+            self._pave_store.retire_paved(tenant, row["web_id"])
+        self._durable.audit.append(
+            "paver.web_retired",
+            {
+                "run_id": "paver:schedule",
+                "tenant": tenant,
+                "web_id": row["web_id"],
+                "node_id": row["node_id"],
+                "successor": successor,
+            },
+        )
 
     def _pave_negative(self, tenant: str, web, reason: str) -> None:
         """A web that failed rehearsal leaves a negative-knowledge note so
@@ -14949,8 +15484,24 @@ class GatewayApp:
         try:
             contract = NodeContract.model_validate_json(stored["contract_json"])
             compiled, value_pipe, _ = self._prepare_web_run(contract, namespace=tenant)
+            # Two sources of a hold: the compiled contract's own reserved
+            # (irreversible) actions, and the tenant SOP's ``approval``
+            # rules projected onto the web's children by NAME (P3 — the
+            # editorial hold: the human's law reserves a desk, the fire
+            # halts, the approver's release resumes it).
             reserved = reserved_operations(compiled)
-            if reserved:
+            reserved += self._sop_reserved_names(tenant, contract)
+            if reserved and not self._paver_holds.released(
+                tenant, web_id, trigger_stamp
+            ):
+                # The halt is a DURABLE row (P3): the approver's release
+                # marks it, the resume re-delivers, and this check walks
+                # past — scoped to exactly this (web, trigger), consumed
+                # by that one fire, never a standing bypass.
+                self._paver_holds.hold(
+                    tenant, web_id, trigger_stamp,
+                    hop=hop, reserved=reserved, now=now,
+                )
                 self._durable.audit.append(
                     "paver.propagation_held",
                     {
@@ -14989,6 +15540,28 @@ class GatewayApp:
             reason=record.error or "the web run failed",
         )
 
+    def _sop_reserved_names(self, tenant: str, contract) -> list[str]:
+        """The tenant SOP ``approval`` rules projected onto a web's
+        children by NAME — the W5 name-matching discipline applied to
+        the hold seam (P3). A child the human's law reserves halts the
+        fire as ``awaiting_approval`` until an approver releases that
+        exact (web, trigger)."""
+        body = getattr(contract, "body", None)
+        children = getattr(body, "nodes", None) or []
+        if not children:
+            return []
+        names: set[str] = set()
+        for sop in self._paver_sops(tenant):
+            rule = getattr(sop, "approval", None)
+            if rule is None:
+                continue
+            for pattern in rule.operations:
+                folded = str(pattern).casefold()
+                for child in children:
+                    if fnmatchcase(child.name.casefold(), folded):
+                        names.add(child.name)
+        return sorted(names)
+
     def _paver_tenants(self) -> list[str]:
         """Every tenant with at least one node — the survey's field of
         view. Best-effort: an enumeration failure surveys nothing, never
@@ -15011,16 +15584,20 @@ class GatewayApp:
         node marks that node a pulse anchor."""
         from ..paver import SurveyNode
 
+        # The Paver's own products (paved webs, W3 adapters) are never
+        # re-surveyed (W3.1) — surveying an adapter citizen re-grinds
+        # the very web it bridged under a new web_id. Promoted web nodes
+        # are tracked by id (P4): a web promoted under an AGENT's
+        # principal is still the Paver's product, never its raw material
+        # — while the agent's own DESK nodes survey like anyone's.
+        promoted = self._pave_store.promoted_node_ids(tenant)
         nodes = [
             node
             for node in self._nodeplace.all_nodes()
             if node.tenant_id == tenant
             and node.revoked_at is None
-            # The Paver's own products (paved webs, W3 adapters) are never
-            # re-surveyed (W3.1) — surveying an adapter citizen re-grinds
-            # the very web it bridged under a new web_id. Its user-node
-            # children still carry the survey signal.
             and node.noder_principal != _PAVER_PRINCIPAL
+            and node.node_id not in promoted
         ]
         # Which nodes carry a webhook door.
         hook_nodes: set[str] = set()
@@ -15045,8 +15622,21 @@ class GatewayApp:
                 if node.node_id in pulse_nodes
                 else None
             )
+            # The version's content hash rides the survey (P2): the web
+            # signature covers it, so an implementation edit re-paves.
+            try:
+                version = self._nodeplace.latest_version(node.node_id)
+                content_hash = version.content_hash if version else ""
+            except Exception:  # noqa: BLE001 - hashless still surveys
+                content_hash = ""
             survey_nodes.append(
-                SurveyNode(key=node.node_id, contract=contract, anchor_kind=kind)
+                SurveyNode(
+                    key=node.node_id,
+                    contract=contract,
+                    anchor_kind=kind,
+                    content_hash=content_hash,
+                    owner=node.noder_principal,
+                )
             )
         return survey_nodes
 

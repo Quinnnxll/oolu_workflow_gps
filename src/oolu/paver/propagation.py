@@ -43,6 +43,7 @@ __all__ = [
     "FireResult",
     "PropagationConsentStore",
     "TriggerClaimStore",
+    "WebHoldStore",
     "WebTriggerRouter",
 ]
 
@@ -209,6 +210,142 @@ class TriggerClaimStore:
                 (trigger_stamp,),
             ).fetchone()
         return int(row["n"] if row is not None else 0)
+
+
+# --------------------------------------------------------------------------- #
+# Holds — the reserved-hop halt as a durable row the approver can RELEASE     #
+# (P3). The halt existed since W4; this book is what makes the release        #
+# RESUME the web instead of stranding the trigger forever.                    #
+# --------------------------------------------------------------------------- #
+_HOLD_SCHEMA = """CREATE TABLE IF NOT EXISTS paver_holds (
+    tenant TEXT NOT NULL,
+    web_id TEXT NOT NULL,
+    trigger_stamp TEXT NOT NULL,
+    hop INTEGER NOT NULL DEFAULT 1,
+    reserved TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'held',
+    held_at TEXT NOT NULL,
+    decided_at TEXT,
+    decided_by TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (tenant, web_id, trigger_stamp)
+)"""
+
+
+class WebHoldStore:
+    """One durable row per halted (web, trigger): held → released/denied.
+
+    ``hold`` is idempotent (a re-delivered halt re-records nothing);
+    ``release`` marks the row so the SAME trigger's next delivery walks
+    PAST the reserved check — the approval is consumed by that one fire,
+    scoped to the exact (web, trigger_stamp) the human looked at, never
+    a standing bypass. ``deny`` settles the trigger without a fire."""
+
+    def __init__(self, conn) -> None:
+        self._conn = conn
+        with self._conn.transaction() as db:
+            db.execute(_HOLD_SCHEMA)
+
+    def hold(
+        self,
+        tenant: str,
+        web_id: str,
+        trigger_stamp: str,
+        *,
+        hop: int,
+        reserved: list[str],
+        now: datetime,
+    ) -> bool:
+        stamp = now.isoformat() if hasattr(now, "isoformat") else str(now)
+        with self._conn.transaction() as db:
+            cursor = db.execute(
+                """INSERT OR IGNORE INTO paver_holds
+                     (tenant, web_id, trigger_stamp, hop, reserved,
+                      status, held_at)
+                   VALUES (?, ?, ?, ?, ?, 'held', ?)""",
+                (
+                    tenant,
+                    web_id,
+                    trigger_stamp,
+                    int(hop),
+                    ",".join(reserved),
+                    stamp,
+                ),
+            )
+        return int(getattr(cursor, "rowcount", 0) or 0) > 0
+
+    def decide(
+        self,
+        tenant: str,
+        web_id: str,
+        trigger_stamp: str,
+        *,
+        approved: bool,
+        by: str,
+        now: datetime,
+    ) -> dict | None:
+        """Settle one OPEN hold. Returns the row (with its hop, for the
+        re-enqueue) or None when no open hold matches — a decided hold
+        is never re-decided, so a release is consumed exactly once."""
+        stamp = now.isoformat() if hasattr(now, "isoformat") else str(now)
+        status = "released" if approved else "denied"
+        with self._conn.transaction() as db:
+            cursor = db.execute(
+                """UPDATE paver_holds
+                   SET status = ?, decided_at = ?, decided_by = ?
+                   WHERE tenant = ? AND web_id = ? AND trigger_stamp = ?
+                     AND status = 'held'""",
+                (status, stamp, by, tenant, web_id, trigger_stamp),
+            )
+        if not (getattr(cursor, "rowcount", 0) or 0):
+            return None
+        return self.get(tenant, web_id, trigger_stamp)
+
+    def released(self, tenant: str, web_id: str, trigger_stamp: str) -> bool:
+        """Does a RELEASED hold stand for exactly this (web, trigger)?
+        The fire path reads this to walk past the reserved check — the
+        one door through the wall, opened by a named approver."""
+        with self._conn.lock:
+            row = self._conn.db.execute(
+                """SELECT 1 FROM paver_holds
+                   WHERE tenant = ? AND web_id = ? AND trigger_stamp = ?
+                     AND status = 'released'""",
+                (tenant, web_id, trigger_stamp),
+            ).fetchone()
+        return row is not None
+
+    def get(self, tenant: str, web_id: str, trigger_stamp: str) -> dict | None:
+        with self._conn.lock:
+            row = self._conn.db.execute(
+                """SELECT * FROM paver_holds
+                   WHERE tenant = ? AND web_id = ? AND trigger_stamp = ?""",
+                (tenant, web_id, trigger_stamp),
+            ).fetchone()
+        return self._row(row) if row is not None else None
+
+    def open_holds(self, tenant: str) -> list[dict]:
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                """SELECT * FROM paver_holds
+                   WHERE tenant = ? AND status = 'held'
+                   ORDER BY held_at, web_id""",
+                (tenant,),
+            ).fetchall()
+        return [self._row(row) for row in rows]
+
+    @staticmethod
+    def _row(row) -> dict:
+        reserved = str(row["reserved"] or "")
+        return {
+            "tenant": str(row["tenant"]),
+            "web_id": str(row["web_id"]),
+            "trigger_stamp": str(row["trigger_stamp"]),
+            "hop": int(row["hop"]),
+            "reserved": reserved.split(",") if reserved else [],
+            "status": str(row["status"]),
+            "held_at": str(row["held_at"]),
+            "decided_at": row["decided_at"],
+            "decided_by": str(row["decided_by"] or ""),
+        }
 
 
 # --------------------------------------------------------------------------- #
