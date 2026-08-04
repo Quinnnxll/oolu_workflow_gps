@@ -74,6 +74,7 @@ def _press_desk(conn):
         PressDesk,
         StoryMetricsStore,
         StoryStore,
+        TopicBriefStore,
     )
 
     contributions = ContributionStore(conn)
@@ -85,6 +86,7 @@ def _press_desk(conn):
         intake=IntakeStore(conn),
         metrics=StoryMetricsStore(conn),
         demand=GenreDemandStore(conn),
+        topics=TopicBriefStore(conn),
     )
 
 

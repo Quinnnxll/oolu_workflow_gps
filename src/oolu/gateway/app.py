@@ -1276,6 +1276,9 @@ class GatewayApp:
         # The genre desk (N1): the standing demand reading, every
         # factor named — the first editorial decision, on evidence.
         r.add("GET", "/v1/press/genres/demand", self._press_genre_demand)
+        # The topic desk (N2): the standing slate — typed evidence,
+        # named factors, disclosures born with the topic.
+        r.add("GET", "/v1/press/topics", self._press_topics)
         r.add("GET", "/v1/press/contributions", self._press_list)
         r.add("POST", "/v1/press/contributions", self._press_publish)
         r.add(
@@ -2711,6 +2714,10 @@ class GatewayApp:
     _NEWS_GENRE_ASKS = frozenset(
         {"genres", "genre", "streams", "switch genre", "pick a genre"}
     )
+    # The topic desk's ask (N2): the standing slate, in the desk's words.
+    _NEWS_TOPIC_ASKS = frozenset(
+        {"topics", "topic", "slate", "the slate", "beat", "the beat"}
+    )
 
     def _news_intake_turn(self, session, body, message):
         """The News desk's hand on one thread message — or None when the
@@ -2782,6 +2789,11 @@ class GatewayApp:
                     "desk",
                     {"kind": "genres", "items": taxonomy_items()},
                 )
+            if normal in self._NEWS_TOPIC_ASKS and press.topics is not None:
+                from ..press import topics_line
+
+                briefs = self._topic_reading(session.tenant_id)
+                return (topics_line(briefs), None, "desk")
             # A named stream: the tap is an ANONYMOUS interest count —
             # no principal rides the row — and the desk answers with
             # that stream's standing in the demand reading.
@@ -3898,6 +3910,118 @@ class GatewayApp:
         press.demand.record(tenant=tenant, items=items)
         return items
 
+    def _beat_rows(self, tenant: str):
+        """The marketplace beat's read surface: the explorer's own
+        normalized rows (listings, the discount fact, verified
+        feedback, the order-book trust score, member lab results) with
+        the ADVERTISER flags stamped at the door — law 3's disclosure
+        is born here, before any mining."""
+        from ..explorer import build_rows, feedback_of, lab_of
+        from ..press import BeatRow
+
+        listings = [
+            listing
+            for listing in self._commerce_catalog.store.active()
+            if listing.tenant_id == tenant
+        ]
+        rows = build_rows(
+            listings,
+            feedback_for=lambda lid: feedback_of(
+                self._explorer_reviews.store.for_listing(lid, tenant=tenant)
+            ),
+            trust_for=self._explorer_trust_for(tenant),
+            lab_for=lambda lid: lab_of(
+                self._explorer_lab.for_listing(lid, tenant=tenant)
+            ),
+        )
+        campaigns = [
+            c
+            for c in self._ad_campaigns.list(tenant=tenant)
+            if c.status == "active"
+        ]
+        advertisers = {c.advertiser for c in campaigns}
+        promoted = {c.offer_ref for c in campaigns}
+        return [
+            BeatRow(
+                listing_id=row.listing_id,
+                title=row.title,
+                seller=row.seller,
+                price_micros=row.price_micros,
+                list_price_micros=row.list_price_micros,
+                discount_percent=row.discount_percent,
+                feedback=dict(row.feedback),
+                trust=dict(row.trust),
+                lab=dict(row.lab),
+                advertiser=row.seller in advertisers,
+                promoted=row.listing_id in promoted,
+            )
+            for row in rows
+        ]
+
+    def _topic_reading(self, tenant: str):
+        """The topic desk's decision (N2): mine the beat and the shelf
+        for typed events, select against the genre desk's standing
+        demand, record the slate whole. Deterministic end to end — no
+        model call anywhere in the decision. Returns [] on a host
+        without the desk's stores."""
+        from ..press import (
+            ClusterPiece,
+            mine_clusters,
+            mine_measured_gaps,
+            mine_price_moves,
+            mine_trust_bands,
+            select_topics,
+        )
+
+        press = self._press
+        if press is None or press.topics is None:
+            return []
+        now = self._clock()
+        rows = self._beat_rows(tenant)
+        candidates = [
+            *mine_price_moves(rows, now=now),
+            *mine_trust_bands(rows, now=now),
+            *mine_measured_gaps(rows, now=now),
+            *mine_clusters(
+                [
+                    ClusterPiece(
+                        contribution_id=record.contribution_id,
+                        author=record.author,
+                        genre=record.genres[0] if record.genres else "local",
+                        title=record.title,
+                        text=record.body,
+                        created_at=record.created_at,
+                    )
+                    for record in press.store.list(tenant=tenant, limit=200)
+                ]
+            ),
+        ]
+        demand_rank = {
+            row["genre"]: row["rank"]
+            for row in (
+                press.demand.reading(tenant=tenant)
+                if press.demand is not None
+                else []
+            )
+        }
+        briefs = select_topics(candidates, demand_rank=demand_rank, now=now)
+        press.topics.record(tenant=tenant, briefs=briefs)
+        return briefs
+
+    def _press_topics(self, request, session, params) -> Response:
+        """The standing slate — every brief with its evidence rows,
+        factor breakdown, and disclosure. The second editorial
+        decision, explained."""
+        press = self._require_press()
+        if press.topics is None:
+            raise GatewayError(
+                404, "not_found", "this host keeps no topic desk"
+            )
+        self._topic_reading(session.tenant_id)
+        return json_response(
+            200, {"items": press.topics.reading(tenant=session.tenant_id)}
+        )
+
     def _press_genre_demand(self, request, session, params) -> Response:
         """The standing demand reading, rank order — every row carries
         its factor breakdown and raw evidence, so the first editorial
@@ -4253,15 +4377,17 @@ class GatewayApp:
                     )
                 except ValueError:
                     pass  # a full reminder book is not a failed edition
-            # The genre desk reads the fresh engagement book (N1): the
-            # demand reading refreshes with every edition fire — the
-            # benchmark loop starts closing. A broken desk is its own
-            # story, never a failed edition.
+            # The genre desk reads the fresh engagement book (N1) and
+            # the topic desk re-mines the beat against it (N2): both
+            # standing readings refresh with every edition fire — the
+            # benchmark loop closing. A broken desk is its own story,
+            # never a failed edition.
             try:
                 self._genre_demand_reading(schedule.tenant)
+                self._topic_reading(schedule.tenant)
             except Exception:  # noqa: BLE001 - the edition already landed
                 logging.getLogger("oolu.gateway").exception(
-                    "demand reading failed for %s", schedule.schedule_id
+                    "desk reading failed for %s", schedule.schedule_id
                 )
             self._durable.audit.append(
                 "pulse.fired",

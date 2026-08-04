@@ -311,6 +311,26 @@ exploration rule and says so; no model call anywhere in the decision.
 
 ### N2 — the topic desk and the marketplace beat
 
+**Status: LANDED** — `press/topics.py`: four deterministic miners over
+typed rows (the gateway hands them in; the press package imports no
+marketplace module and the import scan holds): `mine_price_moves` (the
+discount FACT past a 10% floor), `mine_trust_bands` (order-book trust
+in the concern/proven bands, only with a real book behind the number),
+`mine_measured_gaps` (lab vs verified-review factors splitting ≥0.35,
+both sides with real evidence — a neutral no-evidence factor never
+manufactures a gap), `mine_clusters` (independent voices agreeing via
+the corroboration machinery, anchored on the first telling, never
+twinned). Law 3 from birth: the gateway stamps advertiser/promoted
+flags onto the beat rows (`_beat_rows`) and every candidate carries
+its named disclosure before selection. `select_topics` blends demand
+(N1's standing reading) 0.4 / evidence 0.35 / freshness 0.25 with the
+breakdown stored; `TopicBriefStore` refuses a brief without facts
+(provenance mandatory) and replaces the slate whole. Doors:
+`GET /v1/press/topics`; "topics"/"slate"/"beat" in the News thread
+speaks the slate with every disclosure; the edition pulse re-mines the
+beat after the demand refresh. Pinned by `tests/test_topic_desk.py`
+and the N2 case in `tests/test_newsroom.py`.
+
 Goal: inside the chosen genre, decide WHAT to report — and open the
 marketplace's own typed records to the newsroom as first-class sources.
 

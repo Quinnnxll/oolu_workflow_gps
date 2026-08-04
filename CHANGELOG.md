@@ -4,6 +4,32 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+N2 landed — the topic desk and the marketplace beat
+(docs/news-agent-benchmark-roadmap.md, phase N2):
+
+- **WHAT to report, decided on typed events** — `press/topics.py`:
+  four deterministic miners over the platform's own records — the
+  discount fact past its floor, order-book trust crossing the
+  concern/proven bands (only with a real book behind the number), the
+  lab and the verified reviews disagreeing (both sides with real
+  evidence; a neutral no-evidence factor never manufactures a gap),
+  and independent member voices agreeing on a subject (the
+  corroboration machinery lifted above the single piece, anchored on
+  the first telling, never twinned). The closed loop does not open:
+  the gateway hands the desk typed rows; the press package imports no
+  marketplace module and the import scan holds.
+- **The disclosure is born with the topic (law 3)** — the beat rows
+  carry advertiser/promoted flags stamped at the door; a candidate
+  whose seller runs active advertising — or whose listing IS a
+  campaign's target — names it on the candidate itself, and the words
+  ride every rendering of the slate.
+- **Selection is named factors, provenance is mandatory** —
+  demand (N1's standing reading) 0.4 / evidence 0.35 / freshness 0.25,
+  breakdown stored, reproducible; a brief without evidence rows is
+  REFUSED at the store; the slate replaces whole. Doors:
+  `GET /v1/press/topics`; "topics"/"slate"/"beat" in the News thread;
+  the edition pulse re-mines the beat right after the demand refresh.
+
 N1 landed — the genre desk
 (docs/news-agent-benchmark-roadmap.md, phase N1):
 

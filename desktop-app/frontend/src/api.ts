@@ -661,6 +661,29 @@ export interface GenreDemandRow {
   computed_at: string;
 }
 
+// The topic desk's standing slate (N2): each brief resolves to typed
+// evidence rows, carries its factor breakdown, and speaks its
+// advertiser disclosure — born with the topic, never bolted on.
+export interface TopicFact {
+  kind: string;
+  ref: string;
+  summary: string;
+  value: number | null;
+}
+
+export interface TopicBriefRow {
+  topic_key: string;
+  genre: string;
+  subject: string;
+  facts: TopicFact[];
+  disclosure: string;
+  rank: number;
+  score: number;
+  factors: { demand: number; evidence: number; freshness: number };
+  topic_version: number;
+  computed_at: string;
+}
+
 // The benchmark numbers for one story — revealed only above the
 // k-anonymity floor; below it the honest reason and nothing else.
 export interface StoryMetrics {
@@ -1610,6 +1633,10 @@ export const api = {
   // named — computed fresh from recorded inputs on each read.
   pressGenreDemand: () =>
     req<{ items: GenreDemandRow[] }>("GET", "/v1/press/genres/demand"),
+  // The topic desk (N2): the standing slate — typed evidence, named
+  // factors, disclosures born with the topic.
+  pressTopics: () =>
+    req<{ items: TopicBriefRow[] }>("GET", "/v1/press/topics"),
   pressNewsroomRun: () =>
     req<{ composed: number; items: Story[] }>(
       "POST",

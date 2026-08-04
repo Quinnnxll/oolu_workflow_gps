@@ -43,6 +43,7 @@ from oolu.press import (
     StoryMetricsStore,
     StoryStore,
     Taste,
+    TopicBriefStore,
     edition_message,
     rank_edition,
     score,
@@ -392,6 +393,7 @@ def _host(tmp_path):
         pairwise=PairwiseStore(conn),
         metrics=StoryMetricsStore(conn),
         demand=GenreDemandStore(conn),
+        topics=TopicBriefStore(conn),
     )
     gateway = GatewayApp(
         app._durable,
@@ -746,6 +748,10 @@ def test_the_edition_arrives_on_the_pulse_as_news_own_message(tmp_path):
     assert demand and [r["rank"] for r in demand] == list(
         range(1, len(demand) + 1)
     )
+    # N2: and the topic desk re-mined the beat against it — the seeded
+    # shelf carries two independent voices on the harbor subject.
+    slate = gateway._press.topics.reading(tenant="t1")
+    assert any(row["topic_key"].startswith("cluster:") for row in slate)
     conn.close()
 
 
