@@ -4,6 +4,34 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+Planned — the node vitality plan (docs/node-vitality-plan.md): seven
+defects from live testing of the node-creation capability, each
+investigated to a verified root cause before planning (Part I carries
+the file:line evidence), then phased as the V-series: V0 the run
+surface tells the truth (server-anchored working state; the false
+"didn't go through" dies), V1 work survives the window (the standing
+async seam gains its one deliberate worker; restart re-drive), V2
+birth without lies (a deterministic contract-code agreement wall —
+declared inputs staged and proven consumed — plus the secret_form
+block → durable SecretVault → broker-side header injection for
+API-needing builds), V3 one ask earns its finish (the task loop runs
+to the seat's money budget, not fixed micro-caps; consent
+compression), V4 find the standing node first (search-before-build
+widens past own-nodes; built-in doors yield to standing nodes; the
+model gets find_nodes), V5 the web at scale (indexed discovery,
+embedding + co-occurrence link dimensions that rank but never wire,
+and the energy reading: −log posterior + costs, Thompson-sampled,
+replayable), V6 the node books and the vitality law (measured
+per-node cost, hardened income join, the −$5/year retirement sweep
+with notice, bounded gravity), V7 the open door (the hardcoded 3-use
+web-search cap becomes a consent-and-budget dial). Key verified
+findings behind the plan: runs execute synchronously inside the HTTP
+request with no daemon and checkpoint only at pause; the reminder
+door deterministically steers asks away from standing nodes; the
+birth gate stages no inputs and the only input-agreement check is an
+optional fail-open reviewer; MeteringDeriver has no production
+caller, so the money substrate never materializes.
+
 Fixed — blob-backed words render as words: a text/CSV/JSON file that
 took the drawer's blob door (every device upload since the blob-first
 fix) showed the "binary file" card instead of its content. The reading
