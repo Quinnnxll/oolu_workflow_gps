@@ -46,8 +46,6 @@ from oolu.press import (
     LICENSES,
     ContributionStore,
     PairwiseStore,
-    PollDesk,
-    PollStore,
     PreferenceStore,
     PressDesk,
     StoryStore,
@@ -302,7 +300,7 @@ def _host(tmp_path):
         ContributionStore(conn),
         stories=StoryStore(conn),
         preferences=PreferenceStore(conn),
-        polls=PollDesk(PollStore(conn), PairwiseStore(conn), rng=random.Random(7)),
+        pairwise=PairwiseStore(conn),
     )
     gateway = GatewayApp(
         app._durable,

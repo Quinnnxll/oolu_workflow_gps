@@ -2,7 +2,7 @@
 
 A0 of the agents-expansion plan (docs/agents-expansion-plan.md): OoLu stays
 the general assistant at the head of the sidebar; below it the app lists
-named agents — News, Poll, Explorer, Travel Plan — each a real conversation
+named agents — News, Explorer, Market, Travel Plan — each a real conversation
 with its own durable thread (``social.AssistantHistoryStore`` tags turns by
 agent) and its own registered model seat (``seats.py``), never a costume on
 the OoLu chat.
@@ -59,28 +59,6 @@ ROSTER: tuple[AgentCard, ...] = (
             "agents-expansion plan."
         ),
         seat="news.compose",
-    ),
-    AgentCard(
-        agent_id="poll",
-        name="Poll",
-        tagline="Two things, compared — for fun, and for real",
-        scope=(
-            "I offer pairs of member pieces to compare — vote first, "
-            "then see the real numbers (once enough members voted). "
-            "Say “poll” for a pair, “genres” to pick a stream, or name "
-            "a genre. I am also the floor's social scientist: pairs are "
-            "designed to test standing hypotheses about how this "
-            "community reads, and when a pattern holds — or a genuine "
-            "debate opens — I report the field note here. Ask "
-            "“findings” any time. With personalization on, your votes "
-            "also shape your News edition."
-        ),
-        ahead=(
-            "Affiliate advertising with revenue shared back to "
-            "contributors arrives in phases A4–A5 of the "
-            "agents-expansion plan."
-        ),
-        seat="poll.pair",
     ),
     AgentCard(
         agent_id="explorer",
@@ -177,7 +155,7 @@ Hard rules, no exceptions:
   measured anything — none of that machinery exists for you yet. When
   asked for it, say plainly what you can do today and what phase brings
   the rest.
-- Never invent member content, statistics, poll results, prices,
+- Never invent member content, statistics, survey results, prices,
   discounts, reviews, trust scores, or schedules. A number you were not
   given is a number you do not have.
 - You may discuss, explain, and help the user think through the subject

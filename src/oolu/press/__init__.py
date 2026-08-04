@@ -4,9 +4,11 @@ A1 of the agents-expansion plan (docs/agents-expansion-plan.md): the
 contribution spine. Members publish material into the app under a stated
 license; every contribution is scrubbed, genre-keyed, author-attributed,
 durable, and revocable-forward. Later phases build on exactly these
-records: the newsroom composes them into stories (A2), the poll floor
-mines them for comparable pairs (A3), and the ad dividend splits over
-their attribution weights (A5).
+records: the newsroom composes them into stories (A2) and the ad
+dividend splits over their attribution weights (A5). The poll floor
+(A3) has been REMOVED — the member's pairwise preference book it wrote
+into survives in :mod:`pairwise`, fed by story feedback and future
+survey instruments.
 
 The package is closed-loop by law (plan invariant 1): nothing in here
 reaches a web-search or external-content seam — pinned by the import
@@ -47,28 +49,12 @@ from .intake import (
     review,
 )
 from .newsroom import LineageShare, Newsroom, Story, StoryStore
+from .pairwise import PairwiseStore
 from .personalize import (
     SEMANTIC_PULL,
     Taste,
     semantic_affinity,
     taste_snippet,
-)
-from .polls import (
-    K_FLOOR,
-    PairwiseStore,
-    PollDesk,
-    PollPair,
-    PollSide,
-    PollStore,
-    comparable,
-)
-from .scientist import (
-    HYPOTHESES,
-    MIN_DECIDED,
-    Finding,
-    FindingStore,
-    judge,
-    strategist,
 )
 from .standards import RUBRIC_VERSION, RubricBreakdown, score, select
 from .taxonomy import GENRES, TAXONOMY_VERSION, Genre, taxonomy_items
@@ -81,12 +67,7 @@ __all__ = [
     "GATHER_ASK",
     "GATHER_ASK_WORDS",
     "GENRES",
-    "HYPOTHESES",
-    "MIN_DECIDED",
-    "Finding",
-    "FindingStore",
     "INTAKE_LICENSE",
-    "K_FLOOR",
     "LICENSES",
     "MAX_BODY_CHARS",
     "MAX_MEDIA",
@@ -105,24 +86,17 @@ __all__ = [
     "MediaRef",
     "Newsroom",
     "PairwiseStore",
-    "PollDesk",
-    "PollPair",
-    "PollSide",
-    "PollStore",
     "PreferenceStore",
     "PressDesk",
     "PressError",
-    "comparable",
     "RubricBreakdown",
     "Story",
     "StoryStore",
     "draft_from_material",
     "edition_message",
     "fold_answer",
-    "judge",
     "leak_report",
     "looks_like_material",
-    "strategist",
     "rank_edition",
     "review",
     "score",

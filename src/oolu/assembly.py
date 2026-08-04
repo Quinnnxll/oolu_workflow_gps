@@ -61,32 +61,25 @@ class PlanningOnlyOptimizer:
 
 
 def _press_desk(conn):
-    """The one press wiring: shared stores, and the poll floor dealt by
-    the social scientist (the strategist reads the decided-evidence
-    book and serves the pair that measures the most)."""
+    """The one press wiring: shared stores — contributions, the
+    newsroom's stories, each member's consented preference signals, and
+    the member's pairwise preference book (story feedback and future
+    survey instruments write it; the DPO export reads it)."""
     from .press import (
         ContributionStore,
         IntakeStore,
         PairwiseStore,
-        PollDesk,
-        PollStore,
         PreferenceStore,
         PressDesk,
         StoryStore,
-        strategist,
     )
 
     contributions = ContributionStore(conn)
-    polls = PollStore(conn)
     return PressDesk(
         contributions,
         stories=StoryStore(conn),
         preferences=PreferenceStore(conn),
-        polls=PollDesk(
-            polls,
-            PairwiseStore(conn),
-            strategist=strategist(polls, contributions),
-        ),
+        pairwise=PairwiseStore(conn),
         intake=IntakeStore(conn),
     )
 

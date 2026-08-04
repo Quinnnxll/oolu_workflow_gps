@@ -34,6 +34,7 @@ from oolu.press import (
     ContributionStore,
     LineageShare,
     Newsroom,
+    PairwiseStore,
     PreferenceStore,
     PressDesk,
     PressError,
@@ -386,6 +387,7 @@ def _host(tmp_path):
         ContributionStore(conn),
         stories=StoryStore(conn),
         preferences=PreferenceStore(conn),
+        pairwise=PairwiseStore(conn),
     )
     gateway = GatewayApp(
         app._durable,
@@ -497,6 +499,53 @@ def test_stories_consent_and_hidden_scoring_end_to_end(tmp_path):
     assert [i["story_id"] for i in neutral.body["items"]] != [
         i["story_id"] for i in bent.body["items"]
     ]
+    conn.close()
+
+
+def test_the_pairwise_book_outlives_the_poll_floor(tmp_path):
+    """The DPO export door stands without any poll: the pairwise book is
+    the member's own, written by whatever instrument records a choice
+    (story feedback, future surveys), consent-gated at the door, and
+    scrubbed once more on the way out."""
+    gateway, conn, ident = _host(tmp_path)
+    bob = ident.token("bob")
+
+    # Consent off: nothing consented exists to export.
+    refused = gateway.handle(
+        _req("GET", "/v1/press/preferences/export", token=bob)
+    )
+    assert refused.status == 403
+
+    assert (
+        gateway.handle(
+            _req(
+                "PUT",
+                "/v1/settings",
+                token=bob,
+                body={"changes": {"press.personalize": True}},
+            )
+        ).status
+        == 200
+    )
+    # An instrument records a pairwise choice into the shared book —
+    # same table, no poll anywhere.
+    PairwiseStore(conn).record(
+        tenant="t1",
+        principal="bob",
+        source="survey",
+        prompt="[local] Which telling serves the reader better?",
+        chosen="The fuller telling, with the queue described.",
+        rejected="The brief one.",
+        genres=("local",),
+    )
+    exported = gateway.handle(
+        _req("GET", "/v1/press/preferences/export", token=bob)
+    )
+    assert exported.status == 200 and exported.body["count"] == 1
+    pair = exported.body["items"][0]
+    assert pair["chosen"].startswith("The fuller telling")
+    # And the book rides account erasure like every consented signal.
+    assert PairwiseStore(conn).erase(tenant="t1", principal="bob") == 1
     conn.close()
 
 

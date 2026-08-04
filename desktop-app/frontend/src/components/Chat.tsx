@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { accountScope, api, TERMINAL_PHASES } from "../api";
-import type { ChatAction, ChatHistoryTurn } from "../api";
+import type { ChatAction, ChatHistoryTurn, TurnFileRef } from "../api";
 import { humanizeEvent, statusSentence } from "../humanize";
+import { AttachmentStrip } from "./Attachments";
 import { ChartBlock } from "./Agents";
 import { conciseName } from "../naming";
 import { loadCompose, saveCompose, t, tf, useT } from "../ui";
@@ -19,9 +20,7 @@ import { OoLuAvatar } from "./OoLuAvatar";
 import {
   capturePhoto,
   currentPosition,
-  fileToDrawerContent,
   photoName,
-  photoToDataUrl,
   pickLocalFiles,
 } from "../device";
 import { createRecognizer, speak, speechInputSupported } from "../voice";
@@ -41,7 +40,9 @@ import { ForwardMenu } from "./ForwardMenu";
 // result — so the machinery (skills, paths, synthesis) stays invisible.
 
 type Msg =
-  | { kind: "user"; text: string }
+  // A user turn may carry attachments — drawer refs the bubble renders
+  // as previews with a lossless download, not just names.
+  | { kind: "user"; text: string; files?: TurnFileRef[] }
   | {
       kind: "assistant";
       text: string;
@@ -120,7 +121,7 @@ function fromServer(items: ChatHistoryTurn[]): Msg[] {
   return items.map((turn): Msg => {
     if (turn.kind === "run") return { kind: "run", runId: turn.body };
     if (turn.kind === "assistant") return { kind: "assistant", text: turn.body };
-    return { kind: "user", text: turn.body };
+    return { kind: "user", text: turn.body, files: turn.files };
   });
 }
 
@@ -304,12 +305,25 @@ export function Chat({
     try {
       const shot = await capturePhoto();
       if (!shot) return; // a cancelled camera is not an event
-      const dataUrl = await photoToDataUrl(shot);
-      const name = photoName();
-      await api.createFile(name, dataUrl, undefined, "camera", "image/jpeg");
+      // The shot's ORIGINAL bytes go up (the blob door, lossless); only
+      // a blob-less host downscales to fit its inline row. The name is
+      // ours, the extension the camera's own.
+      const ext = (shot.type.split("/")[1] || "jpg").replace("jpeg", "jpg");
+      const name = photoName().replace(/jpg$/, ext);
+      const named = new File([shot], name, {
+        type: shot.type || "image/jpeg",
+      });
+      const saved = await api.saveToDrawer(named, undefined, "camera");
       void send(
-        `I just took a photo on this device — it is in Files as “${name}”` +
+        `I just took a photo on this device — it is in Files as “${saved.name}”` +
           " (folder: camera).",
+        [
+          {
+            file_id: saved.file_id,
+            name: saved.name,
+            media_type: saved.media_type,
+          },
+        ],
       );
     } catch (e) {
       setThread((t) => [...t, { kind: "assistant", text: (e as Error).message }]);
@@ -320,23 +334,23 @@ export function Chat({
     try {
       const picked = await pickLocalFiles();
       if (picked.length === 0) return; // a cancelled picker is not an event
-      const landed: string[] = [];
+      const landed: TurnFileRef[] = [];
       for (const file of picked) {
-        try {
-          const { content, mediaType } = await fileToDrawerContent(file);
-          await api.createFile(file.name, content, undefined, "", mediaType);
-        } catch (e) {
-          // Past the inline cap: the blob door carries the full bytes.
-          if (!/too large/i.test((e as Error).message)) throw e;
-          await api.uploadFileBytes(file);
-        }
-        landed.push(file.name);
+        // Blob door first — the TRUE bytes, so preview and download are
+        // lossless; a blob-less host falls back inline (saveToDrawer).
+        const saved = await api.saveToDrawer(file);
+        landed.push({
+          file_id: saved.file_id,
+          name: saved.name,
+          media_type: saved.media_type,
+        });
       }
       void send(
         `I picked ${landed.length === 1 ? "a file" : `${landed.length} files`}` +
           ` from this device — in Files as ${landed
-            .map((n) => `“${n}”`)
+            .map((f) => `“${f.name}”`)
             .join(", ")}.`,
+        landed,
       );
     } catch (e) {
       setThread((t) => [...t, { kind: "assistant", text: (e as Error).message }]);
@@ -357,7 +371,7 @@ export function Chat({
     setThread((t) => [...t, { kind: "run", runId }]);
   }
 
-  async function send(message?: string) {
+  async function send(message?: string, files?: TurnFileRef[]) {
     const text = (message ?? draft).trim();
     if (!text || busy) return;
     setDraft("");
@@ -370,7 +384,7 @@ export function Chat({
     // knows OoLu is still working on it, not hung.
     updateAvatarSignals({ userMood: deriveUserMood(text), thinking: true });
     setLiveReasoning("");
-    setThread((t) => [...t, { kind: "user", text }]);
+    setThread((t) => [...t, { kind: "user", text, files }]);
     try {
       const history = thread
         .filter(
@@ -388,6 +402,7 @@ export function Chat({
         { onReasoning: (delta) => setLiveReasoning((r) => r + delta) },
         undefined,
         mood,
+        files?.map((f) => f.file_id),
       );
       updateAvatarSignals({ tone: deriveTone(turn.reply) });
       // OoLu copied something the user asked for (e.g. a node's full ID) —
@@ -665,6 +680,8 @@ export function Chat({
                 <Reasoning text={m.reasoning} />
               )}
               {m.text}
+              {/* What rode along: previews with a lossless download. */}
+              {m.kind === "user" && <AttachmentStrip files={m.files} />}
               {/* The member's own book, drawn in the bubble. */}
               {m.kind === "assistant" && m.block?.kind === "chart" && (
                 <ChartBlock

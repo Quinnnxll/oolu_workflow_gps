@@ -240,14 +240,6 @@ SEATS: dict[str, Seat] = {
             audited=False,  # the conversation is private, like chat.turn
         ),
         Seat(
-            purpose="poll.pair",
-            charge=(
-                "offer comparable pairs and honest aggregates; results "
-                "are real counts, revealed only after the member votes"
-            ),
-            audited=False,
-        ),
-        Seat(
             purpose="explore.brief",
             charge=(
                 "compare products on verified evidence — price, discount, "

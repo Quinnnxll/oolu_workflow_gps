@@ -38,7 +38,7 @@ NOW = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
 # The registry: cards and seats, one vocabulary.                               #
 # --------------------------------------------------------------------------- #
 def test_the_roster_lists_the_agents_in_order():
-    order = ["news", "poll", "explorer", "market", "travel"]
+    order = ["news", "explorer", "market", "travel"]
     assert [c.agent_id for c in ROSTER] == order
     items = roster_items()
     assert [i["agent_id"] for i in items] == order
@@ -81,8 +81,8 @@ def test_a_dead_model_degrades_to_the_card_never_dies():
         def reply(self, messages):
             raise ModelUnavailable("no brain today")
 
-    card = agent_card("poll")
-    say, _, source = agent_turn(card, "run a poll", model=Dead())
+    card = agent_card("explorer")
+    say, _, source = agent_turn(card, "compare kettles", model=Dead())
     assert source == "card" and card.scope in say
 
 
@@ -188,11 +188,11 @@ def test_a_pre_roster_table_migrates_with_its_history_intact(tmp_path):
     ] == ["from before"]
     # ...and the migrated table takes tagged turns like a fresh one.
     store.append(
-        tenant="t1", principal="alice", kind="user", body="new", agent="poll"
+        tenant="t1", principal="alice", kind="user", body="new", agent="explorer"
     )
     assert [
         t["body"]
-        for t in store.history(tenant="t1", principal="alice", agent="poll")
+        for t in store.history(tenant="t1", principal="alice", agent="explorer")
     ] == ["new"]
     conn.close()
 
@@ -203,6 +203,68 @@ def test_a_turn_must_name_its_thread(tmp_path):
         store.append(
             tenant="t1", principal="alice", kind="user", body="x", agent="  "
         )
+    conn.close()
+
+
+def test_attachments_ride_the_turn_as_refs_and_survive_reload(tmp_path):
+    conn, store = _history(tmp_path)
+    # Refs, never bytes: id + true name + true type is all a device needs
+    # to render the preview and fetch the lossless download again.
+    store.append(
+        tenant="t1",
+        principal="alice",
+        kind="user",
+        body="here is the clip",
+        files=[
+            {"file_id": "f1", "name": "surf.mp4", "media_type": "video/mp4"},
+            {"name": "no-id-no-ref"},  # a ref without an id is no ref
+            "not-a-dict",  # junk shapes drop, never crash
+        ],
+    )
+    store.append(tenant="t1", principal="alice", kind="assistant", body="got it")
+    turns = store.history(tenant="t1", principal="alice")
+    assert turns[0]["files"] == [
+        {"file_id": "f1", "name": "surf.mp4", "media_type": "video/mp4"}
+    ]
+    # A turn without attachments reads as an empty list, not a missing key.
+    assert turns[1]["files"] == []
+    conn.close()
+
+
+def test_a_pre_attachment_table_migrates_and_old_turns_read_clean(tmp_path):
+    conn = DurableConnection(tmp_path / "old.db")
+    # A table born before attachments: agent column, no files column.
+    with conn.transaction() as db:
+        db.execute(
+            """CREATE TABLE assistant_turns (
+                tenant_id TEXT NOT NULL,
+                principal TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                body TEXT NOT NULL,
+                at TEXT NOT NULL,
+                agent TEXT NOT NULL DEFAULT 'oolu',
+                PRIMARY KEY (tenant_id, principal, seq)
+            )"""
+        )
+        db.execute(
+            "INSERT INTO assistant_turns VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("t1", "alice", 1, "user", "from before", NOW.isoformat(), "oolu"),
+        )
+    store = AssistantHistoryStore(conn)
+    turns = store.history(tenant="t1", principal="alice")
+    assert [t["body"] for t in turns] == ["from before"]
+    assert turns[0]["files"] == []
+    # The migrated table takes attachment-carrying turns like a fresh one.
+    store.append(
+        tenant="t1",
+        principal="alice",
+        kind="user",
+        body="with a photo",
+        files=[{"file_id": "f9", "name": "sky.png", "media_type": "image/png"}],
+    )
+    fresh = store.history(tenant="t1", principal="alice")
+    assert fresh[-1]["files"][0]["file_id"] == "f9"
     conn.close()
 
 
@@ -267,7 +329,6 @@ def test_the_roster_door_lists_the_agents(tmp_path):
     assert listing.status == 200
     assert [i["agent_id"] for i in listing.body["items"]] == [
         "news",
-        "poll",
         "explorer",
         "market",
         "travel",

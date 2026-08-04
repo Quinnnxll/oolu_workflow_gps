@@ -1,10 +1,9 @@
 """The contributor ad dividend — verified delivery pays (A5).
 
 ADR-0005's first client: contributors are earning principals, and a
-story's (or poll pair's) lineage weights — recorded at composition time,
-long before any money existed — become the split a verified ad
-impression pays over. Everything rides the STANDING pipeline, exactly as
-the plan demands:
+story's lineage weights — recorded at composition time, long before any
+money existed — become the split a verified ad impression pays over.
+Everything rides the STANDING pipeline, exactly as the plan demands:
 
 - the split is the same :class:`PricingEngine` the Nodeplace pays with
   (contributors in the noder seat, the ad commission α in the rho seat)

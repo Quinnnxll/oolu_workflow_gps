@@ -362,86 +362,21 @@ describe("PressPanel (inside the News thread)", () => {
     expect(scheduled?.body).toMatchObject({ enabled: true });
   });
 
-  it("deals a poll as a message block: bylines, one vote, honest reveal", async () => {
-    const POLL: RosterAgent = { ...NEWS, agent_id: "poll", name: "Poll" };
-    routes["POST /v1/chat"] = {
-      status: 200,
-      body: {
-        reply: "Which one? Tap to vote.",
-        source: "desk",
-        agent: "poll",
-        block: {
-          kind: "poll",
-          pair: {
-            pair_id: "p1",
-            genre: "food",
-            left: {
-              contribution_id: "c1",
-              author: "alice",
-              title: "The steel kettle, tested",
-              excerpt: "Four minutes to a litre.",
-            },
-            right: {
-              contribution_id: "c2",
-              author: "bob",
-              title: "A week with the glass kettle",
-              excerpt: "Six minutes, but the lid feels solid.",
-            },
-            created_at: "2026-07-14T09:00:00Z",
-          },
-        },
-      },
-    };
-    routes["POST /v1/press/polls/p1/vote"] = {
-      status: 200,
-      body: {
-        pair_id: "p1",
-        voted: true,
-        choice: "left",
-        revealed: false,
-        reason: "not enough votes yet",
-        learning: false,
-      },
-    };
-    render(<AgentThread agent={POLL} />);
-
-    // "poll" in the conversation deals the pair INTO the bubble.
-    fireEvent.change(screen.getByPlaceholderText("Message Poll…"), {
-      target: { value: "poll" },
-    });
-    fireEvent.click(screen.getByLabelText("Send"));
-    expect(await screen.findByText("The steel kettle, tested")).toBeTruthy();
-    expect(screen.getByText("A week with the glass kettle")).toBeTruthy();
-    expect(await screen.findByText("alice")).toBeTruthy();
-    expect(screen.getByText("bob")).toBeTruthy();
-
-    // Tap left: the vote posts; the floor answers honestly; the pair
-    // locks (no second vote from this surface).
-    fireEvent.click(screen.getByText("The steel kettle, tested"));
-    expect(await screen.findByText("not enough votes yet")).toBeTruthy();
-    const voted = calls.find(
-      (c) => c.method === "POST" && c.path === "/v1/press/polls/p1/vote",
-    );
-    expect(voted?.body).toMatchObject({ choice: "left" });
-    // And the learning-off echo rides along.
-    expect(
-      screen.getByText(/not recorded — personalization is off/),
-    ).toBeTruthy();
-  });
-
   it("picks the stream through the genre chips block — the tap speaks", async () => {
-    const POLL: RosterAgent = { ...NEWS, agent_id: "poll", name: "Poll" };
+    routes["GET /v1/press/genres"] = GENRES;
+    routes["GET /v1/press/contributions"] = { status: 200, body: { items: [] } };
+    routes["GET /v1/press/stories"] = { status: 200, body: { items: [] } };
     routes["POST /v1/chat"] = {
       status: 200,
       body: {
-        reply: "Pick a stream.",
+        reply: "The streams members publish into.",
         source: "desk",
-        agent: "poll",
+        agent: "news",
         block: { kind: "genres", items: GENRES.body.items },
       },
     };
-    render(<AgentThread agent={POLL} />);
-    fireEvent.change(screen.getByPlaceholderText("Message Poll…"), {
+    render(<AgentThread agent={NEWS} />);
+    fireEvent.change(screen.getByPlaceholderText("Message News…"), {
       target: { value: "genres" },
     });
     fireEvent.click(screen.getByLabelText("Send"));
@@ -451,7 +386,7 @@ describe("PressPanel (inside the News thread)", () => {
       (c) => c.method === "POST" && c.path === "/v1/chat",
     );
     expect(spoken.length).toBe(2);
-    expect(spoken[1]?.body).toMatchObject({ message: "Food", agent: "poll" });
+    expect(spoken[1]?.body).toMatchObject({ message: "Food", agent: "news" });
   });
 
   it("holds the ad slot behind the versioned consent, then labels it", async () => {
@@ -483,11 +418,11 @@ describe("PressPanel (inside the News thread)", () => {
     };
     routes["GET /v1/legal/consent"] = {
       status: 200,
-      body: { privacy_version: 2, accepted_version: null, ads_enabled: false },
+      body: { privacy_version: 3, accepted_version: null, ads_enabled: false },
     };
     routes["POST /v1/legal/consent"] = {
       status: 200,
-      body: { document: "privacy", accepted_version: 2 },
+      body: { document: "privacy", accepted_version: 3 },
     };
     render(<AgentThread agent={NEWS} />);
     expect(
@@ -517,13 +452,13 @@ describe("PressPanel (inside the News thread)", () => {
       status: 200,
       body: { recorded: true, kind: "impression" },
     };
-    fireEvent.click(screen.getByText("Accept version 2"));
+    fireEvent.click(screen.getByText("Accept version 3"));
     expect(await screen.findByText("Sponsored")).toBeTruthy();
     expect(screen.getByText("Kettle week")).toBeTruthy();
     const accepted = calls.find(
       (c) => c.method === "POST" && c.path === "/v1/legal/consent",
     );
-    expect(accepted?.body).toMatchObject({ document: "privacy", version: 2 });
+    expect(accepted?.body).toMatchObject({ document: "privacy", version: 3 });
     const impression = calls.find(
       (c) =>
         c.method === "POST" &&

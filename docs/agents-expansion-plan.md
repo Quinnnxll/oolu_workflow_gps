@@ -1,5 +1,19 @@
 # The agent roster — build-phase plan (News, Poll, Explorer, Travel)
 
+> **Amendment (2026-08): the Poll agent is REMOVED.** The poll floor
+> shipped and was then deliberately retired — a social-feed comparison
+> game breeds superficial engagement, and the News agent's benchmark
+> direction (docs/news-agent-benchmark-roadmap.md) replaces it: interest
+> and quality are measured on the news posts themselves (attention time,
+> complete-read rate, likes), and preference learning moves to consented
+> reader surveys owned by the News desk. What survives the removal: the
+> member's pairwise preference book (`press/pairwise.py`, the DPO export
+> door, account erasure), the genre-chips message block (re-homed to the
+> News thread), and the ad house on the News surface only (privacy v3 —
+> a strict narrowing). Sections A3/A3.1 below, the A7 group-poll plan,
+> and invariants 8–9's poll clauses are historical record, not standing
+> plan.
+
 Status: Proposed. Scope: growing the OoLu app from one assistant into a
 **roster of agents listed below OoLu** — OoLu stays the general personal
 assistant; beneath it appear **News** (member-contributed stories, selected
@@ -547,7 +561,11 @@ tap speaks back — the static panel is gone. Pinned by
 
 ### A3 — the poll floor (fun on the surface, instruments underneath)
 
-**Status: LANDED** — `press/polls.py`: comparable-pair mining on the
+**Status: REMOVED (2026-08)** — see the amendment at the head of this
+document. The section below is kept as the historical record of what
+was built and then retired.
+
+**Status at removal: LANDED** — `press/polls.py`: comparable-pair mining on the
 content-token band (same genre, distinct authors, agreement in the
 comparable band, near-duplicates excluded — one piece twice is no
 comparison), never re-minting a standing pair; `PollPair` with both

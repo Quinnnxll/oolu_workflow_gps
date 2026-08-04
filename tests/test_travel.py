@@ -3,12 +3,13 @@
 Exit gate (agents-expansion plan, phase A7): free-busy sharing is
 opt-in per peer and the wire shape reveals busy/free intervals ONLY;
 an itinerary violating a hard constraint is marked infeasible with the
-named reason and never outranks a feasible plan; group polls are A3's
-polls unchanged (their laws are pinned in test_polls.py); bookings walk
-the standing approval path (the declined-approval/reservation-release
-discipline is the marketplace's own pinned law) and a confirmed trip
-lands as calendar events; and the travel desk composes over typed data
-— the import scan shows it touches no conversation transcript.
+named reason and never outranks a feasible plan; group choice is a
+named future instrument (the A3 poll floor it once rode is removed);
+bookings walk the standing approval path (the declined-approval/
+reservation-release discipline is the marketplace's own pinned law)
+and a confirmed trip lands as calendar events; and the travel desk
+composes over typed data — the import scan shows it touches no
+conversation transcript.
 """
 
 from __future__ import annotations

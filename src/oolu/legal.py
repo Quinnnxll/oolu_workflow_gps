@@ -10,11 +10,14 @@ The Node Policy is code-owned (it is enforced by the hygiene machinery)
 and always served from :mod:`oolu.nodeplace`.
 
 **The privacy promise is renegotiated in the open** (agents-expansion
-plan, invariant 13). Privacy VERSION 2 amends the original "No
+plan, invariant 13). Privacy VERSION 2 amended the original "No
 advertising" promise for the ad house (A4): sponsored placements on the
 News and Poll surfaces only, always labeled, matched inside the
 platform, revenue shared with contributors — and "no sale of personal
-data" stands untouched. The change is versioned, and
+data" stands untouched. Privacy VERSION 3 NARROWS version 2: the Poll
+agent is removed, so sponsored placements appear on the News surface
+only — strictly less than what version 2 allowed; every other clause
+stands word for word. Each change is versioned, and
 :class:`LegalAcceptanceStore` records each member's explicit acceptance;
 nothing sponsored renders to a member who has not accepted the current
 version. The old promise was never silently rewritten — this docstring,
@@ -29,7 +32,7 @@ from typing import Callable
 
 # Versioned templates: acceptance binds to a number, never a vibe.
 # Bump a version only with a deliberate amendment beside it.
-LEGAL_VERSIONS = {"terms": 1, "privacy": 2}
+LEGAL_VERSIONS = {"terms": 1, "privacy": 3}
 
 TEMPLATE_NOTICE = (
     "> **TEMPLATE — NOT LEGAL ADVICE.** This is placeholder text shipped\n"
@@ -95,16 +98,18 @@ PRIVACY_TEMPLATE = (
 6. **Retention.** Execution logs follow your retention setting
    (account.log_retention_days). Backups age out on the operator's
    schedule (see the operations runbook).
-7. **Advertising (privacy version 2).** Sponsored placements may appear
-   on the News and Poll surfaces only, and are always labeled as
-   sponsored. Matching happens inside the platform: with your
-   personalization consent it may use your own reading and voting
-   signals; without it, matching is contextual only (the content's
-   genre). Advertisers receive aggregate campaign statistics — never
-   your identity or personal data. Advertising revenue is shared with
-   the members whose contributions the placements ran against. No
-   sponsored placement is shown to you until you accept this version
-   of the policy; declining costs you nothing but the ads.
+7. **Advertising (privacy version 3).** Sponsored placements may appear
+   on the News surface only, and are always labeled as sponsored.
+   (Version 3 narrows version 2, which also allowed the since-removed
+   Poll surface — nothing new is permitted.) Matching happens inside
+   the platform: with your personalization consent it may use your own
+   reading signals; without it, matching is contextual only (the
+   content's genre). Advertisers receive aggregate campaign statistics
+   — never your identity or personal data. Advertising revenue is
+   shared with the members whose contributions the placements ran
+   against. No sponsored placement is shown to you until you accept
+   this version of the policy; declining costs you nothing but the
+   ads.
 """
 )
 

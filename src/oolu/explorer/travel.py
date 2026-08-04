@@ -18,10 +18,10 @@ Two laws:
   conversation transcript (the import scan holds the wall: nothing here
   touches chat or the assistant history).
 
-Group choice rides A3 unchanged: destination pieces in the ``travel``
-genre poll under the standing honesty laws. Booking rides the standing
-commerce spine unchanged; a confirmed booking lands as calendar events
-(source ``trip``) through the gateway's confirm door.
+Group choice is a named future instrument (the A3 poll floor it once
+rode is removed). Booking rides the standing commerce spine unchanged;
+a confirmed booking lands as calendar events (source ``trip``) through
+the gateway's confirm door.
 
 Deferred, named: multi-leg itineraries and inter-leg travel time — v1
 compares single-destination packages; the constraint model carries the

@@ -30,7 +30,7 @@ import { Work } from "./Work";
 
 // The Life environment: a messenger. The left pane lists who you can talk
 // to — OoLu (the assistant, full function access), the agent roster
-// (News, Poll, Explorer, Travel — each its own thread, its own seat),
+// (News, Explorer, Market, Travel — each its own thread, its own seat),
 // Friends (people and legal entities), and Noder (one log thread per node
 // interaction) — and the right pane is the open conversation. Work is the
 // same architecture over a separate environment.

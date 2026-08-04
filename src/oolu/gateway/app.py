@@ -1036,9 +1036,6 @@ class GatewayApp:
         self._assistant_history = assistant_history
         self._profile_photos = profile_photos
         self._press = press
-        # The poll floor's social scientist: reported findings, so a
-        # verdict speaks once (lazy — built on the first decided vote).
-        self._poll_findings = None
         self._ad_dividend = ad_dividend
         self._representative = representative
         self._reminders = reminders
@@ -1305,10 +1302,6 @@ class GatewayApp:
         )
         r.add("POST", "/v1/press/newsroom/run", self._press_newsroom_run)
         r.add("POST", "/v1/press/edition/schedule", self._press_edition_schedule)
-        # The poll floor (A3): vote first, see second; the floor holds.
-        r.add("GET", "/v1/press/polls/next", self._press_poll_next)
-        r.add("POST", "/v1/press/polls/{pair_id}/vote", self._press_poll_vote)
-        r.add("GET", "/v1/press/polls/{pair_id}/stats", self._press_poll_stats)
         # The member's own pairwise preferences, DPO-shaped (consented).
         r.add(
             "GET",
@@ -1651,7 +1644,7 @@ class GatewayApp:
         r.add("GET", "/v1/legal/consent", self._legal_consent_get)
         r.add("POST", "/v1/legal/consent", self._legal_consent_post)
         # The ad house (A4): campaigns for verified sellers; placements
-        # merged at render on the News/Poll surfaces only; delivery
+        # merged at render on the News surface only; delivery
         # events behind gates; earnings previews, never balances.
         r.add("GET", "/v1/adhouse/campaigns", self._adhouse_campaigns_list)
         r.add("POST", "/v1/adhouse/campaigns", self._adhouse_campaign_create)
@@ -2156,6 +2149,7 @@ class GatewayApp:
                     principal=session.principal_id,
                     kind="user",
                     body=message,
+                    files=self._turn_files(session, body),
                 )
                 self._assistant_history.append(
                     tenant=session.tenant_id,
@@ -2549,6 +2543,7 @@ class GatewayApp:
                 principal=session.principal_id,
                 kind="user",
                 body=message,
+                files=self._turn_files(session, body),
             )
             self._assistant_history.append(
                 tenant=session.tenant_id,
@@ -2634,16 +2629,14 @@ class GatewayApp:
             served = self._market_desk_turn(
                 session, message, request.now or self._clock()
             )
-        elif card.agent_id == "poll":
-            served = self._poll_desk_turn(session, message)
         elif card.agent_id == "explorer":
             served = self._explorer_desk_turn(
                 session, message, request.now or self._clock()
             )
         if served is not None:
             # A desk may answer with words alone, or words plus a BLOCK
-            # — a structured piece the client renders in the bubble (a
-            # poll pair to vote on, the genre chips to pick from).
+            # — a structured piece the client renders in the bubble
+            # (e.g. the genre chips to pick a stream from).
             say, reasoning, source, *rest = served
             block = rest[0] if rest else None
         else:
@@ -2675,6 +2668,7 @@ class GatewayApp:
                 kind="user",
                 body=message,
                 agent=card.agent_id,
+                files=self._turn_files(session, body),
             )
             self._assistant_history.append(
                 tenant=session.tenant_id,
@@ -2699,87 +2693,12 @@ class GatewayApp:
             },
         )
 
-    # The Poll thread's deterministic asks — the social scientist's desk.
-    _POLL_PAIR_ASKS = frozenset(
-        {"poll", "next", "next pair", "another", "vote", "play"}
-    )
-    _POLL_GENRE_ASKS = frozenset(
+    # The News thread's deterministic genre ask: the chips are the
+    # streams a member can name — the smallest standing piece of "which
+    # genre are people interested in", living on the News desk itself.
+    _NEWS_GENRE_ASKS = frozenset(
         {"genres", "genre", "streams", "switch genre", "pick a genre"}
     )
-    _POLL_FINDING_ASKS = frozenset(
-        {
-            "findings",
-            "report",
-            "patterns",
-            "science",
-            "what did you learn",
-            "what have you learned",
-        }
-    )
-
-    def _poll_desk_turn(self, session, message):
-        """The Poll desk's hand on one thread message — or None for
-        ordinary conversation. The poll and the genre picking are
-        MESSAGE BLOCKS: a pair to vote on in the bubble, the genre
-        chips to tap; naming a genre in words deals from that stream.
-        "findings" reads the scientist's standing field notes."""
-        from ..press import GENRES, PressError, taxonomy_items
-
-        press = self._press
-        if press is None or press.polls is None:
-            return None
-        normal = re.sub(
-            r"\s+", " ", str(message or "").strip().casefold()
-        ).rstrip(".!?")
-        genre = None
-        if normal in GENRES:
-            genre = normal
-        else:
-            for item in taxonomy_items():
-                if normal == item["label"].casefold():
-                    genre = item["key"]
-                    break
-        if genre is None and normal not in self._POLL_PAIR_ASKS:
-            if normal in self._POLL_GENRE_ASKS:
-                return (
-                    "Pick a stream — or say “poll” and I choose by what "
-                    "the floor enjoys.",
-                    None,
-                    "desk",
-                    {"kind": "genres", "items": taxonomy_items()},
-                )
-            if normal in self._POLL_FINDING_ASKS:
-                findings = self._poll_science_judge(session)
-                if not findings:
-                    return (
-                        "Still researching — the floor needs more decided "
-                        "comparisons before any pattern is worth words. "
-                        "Every vote helps.",
-                        None,
-                        "desk",
-                    )
-                return (
-                    "\n\n".join(f.report() for f in findings),
-                    None,
-                    "desk",
-                )
-            return None
-        try:
-            pair = press.polls.next_pair(
-                tenant=session.tenant_id,
-                principal=session.principal_id,
-                corpus=press.store.list(tenant=session.tenant_id, limit=500),
-                genre=genre,
-            )
-        except PressError as exc:
-            return (str(exc), None, "desk")
-        return (
-            "Which one? Tap to vote — the results follow your own choice, "
-            "and every decided comparison teaches the floor's science.",
-            None,
-            "desk",
-            {"kind": "poll", "pair": self._pair_dict(pair)},
-        )
 
     def _news_intake_turn(self, session, body, message):
         """The News desk's hand on one thread message — or None when the
@@ -2820,6 +2739,23 @@ class GatewayApp:
         standing = intake.get(
             tenant=session.tenant_id, principal=session.principal_id
         )
+        if standing is None and not refs:
+            # The genre chips — only when no draft is mid-review, so an
+            # intake answer never doubles as a stream switch.
+            from ..press import taxonomy_items
+
+            normal = re.sub(
+                r"\s+", " ", str(message or "").strip().casefold()
+            ).rstrip(".!?")
+            if normal in self._NEWS_GENRE_ASKS:
+                return (
+                    "The streams members publish into — name one and "
+                    "your edition leans that way (with personalization "
+                    "on).",
+                    None,
+                    "desk",
+                    {"kind": "genres", "items": taxonomy_items()},
+                )
 
         def _staged(staged, say):
             # A dropped review (a leak) leaves NOTHING standing: fixed
@@ -3674,6 +3610,23 @@ class GatewayApp:
             200, {"items": [self._contribution_dict(r) for r in items]}
         )
 
+    def _turn_files(self, session, body) -> list[dict]:
+        """The attachments a chat turn carries, as drawer refs the thread
+        can render again on any device: id, true name, true type — never
+        bytes. A stale or foreign ref simply drops; a conversation must
+        never fail because a file went away."""
+        file_ids = (body or {}).get("file_ids") or []
+        if not isinstance(file_ids, list):
+            return []
+        return [
+            {
+                "file_id": ref.file_id,
+                "name": ref.name,
+                "media_type": ref.media_type,
+            }
+            for ref in self._drawer_refs(session, file_ids, missing="drop")
+        ]
+
     def _drawer_refs(self, session, file_ids, *, missing="refuse"):
         """Drawer files as press MediaRefs, the wall held at the door:
         another account's file — or a node's — is indistinguishable from
@@ -4134,149 +4087,13 @@ class GatewayApp:
                 },
             )
 
-    # -- the poll floor (A3) ------------------------------------------- #
-    def _require_polls(self):
-        press = self._require_press()
-        if press.polls is None:
-            raise GatewayError(404, "not_found", "this host keeps no polls")
-        return press
-
-    @staticmethod
-    def _pair_dict(pair) -> dict:
-        return {
-            "pair_id": pair.pair_id,
-            "genre": pair.genre,
-            "left": pair.left.model_dump(),
-            "right": pair.right.model_dump(),
-            "created_at": pair.created_at.isoformat(),
-        }
-
-    def _press_poll_next(self, request, session, params) -> Response:
-        """A pair this member has not voted on — in their named genre,
-        or the Thompson draw's pick when they name none. The switch is
-        immediate: the genre parameter IS the stream."""
-        press = self._require_polls()
-        from ..press import GENRES, PressError
-
-        genre = str(request.query.get("genre") or "") or None
-        if genre is not None and genre not in GENRES:
-            raise GatewayError(400, "invalid_request", f"unknown genre: {genre}")
-        corpus = press.store.list(tenant=session.tenant_id, limit=500)
-        try:
-            pair = press.polls.next_pair(
-                tenant=session.tenant_id,
-                principal=session.principal_id,
-                corpus=corpus,
-                genre=genre,
-            )
-        except PressError as exc:
-            raise self._press_refused(exc) from exc
-        return json_response(200, self._pair_dict(pair))
-
-    def _press_poll_vote(self, request, session, params) -> Response:
-        """One idempotent vote. The aggregate always counts it; the
-        preference event is written only under the member's own
-        consent — and their edition feels it (the engagement signal)."""
-        press = self._require_polls()
-        from ..press import PressError
-
-        choice = str((request.body or {}).get("choice") or "").strip()
-        learning = self._press_personalized(session)
-        try:
-            verdict = press.polls.vote(
-                params["pair_id"],
-                tenant=session.tenant_id,
-                principal=session.principal_id,
-                choice=choice,
-                learning=learning,
-            )
-        except PressError as exc:
-            raise self._press_refused(exc) from exc
-        # The consented vote also feeds the member's OWN edition ranking
-        # — a vote is engagement with the genre, recorded as such.
-        if learning and press.preferences is not None:
-            pair = press.polls.store.get_pair(
-                params["pair_id"], tenant=session.tenant_id
-            )
-            if pair is not None:
-                press.preferences.record(
-                    tenant=session.tenant_id,
-                    principal=session.principal_id,
-                    signal="read",
-                    subject=f"poll:{pair.pair_id}",
-                    genres=(pair.genre,),
-                )
-        verdict["learning"] = bool(learning)
-        # The vote just grew the evidence: the scientist re-judges the
-        # floor, and a NEW verdict (or a flipped one) is reported into
-        # the Poll thread — worth sharing, like a news brief or a
-        # debate statement; the same conclusion twice stays silent.
-        for report in self._poll_science_reports(session):
-            if self._assistant_history is not None:
-                self._assistant_history.append(
-                    tenant=session.tenant_id,
-                    principal=session.principal_id,
-                    kind="assistant",
-                    body=report,
-                    agent="poll",
-                )
-        return json_response(200, verdict)
-
-    def _poll_findings_store(self):
-        if self._poll_findings is None:
-            from ..press import FindingStore
-
-            self._poll_findings = FindingStore(self._durable.conn)
-        return self._poll_findings
-
-    def _poll_science_judge(self, session):
-        """The floor judged now: findings worth words (pattern or
-        debate), over decided k-anonymous comparisons only."""
-        from ..press import judge
-
-        press = self._press
-        polls = press.polls.store
-        findings, _ = judge(
-            polls.all_pairs(tenant=session.tenant_id),
-            counts_of=lambda pid: polls.counts(pid, tenant=session.tenant_id),
-            contribution_of=lambda cid: press.store.get(
-                cid, tenant=session.tenant_id
-            ),
-        )
-        return findings
-
-    def _poll_science_reports(self, session) -> list[str]:
-        """The NEWLY newsworthy: findings whose verdict just opened or
-        flipped — each reported once, the field-note words."""
-        press = self._press
-        if press is None or press.polls is None:
-            return []
-        store = self._poll_findings_store()
-        reports: list[str] = []
-        for finding in self._poll_science_judge(session):
-            if store.note(tenant=session.tenant_id, finding=finding):
-                reports.append(finding.report())
-        return reports
-
-    def _press_poll_stats(self, request, session, params) -> Response:
-        press = self._require_polls()
-        from ..press import PressError
-
-        try:
-            verdict = press.polls.reveal(
-                params["pair_id"],
-                tenant=session.tenant_id,
-                principal=session.principal_id,
-            )
-        except PressError as exc:
-            raise self._press_refused(exc) from exc
-        return json_response(200, verdict)
-
     def _press_preferences_export(self, request, session, params) -> Response:
         """The member's own pairwise preferences in the DPO dataset
-        shape — consent-gated, per-member, scrubbed on the way out."""
-        press = self._require_polls()
-        if press.polls.pairwise is None:
+        shape — consent-gated, per-member, scrubbed on the way out.
+        The book outlived the poll floor: story feedback and future
+        survey instruments write it now."""
+        press = self._require_press()
+        if press.pairwise is None:
             raise GatewayError(
                 404, "not_found", "this host keeps no preference pairs"
             )
@@ -4286,7 +4103,7 @@ class GatewayApp:
                 "forbidden",
                 "personalization is off — there is nothing consented to export",
             )
-        pairs = press.polls.pairwise.export(
+        pairs = press.pairwise.export(
             tenant=session.tenant_id, principal=session.principal_id
         )
         return json_response(200, {"items": pairs, "count": len(pairs)})
@@ -4536,11 +4353,6 @@ class GatewayApp:
         if surface == "edition" and press is not None and press.stories:
             story = press.stories.get(content_ref, tenant=session.tenant_id)
             return tuple(story.genres) if story is not None else None
-        if surface == "poll" and press is not None and press.polls:
-            pair = press.polls.store.get_pair(
-                content_ref, tenant=session.tenant_id
-            )
-            return (pair.genre,) if pair is not None else None
         return None
 
     def _press_ads(self, request, session, params) -> Response:
@@ -4552,9 +4364,9 @@ class GatewayApp:
 
         surface = str(request.query.get("surface") or "")
         content_ref = str(request.query.get("content") or "")
-        if surface not in ("edition", "poll"):
+        if surface != "edition":
             raise GatewayError(
-                400, "invalid_request", "surface must be edition or poll"
+                400, "invalid_request", "surface must be edition"
             )
         if not content_ref:
             raise GatewayError(400, "invalid_request", "content is required")
@@ -4645,8 +4457,9 @@ class GatewayApp:
 
     def _ad_lineage_of(self, session):
         """How a placement resolves to the contributors it ran against:
-        edition → the story's recorded lineage weights; poll → the two
-        sides, evenly. The same set A5's real split will pay."""
+        edition → the story's recorded lineage weights. The same set
+        A5's real split will pay. (A placement persisted on the retired
+        poll surface resolves to no lineage and is honestly skipped.)"""
         press = self._press
 
         def lineage(placement) -> list[tuple[str, float]]:
@@ -4661,17 +4474,6 @@ class GatewayApp:
                 if story is None:
                     return []
                 return [(s.author, s.weight) for s in story.lineage]
-            if (
-                placement.surface == "poll"
-                and press is not None
-                and press.polls is not None
-            ):
-                pair = press.polls.store.get_pair(
-                    placement.content_ref, tenant=placement.tenant_id
-                )
-                if pair is None:
-                    return []
-                return [(pair.left.author, 0.5), (pair.right.author, 0.5)]
             return []
 
         return lineage
@@ -9690,14 +9492,10 @@ class GatewayApp:
             erased["press_preferences"] = self._press.preferences.erase(
                 tenant=tenant, principal=principal
             )
-        if self._press is not None and self._press.polls is not None:
-            erased["poll_votes"] = self._press.polls.store.erase_votes(
+        if self._press is not None and self._press.pairwise is not None:
+            erased["preference_pairs"] = self._press.pairwise.erase(
                 tenant=tenant, principal=principal
             )
-            if self._press.polls.pairwise is not None:
-                erased["preference_pairs"] = self._press.polls.pairwise.erase(
-                    tenant=tenant, principal=principal
-                )
         erased["calendar_events"] = self._calendar.erase(
             tenant=tenant, owner=principal
         )

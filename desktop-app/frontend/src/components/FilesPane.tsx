@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import type { FileMeta } from "../api";
-import { fileToDrawerContent, pickLocalFiles } from "../device";
+import { pickLocalFiles } from "../device";
 import { forwardFile, forwardTargets } from "../forward";
 import type { ForwardTarget } from "../forward";
 import { tf, useT } from "../ui";
@@ -139,15 +139,10 @@ export function FilesPane({ nodeId }: { nodeId?: string }) {
     const refused: string[] = [];
     for (const file of picked) {
       try {
-        try {
-          const { content, mediaType } = await fileToDrawerContent(file);
-          await api.createFile(file.name, content, nodeId, cwd, mediaType);
-        } catch (e) {
-          // Past the inline cap: the blob door carries the FULL bytes —
-          // no downscaling, no base64, no 1 MB ceiling.
-          if (!/too large/i.test((e as Error).message)) throw e;
-          await api.uploadFileBytes(file, nodeId, cwd);
-        }
+        // Blob door first — the FULL bytes, no downscaling, no base64,
+        // no 1 MB ceiling; a blob-less host falls back to the inline
+        // row within its budget (saveToDrawer).
+        await api.saveToDrawer(file, nodeId, cwd);
         saved++;
       } catch (e) {
         refused.push((e as Error).message);

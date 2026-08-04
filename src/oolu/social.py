@@ -22,6 +22,7 @@ member's photo next to their display name.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import Callable
 from uuid import uuid4
@@ -215,6 +216,7 @@ _TURNS_SCHEMA = """CREATE TABLE IF NOT EXISTS assistant_turns (
     body TEXT NOT NULL,
     at TEXT NOT NULL,
     agent TEXT NOT NULL DEFAULT 'oolu',
+    files TEXT NOT NULL DEFAULT '[]',
     PRIMARY KEY (tenant_id, principal, seq)
 )"""
 
@@ -237,6 +239,7 @@ class AssistantHistoryStore:
         with self._conn.transaction() as db:
             db.execute(_TURNS_SCHEMA)
         self._migrate_agent_column()
+        self._migrate_files_column()
 
     def _migrate_agent_column(self) -> None:
         # Tables born before the roster lack the agent column. The probe
@@ -254,6 +257,21 @@ class AssistantHistoryStore:
                 " ADD COLUMN agent TEXT NOT NULL DEFAULT 'oolu'"
             )
 
+    def _migrate_files_column(self) -> None:
+        # Tables born before attachments lack the files column; existing
+        # rows keep the empty default — old turns carried words only.
+        try:
+            with self._conn.transaction() as db:
+                db.execute("SELECT files FROM assistant_turns LIMIT 1")
+            return
+        except Exception:
+            pass
+        with self._conn.transaction() as db:
+            db.execute(
+                "ALTER TABLE assistant_turns"
+                " ADD COLUMN files TEXT NOT NULL DEFAULT '[]'"
+            )
+
     def append(
         self,
         *,
@@ -262,12 +280,24 @@ class AssistantHistoryStore:
         kind: str,
         body: str,
         agent: str = DEFAULT_AGENT,
+        files: list[dict] | None = None,
     ) -> int:
         if kind not in ("user", "assistant", "run"):
             raise ValueError(f"unknown turn kind: {kind}")
         agent = str(agent or "").strip()
         if not agent:
             raise ValueError("a turn belongs to an agent's thread")
+        # Attachments ride the turn as drawer REFS (id, name, type) —
+        # never bytes: the drawer keeps the file, the thread points at it.
+        refs = [
+            {
+                "file_id": str(f.get("file_id") or ""),
+                "name": str(f.get("name") or ""),
+                "media_type": str(f.get("media_type") or ""),
+            }
+            for f in (files or [])
+            if isinstance(f, dict) and f.get("file_id")
+        ]
         with self._conn.transaction() as db:
             row = db.execute(
                 "SELECT COALESCE(MAX(seq), 0) AS top FROM assistant_turns"
@@ -277,8 +307,8 @@ class AssistantHistoryStore:
             seq = int(row["top"]) + 1
             db.execute(
                 """INSERT INTO assistant_turns
-                     (tenant_id, principal, seq, kind, body, at, agent)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                     (tenant_id, principal, seq, kind, body, at, agent, files)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     tenant,
                     principal,
@@ -287,6 +317,7 @@ class AssistantHistoryStore:
                     str(body),
                     self._clock().isoformat(),
                     agent,
+                    json.dumps(refs),
                 ),
             )
             # The messenger cap, per thread: each agent's old turns fall
@@ -341,7 +372,8 @@ class AssistantHistoryStore:
             args.append(str(agent))
         with self._conn.lock:
             rows = self._conn.db.execute(
-                f"""SELECT seq, kind, body, at, agent FROM assistant_turns
+                f"""SELECT seq, kind, body, at, agent, files
+                    FROM assistant_turns
                    WHERE {where}
                    ORDER BY seq DESC LIMIT ?""",
                 (*args, int(limit)),
@@ -353,9 +385,20 @@ class AssistantHistoryStore:
                 "body": row["body"],
                 "at": row["at"],
                 "agent": row["agent"],
+                "files": self._files_of(row),
             }
             for row in reversed(rows)
         ]
+
+    @staticmethod
+    def _files_of(row) -> list[dict]:
+        # A row from before the column (or a hand-written one) reads as
+        # no attachments — never a crash on old history.
+        try:
+            parsed = json.loads(row["files"] or "[]")
+        except Exception:
+            return []
+        return parsed if isinstance(parsed, list) else []
 
 
 # --------------------------------------------------------------------------- #

@@ -187,11 +187,82 @@ def _drop_audit_indexes(conn: sqlite3.Connection) -> None:
     conn.execute("DROP INDEX IF EXISTS idx_audit_log_type_run")
 
 
+# The poll floor is closed (the Poll agent was removed): its tables leave
+# with it, so no member's vote lingers as unreachable data. The member's
+# pairwise preference book (press_pairwise) STAYS — it is the member's
+# own learning, written by story feedback and future survey instruments,
+# and it still rides export and account erasure.
+_POLL_FLOOR_TABLES = (
+    "poll_pairs",
+    "poll_votes",
+    "poll_genre_stats",
+    "poll_findings",
+)
+
+
+def _retire_poll_floor(conn: sqlite3.Connection) -> None:
+    for table in _POLL_FLOOR_TABLES:
+        conn.execute(f"DROP TABLE IF EXISTS {table}")
+
+
+def _restore_poll_floor(conn: sqlite3.Connection) -> None:
+    # Rollback restores the shapes (empty) so an older build can run;
+    # the dropped rows are gone — a retirement, not an archive.
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS poll_pairs (
+               pair_id TEXT PRIMARY KEY,
+               tenant_id TEXT NOT NULL,
+               genre TEXT NOT NULL,
+               left_id TEXT NOT NULL,
+               left_author TEXT NOT NULL,
+               left_title TEXT NOT NULL,
+               left_excerpt TEXT NOT NULL,
+               right_id TEXT NOT NULL,
+               right_author TEXT NOT NULL,
+               right_title TEXT NOT NULL,
+               right_excerpt TEXT NOT NULL,
+               created_at TEXT NOT NULL
+           )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS poll_votes (
+               pair_id TEXT NOT NULL,
+               tenant_id TEXT NOT NULL,
+               principal TEXT NOT NULL,
+               choice TEXT NOT NULL,
+               at TEXT NOT NULL,
+               PRIMARY KEY (pair_id, principal)
+           )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS poll_genre_stats (
+               tenant_id TEXT NOT NULL,
+               genre TEXT NOT NULL,
+               served INTEGER NOT NULL DEFAULT 0,
+               voted INTEGER NOT NULL DEFAULT 0,
+               PRIMARY KEY (tenant_id, genre)
+           )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS poll_findings (
+               tenant_id TEXT NOT NULL,
+               hypothesis TEXT NOT NULL,
+               verdict TEXT NOT NULL,
+               support INTEGER NOT NULL,
+               against INTEGER NOT NULL,
+               decided INTEGER NOT NULL,
+               reported_at TEXT NOT NULL,
+               PRIMARY KEY (tenant_id, hypothesis)
+           )"""
+    )
+
+
 # Ordered schema history for the durable runtime. Append-only: add new steps,
 # never edit a released one.
 DURABLE_MIGRATIONS: tuple[Migration, ...] = (
     Migration(up=_create_durable_schema, down=_drop_durable_schema),
     Migration(up=_create_audit_indexes, down=_drop_audit_indexes),
+    Migration(up=_retire_poll_floor, down=_restore_poll_floor),
 )
 
 

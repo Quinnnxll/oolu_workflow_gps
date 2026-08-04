@@ -78,9 +78,13 @@ LICENSES: dict[str, License] = {
         License(
             key="oolu-members-1",
             name="OoLu members license v1",
+            # Amended with the Poll agent's removal: the promised uses
+            # NARROWED (stories only — polls are gone). A narrowing never
+            # exceeds any standing consent; a widening would need a new
+            # license key beside this one.
             terms=(
                 "Visible to members of your OoLu server. May be composed "
-                "into stories and polls that always credit you by name "
+                "into stories that always credit you by name "
                 "and photo. You may unpublish at any time — future use "
                 "stops; history is never erased. Eligible for the "
                 "contributor revenue share when advertising arrives."
@@ -324,13 +328,13 @@ class PressDesk:
         *,
         stories=None,
         preferences=None,
-        polls=None,
+        pairwise=None,
         intake=None,
     ) -> None:
         self._store = store
         self._stories = stories  # newsroom.StoryStore | None
         self._preferences = preferences  # editions.PreferenceStore | None
-        self._polls = polls  # polls.PollDesk | None
+        self._pairwise = pairwise  # pairwise.PairwiseStore | None
         self._intake = intake  # intake.IntakeStore | None
 
     @property
@@ -346,8 +350,8 @@ class PressDesk:
         return self._preferences
 
     @property
-    def polls(self):
-        return self._polls
+    def pairwise(self):
+        return self._pairwise
 
     @property
     def intake(self):

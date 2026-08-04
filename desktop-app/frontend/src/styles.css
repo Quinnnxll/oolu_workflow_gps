@@ -2688,6 +2688,63 @@ button.ghost {
   width: 100%;
 }
 
+/* Attachments in a bubble: previews with a lossless download — a photo
+   inline, a clip or a sound with controls, an honest card for any other
+   format. The figure resets to a caption-under-media stack. */
+.attachment-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.attachment {
+  margin: 0;
+}
+
+.attachment img.attachment-media {
+  max-width: 100%;
+  max-height: 280px;
+  border-radius: 8px;
+  object-fit: contain;
+  display: block;
+}
+
+.attachment video.attachment-media {
+  max-width: 100%;
+  max-height: 280px;
+  border-radius: 8px;
+  display: block;
+}
+
+.attachment audio.attachment-media {
+  width: 100%;
+  display: block;
+}
+
+.attachment figcaption {
+  font-size: 0.85em;
+  opacity: 0.8;
+  margin-top: 2px;
+}
+
+.attachment-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.attachment-download {
+  font-size: 0.9em;
+}
+
+.attachment-gone {
+  font-size: 0.9em;
+}
+
 /* The taps speak emoji — a touch larger than the words they replaced. */
 .press-tap {
   font-size: 1.15em;
@@ -2756,43 +2813,6 @@ button.ghost {
 .market-block > summary {
   cursor: pointer;
   font-weight: 600;
-}
-
-/* ---- the poll floor (agents-expansion A3) ------------------------------- */
-.poll-pair {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
-
-.poll-side {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-  text-align: left;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 10px;
-  background: transparent;
-  cursor: pointer;
-}
-
-.poll-side:hover:not(:disabled) {
-  border-color: hsl(210 45% 44%);
-}
-
-.poll-side.chosen {
-  border-color: hsl(210 45% 44%);
-  box-shadow: 0 0 0 1px hsl(210 45% 44%);
-}
-
-.poll-side .press-body {
-  font-size: 0.9em;
-}
-
-.poll-verdict {
-  padding: 4px 0;
 }
 
 /* ---- the ad house (agents-expansion A4) --------------------------------- */

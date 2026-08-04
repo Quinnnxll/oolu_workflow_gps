@@ -63,8 +63,8 @@ _PREFS_SCHEMA = """CREATE TABLE IF NOT EXISTS press_preferences (
 class PreferenceStore:
     """The member's own signals — consented, revocable-forward, and
     readable only as THEIR ranking input. Nothing aggregates across
-    members here; the k-anonymous public statistics are A3's poll
-    machinery, not this table."""
+    members here — any future public statistic is its own instrument
+    with its own k-anonymity law, not this table."""
 
     def __init__(self, conn, *, clock: Callable[[], datetime] | None = None) -> None:
         self._conn = conn

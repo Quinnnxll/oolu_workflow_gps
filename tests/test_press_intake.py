@@ -217,6 +217,28 @@ def test_raw_material_in_the_thread_reviews_publishes_and_composes(tmp_path):
     conn.close()
 
 
+def test_the_genre_chips_answer_on_the_news_desk(tmp_path):
+    """The genre ask is the News desk's own now (the poll floor is
+    gone): "genres" with nothing standing answers with the taxonomy as
+    a chips block; the same word while a draft is mid-review stays an
+    intake answer — a stream switch never doubles as consent."""
+    gateway, conn, ident = _host(tmp_path)
+    alice = ident.token("alice")
+
+    chips = _say(gateway, alice, "genres")
+    assert chips["source"] == "desk"
+    assert chips["block"]["kind"] == "genres"
+    keys = [item["key"] for item in chips["block"]["items"]]
+    assert "local" in keys and "food" in keys
+
+    # With an offer standing, "genres" is just words: the offer is
+    # withdrawn (an unrelated message), never the chips block.
+    _say(gateway, alice, ARTICLE)
+    mid = _say(gateway, alice, "genres")
+    assert mid.get("block") is None
+    conn.close()
+
+
 def test_thin_material_gathers_once_and_a_no_drops_it(tmp_path):
     gateway, conn, ident = _host(tmp_path)
     alice = ident.token("alice")

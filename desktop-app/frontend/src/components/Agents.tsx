@@ -6,17 +6,16 @@ import type {
   Contribution,
   ExplorerBrief,
   ExplorerRow,
-  FileMeta,
-  PollPair,
-  PollVerdict,
   PressGenre,
   RosterAgent,
   Story,
   TravelBrief,
+  TurnFileRef,
 } from "../api";
 import { identityHue } from "../avatar";
-import { fileToDrawerContent, pickLocalFiles } from "../device";
+import { pickLocalFiles, saveToDevice } from "../device";
 import { loadCompose, saveCompose, tf, useT } from "../ui";
+import { AttachmentStrip } from "./Attachments";
 import { Byline } from "./Byline";
 import { MarketPanel } from "./Market";
 
@@ -28,11 +27,10 @@ import { MarketPanel } from "./Market";
 // cache exactly like the OoLu chat.
 
 // A structured piece riding an agent's reply — rendered in the bubble:
-// a poll pair to vote on, genre chips, the Explorer's followable
-// categories (a tap speaks "follow …"), or the closest products with
-// the comparison's own deadline.
+// genre chips, the Explorer's followable categories (a tap speaks
+// "follow …"), or the closest products with the comparison's own
+// deadline.
 type ChatBlock =
-  | { kind: "poll"; pair: PollPair }
   | { kind: "genres"; items: PressGenre[] }
   | { kind: "categories"; items: { category: string; followed: boolean }[] }
   | {
@@ -59,6 +57,9 @@ type AgentMsg = {
   text: string;
   reasoning?: string | null;
   block?: ChatBlock | null;
+  // A user turn's attachments — drawer refs rendered as previews with a
+  // lossless download, on this device and every other one.
+  files?: TurnFileRef[];
 };
 
 const cacheKey = (agent: string) => `oolu_agent_${agent}`;
@@ -107,7 +108,7 @@ export function AdSlot({
   surface,
   content,
 }: {
-  surface: "edition" | "poll";
+  surface: "edition";
   content: string;
 }) {
   const tr = useT();
@@ -182,75 +183,6 @@ export function AdSlot({
       >
         {tr("ads.offer")}
       </button>
-    </div>
-  );
-}
-
-// The poll, as a MESSAGE BLOCK (A3.1): the pair arrives in the Poll
-// agent's own bubble — two member pieces side by side, each with its
-// byline; tap to vote; the reveal follows the server's honesty laws
-// verbatim (vote first, floor second). Say "poll" for another, name a
-// genre, or tap a chip from the genres block.
-export function PollPairBlock({ pair }: { pair: PollPair }) {
-  const tr = useT();
-  const [verdict, setVerdict] = useState<PollVerdict | null>(null);
-  const [note, setNote] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  async function vote(choice: "left" | "right") {
-    if (busy) return;
-    setBusy(true);
-    try {
-      setVerdict(await api.pressPollVote(pair.pair_id, choice));
-    } catch (e) {
-      setNote(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="poll-block">
-      <div className="poll-pair">
-        {(["left", "right"] as const).map((side) => (
-          <button
-            key={side}
-            type="button"
-            className={`poll-side${verdict?.choice === side ? " chosen" : ""}`}
-            disabled={busy || verdict?.voted === true}
-            onClick={() => void vote(side)}
-          >
-            <span className="press-title">{pair[side].title}</span>
-            <span className="press-body">{pair[side].excerpt}</span>
-            <Byline username={pair[side].author} size={20} />
-          </button>
-        ))}
-      </div>
-      {verdict && (
-        <div className="poll-verdict">
-          {verdict.revealed && verdict.counts && verdict.total ? (
-            <span>
-              {tf("poll.result", {
-                left: Math.round((100 * verdict.counts.left) / verdict.total),
-                right: Math.round(
-                  (100 * verdict.counts.right) / verdict.total,
-                ),
-                n: verdict.total,
-              })}
-            </span>
-          ) : (
-            // The server's honesty law, verbatim — "not enough votes
-            // yet" and nothing noisier.
-            <span className="muted">{verdict.reason}</span>
-          )}
-          {verdict.learning === false && (
-            <span className="muted"> · {tr("press.notRecorded")}</span>
-          )}
-        </div>
-      )}
-      {note && <div className="muted press-empty">{note}</div>}
-      {/* The magazine rule: the ad lives BETWEEN the content, labeled. */}
-      <AdSlot surface="poll" content={pair.pair_id} />
     </div>
   );
 }
@@ -656,7 +588,9 @@ export function TravelPanel() {
 }
 
 // One attached piece of media, fetched with the bearer token and shown
-// by its true type: a photo inline, a clip or a sound with controls.
+// by its true type: a photo inline, a clip or a sound with controls, an
+// honest named card for anything else (a PDF, a document) — and every
+// shape carries the lossless download, straight from the fetched bytes.
 // A reference whose file is gone (refs, never copies) renders nothing —
 // honestly absent, never a broken box.
 function PressMedia({
@@ -670,28 +604,60 @@ function PressMedia({
   mediaType: string;
   name: string;
 }) {
+  const tr = useT();
+  const [blob, setBlob] = useState<Blob | null>(null);
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
     let held: string | null = null;
-    void api.pressMediaUrl(contributionId, index).then((u) => {
-      held = u;
-      setUrl(u);
+    void api.pressMediaBlob(contributionId, index).then((bytes) => {
+      if (!bytes) return;
+      held = URL.createObjectURL(bytes);
+      setBlob(bytes);
+      setUrl(held);
     });
     return () => {
       if (held) URL.revokeObjectURL(held);
     };
   }, [contributionId, index]);
-  if (!url) return null;
+  if (!url || !blob) return null;
+  const download = (
+    <button
+      type="button"
+      className="linklike attachment-download"
+      onClick={() => saveToDevice(name, blob)}
+    >
+      {tr("file.download")}
+    </button>
+  );
   if (mediaType.startsWith("image/")) {
-    return <img className="press-media" src={url} alt={name} />;
+    return (
+      <figure className="attachment">
+        <img className="press-media" src={url} alt={name} />
+        <figcaption>{download}</figcaption>
+      </figure>
+    );
   }
   if (mediaType.startsWith("video/")) {
-    return <video className="press-media" src={url} controls title={name} />;
+    return (
+      <figure className="attachment">
+        <video className="press-media" src={url} controls title={name} />
+        <figcaption>{download}</figcaption>
+      </figure>
+    );
   }
   if (mediaType.startsWith("audio/")) {
-    return <audio className="press-media" src={url} controls title={name} />;
+    return (
+      <figure className="attachment">
+        <audio className="press-media" src={url} controls title={name} />
+        <figcaption>{download}</figcaption>
+      </figure>
+    );
   }
-  return null;
+  return (
+    <span className="attachment attachment-card">
+      📎 {name} {download}
+    </span>
+  );
 }
 
 // The contribution spine's surface (A1, amended): the shelf of live
@@ -955,7 +921,13 @@ export function AgentThread({ agent }: { agent: RosterAgent }) {
           setThread(
             items
               .filter((t) => t.kind === "user" || t.kind === "assistant")
-              .map((t): AgentMsg => ({ kind: t.kind as "user" | "assistant", text: t.body })),
+              .map(
+                (t): AgentMsg => ({
+                  kind: t.kind as "user" | "assistant",
+                  text: t.body,
+                  files: t.files,
+                }),
+              ),
           );
         }
       })
@@ -967,29 +939,28 @@ export function AgentThread({ agent }: { agent: RosterAgent }) {
   // keeps the true bytes; a host without one takes what fits inline)
   // and sent WITH the message, so the desk reviews words and evidence
   // together.
-  const [pending, setPending] = useState<{ id: string; name: string }[]>([]);
+  const [pending, setPending] = useState<
+    { id: string; name: string; mediaType: string }[]
+  >([]);
 
   async function attach() {
     const picked = await pickLocalFiles();
     for (const file of picked) {
       try {
-        let saved: FileMeta;
-        try {
-          saved = await api.uploadFileBytes(file);
-        } catch {
-          const { content, mediaType } = await fileToDrawerContent(file);
-          saved = await api.createFile(
-            file.name,
-            content,
-            undefined,
-            "",
-            mediaType,
-          );
-        }
+        // Blob door first — TRUE bytes, lossless preview and download;
+        // only a blob-less host falls back inline (saveToDrawer).
+        const saved = await api.saveToDrawer(file);
         setPending((p) =>
           p.some((f) => f.id === saved.file_id) || p.length >= 6
             ? p
-            : [...p, { id: saved.file_id, name: saved.name }],
+            : [
+                ...p,
+                {
+                  id: saved.file_id,
+                  name: saved.name,
+                  mediaType: saved.media_type,
+                },
+              ],
         );
       } catch (e) {
         setThread((t) => [
@@ -1007,12 +978,24 @@ export function AgentThread({ agent }: { agent: RosterAgent }) {
     const message = (spoken ?? draft).trim();
     if ((!message && pending.length === 0) || busy) return;
     const fileIds = pending.map((f) => f.id);
+    const sent: TurnFileRef[] = pending.map((f) => ({
+      file_id: f.id,
+      name: f.name,
+      media_type: f.mediaType,
+    }));
     const shown =
       message ||
       pending.map((f) => f.name).join(", "); // a bare attachment still shows
     if (spoken === undefined) setDraft("");
     setPending([]);
-    setThread((t) => [...t, { kind: "user", text: shown }]);
+    setThread((t) => [
+      ...t,
+      {
+        kind: "user",
+        text: shown,
+        files: sent.length > 0 ? sent : undefined,
+      },
+    ]);
     setBusy(true);
     try {
       const history = thread.map((m) => ({
@@ -1063,9 +1046,6 @@ export function AgentThread({ agent }: { agent: RosterAgent }) {
             contribution shelf and the contribute form — in-thread, the
             inlineBlock pattern, never a window popping on top. */}
         {agent.agent_id === "news" && <PressPanel />}
-        {/* The poll floor (A3.1) lives IN the conversation: pairs and
-            genre chips arrive as message blocks; nothing heads the
-            thread. */}
         {/* The marketplace: every function block as a form block IN
             this conversation — shop, requests, approvals, orders,
             sell — plus the brief and the list-out. */}
@@ -1085,11 +1065,10 @@ export function AgentThread({ agent }: { agent: RosterAgent }) {
         {thread.map((m, i) => (
           <div key={i} className={`bubble ${m.kind}`}>
             {m.text}
-            {/* The block in the bubble: the poll to vote on, the genre
-                chips whose tap speaks back into the conversation. */}
-            {m.block?.kind === "poll" && (
-              <PollPairBlock pair={m.block.pair} />
-            )}
+            {/* What rode along: previews with a lossless download. */}
+            {m.kind === "user" && <AttachmentStrip files={m.files} />}
+            {/* The block in the bubble: the genre chips whose tap
+                speaks back into the conversation. */}
             {m.block?.kind === "genres" && (
               <GenreChipsBlock
                 items={m.block.items}

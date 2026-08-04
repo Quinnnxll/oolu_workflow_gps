@@ -2,9 +2,9 @@
 
 The listing-tag lesson (``nodeplace/economics.py``'s ``class:``/``market:``
 keys) applied to content: contributions carry genre keys from ONE
-registry, and the same keys later classify poll genres (A3) and campaign
-targeting (A4) — so "fairly matched" is a join on a shared vocabulary,
-never a fuzzy guess across two word lists.
+registry, and the same keys later classify campaign targeting (A4) — so
+"fairly matched" is a join on a shared vocabulary, never a fuzzy guess
+across two word lists.
 
 The taxonomy is versioned: a contribution records the version it was
 keyed under, so a future re-cut of the genres never silently reclassifies

@@ -32,8 +32,8 @@ class Placement(BaseModel):
     placement_id: str  # also the provenance token
     tenant_id: str
     campaign_id: str
-    surface: str  # "edition" | "poll" — the only two legal surfaces
-    content_ref: str  # story_id / pair_id the ad ran against
+    surface: str  # "edition" — the only legal surface (poll retired)
+    content_ref: str  # the story_id the ad ran against
     viewer: str  # whose render this occurrence was
     price_micros: int
     breakdown: dict

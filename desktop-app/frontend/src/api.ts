@@ -11,6 +11,7 @@ import type {
   TimelineEvent,
   WorkerHealth,
 } from "./types";
+import { fileToDrawerContent } from "./device";
 
 // Dev: empty base → relative URLs → Vite proxies /v1 to the loopback backend.
 // Packaged: the Tauri shell injects the API origin as window.__OOLU_API__ and
@@ -567,8 +568,8 @@ export interface ChatTurnReply {
   // node's full ID they wanted in the clear. The client writes it; the ID
   // never has to be printed in the reply.
   copy?: string | null;
-  // A roster desk's structured piece, rendered in the bubble: a poll
-  // pair to vote on, or the genre chips whose tap speaks back.
+  // A roster desk's structured piece, rendered in the bubble — e.g.
+  // the genre chips whose tap speaks back.
   block?: ChatTurnBlock | null;
   run_id: string | null;
 }
@@ -577,12 +578,21 @@ export interface ChatTurnReply {
 // it — what a fresh device loads so every client shows the same
 // conversation. `agent` names whose thread the turn belongs to (absent on
 // hosts from before the roster).
+// An attachment a turn carries: a drawer ref (id, true name, true type)
+// the thread renders again on any device — never inlined bytes.
+export interface TurnFileRef {
+  file_id: string;
+  name: string;
+  media_type: string;
+}
+
 export interface ChatHistoryTurn {
   seq: number;
   kind: "user" | "assistant" | "run";
   body: string;
   at: string;
   agent?: string;
+  files?: TurnFileRef[];
 }
 
 // ---- the agent roster (A0) --------------------------------------------------
@@ -611,10 +621,9 @@ export interface PressGenre {
   description: string;
 }
 
-// A structured piece riding a roster agent's reply — the Poll desk's
-// pair to vote on, or the genre chips whose tap speaks back.
+// A structured piece riding a roster agent's reply — e.g. the genre
+// chips whose tap speaks back into the conversation.
 export type ChatTurnBlock =
-  | { kind: "poll"; pair: PollPair }
   | { kind: "genres"; items: PressGenre[] }
   | { kind: "categories"; items: { category: string; followed: boolean }[] }
   | {
@@ -691,22 +700,6 @@ export interface EditionSchedule {
   [key: string]: unknown;
 }
 
-// A poll pair (A3): two comparable member pieces, each with its byline.
-export interface PollSide {
-  contribution_id: string;
-  author: string;
-  title: string;
-  excerpt: string;
-}
-
-export interface PollPair {
-  pair_id: string;
-  genre: string;
-  left: PollSide;
-  right: PollSide;
-  created_at: string;
-}
-
 // A sponsored placement (A4): always labeled; the placement_id is the
 // provenance token delivery events bind to.
 export interface AdPlacement {
@@ -781,19 +774,6 @@ export interface TravelBrief {
   open_slots: [string, string][];
   feasible: TravelCandidate[];
   infeasible: TravelCandidate[];
-}
-
-// The reveal's honest shapes: nothing before your vote, no counts below
-// the k-anonymity floor.
-export interface PollVerdict {
-  pair_id: string;
-  voted: boolean;
-  choice?: "left" | "right";
-  revealed: boolean;
-  reason?: string;
-  counts?: { left: number; right: number };
-  total?: number;
-  learning?: boolean;
 }
 
 // ---- friends wire shapes ----------------------------------------------------
@@ -1357,6 +1337,7 @@ export const api = {
     handlers: { onReasoning?: (delta: string) => void },
     nodeId?: string,
     mood?: string,
+    fileIds?: string[],
   ): Promise<ChatTurnReply> => {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -1374,13 +1355,14 @@ export const api = {
           tz_offset_minutes: -new Date().getTimezoneOffset() || 0,
           ...(nodeId ? { node_id: nodeId } : {}),
           ...(mood ? { mood } : {}),
+          ...(fileIds && fileIds.length > 0 ? { file_ids: fileIds } : {}),
         }),
       });
     } catch {
-      return api.chat(message, history, nodeId, mood);
+      return api.chat(message, history, nodeId, mood, undefined, fileIds);
     }
     if (res.status === 404 || !res.body) {
-      return api.chat(message, history, nodeId, mood);
+      return api.chat(message, history, nodeId, mood, undefined, fileIds);
     }
     if (res.status === 401 && token) {
       signOut();
@@ -1503,13 +1485,14 @@ export const api = {
       "POST",
       `/v1/press/contributions/${encodeURIComponent(contributionId)}/unpublish`,
     ),
-  // A published attachment's bytes as an object URL the media tags can
-  // show (fetch carries the bearer token — a plain src cannot). Null
-  // when the referenced file is honestly gone (refs, never copies).
-  pressMediaUrl: async (
+  // A published attachment's TRUE bytes (fetch carries the bearer token —
+  // a plain src cannot). Null when the referenced file is honestly gone
+  // (refs, never copies). The blob is both the preview's source and the
+  // lossless download — one fetch serves both.
+  pressMediaBlob: async (
     contributionId: string,
     index: number,
-  ): Promise<string | null> => {
+  ): Promise<Blob | null> => {
     const headers: Record<string, string> = {};
     const token = apiToken();
     if (token) headers["Authorization"] = "Bearer " + token;
@@ -1521,10 +1504,17 @@ export const api = {
         { headers },
       );
       if (!res.ok) return null;
-      return URL.createObjectURL(await res.blob());
+      return res.blob();
     } catch {
       return null;
     }
+  },
+  pressMediaUrl: async (
+    contributionId: string,
+    index: number,
+  ): Promise<string | null> => {
+    const blob = await api.pressMediaBlob(contributionId, index);
+    return blob ? URL.createObjectURL(blob) : null;
   },
   // The newsroom (A2): the caller's edition — neutral for everyone,
   // affinity-bent only under their own consent; the server says which.
@@ -1559,25 +1549,6 @@ export const api = {
           payload.tz_offset_minutes ?? (-new Date().getTimezoneOffset() || 0),
       },
     ),
-  // The poll floor (A3): a pair you haven't voted on — your named genre,
-  // or the server's exploration pick when you name none.
-  pressPollNext: (genre?: string) =>
-    req<PollPair>(
-      "GET",
-      "/v1/press/polls/next" +
-        (genre ? `?genre=${encodeURIComponent(genre)}` : ""),
-    ),
-  pressPollVote: (pairId: string, choice: "left" | "right") =>
-    req<PollVerdict>(
-      "POST",
-      `/v1/press/polls/${encodeURIComponent(pairId)}/vote`,
-      { choice },
-    ),
-  pressPollStats: (pairId: string) =>
-    req<PollVerdict>(
-      "GET",
-      `/v1/press/polls/${encodeURIComponent(pairId)}/stats`,
-    ),
   // The versioned legal consent (A4): what you accepted, and the door
   // to accept the CURRENT version by number — never by vibe.
   legalConsent: () =>
@@ -1594,7 +1565,7 @@ export const api = {
     ),
   // The render-time ad merge: one labeled placement for one content
   // view, or an honest nothing with the reason named.
-  pressAd: (surface: "edition" | "poll", content: string) =>
+  pressAd: (surface: "edition", content: string) =>
     req<{ placement: AdPlacement | null; reason?: string }>(
       "GET",
       `/v1/press/ads?surface=${surface}&content=${encodeURIComponent(content)}`,
@@ -1968,6 +1939,24 @@ export const api = {
     if (!res.ok) throw new Error(`could not fetch the file (${res.status})`);
     return res.blob();
   },
+  // The ONE way a device file lands in the drawer: the blob door first —
+  // TRUE bytes, no downscale, no base64, so what comes back down is
+  // exactly what went up (lossless by construction). Only a host without
+  // a blob store falls back to the inline row, within its 1 MB budget;
+  // there an image is downscaled and an oversized file refuses in words —
+  // an honest limit, never a silently degraded copy on a capable host.
+  saveToDrawer: async (
+    file: File,
+    nodeId?: string,
+    folder = "",
+  ): Promise<FileMeta> => {
+    try {
+      return await api.uploadFileBytes(file, nodeId, folder);
+    } catch {
+      const { content, mediaType } = await fileToDrawerContent(file);
+      return await api.createFile(file.name, content, nodeId, folder, mediaType);
+    }
+  },
   // ---- the Work environment: node accounts and stewardship -------------
   workNodes: () => req<{ items: WorkNode[] }>("GET", "/v1/work/nodes"),
   workAccountCreate: (nodeId: string, fixed: NodeAccountCreate) =>
@@ -2232,12 +2221,13 @@ export const api = {
   }) => req<CommerceListing>("POST", "/v1/commerce/listings", body),
   commerceListingPublish: (listingId: string) =>
     req<CommerceListing>("POST", `/v1/commerce/listings/${listingId}/publish`),
-  // A listing attachment's bytes as an object URL (the bearer token
-  // travels with the fetch). Null when the referenced file is gone.
-  commerceListingMediaUrl: async (
+  // A listing attachment's TRUE bytes (the bearer token travels with the
+  // fetch). Null when the referenced file is gone. One fetch serves both
+  // the preview and the lossless download.
+  commerceListingMediaBlob: async (
     listingId: string,
     index: number,
-  ): Promise<string | null> => {
+  ): Promise<Blob | null> => {
     const headers: Record<string, string> = {};
     const token = apiToken();
     if (token) headers["Authorization"] = "Bearer " + token;
@@ -2249,10 +2239,17 @@ export const api = {
         { headers },
       );
       if (!res.ok) return null;
-      return URL.createObjectURL(await res.blob());
+      return res.blob();
     } catch {
       return null;
     }
+  },
+  commerceListingMediaUrl: async (
+    listingId: string,
+    index: number,
+  ): Promise<string | null> => {
+    const blob = await api.commerceListingMediaBlob(listingId, index);
+    return blob ? URL.createObjectURL(blob) : null;
   },
   // The market desk: the briefing (position meets demand), its standing
   // schedule, and the list-out of everything the caller created.

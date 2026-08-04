@@ -4,6 +4,49 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+The Poll agent removed; attachments become first-class; the News-agent
+benchmark roadmap (docs/news-agent-benchmark-roadmap.md):
+
+- **The Poll agent is REMOVED** — the poll floor (A3) and its social
+  scientist (A3.1) leave the codebase: `press/polls.py`,
+  `press/scientist.py`, the roster card, the `poll.pair` seat, the
+  three `/v1/press/polls/*` doors, the Poll thread desk, the frontend
+  pair block, and their suites. A social-feed comparison game breeds
+  superficial engagement; the News agent's benchmark direction
+  measures interest on the news posts themselves. A durable migration
+  drops the poll tables (`poll_pairs`, `poll_votes`,
+  `poll_genre_stats`, `poll_findings`) so no member's vote lingers
+  unreachable.
+- **What survives the removal, deliberately** — the member's pairwise
+  preference book moves to its own module (`press/pairwise.py`,
+  hung directly off `PressDesk`): the DPO export door
+  (`/v1/press/preferences/export`) and account erasure stand; story
+  feedback and future reader surveys are its writers now. The
+  genre-chips message block re-homes to the News thread ("genres"
+  is a News desk ask). The ad house narrows to the News surface only.
+- **Privacy version 3** — a strict NARROWING of version 2 (sponsored
+  placements on News only; every other clause stands word for word),
+  renegotiated in the open per invariant 13: version bump, amendment
+  beside it, re-acceptance required before anything sponsored renders.
+  The members-license terms drop the poll use the same way — the
+  promise narrows, never widens. A placement persisted on the retired
+  poll surface resolves to no lineage and is honestly skipped by the
+  dividend.
+- **Multimedia uploads carry TRUE bytes end to end** — every upload
+  path (Files pane, OoLu chat picker and camera, News-thread attach,
+  Market listing media) now goes through one door, blob-first
+  (`api.saveToDrawer`): no silent JPEG downscale of a picture the
+  host could hold losslessly; only a blob-less host falls back to the
+  inline row, and an oversized file refuses in words.
+- **Attachments are first-class conversation citizens** — a turn's
+  files ride the durable history as refs (id, true name, true type;
+  `assistant_turns.files`, migrated in place), so every device renders
+  the same previews: a photo inline, a clip or a sound with controls,
+  an honest named card for anything else — and EVERY shape carries a
+  lossless download from the drawer's true bytes. Press contribution
+  media and Market listing media gain the same download and honest
+  cards (no more silent nothing for a PDF).
+
 Gate-aware paving (W5) — the Paver speaks gates
 (docs/algorithm-barriers-plan.md, Part II; the FINAL phase of the
 three-barrier plan — all of G0–G3, W0–W5, F0–F3 are now landed):

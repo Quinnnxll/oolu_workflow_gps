@@ -142,26 +142,25 @@ describe("FilesPane", () => {
     expect(await screen.findByText("2026")).toBeTruthy();
 
     // An upload lands in the CURRENT folder — documents themselves are
-    // OoLu's to write, so the + holds only the human moves.
+    // OoLu's to write, so the + holds only the human moves. The blob
+    // door is the first door (true bytes); the folder rides its query.
     expect(screen.queryByRole("button", { name: "New document" })).toBeNull();
-    routes["POST /v1/files"] = {
+    routes["POST /v1/files/upload"] = {
       status: 201,
       body: { ...FILES.items[0], file_id: "f9" },
     };
     vi.mocked(pickLocalFiles).mockResolvedValue([
       new File(["a,b"], "budget.csv", { type: "text/csv" }),
     ]);
-    vi.mocked(fileToDrawerContent).mockResolvedValue({
-      content: "a,b",
-      mediaType: "text/csv",
-    });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
     fireEvent.click(
       screen.getByRole("button", { name: "Upload from device" }),
     );
     await waitFor(() => {
-      const create = calls.find((c) => c.method === "POST");
-      expect((create?.body as { folder: string }).folder).toBe("reports");
+      const raw = calls.find(
+        (c) => c.method === "POST" && c.path === "/v1/files/upload",
+      );
+      expect(raw?.query).toContain("folder=reports");
     });
   });
 
@@ -183,8 +182,41 @@ describe("FilesPane", () => {
     ).toBeTruthy();
   });
 
-  it("uploads picked device files into the open folder", async () => {
+  it("uploads picked device files through the blob door — true bytes first", async () => {
     routes["GET /v1/files"] = { status: 200, body: FILES };
+    routes["POST /v1/files/upload"] = {
+      status: 201,
+      body: { ...FILES.items[0], file_id: "f9", name: "budget.csv" },
+    };
+    vi.mocked(pickLocalFiles).mockResolvedValue([
+      new File(["a,b"], "budget.csv", { type: "text/csv" }),
+    ]);
+    render(<FilesPane />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Upload from device" }),
+    );
+
+    await waitFor(() => {
+      const raw = calls.find(
+        (c) => c.method === "POST" && c.path === "/v1/files/upload",
+      );
+      expect(raw?.query).toContain("name=budget.csv");
+    });
+    // The blob door carried it: the inline row was never written.
+    expect(await screen.findByText(/uploaded 1 file/)).toBeTruthy();
+    expect(
+      calls.some((c) => c.method === "POST" && c.path === "/v1/files"),
+    ).toBe(false);
+  });
+
+  it("a blob-less host falls back to the inline row, content intact", async () => {
+    routes["GET /v1/files"] = { status: 200, body: FILES };
+    routes["POST /v1/files/upload"] = {
+      status: 404,
+      body: { error: { message: "this host keeps no blob store" } },
+    };
     routes["POST /v1/files"] = {
       status: 201,
       body: { ...FILES.items[0], file_id: "f9" },
@@ -217,8 +249,8 @@ describe("FilesPane", () => {
   });
 
   it("a refused upload lands as words next to the successes", async () => {
-    // Past the inline cap the blob door takes over — so a refusal now
-    // means even the blob store said no (its own 100 MB ceiling).
+    // The blob door said no AND the inline budget can't hold it either:
+    // the refusal is the inline door's honest words, never a silent skip.
     routes["GET /v1/files"] = { status: 200, body: FILES };
     routes["POST /v1/files/upload"] = {
       status: 413,
@@ -237,7 +269,7 @@ describe("FilesPane", () => {
       screen.getByRole("button", { name: "Upload from device" }),
     );
 
-    expect(await screen.findByText(/file exceeds/)).toBeTruthy();
+    expect(await screen.findByText(/too large for the drawer/)).toBeTruthy();
     expect(
       calls.some((c) => c.method === "POST" && c.path === "/v1/files"),
     ).toBe(false);
@@ -379,28 +411,31 @@ describe("FilesPane", () => {
     expect(calls[0].query).toBe("node_id=n1");
 
     // No "New document" in the node's drawer either — documents are
-    // OoLu's to write. An upload still lands in the NODE's files.
+    // OoLu's to write. An upload still lands in the NODE's files: the
+    // blob door carries node_id in its query.
     expect(screen.queryByRole("button", { name: "New document" })).toBeNull();
+    routes["POST /v1/files/upload"] = {
+      status: 201,
+      body: { ...FILES.items[0], file_id: "f9", node_id: "n1" },
+    };
     vi.mocked(pickLocalFiles).mockResolvedValue([
       new File(["hi"], "spec.md", { type: "text/markdown" }),
     ]);
-    vi.mocked(fileToDrawerContent).mockResolvedValue({
-      content: "hi",
-      mediaType: "text/markdown",
-    });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
     fireEvent.click(
       screen.getByRole("button", { name: "Upload from device" }),
     );
     await waitFor(() => {
-      const create = calls.find((c) => c.method === "POST");
-      expect((create?.body as { node_id: string }).node_id).toBe("n1");
+      const raw = calls.find(
+        (c) => c.method === "POST" && c.path === "/v1/files/upload",
+      );
+      expect(raw?.query).toContain("node_id=n1");
     });
   });
 });
 
 describe("FilesPane — the blob door", () => {
-  it("past the inline cap, the upload takes the blob door with full bytes", async () => {
+  it("a big binary rides the blob door with its full bytes", async () => {
     routes["GET /v1/files"] = { status: 200, body: { items: [] } };
     routes["POST /v1/files/upload"] = {
       status: 201,
@@ -409,9 +444,6 @@ describe("FilesPane — the blob door", () => {
     vi.mocked(pickLocalFiles).mockResolvedValue([
       new File(["x"], "movie.mp4", { type: "video/mp4" }),
     ]);
-    vi.mocked(fileToDrawerContent).mockRejectedValue(
-      new Error("movie.mp4 is too large for the drawer (1 MB cap)"),
-    );
     render(<FilesPane />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Add" }));

@@ -15,10 +15,10 @@ import type {
   CommerceRfq,
   CommerceSalesPolicy,
   CommerceSourced,
-  FileMeta,
   SellerKycView,
 } from "../api";
-import { fileToDrawerContent, pickLocalFiles } from "../device";
+import { pickLocalFiles, saveToDevice } from "../device";
+import { useT } from "../ui";
 
 // The market surface (marketplace-build-plan M1+M2): buying walks the
 // spine's law — offer → intent → verdict → (approval) → order — and this
@@ -48,7 +48,9 @@ function offerTotal(offer: CommerceOffer): number {
 }
 
 // One product attachment, fetched with the bearer token and shown by its
-// true type — the press media strip's discipline, on the shelf.
+// true type — the press media strip's discipline, on the shelf: a photo
+// inline, a clip or a sound with controls, an honest named card for any
+// other format, and the lossless download on every shape.
 function ListingMediaItem({
   listingId,
   index,
@@ -60,28 +62,60 @@ function ListingMediaItem({
   mediaType: string;
   name: string;
 }) {
+  const tr = useT();
+  const [blob, setBlob] = useState<Blob | null>(null);
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
     let held: string | null = null;
-    void api.commerceListingMediaUrl(listingId, index).then((u) => {
-      held = u;
-      setUrl(u);
+    void api.commerceListingMediaBlob(listingId, index).then((bytes) => {
+      if (!bytes) return;
+      held = URL.createObjectURL(bytes);
+      setBlob(bytes);
+      setUrl(held);
     });
     return () => {
       if (held) URL.revokeObjectURL(held);
     };
   }, [listingId, index]);
-  if (!url) return null;
+  if (!url || !blob) return null;
+  const download = (
+    <button
+      type="button"
+      className="linklike attachment-download"
+      onClick={() => saveToDevice(name, blob)}
+    >
+      {tr("file.download")}
+    </button>
+  );
   if (mediaType.startsWith("image/")) {
-    return <img className="press-media" src={url} alt={name} />;
+    return (
+      <figure className="attachment">
+        <img className="press-media" src={url} alt={name} />
+        <figcaption>{download}</figcaption>
+      </figure>
+    );
   }
   if (mediaType.startsWith("video/")) {
-    return <video className="press-media" src={url} controls title={name} />;
+    return (
+      <figure className="attachment">
+        <video className="press-media" src={url} controls title={name} />
+        <figcaption>{download}</figcaption>
+      </figure>
+    );
   }
   if (mediaType.startsWith("audio/")) {
-    return <audio className="press-media" src={url} controls title={name} />;
+    return (
+      <figure className="attachment">
+        <audio className="press-media" src={url} controls title={name} />
+        <figcaption>{download}</figcaption>
+      </figure>
+    );
   }
-  return null;
+  return (
+    <span className="attachment attachment-card">
+      📎 {name} {download}
+    </span>
+  );
 }
 
 function ListingMediaStrip({ listing }: { listing: CommerceListing }) {
@@ -1034,19 +1068,9 @@ export function SellPane({ onChanged }: { onChanged: () => void }) {
     const picked = await pickLocalFiles();
     for (const file of picked) {
       try {
-        let saved: FileMeta;
-        try {
-          saved = await api.uploadFileBytes(file);
-        } catch {
-          const { content, mediaType } = await fileToDrawerContent(file);
-          saved = await api.createFile(
-            file.name,
-            content,
-            undefined,
-            "",
-            mediaType,
-          );
-        }
+        // Blob door first — TRUE bytes, so the listing's media downloads
+        // losslessly; a blob-less host falls back inline (saveToDrawer).
+        const saved = await api.saveToDrawer(file);
         setMedia((m) =>
           m.some((f) => f.id === saved.file_id) || m.length >= 6
             ? m

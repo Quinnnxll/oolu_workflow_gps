@@ -14,7 +14,6 @@ exists anywhere in the package.
 
 from __future__ import annotations
 
-import random
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -36,8 +35,6 @@ from oolu.press import (
     LICENSES,
     ContributionStore,
     PairwiseStore,
-    PollDesk,
-    PollStore,
     PreferenceStore,
     PressDesk,
     StoryStore,
@@ -71,13 +68,13 @@ def _campaign(campaign_id, *, genres=("products",), bid=10_000, funded=1_000_000
 # --------------------------------------------------------------------------- #
 # The legal seam: versioned, monotone, explicit.                               #
 # --------------------------------------------------------------------------- #
-def test_privacy_v2_carries_the_renegotiated_promise():
+def test_privacy_v3_carries_the_narrowed_promise():
     from oolu.legal import PRIVACY_TEMPLATE
 
     flat = " ".join(PRIVACY_TEMPLATE.split())  # wrap-safe pinning
-    assert LEGAL_VERSIONS["privacy"] == 2
+    assert LEGAL_VERSIONS["privacy"] == 3
     assert "always labeled as sponsored" in flat
-    assert "News and Poll surfaces only" in flat
+    assert "News surface only" in flat
     # The part that never moved.
     assert "No sale of personal data" in flat
 
@@ -90,12 +87,16 @@ def test_acceptance_is_versioned_and_monotone(tmp_path):
         is None
     )
     assert store.is_current(tenant="t1", principal="a", document="privacy") is False
+    # An old acceptance (version 2) is no longer current after the v3
+    # amendment — the narrowing still renegotiates in the open.
     store.accept(tenant="t1", principal="a", document="privacy", version=2)
+    assert store.is_current(tenant="t1", principal="a", document="privacy") is False
+    store.accept(tenant="t1", principal="a", document="privacy", version=3)
     assert store.is_current(tenant="t1", principal="a", document="privacy") is True
     # Accepting an OLDER version after a newer one is a no-op.
     assert (
         store.accept(tenant="t1", principal="a", document="privacy", version=1)
-        == 2
+        == 3
     )
     conn.close()
 
@@ -235,7 +236,7 @@ def _host(tmp_path):
         ContributionStore(conn),
         stories=StoryStore(conn),
         preferences=PreferenceStore(conn),
-        polls=PollDesk(PollStore(conn), PairwiseStore(conn), rng=random.Random(7)),
+        pairwise=PairwiseStore(conn),
     )
     gateway = GatewayApp(
         app._durable,
