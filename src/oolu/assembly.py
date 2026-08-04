@@ -72,6 +72,7 @@ def _press_desk(conn):
         PairwiseStore,
         PreferenceStore,
         PressDesk,
+        RewardCitationStore,
         StoryMetricsStore,
         StoryStore,
         SurveyDesk,
@@ -91,6 +92,7 @@ def _press_desk(conn):
         demand=GenreDemandStore(conn),
         topics=TopicBriefStore(conn),
         surveys=SurveyDesk(SurveyStore(conn), pairwise),
+        rewards=RewardCitationStore(conn),
     )
 
 

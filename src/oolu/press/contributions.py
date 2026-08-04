@@ -334,6 +334,7 @@ class PressDesk:
         demand=None,
         topics=None,
         surveys=None,
+        rewards=None,
     ) -> None:
         self._store = store
         self._stories = stories  # newsroom.StoryStore | None
@@ -344,6 +345,7 @@ class PressDesk:
         self._demand = demand  # demand.GenreDemandStore | None
         self._topics = topics  # topics.TopicBriefStore | None
         self._surveys = surveys  # surveys.SurveyDesk | None
+        self._rewards = rewards  # rewards.RewardCitationStore | None
 
     @property
     def store(self) -> ContributionStore:
@@ -380,6 +382,10 @@ class PressDesk:
     @property
     def surveys(self):
         return self._surveys
+
+    @property
+    def rewards(self):
+        return self._rewards
 
     def publish(
         self,

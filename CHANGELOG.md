@@ -4,6 +4,34 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+N6 landed — the revenue loop
+(docs/news-agent-benchmark-roadmap.md, phase N6):
+
+- **Revenue flows back over the FULL source table** —
+  `press/rewards.py` (`source_split`): contributor lineage carries the
+  0.6 tranche with its recorded weights, every cited survey's retained
+  pseudonymous respondent set splits the 0.25 tranche evenly, and the
+  research-source members whose lab results or verified reviews anchor
+  a cited claim split the 0.15 tranche (resolved live at settle time).
+  Tranches renormalize over the classes actually present — a post with
+  lineage alone pays exactly what A5 always paid.
+- **One conserved split, no parallel pipeline** — the gateway resolves
+  a placement to the split (`_ad_source_shares_of`) and collapses it
+  per principal for the standing `AdDividendService` → `PricingEngine`
+  → `EarningsLedger` → double-entry recognition; the earnings preview
+  and the settle read the SAME split, so the forecast never promises a
+  member the ledger will not pay. Fraud gates, the `ad:` event ids,
+  the production-money guard, and idempotent settlement all unchanged.
+- **Every payout row cites its source row** — `RewardCitationStore`
+  (`press_reward_citations`, keyed inserts) records `lineage:<id>` /
+  `survey:<id>` / `lab:<listing>` / `feedback:<listing>` per paid
+  principal beside the ledger; a share the fraud gate excluded earns
+  no citation, and a replayed crank re-records nothing.
+- **Erasure stops future shares by construction** — deleted respondent
+  rows and live research resolution shrink the next split (the
+  remaining class renormalizes), while settled history keeps its money
+  AND its citations: financial records ride the ledger's retention.
+
 N5 landed — the publication desk
 (docs/news-agent-benchmark-roadmap.md, phase N5):
 

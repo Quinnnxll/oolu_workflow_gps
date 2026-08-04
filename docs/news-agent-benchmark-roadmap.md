@@ -553,6 +553,32 @@ over receipts is the same numbers the benchmark aggregate shows.
 
 ### N6 — the revenue loop (sources get paid)
 
+**Status: LANDED** — `press/rewards.py` holds the split as pure library
+code (fully deterministic over certain, specific data — the desk
+doctrine's opt-out): `source_split` spreads the whole over tranches —
+contributor lineage 0.6 (the recorded weights, unchanged in shape),
+survey respondents 0.25 (every cited survey's retained pseudonymous
+respondent set, split evenly), research-source members 0.15 (whoever's
+lab result or verified review anchors a cited claim, resolved LIVE at
+settle time) — renormalized over the classes actually present, so a
+post with lineage alone pays exactly what A5 always paid. The gateway's
+`_ad_source_shares_of` resolves a placement to this split off the
+story's stored source table; `_ad_lineage_of` collapses it to the
+engine's per-principal shape, so the earnings PREVIEW and the SETTLE
+read the same split. The money still moves only through the standing
+`AdDividendService` → `PricingEngine` → `EarningsLedger` → double-entry
+recognition — no parallel pipeline, conservation structural, `ad:` event
+ids, production-money guard, fraud gates all unchanged. Every payout
+row cites its source rows: `RewardCitationStore`
+(`press_reward_citations`, keyed inserts) records `lineage:<id>` /
+`survey:<id>` / `lab:<listing>` / `feedback:<listing>` per paid
+principal beside the ledger — a share the fraud gate excluded earns no
+citation, and a replayed crank re-records nothing. Erasure stops future
+shares by construction (deleted respondent rows and live research
+resolution shrink the next split) while settled history keeps its money
+AND its citations — financial records ride the ledger's retention, not
+the press erasure. Pinned by `tests/test_reward_desk.py`.
+
 Goal: revenue attached to a post flows back over the FULL source table.
 
 - The ad dividend's split input widens: contributor lineage weights

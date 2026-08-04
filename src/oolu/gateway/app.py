@@ -5129,26 +5129,89 @@ class GatewayApp:
     def _adhouse_click(self, request, session, params) -> Response:
         return self._ad_deliver(request, session, params, kind="click")
 
-    def _ad_lineage_of(self, session):
-        """How a placement resolves to the contributors it ran against:
-        edition → the story's recorded lineage weights. The same set
-        A5's real split will pay. (A placement persisted on the retired
-        poll surface resolves to no lineage and is honestly skipped.)"""
+    def _ad_source_shares_of(self, session):
+        """How a placement resolves to the members its money cites (N6):
+        edition → the story's FULL source table. Contributor lineage
+        carries the standing tranche; every cited survey's retained
+        respondent set splits the survey tranche evenly; the research-
+        source members whose lab results or verified reviews anchored a
+        cited claim split the research tranche — resolved LIVE, so an
+        erased member's future shares stop by construction. A story
+        with no source table is the standing A5 case: lineage alone
+        carries the whole weight, unchanged. (A placement persisted on
+        the retired poll surface resolves to nothing and is honestly
+        skipped.)"""
+        from ..press.rewards import source_split
+
         press = self._press
 
-        def lineage(placement) -> list[tuple[str, float]]:
+        def shares(placement) -> list:
             if (
-                placement.surface == "edition"
-                and press is not None
-                and press.stories is not None
+                placement.surface != "edition"
+                or press is None
+                or press.stories is None
             ):
-                story = press.stories.get(
-                    placement.content_ref, tenant=placement.tenant_id
-                )
-                if story is None:
-                    return []
-                return [(s.author, s.weight) for s in story.lineage]
-            return []
+                return []
+            story = press.stories.get(
+                placement.content_ref, tenant=placement.tenant_id
+            )
+            if story is None:
+                return []
+            respondents: dict[str, list[str]] = {}
+            research: list[tuple[str, str, list[str]]] = []
+            for row in press.stories.sources_of(story.story_id):
+                kind, ref = row["kind"], row["ref"]
+                if not ref:
+                    continue
+                if kind == "survey" and press.surveys is not None:
+                    names = press.surveys.store.respondents(
+                        ref, tenant=placement.tenant_id
+                    )
+                    if names:
+                        respondents[ref] = names
+                elif kind == "lab":
+                    authors = sorted(
+                        {
+                            report.author
+                            for report in self._explorer_lab.for_listing(
+                                ref, tenant=placement.tenant_id
+                            )
+                        }
+                    )
+                    if authors:
+                        research.append(("lab", ref, authors))
+                elif kind == "feedback":
+                    voices = sorted(
+                        {
+                            review.reviewer
+                            for review in (
+                                self._explorer_reviews.store.for_listing(
+                                    ref, tenant=placement.tenant_id
+                                )
+                            )
+                        }
+                    )
+                    if voices:
+                        research.append(("feedback", ref, voices))
+            return source_split(
+                lineage=story.lineage,
+                respondents=respondents,
+                research=research,
+            )
+
+        return shares
+
+    def _ad_lineage_of(self, session):
+        """The engine's (author, weight) shape over the N6 source split
+        — one line per principal, weights summed across their citations.
+        The preview and the settle read the SAME split: the forecast
+        never promises a member the ledger will not pay."""
+        from ..press.rewards import merged_shares
+
+        shares_of = self._ad_source_shares_of(session)
+
+        def lineage(placement) -> list[tuple[str, float]]:
+            return merged_shares(shares_of(placement))
 
         return lineage
 
@@ -5162,8 +5225,9 @@ class GatewayApp:
                 404, "not_found", "this host keeps no ad settlement stack"
             )
         from ..billing import MoneyModeError
+        from ..press.rewards import merged_shares
 
-        lineage = self._ad_lineage_of(session)
+        shares_of = self._ad_source_shares_of(session)
         impressed = self._ad_events.impressed_placements(
             tenant=session.tenant_id
         )
@@ -5172,19 +5236,33 @@ class GatewayApp:
             for placement in self._ad_placements.list(tenant=session.tenant_id):
                 if placement.placement_id not in impressed:
                     continue
-                shares = lineage(placement)
-                if not shares:
+                split = shares_of(placement)
+                if not split:
                     skipped += 1  # content gone: nothing to attribute
                     continue
                 outcome = self._ad_dividend.settle_impression(
                     placement,
-                    shares=shares,
+                    shares=merged_shares(split),
                     engaged=self._ad_events.has(
                         placement.placement_id, kind="click"
                     ),
                 )
                 if outcome.get("settled"):
                     settled += 1
+                    # Every payout row cites its source rows (N6): only
+                    # the principals the ledger actually paid — a share
+                    # the fraud gate excluded earns no citation either.
+                    # Keyed inserts, so a replayed crank re-records
+                    # nothing.
+                    if self._press is not None and self._press.rewards is not None:
+                        paid = set(outcome.get("contributor_accruals") or ())
+                        self._press.rewards.record(
+                            tenant=session.tenant_id,
+                            event_id=outcome["event_id"],
+                            shares=[
+                                s for s in split if s.principal in paid
+                            ],
+                        )
                     self._durable.audit.append(
                         "ad.settled",
                         {
