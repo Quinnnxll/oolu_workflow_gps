@@ -196,7 +196,12 @@ class GatewayASGI:
         if method == "POST" and path == "/v1/chat/stream":
             await self._chat_stream(request, send)
             return
-        response = self._app.handle(request)
+        # Off the event loop (V0): a long blocking turn or a lazy-tick
+        # sweep must never freeze every other door — history loads and
+        # run polls stay answerable WHILE work runs. The app is already
+        # exercised under concurrent threads (the SSE worker), and the
+        # durable connection is cross-thread by construction.
+        response = await asyncio.to_thread(self._app.handle, request)
         payload, content_type = _serialize(response)
         headers = dict(response.headers)
         headers["Content-Type"] = content_type

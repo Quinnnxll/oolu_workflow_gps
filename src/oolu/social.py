@@ -300,7 +300,13 @@ class AssistantHistoryStore:
         files: list[dict] | None = None,
         block: dict | None = None,
     ) -> int:
-        if kind not in ("user", "assistant", "run"):
+        # "working" (V0) is the durable turn-in-progress marker: appended
+        # when a turn's work begins, RESOLVED (deleted) when the reply
+        # lands, swept into an honest interruption note if the host dies
+        # mid-turn. The thread never shows a reply-less void while the
+        # backend still works — and never a working bubble for work that
+        # died.
+        if kind not in ("user", "assistant", "run", "working"):
             raise ValueError(f"unknown turn kind: {kind}")
         agent = str(agent or "").strip()
         if not agent:
@@ -372,6 +378,35 @@ class AssistantHistoryStore:
                 ),
             )
         return seq
+
+    def resolve_working(
+        self, *, tenant: str, principal: str, seq: int
+    ) -> bool:
+        """Consume one working marker — the reply is about to land in
+        its place. True when the marker still stood (False: a sweep or
+        a concurrent resolution got there first)."""
+        with self._conn.transaction() as db:
+            cursor = db.execute(
+                """DELETE FROM assistant_turns
+                   WHERE tenant_id = ? AND principal = ? AND seq = ?
+                     AND kind = 'working'""",
+                (tenant, principal, int(seq)),
+            )
+        return bool(getattr(cursor, "rowcount", 0) or 0)
+
+    def sweep_working(self, *, older_than: datetime, note: str) -> int:
+        """Resolve DEAD working markers into an honest interruption note
+        — host-wide, because a marker outliving its process is a lie on
+        every thread it stands in. ISO timestamps compare lexically, so
+        the cut is exact. Returns how many were swept."""
+        with self._conn.transaction() as db:
+            cursor = db.execute(
+                """UPDATE assistant_turns
+                   SET kind = 'assistant', body = ?
+                   WHERE kind = 'working' AND at < ?""",
+                (str(note), older_than.isoformat()),
+            )
+        return int(getattr(cursor, "rowcount", 0) or 0)
 
     def erase(self, *, tenant: str, principal: str) -> int:
         """Data-subject erasure: the account's whole thread, gone."""

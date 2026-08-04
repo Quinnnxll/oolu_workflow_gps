@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import type { WorkNode } from "../api";
 import { NodeInteract, reliabilityLine } from "./NodeInteract";
 
@@ -131,9 +137,19 @@ describe("NodeInteract", () => {
 
   it("glows while the model reasons, and shows the thinking dimmed", async () => {
     // A slow turn: the promise resolves only when the test lets it.
+    // Routed by path (the mount now loads server history first, V0),
+    // so the gate holds exactly the CHAT call, nothing else.
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
-    fetchMock.mockImplementationOnce(async () => {
+    fetchMock.mockImplementation(async (input: string | URL) => {
+      if (String(input).includes("/v1/chat/history")) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ items: [] }),
+          json: async () => ({ items: [] }),
+        } as unknown as Response;
+      }
       await gate;
       return {
         ok: true,
@@ -196,5 +212,108 @@ describe("NodeInteract", () => {
       (calls.find((c) => c.path === "/v1/chat")?.body as { message: string })
         .message,
     ).toBe("pending");
+  });
+});
+
+// ---- V0: the node's thread lives on the server ----------------------------
+describe("NodeInteract — the server-side thread (V0)", () => {
+  it("loads the node's server thread on mount — the reply a past visit never waited for", async () => {
+    routes["GET /v1/chat/history"] = {
+      status: 200,
+      body: {
+        items: [
+          { seq: 1, kind: "user", body: "tally the ledger", at: "t" },
+          { seq: 2, kind: "assistant", body: "Tallied: 41 rows.", at: "t" },
+        ],
+      },
+    };
+    render(<NodeInteract node={node()} />);
+    expect(await screen.findByText("Tallied: 41 rows.")).toBeTruthy();
+    // The request named THIS node's thread.
+    const history = fetchMock.mock.calls.find(([input]) =>
+      String(input).includes("/v1/chat/history"),
+    );
+    expect(String(history?.[0])).toContain(encodeURIComponent("node:n1"));
+  });
+
+  it("a return mid-turn shows the working state, then the reply", async () => {
+    vi.useFakeTimers();
+    try {
+      routes["GET /v1/chat/history"] = {
+        status: 200,
+        body: {
+          items: [
+            { seq: 1, kind: "user", body: "tally the ledger", at: "t" },
+            { seq: 2, kind: "working", body: "", at: "t" },
+          ],
+        },
+      };
+      render(<NodeInteract node={node()} />);
+      await act(async () => {});
+      expect(screen.getByText(/the reply lands when it's ready/)).toBeTruthy();
+
+      routes["GET /v1/chat/history"] = {
+        status: 200,
+        body: {
+          items: [
+            { seq: 1, kind: "user", body: "tally the ledger", at: "t" },
+            { seq: 3, kind: "assistant", body: "Tallied: 41 rows.", at: "t" },
+          ],
+        },
+      };
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2600);
+      });
+      expect(screen.getByText("Tallied: 41 rows.")).toBeTruthy();
+      expect(
+        screen.queryByText(/the reply lands when it's ready/),
+      ).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a broken request with the server still working never fabricates failure", async () => {
+    routes["POST /v1/chat"] = {
+      status: 500,
+      body: { error: { message: "boom" } },
+    };
+    routes["GET /v1/chat/history"] = {
+      status: 200,
+      body: {
+        items: [
+          { seq: 1, kind: "user", body: "tally it", at: "t" },
+          { seq: 2, kind: "working", body: "", at: "t" },
+        ],
+      },
+    };
+    render(<NodeInteract node={node()} />);
+    await act(async () => {});
+    fireEvent.change(
+      screen.getByPlaceholderText("Message OoLu about Invoice Cleaner…"),
+      { target: { value: "tally it" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await act(async () => {});
+
+    expect(screen.queryByText(/didn't go through/)).toBeNull();
+    expect(screen.getByText(/the reply lands when it's ready/)).toBeTruthy();
+  });
+
+  it("a genuine failure — reachable host, not working, no reply — still apologizes", async () => {
+    routes["POST /v1/chat"] = {
+      status: 500,
+      body: { error: { message: "boom" } },
+    };
+    routes["GET /v1/chat/history"] = { status: 200, body: { items: [] } };
+    render(<NodeInteract node={node()} />);
+    await act(async () => {});
+    fireEvent.change(
+      screen.getByPlaceholderText("Message OoLu about Invoice Cleaner…"),
+      { target: { value: "tally it" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText(/didn't go through/)).toBeTruthy();
   });
 });

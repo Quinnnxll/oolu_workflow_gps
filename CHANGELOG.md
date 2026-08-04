@@ -4,6 +4,42 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+V0 landed — the run surface tells the truth
+(docs/node-vitality-plan.md, phase V0): the working indicator is
+server-anchored now and survives anything.
+
+- **Durable turn-in-progress.** A chat turn appends the user's ask and
+  a `working` marker to server history BEFORE the work; the reply
+  resolves the marker (exactly once), and a raised turn resolves it on
+  the way out — the thread never promises work nobody is doing. Node
+  threads persist server-side under agent `node:<id>`: leaving the
+  window mid-turn loses nothing, and the history door answers for the
+  node's thread; localStorage becomes the instant-paint cache instead
+  of the record.
+- **Honest death.** A marker that outlives its process is swept into
+  an interruption note in place — at gateway boot and by an
+  age-bounded lazy-tick sweep (15 minutes) — so a crashed host reads
+  as "interrupted", never as "still working".
+- **The executing snapshot.** The orchestrator engine split
+  `prepare`/`apply_resume` from the drive and narrates each step
+  through an `on_step` hook; the durable service stages the run row
+  before and during the drive, so `GET /v1/runs/{id}` answers with the
+  real phase WHILE the run executes, and a resumed decision is
+  durably consumed before the drive begins (the stale "needs a
+  decision" window is gone).
+- **The indicator derives from the server.** SSE gains `progress`
+  frames (the run's phase) beside the pings; the busy bubble binds to
+  the durable marker and polls it to resolution; a broken transport
+  consults the record before speaking — marker standing keeps the
+  bubble, a landed reply shows itself, and only a turn the host is
+  not working and never answered earns the apology. The gateway's
+  ASGI handler moved off the event loop (`asyncio.to_thread`) so a
+  blocking turn can't freeze the very polls that tell the truth.
+
+Pinned by tests/test_run_surface.py (marker book, gateway turns, node
+threads, boot sweep, mid-drive snapshots, resumed-decision landing)
+and the V0 cases in Chat.test.tsx / NodeInteract.test.tsx.
+
 Planned — the node vitality plan (docs/node-vitality-plan.md): seven
 defects from live testing of the node-creation capability, each
 investigated to a verified root cause before planning (Part I carries

@@ -117,20 +117,48 @@ function loadThread(): Msg[] {
 // truth (this phone shows what that laptop said); localStorage remains the
 // warm cache and the whole story on hosts without a history store.
 // Reminder bubbles are presence, not conversation — they stay client-side.
+// A "working" marker is presence too (the server is still on that turn):
+// it renders as the thinking bubble, never as a message.
 function fromServer(items: ChatHistoryTurn[]): Msg[] {
-  return items.map((turn): Msg => {
-    if (turn.kind === "run") return { kind: "run", runId: turn.body };
-    if (turn.kind === "assistant") {
-      return {
-        kind: "assistant",
-        text: turn.body,
-        // A persisted chart block re-renders after reload — the same
-        // bubble on every device.
-        block: turn.block?.kind === "chart" ? turn.block : null,
-      };
+  return items
+    .filter((turn) => turn.kind !== "working")
+    .map((turn): Msg => {
+      if (turn.kind === "run") return { kind: "run", runId: turn.body };
+      if (turn.kind === "assistant") {
+        return {
+          kind: "assistant",
+          text: turn.body,
+          // A persisted chart block re-renders after reload — the same
+          // bubble on every device.
+          block: turn.block?.kind === "chart" ? turn.block : null,
+        };
+      }
+      return { kind: "user", text: turn.body, files: turn.files };
+    });
+}
+
+// The server's own word on whether a turn is still in flight (V0): the
+// backend keeps a durable working marker while it works and resolves it
+// into the reply — the indicator derives from THIS, so it survives a
+// reload, a window switch, or a dropped stream.
+export function serverStillWorking(items: ChatHistoryTurn[]): boolean {
+  return items.length > 0 && items[items.length - 1].kind === "working";
+}
+
+// Did the reply to OUR message land server-side? (The stream can break
+// AFTER the turn finished — then the thread already holds the answer
+// and no apology belongs under it.)
+export function replyLanded(items: ChatHistoryTurn[], sent: string): boolean {
+  for (let i = items.length - 1; i > 0; i--) {
+    if (
+      items[i].kind === "assistant" &&
+      items[i - 1].kind === "user" &&
+      items[i - 1].body === sent
+    ) {
+      return true;
     }
-    return { kind: "user", text: turn.body, files: turn.files };
-  });
+  }
+  return false;
 }
 
 export function Chat({
@@ -149,6 +177,13 @@ export function Chat({
   // own compose slot, same store as a friend thread's.
   const [draft, setDraft] = useState(() => loadCompose("oolu"));
   const [busy, setBusy] = useState(false);
+  // The SERVER's working state (V0): true while the host's durable
+  // marker says a turn is still in flight — it survives reloads and
+  // window switches, and a poll keeps it honest until the reply lands.
+  const [serverWorking, setServerWorking] = useState(false);
+  // Where the run stands ("execution", "verification") — the drive's
+  // own progress frames, so the bubble says more than an ellipsis.
+  const [runPhase, setRunPhase] = useState("");
   // The model's reasoning as it streams in — real ⟨think⟩ tokens, shown live
   // in the thinking bubble, not a canned animation.
   const [liveReasoning, setLiveReasoning] = useState("");
@@ -202,14 +237,36 @@ export function Chat({
   // On mount, ask the host for the account's thread. Present and
   // non-empty → it replaces the local cache (another device may have
   // talked since); absent (404 on history-less hosts) → local stands.
+  // A trailing working marker means the backend is STILL on a turn —
+  // the bubble shows and the poll below carries it to the reply (V0).
   useEffect(() => {
     void api
       .chatHistory()
       .then(({ items }) => {
         if (items && items.length > 0) setThread(fromServer(items));
+        setServerWorking(serverStillWorking(items ?? []));
       })
       .catch(() => {}); // no server history here: the cache is the thread
   }, []);
+
+  // While the server says "working", poll the thread: the reply (or the
+  // honest interruption note) replaces the bubble the moment the marker
+  // resolves — on THIS device, whichever device asked.
+  useEffect(() => {
+    if (!serverWorking) return;
+    const t = setInterval(async () => {
+      try {
+        const { items } = await api.chatHistory();
+        if (!serverStillWorking(items ?? [])) {
+          if (items && items.length > 0) setThread(fromServer(items));
+          setServerWorking(false);
+        }
+      } catch {
+        /* the host will answer the next poll — the bubble stands */
+      }
+    }, 2500);
+    return () => clearInterval(t);
+  }, [serverWorking]);
 
   // Reminders ring HERE: a ripe reminder surfaces as OoLu's own message
   // the moment the poll sees it. Marked delivered FIRST (exactly-once —
@@ -407,7 +464,10 @@ export function Chat({
       const turn = await api.chatStream(
         text,
         history,
-        { onReasoning: (delta) => setLiveReasoning((r) => r + delta) },
+        {
+          onReasoning: (delta) => setLiveReasoning((r) => r + delta),
+          onProgress: (phase) => setRunPhase(phase),
+        },
         undefined,
         mood,
         files?.map((f) => f.file_id),
@@ -472,16 +532,42 @@ export function Chat({
         }
       }
     } catch (e) {
-      setThread((t) => [
-        ...t,
-        {
-          kind: "assistant",
-          text: `Sorry — that didn't go through (${(e as Error).message}).`,
-        },
-      ]);
+      // The stream broke — ask the host's own record before saying
+      // anything (V0). A standing working marker keeps the bubble (the
+      // poll carries it to the reply); a thread that already holds the
+      // reply shows it; only a turn the server is NOT working and never
+      // answered earns the apology — never a fabricated failure while
+      // the backend still works.
+      try {
+        const { items } = await api.chatHistory();
+        const turns = items ?? [];
+        if (turns.length > 0) setThread(fromServer(turns));
+        if (serverStillWorking(turns)) {
+          setServerWorking(true);
+        } else if (!replyLanded(turns, text)) {
+          setThread((t) => [
+            ...t,
+            {
+              kind: "assistant",
+              text: `Sorry — that didn't go through (${(e as Error).message}).`,
+            },
+          ]);
+        }
+      } catch {
+        setThread((t) => [
+          ...t,
+          {
+            kind: "assistant",
+            text:
+              "I lost the connection to the host — your ask may still " +
+              `be running there (${(e as Error).message}).`,
+          },
+        ]);
+      }
     } finally {
       setBusy(false);
       setLiveReasoning("");
+      setRunPhase("");
       updateAvatarSignals({ thinking: false });
     }
   }
@@ -714,12 +800,16 @@ export function Chat({
             </div>
           ),
         )}
-        {busy && (
+        {(busy || serverWorking) && (
           <div className="bubble assistant thinking-bubble">
             <span className="thinking-dot" aria-hidden="true" />
             {liveReasoning ? (
               <span className="thinking-note thinking-reasoning">
                 {liveReasoning}
+              </span>
+            ) : runPhase ? (
+              <span className="thinking-note">
+                {tr("interact.thinking")} — {runPhase}
               </span>
             ) : (
               <span className="thinking-note">{tr("interact.thinking")}</span>

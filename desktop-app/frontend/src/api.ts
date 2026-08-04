@@ -588,7 +588,10 @@ export interface TurnFileRef {
 
 export interface ChatHistoryTurn {
   seq: number;
-  kind: "user" | "assistant" | "run";
+  // "working" (V0) is the server's durable turn-in-progress marker: the
+  // backend is still on it — the client shows a live working state, not
+  // a void, and polls until the reply resolves the marker.
+  kind: "user" | "assistant" | "run" | "working";
   body: string;
   at: string;
   agent?: string;
@@ -1448,7 +1451,12 @@ export const api = {
   chatStream: async (
     message: string,
     history: { role: "user" | "assistant"; content: string }[],
-    handlers: { onReasoning?: (delta: string) => void },
+    handlers: {
+      onReasoning?: (delta: string) => void;
+      // A run phase frame (V0): the drive narrates where it stands
+      // ("execution", "verification"), so the working bubble can say so.
+      onProgress?: (phase: string) => void;
+    },
     nodeId?: string,
     mood?: string,
     fileIds?: string[],
@@ -1498,13 +1506,20 @@ export const api = {
         const frame = buffer.slice(0, sep).trim();
         buffer = buffer.slice(sep + 2);
         if (!frame.startsWith("data:")) continue;
-        let obj: { type?: string; delta?: string; message?: string };
+        let obj: {
+          type?: string;
+          delta?: string;
+          message?: string;
+          phase?: string;
+        };
         try {
           obj = JSON.parse(frame.slice(5).trim());
         } catch {
           continue;
         }
         if (obj.type === "reasoning") handlers.onReasoning?.(obj.delta ?? "");
+        else if (obj.type === "progress")
+          handlers.onProgress?.(obj.phase ?? "");
         else if (obj.type === "error")
           throw new Error(obj.message ?? "stream error");
         else if (obj.type === "done") done = obj as unknown as ChatTurnReply;

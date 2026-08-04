@@ -278,6 +278,16 @@ _AGENT_WEB_OWNERS = frozenset({_NEWS_PRINCIPAL})
 # fire time, so the anchor's binding resolves the day's real readings.
 _PRESS_BOUNDARY = "press_boundary"
 
+# The working marker's honesty bound (V0): a marker older than this with
+# no reply is a turn the host lost mid-work — swept into the note below
+# so the thread never shows a working bubble for work that died. V1's
+# re-drive will finish the work instead of apologizing for it.
+_WORKING_STALE_MINUTES = 15
+_WORKING_INTERRUPTED_NOTE = (
+    "— that ask was interrupted mid-work (the host stopped before the "
+    "reply landed). Ask again and I'll pick it up fresh."
+)
+
 _NODE_BUILD_RE = re.compile(
     r"^\s*"
     # optional polite / addressing lead-in
@@ -1058,6 +1068,21 @@ class GatewayApp:
         self._direct_messages = direct_messages
         self._friendships = friendships
         self._assistant_history = assistant_history
+        # V0: a fresh process means every standing working marker belongs
+        # to a turn that DIED with the old one — resolve them into the
+        # honest interruption note now, so no thread ever shows a working
+        # bubble for work no process is doing. (V1's re-drive replaces
+        # the apology with the finish; a multi-process fleet moves this
+        # to the age-bounded sweep alone.)
+        if self._assistant_history is not None:
+            try:
+                self._assistant_history.sweep_working(
+                    older_than=datetime.now(UTC),
+                    note=_WORKING_INTERRUPTED_NOTE,
+                )
+            except Exception:  # noqa: BLE001 - hygiene never blocks boot
+                pass
+        self._working_sweep_gate = 0.0
         self._profile_photos = profile_photos
         self._press = press
         # The observer seat's proposal book (N7): models propose, the
@@ -2183,9 +2208,15 @@ class GatewayApp:
 
         The user-facing surface: the assistant answers, and when the turn
         is work it starts a plain (non-marketplace) run whose progress the
-        client folds back into the conversation. The conversation itself is
-        client-held — the request carries the recent history — so this
-        route stays stateless over the same durable run store as /v1/runs.
+        client folds back into the conversation.
+
+        The durable turn-in-progress (V0): the USER turn and a ``working``
+        marker land in server history BEFORE the work begins — so any
+        device, any reload, any return mid-turn shows the ask and an
+        honest working state — and the marker is RESOLVED when the reply
+        replaces it (or by the staleness sweep if the host dies working).
+        Node threads persist the same way under ``node:<id>``, so leaving
+        a node window mid-turn no longer discards the eventual reply.
         """
         body = request.body or {}
         message = body.get("message")
@@ -2237,6 +2268,61 @@ class GatewayApp:
                     "block": block,
                 },
             )
+        thread_agent = (
+            f"node:{body.get('node_id')}" if body.get("node_id") else "oolu"
+        )
+        working_seq = None
+        if self._assistant_history is not None:
+            self._assistant_history.append(
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+                kind="user",
+                body=message,
+                agent=thread_agent,
+                files=self._turn_files(session, body),
+            )
+            working_seq = self._assistant_history.append(
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+                kind="working",
+                body="",
+                agent=thread_agent,
+            )
+        try:
+            return self._chat_turn_work(
+                request,
+                session,
+                body,
+                message,
+                history,
+                thread_agent,
+                working_seq,
+                emit=emit,
+            )
+        except BaseException:
+            # A raised turn returns its error to the client in words —
+            # the marker must not stand behind it promising work.
+            if working_seq is not None and self._assistant_history is not None:
+                self._assistant_history.resolve_working(
+                    tenant=session.tenant_id,
+                    principal=session.principal_id,
+                    seq=working_seq,
+                )
+            raise
+
+    def _chat_turn_work(
+        self,
+        request,
+        session,
+        body,
+        message,
+        history,
+        thread_agent,
+        working_seq,
+        *,
+        emit=None,
+    ) -> Response:
+        """The turn's work — everything past the durable marker (V0)."""
         # The assistant's hands: the caller's own files, tenant-bound —
         # and, inside a node's interact window, that node's own desk.
         tools = None
@@ -2568,7 +2654,25 @@ class GatewayApp:
                         built = self._autobuild_before_run(session, turn.task)
                     if built:
                         say = f"{say} {built}".strip()
-                    run = self._start_intent_run(session, turn.task)
+                    # The drive narrates itself (V0): each phase step
+                    # lands a progress frame on the stream, so the
+                    # working bubble says WHERE the run stands instead
+                    # of a bare ellipsis.
+                    progress = (
+                        (
+                            lambda state: emit(
+                                {
+                                    "type": "progress",
+                                    "phase": state.phase.value,
+                                }
+                            )
+                        )
+                        if emit is not None
+                        else None
+                    )
+                    run = self._start_intent_run(
+                        session, turn.task, progress=progress
+                    )
                     self._metrics["chat_runs"] += 1
                     # The run may have already failed DURING execution
                     # (submit runs synchronously to the first pause or
@@ -2600,22 +2704,24 @@ class GatewayApp:
                 ):
                     say += f" If you want me to auto-build what's missing: {AUTOBUILD_HINT}"
         # The conversation survives the device: turns land in the per-
-        # account history so every signed-in client sees one thread. The
-        # node-interact window is that node's context, not this thread —
-        # only the main conversation is recorded.
-        if self._assistant_history is not None and not body.get("node_id"):
-            self._assistant_history.append(
-                tenant=session.tenant_id,
-                principal=session.principal_id,
-                kind="user",
-                body=message,
-                files=self._turn_files(session, body),
-            )
+        # account history so every signed-in client sees one thread —
+        # the node-interact window included (V0), under its own
+        # ``node:<id>`` agent, so leaving it mid-turn loses nothing. The
+        # user turn already landed with the working marker; the reply
+        # RESOLVES the marker and takes its place.
+        if self._assistant_history is not None:
+            if working_seq is not None:
+                self._assistant_history.resolve_working(
+                    tenant=session.tenant_id,
+                    principal=session.principal_id,
+                    seq=working_seq,
+                )
             self._assistant_history.append(
                 tenant=session.tenant_id,
                 principal=session.principal_id,
                 kind="assistant",
                 body=say,
+                agent=thread_agent,
             )
             if run:
                 self._assistant_history.append(
@@ -2623,6 +2729,7 @@ class GatewayApp:
                     principal=session.principal_id,
                     kind="run",
                     body=str(run["run_id"]),
+                    agent=thread_agent,
                 )
         return json_response(
             200,
@@ -2653,7 +2760,14 @@ class GatewayApp:
         if self._assistant_history is None:
             raise GatewayError(404, "not_found", "chat history is not kept here")
         agent = str(request.query.get("agent") or "oolu").strip()
-        if agent != "oolu" and agent_card(agent) is None:
+        # ``node:<id>`` threads (V0) are per-account like every other —
+        # history is keyed (tenant, principal), so a member reads only
+        # their own conversation with that node, never anyone else's.
+        if (
+            agent != "oolu"
+            and not agent.startswith("node:")
+            and agent_card(agent) is None
+        ):
             raise GatewayError(400, "invalid_request", f"unknown agent: {agent}")
         return json_response(
             200,
@@ -9856,6 +9970,7 @@ class GatewayApp:
         max_recovery: int = 1,
         extra_bindings: dict | None = None,
         pulse: dict | None = None,
+        progress=None,
     ) -> dict:
         """Submit a plain intent as a run: the non-marketplace core of
         ``_submit_run``, shared with the chat surface.
@@ -9909,7 +10024,9 @@ class GatewayApp:
             self._durable.runs.save(previous)
             try:
                 if mode == "restart":
-                    state = self._durable.restart(previous.run_id)
+                    state = self._durable.restart(
+                        previous.run_id, on_progress=progress
+                    )
                 else:
                     state = self._durable.resume(
                         previous.run_id,
@@ -9918,6 +10035,7 @@ class GatewayApp:
                             incident_decision="retry",
                             principal=session.principal_id,
                         ),
+                        on_progress=progress,
                     )
             except OrchestratorError as exc:
                 raise GatewayError(422, "cannot_execute", str(exc)) from exc
@@ -9938,7 +10056,9 @@ class GatewayApp:
         )
         try:
             state = self._durable.submit(
-                contract, max_recovery_attempts=max_recovery
+                contract,
+                max_recovery_attempts=max_recovery,
+                on_progress=progress,
             )
         except OrchestratorError as exc:
             # A refused plan (e.g. preflight: the planned route needs a
@@ -14810,6 +14930,18 @@ class GatewayApp:
             if now_mono >= self._propagation_gate:
                 self._propagation_gate = now_mono + 60.0
                 self._drain_propagation(request.now or self._clock())
+            # Stale working markers (V0): a marker past the honesty bound
+            # is a turn this process lost (a killed thread, a swallowed
+            # exception) — resolved into the interruption note so the
+            # thread stops promising work nobody is doing.
+            if now_mono >= self._working_sweep_gate:
+                self._working_sweep_gate = now_mono + 60.0
+                if self._assistant_history is not None:
+                    self._assistant_history.sweep_working(
+                        older_than=(request.now or self._clock())
+                        - timedelta(minutes=_WORKING_STALE_MINUTES),
+                        note=_WORKING_INTERRUPTED_NOTE,
+                    )
             if now_mono < self._sweep_gate:
                 return
             self._sweep_gate = now_mono + 60.0

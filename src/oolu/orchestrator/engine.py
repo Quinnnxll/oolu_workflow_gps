@@ -87,24 +87,44 @@ class WorkflowOrchestrator:
     # ------------------------------------------------------------------ #
     # Public API.                                                         #
     # ------------------------------------------------------------------ #
-    def start(
+    def prepare(
         self, contract: TaskContract, *, max_recovery_attempts: int = 1
     ) -> RunState:
+        """Mint the run's state WITHOUT driving it — the seam that lets a
+        caller persist an executing snapshot before the first step, so a
+        concurrent status read answers honestly during the drive (V0)."""
         state = RunState(
             intent=contract.intent,
             contract=contract,
             max_recovery_attempts=max_recovery_attempts,
         )
         self._emit("workflow.started", {"run_id": state.run_id, "intent": state.intent})
-        return self.run(state)
-
-    def run(self, state: RunState) -> RunState:
-        """Advance the run until it pauses or reaches a terminal phase."""
-        while not state.is_paused and not state.is_terminal:
-            state = self.step(state)
         return state
 
-    def restart(self, state: RunState) -> RunState:
+    def start(
+        self,
+        contract: TaskContract,
+        *,
+        max_recovery_attempts: int = 1,
+        on_step=None,
+    ) -> RunState:
+        return self.run(
+            self.prepare(contract, max_recovery_attempts=max_recovery_attempts),
+            on_step=on_step,
+        )
+
+    def run(self, state: RunState, *, on_step=None) -> RunState:
+        """Advance the run until it pauses or reaches a terminal phase.
+        ``on_step`` (V0) is called with the state after EVERY phase step —
+        the progress hook a durable caller stages snapshots and streams
+        frames from; it must never raise into the drive."""
+        while not state.is_paused and not state.is_terminal:
+            state = self.step(state)
+            if on_step is not None:
+                on_step(state)
+        return state
+
+    def restart(self, state: RunState, *, on_step=None) -> RunState:
         """Re-drive a FAILED run IN PLACE — the same run_id, the same
         thread — instead of minting a sibling. Asking the same goal
         again must not pile a new dead thread onto the Noder list every
@@ -144,7 +164,7 @@ class WorkflowOrchestrator:
             "workflow.restarted",
             {"run_id": state.run_id, "user_retries": state.user_retries},
         )
-        return self.run(state)
+        return self.run(state, on_step=on_step)
 
     def step(self, state: RunState) -> RunState:
         """Execute exactly the phase named by ``state.phase`` once."""
@@ -157,8 +177,11 @@ class WorkflowOrchestrator:
             raise PreflightError([f"no handler for phase {state.phase.value}"])
         return handler(state)
 
-    def resume(self, state: RunState, resume: ResumeInput) -> RunState:
-        """Fold human input into a paused run, then continue."""
+    def apply_resume(self, state: RunState, resume: ResumeInput) -> RunState:
+        """Fold human input into a paused run WITHOUT driving it — the
+        resume half of the V0 seam: a durable caller stages the un-paused
+        state before the drive, so a concurrent poll stops showing a
+        stale "needs a decision" the moment the decision landed."""
         if state.pause is None:
             raise ResumeError("run is not paused")
         if resume.kind is not state.pause.kind:
@@ -178,7 +201,13 @@ class WorkflowOrchestrator:
         self._emit(
             "workflow.resumed", {"run_id": state.run_id, "kind": resume.kind.value}
         )
-        return self.run(state)
+        return state
+
+    def resume(
+        self, state: RunState, resume: ResumeInput, *, on_step=None
+    ) -> RunState:
+        """Fold human input into a paused run, then continue."""
+        return self.run(self.apply_resume(state, resume), on_step=on_step)
 
     # ------------------------------------------------------------------ #
     # Hard preflight guard (re-derived from recorded state every time).   #

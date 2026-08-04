@@ -1,8 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import type { ChatAction, WorkNode } from "../api";
+import type { ChatAction, ChatHistoryTurn, WorkNode } from "../api";
 import { identityHue } from "../avatar";
-import { actionLabel, Reasoning } from "./Chat";
+import {
+  actionLabel,
+  Reasoning,
+  replyLanded,
+  serverStillWorking,
+} from "./Chat";
 import { ForwardMenu } from "./ForwardMenu";
 import { loadCompose, saveCompose, t, tf, useT } from "../ui";
 
@@ -25,6 +30,20 @@ type Msg =
       // The model's own thinking behind this reply, when it showed it.
       reasoning?: string;
     };
+
+// The node's thread now lives on the SERVER (V0) under agent
+// "node:<id>" — leaving the window mid-turn no longer discards the
+// eventual reply. localStorage stays as the instant-paint cache (and
+// the whole story on history-less hosts). Run markers and working
+// markers are presence, not messages.
+function nodeThreadFromServer(items: ChatHistoryTurn[]): Msg[] {
+  return items
+    .filter((turn) => turn.kind === "user" || turn.kind === "assistant")
+    .map((turn): Msg => ({
+      kind: turn.kind as "user" | "assistant",
+      text: turn.body,
+    }));
+}
 
 // The node's profile photo: its stable identity color and initial. While
 // the model reasons it breathes with a glowing light — the user sees the
@@ -77,6 +96,11 @@ export function NodeInteract({ node }: { node: WorkNode }) {
   // compose slot per node, same store as a friend thread's.
   const [draft, setDraft] = useState(() => loadCompose(`node:${node.node_id}`));
   const [busy, setBusy] = useState(false);
+  // The SERVER's working state (V0): a durable marker under this
+  // node's thread means the backend is still on a turn — the indicator
+  // derives from it, so returning mid-turn shows the work, then the
+  // reply.
+  const [serverWorking, setServerWorking] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -87,6 +111,44 @@ export function NodeInteract({ node }: { node: WorkNode }) {
     localStorage.setItem(storageKey, JSON.stringify(thread));
     endRef.current?.scrollIntoView?.({ block: "end" });
   }, [thread, storageKey]);
+
+  // On mount, the host's record replaces the cache — the reply a
+  // previous visit never waited for is HERE now. History-less hosts
+  // 404 and the cache stands, exactly as before.
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .chatHistory(`node:${node.node_id}`)
+      .then(({ items }) => {
+        if (cancelled) return;
+        if (items && items.length > 0)
+          setThread(nodeThreadFromServer(items));
+        setServerWorking(serverStillWorking(items ?? []));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [node.node_id]);
+
+  // While the server says "working", poll until the reply (or the
+  // honest interruption note) resolves the marker.
+  useEffect(() => {
+    if (!serverWorking) return;
+    const t = setInterval(async () => {
+      try {
+        const { items } = await api.chatHistory(`node:${node.node_id}`);
+        if (!serverStillWorking(items ?? [])) {
+          if (items && items.length > 0)
+            setThread(nodeThreadFromServer(items));
+          setServerWorking(false);
+        }
+      } catch {
+        /* the host answers the next poll — the bubble stands */
+      }
+    }, 2500);
+    return () => clearInterval(t);
+  }, [serverWorking, node.node_id]);
 
   async function send(message?: string) {
     const text = (message ?? draft).trim();
@@ -110,13 +172,36 @@ export function NodeInteract({ node }: { node: WorkNode }) {
         },
       ]);
     } catch (e) {
-      setThread((t) => [
-        ...t,
-        {
-          kind: "assistant",
-          text: `Sorry — that didn't go through (${(e as Error).message}).`,
-        },
-      ]);
+      // The request broke — the server's record decides what shows
+      // (V0): a standing marker keeps the bubble, a landed reply shows
+      // itself, and only a turn the host is NOT working and never
+      // answered earns the apology.
+      try {
+        const { items } = await api.chatHistory(`node:${node.node_id}`);
+        const turns = items ?? [];
+        if (turns.length > 0) setThread(nodeThreadFromServer(turns));
+        if (serverStillWorking(turns)) {
+          setServerWorking(true);
+        } else if (!replyLanded(turns, text)) {
+          setThread((t) => [
+            ...t,
+            {
+              kind: "assistant",
+              text: `Sorry — that didn't go through (${(e as Error).message}).`,
+            },
+          ]);
+        }
+      } catch {
+        setThread((t) => [
+          ...t,
+          {
+            kind: "assistant",
+            text:
+              "I lost the connection to the host — your ask may still " +
+              `be running there (${(e as Error).message}).`,
+          },
+        ]);
+      }
     } finally {
       setBusy(false);
     }
@@ -149,7 +234,7 @@ export function NodeInteract({ node }: { node: WorkNode }) {
             />
           </div>
         ))}
-        {busy && (
+        {(busy || serverWorking) && (
           <div className="bubble assistant thinking-bubble">
             <NodeFace title={node.title} thinking />
             <span className="thinking-note">{tr("interact.thinking")}</span>

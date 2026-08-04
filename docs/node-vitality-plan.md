@@ -258,6 +258,32 @@ reopen the app — every return shows the ask and a live working state
 that resolves into the real reply; the false "didn't go through" is
 gone; a node thread left mid-turn shows its reply on return.
 
+**Status: LANDED.** The turn is durable from its first breath:
+`_chat_turn` appends the user turn and a `working` marker before the
+work and resolves the marker at the reply — under `BaseException`
+protection, so a raised turn never leaves a promise standing. Node
+threads persist server-side under agent `node:<id>` (the
+`not body.get("node_id")` exclusion is gone; the history door answers
+for `node:` agents; localStorage is now the instant-paint cache, not
+the record). A marker that outlives its process is swept into the
+honest interruption note — at gateway boot and by an age-bounded
+(15-minute) lazy-tick sweep. The engine split `prepare`/`apply_resume`
+out of the drive and gained an `on_step` hook; the durable service
+stages an executing runs-row snapshot before and during the drive
+(`_stage_progress` + `_step_hook`), so a status poll answers honestly
+mid-run and a resumed decision lands durably before the drive. The
+gateway threads SSE `progress` frames (phase) through
+`_start_intent_run` → durable `on_progress`, and `asgi.handle` moved
+to `asyncio.to_thread` so blocking turns no longer freeze the event
+loop that answers the polls. The frontend derives the indicator from
+the server: `serverStillWorking` + a 2.5-second poll while the marker
+stands, and a broken transport consults the record before speaking —
+marker standing → keep the bubble; reply landed (`replyLanded`) →
+show it; neither → the honest apology. Pinned by
+`tests/test_run_surface.py` and the V0 cases in `Chat.test.tsx` /
+`NodeInteract.test.tsx`. (Single-host assumption on the boot sweep is
+documented; the multi-process story arrives with V1's worker.)
+
 ### V1 — work survives the window (report 2)
 
 Goal: leaving, closing, or crashing the client never stops accepted

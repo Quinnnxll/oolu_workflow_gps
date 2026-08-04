@@ -631,6 +631,120 @@ describe("Chat", () => {
 
     expect(await screen.findByText(/didn't go through/)).toBeTruthy();
   });
+
+  // ---- V0: the run surface tells the truth -------------------------------
+  it("a return mid-turn shows the server's working state, then the reply", async () => {
+    vi.useFakeTimers();
+    try {
+      // The host's durable record: the ask landed and the backend is
+      // STILL on it — the marker is the indicator, not client state.
+      routes["GET /v1/chat/history"] = {
+        status: 200,
+        body: {
+          items: [
+            { seq: 1, kind: "user", body: "make the CSV", at: "t" },
+            { seq: 2, kind: "working", body: "", at: "t" },
+          ],
+        },
+      };
+      render(<Chat />);
+      await act(async () => {});
+      expect(screen.getByText("make the CSV")).toBeTruthy();
+      expect(screen.getByText(/Working on it/)).toBeTruthy();
+
+      // The backend finishes while we watch: the poll replaces the
+      // bubble with the real reply — no reload, no re-ask.
+      routes["GET /v1/chat/history"] = {
+        status: 200,
+        body: {
+          items: [
+            { seq: 1, kind: "user", body: "make the CSV", at: "t" },
+            { seq: 3, kind: "assistant", body: "Done — the CSV stands.", at: "t" },
+          ],
+        },
+      };
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2600);
+      });
+      expect(screen.getByText("Done — the CSV stands.")).toBeTruthy();
+      expect(screen.queryByText(/Working on it/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a broken transport never fabricates failure while the server still works", async () => {
+    vi.useFakeTimers();
+    try {
+      routes["POST /v1/chat"] = {
+        status: 500,
+        body: { error: { message: "stream died" } },
+      };
+      // The server's own record says: still working this very ask.
+      routes["GET /v1/chat/history"] = {
+        status: 200,
+        body: {
+          items: [
+            { seq: 1, kind: "user", body: "do a thing", at: "t" },
+            { seq: 2, kind: "working", body: "", at: "t" },
+          ],
+        },
+      };
+      render(<Chat />);
+      await act(async () => {});
+      fireEvent.change(screen.getByPlaceholderText("Message OoLu…"), {
+        target: { value: "do a thing" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      await act(async () => {});
+
+      // No fabricated apology — the working bubble stands instead.
+      expect(screen.queryByText(/didn't go through/)).toBeNull();
+      expect(screen.getByText(/Working on it/)).toBeTruthy();
+
+      // The reply lands server-side; the poll folds it in.
+      routes["GET /v1/chat/history"] = {
+        status: 200,
+        body: {
+          items: [
+            { seq: 1, kind: "user", body: "do a thing", at: "t" },
+            { seq: 3, kind: "assistant", body: "All done.", at: "t" },
+          ],
+        },
+      };
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2600);
+      });
+      expect(screen.getByText("All done.")).toBeTruthy();
+      expect(screen.queryByText(/didn't go through/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a reply that landed despite the broken stream shows itself, never an apology", async () => {
+    routes["POST /v1/chat"] = {
+      status: 500,
+      body: { error: { message: "socket reset" } },
+    };
+    routes["GET /v1/chat/history"] = {
+      status: 200,
+      body: {
+        items: [
+          { seq: 1, kind: "user", body: "do a thing", at: "t" },
+          { seq: 2, kind: "assistant", body: "It's done already.", at: "t" },
+        ],
+      },
+    };
+    render(<Chat />);
+    fireEvent.change(screen.getByPlaceholderText("Message OoLu…"), {
+      target: { value: "do a thing" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText("It's done already.")).toBeTruthy();
+    expect(screen.queryByText(/didn't go through/)).toBeNull();
+  });
 });
 
 describe("RunCard", () => {

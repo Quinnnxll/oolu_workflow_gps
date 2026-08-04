@@ -51,31 +51,78 @@ class DurableWorkflowService:
 
     # ------------------------------------------------------------------ #
     # Synchronous driving (one call advances to the next pause/terminal). #
+    #                                                                     #
+    # The executing snapshot (V0): the run row is staged BEFORE the drive #
+    # and refreshed after every phase step, so a concurrent status read   #
+    # answers honestly WHILE the run executes — no more "no row until the #
+    # first pause". Intermediate stages are runs-only (no outbox noise);  #
+    # the terminal/pause checkpoint keeps its announcement, as ever.      #
     # ------------------------------------------------------------------ #
     def submit(
-        self, contract: TaskContract, *, max_recovery_attempts: int = 1
+        self,
+        contract: TaskContract,
+        *,
+        max_recovery_attempts: int = 1,
+        on_progress: Callable[[RunState], None] | None = None,
     ) -> RunState:
-        state = self._orch.start(contract, max_recovery_attempts=max_recovery_attempts)
+        state = self._orch.prepare(
+            contract, max_recovery_attempts=max_recovery_attempts
+        )
+        self._stage_progress(state)
+        state = self._orch.run(state, on_step=self._step_hook(on_progress))
         self._checkpoint(state, "workflow.submitted")
         return state
 
-    def resume(self, run_id: str, resume: ResumeInput) -> RunState:
+    def resume(
+        self,
+        run_id: str,
+        resume: ResumeInput,
+        *,
+        on_progress: Callable[[RunState], None] | None = None,
+    ) -> RunState:
         state = self.runs.get(run_id)
         if state is None:
             raise KeyError(f"unknown run: {run_id}")
-        state = self._orch.resume(state, resume)
+        # The decision lands durably BEFORE the drive: a poll stops
+        # showing a stale "needs a decision" the moment it was made.
+        state = self._orch.apply_resume(state, resume)
+        self._stage_progress(state)
+        state = self._orch.run(state, on_step=self._step_hook(on_progress))
         self._checkpoint(state, "workflow.resumed")
         return state
 
-    def restart(self, run_id: str) -> RunState:
+    def restart(
+        self,
+        run_id: str,
+        *,
+        on_progress: Callable[[RunState], None] | None = None,
+    ) -> RunState:
         """Re-drive a FAILED run in its own thread instead of minting a
         sibling — the retry lives where the failure lives."""
         state = self.runs.get(run_id)
         if state is None:
             raise KeyError(f"unknown run: {run_id}")
-        state = self._orch.restart(state)
+        state = self._orch.restart(state, on_step=self._step_hook(on_progress))
         self._checkpoint(state, "workflow.restarted")
         return state
+
+    def _stage_progress(self, state: RunState) -> None:
+        """Stage the run row alone — the honest mid-drive snapshot."""
+        with self.conn.transaction() as db:
+            self.runs.stage(db, state)
+
+    def _step_hook(
+        self, on_progress: Callable[[RunState], None] | None
+    ) -> Callable[[RunState], None]:
+        def hook(state: RunState) -> None:
+            self._stage_progress(state)
+            if on_progress is not None:
+                try:
+                    on_progress(state)
+                except Exception:  # noqa: BLE001 - a progress ear never stops the run
+                    pass
+
+        return hook
 
     def get(self, run_id: str) -> RunState | None:
         return self.runs.get(run_id)
@@ -114,7 +161,7 @@ class DurableWorkflowService:
         if state is None:
             self.queue.fail(task.task_id, owner, error=f"missing run: {run_id}")
             return task
-        state = self._orch.run(state)
+        state = self._orch.run(state, on_step=self._step_hook(None))
         self._checkpoint(state, "workflow.advanced")
         self.queue.complete(task.task_id, owner, result={"phase": state.phase.value})
         return self.queue.get(task.task_id)
