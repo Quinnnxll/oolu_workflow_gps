@@ -4,6 +4,52 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+V1 landed — work survives the window
+(docs/node-vitality-plan.md, phase V1): leaving, closing, or crashing
+the client never stops accepted work.
+
+- **The chat lane accepts instead of driving.** A task ask lands a
+  durable run row and a queue task and the turn returns — the model's
+  acknowledgment plus the run marker, which the client's run card
+  narrates live (honest mid-drive rows since V0). The four resume
+  doors work the same way now: the decision lands durably, the drive
+  is queued — a confirmed run no longer dies with the window that
+  confirmed it.
+- **The one deliberate worker.** The daemon amendment (Part IV,
+  decision 2, owner-ratified): user-initiated runs get exactly one
+  worker thread on the gateway, started by the ASGI lifespan wherever
+  the app is served, drained gracefully on shutdown (finish the step,
+  checkpoint, hand the lease back with the attempt refunded), and
+  giving the lazy tick a heartbeat while the app sits idle. A drive
+  that raises becomes a FAILED run in the exception's own words —
+  never a silent lease-reclaim-retry loop.
+- **The finish reports.** A `run_reports` binding remembers which
+  thread asked; when the run settles (terminal, or an incident), one
+  report turn lands there — "Done — “…” finished.", or the failing
+  node's name with the growth offer and the P2 reminder offer, the
+  same vocabulary the synchronous reply used to promise — plus a
+  reminder-ring ping. Exactly once per arming; resuming or reviving
+  re-arms it. "I'll ping you the second it's done" stopped being a
+  lie.
+- **Restart re-drive.** Boot reclaims expired leases, re-queues owed
+  runs that lost their queue task, reports what settled unreported,
+  and says plainly when a run row is gone — kill -9 mid-run costs at
+  most the step in flight. The desktop shell's hard kill is exactly
+  this case.
+- **The client watches.** After a task ask, the chat and node windows
+  watch the queued run and fold the worker's report turn into the
+  thread the moment it lands — and stand down when a run pauses on a
+  question, because the run card carries those.
+
+Pinned by tests/test_run_worker.py (async submission, drains, raised
+drives, resume/restart queueing, gateway reports, boot recovery, the
+live worker thread) and the V1 cases in Chat.test.tsx /
+NodeInteract.test.tsx; the synchronous-era chat tests moved to the
+accepted-queued-reported order. Part IV decisions 1–4 were ratified
+and the open questions answered by the owner (Docker; reviewer
+probably unseated; ad-dividend income counts; −$5/year and 90-day
+grace confirmed).
+
 V0 landed — the run surface tells the truth
 (docs/node-vitality-plan.md, phase V0): the working indicator is
 server-anchored now and survives anything.

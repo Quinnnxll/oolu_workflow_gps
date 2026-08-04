@@ -33,7 +33,10 @@ def _real_hand(tmp_path, payload):
 
 
 def _built_and_ran(app, ident, payload_hint="please "):
-    """Build the GOAL node through the real door, then run it once."""
+    """Build the GOAL node through the real door, then run it once.
+
+    V1: the chat ask only QUEUES the run — the drive belongs to the
+    worker, so the queue is drained here and the run returned settled."""
     app._node_function_author = lambda tenant: FakeAuthor()
     built = _chat(app, ident, "build me a node that " + GOAL)
     assert "Built a NEW node" in built.body["reply"]
@@ -43,6 +46,8 @@ def _built_and_ran(app, ident, payload_hint="please "):
     ran = _chat(app, ident, payload_hint + GOAL)
     assert ran.status == 200, ran.body
     assert ran.body["run_id"], ran.body
+    assert ran.body["run"]["phase"] == "intake"  # queued, nothing driven yet
+    assert app.drive_queue() >= 1
     return node, ran.body["run_id"], model
 
 
@@ -162,11 +167,13 @@ def test_the_interact_window_answers_from_the_drawer_alone(tmp_path):
         # Run once, then ask again: the answer is the drawer's newest
         # verified outputs, named with the run — and the chat model was
         # never consulted for either ask (source stays "tool").
+        # V1: the ask queues; the worker's drive lands the outputs.
         model = _FakeModel([TASK_TURN])
         app._tenant_model = lambda tenant: model
         ran = _chat(app, ident, "please " + GOAL)
         assert ran.status == 200, ran.body
         run_id = ran.body["run_id"]
+        assert app.drive_queue() >= 1
         calls_after_run = len(model.calls)
 
         asked = _interact(app, ident, node.node_id, "What did you produce last?")

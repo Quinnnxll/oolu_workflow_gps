@@ -463,10 +463,33 @@ def test_the_symlink_stage_command_quotes_hostile_names():
 # --------------------------------------------------------------------------- #
 # The gateway ships the reference, not the bytes.                              #
 # --------------------------------------------------------------------------- #
+def _grown_web_node(tmp_path):
+    """The growth flow walked once for a WEB goal: the node exists after.
+
+    V1 queued the chat task lane, so the walk needs a drive in the
+    middle: the ask only queues the run that will FAIL at the worker,
+    and the growth offer is written at report time — so drive_queue()
+    must land between the ask and the "yes" that spends the offer."""
+    from test_chat_assistant import _FakeModel
+    from test_growth_trigger import _chat, _rig
+    from test_node_hands import WEB_FUNCTION_ANSWER, WEB_GOAL
+    from test_node_interact import FakeAuthor
+
+    app, conn, ident, desk, script_exec = _rig(tmp_path)
+    task_turn = '{"say": "On it!", "task": "' + WEB_GOAL + '"}'
+    # Two scripted turns: the growth walk, and one later re-ask of the
+    # same goal (which then runs the built node's own function).
+    model = _FakeModel([task_turn, task_turn])
+    app._tenant_model = lambda tenant: model
+    app._node_function_author = lambda tenant: FakeAuthor(WEB_FUNCTION_ANSWER)
+    _chat(app, ident, "get me today's fx rates")
+    app.drive_queue()  # the failing run settles; the report lands the offer
+    agreed = _chat(app, ident, "yes")
+    return app, conn, ident, desk, script_exec, agreed
+
+
 def test_the_gateway_freezes_a_tree_and_ships_its_id(tmp_path):
     from types import SimpleNamespace
-
-    from test_node_hands import _grown_web_node
 
     from oolu.durable import UserFile
 
@@ -508,8 +531,6 @@ def test_the_gateway_freezes_a_tree_and_ships_its_id(tmp_path):
 
 def test_a_single_file_node_stays_inline_no_bundle(tmp_path):
     from types import SimpleNamespace
-
-    from test_node_hands import _grown_web_node
 
     app, conn, ident, desk, script_exec, agreed = _grown_web_node(tmp_path)
     try:

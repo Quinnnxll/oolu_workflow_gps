@@ -22,7 +22,7 @@ from .offers import GrowthOfferStore
 from .outbox import OutboxMessage, OutboxStatus, TransactionalOutbox
 from .queue import DurableTaskQueue, Task, TaskQueue, TaskStatus
 from .records import DurableRecordStore, DurableRunStateStore
-from .service import DurableWorkflowService, OrchestratorFactory
+from .service import DurableWorkflowService, OrchestratorFactory, WorkerDrain
 
 __all__ = [
     "DURABLE_MIGRATIONS",
@@ -40,6 +40,7 @@ __all__ = [
     "DurableRunStateStore",
     "DurableTaskQueue",
     "DurableWorkflowService",
+    "WorkerDrain",
     "FilesystemArtifactStore",
     "IdempotencyLedger",
     "OrchestratorFactory",

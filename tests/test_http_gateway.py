@@ -470,7 +470,13 @@ def test_clarification_flow(tmp_path):
             body={"answers": {"size": "large"}},
         )
     )
-    assert answered.body["awaiting"] == "confirmation"
+    # V1: the answers door consumes the decision but does not advance the
+    # run — the drive belongs to the worker.
+    assert answered.status == 200
+    assert answered.body["awaiting"] is None
+    app.drive_queue()
+    resumed = app.handle(_req("GET", f"/v1/runs/{run_id}", token=token))
+    assert resumed.body["awaiting"] == "confirmation"
     conn.close()
 
 
@@ -489,17 +495,27 @@ def test_approval_flow_and_unauthorized_approval(tmp_path):
             body={"approved": True},
         )
     )
-    assert confirmed.body["awaiting"] == "approval"
+    # V1: the confirmation door consumes the decision but does not advance
+    # the run — drive the queue to reach the approval pause.
+    assert confirmed.status == 200
+    assert confirmed.body["awaiting"] is None
+    app.drive_queue()
+    paused = app.handle(_req("GET", f"/v1/runs/{run_id}", token=requester))
+    assert paused.body["awaiting"] == "approval"
     # A non-approver cannot approve.
     denied = app.handle(
         _req("POST", f"/v1/runs/{run_id}/approvals", token=ident.token("nobody"))
     )
     assert denied.status == 403
-    # The authorized approver completes it.
+    # The authorized approver completes it — once the worker drives.
     approved = app.handle(
         _req("POST", f"/v1/runs/{run_id}/approvals", token=ident.token("approver-1"))
     )
-    assert approved.body["phase"] == "completed"
+    assert approved.status == 200
+    assert approved.body["awaiting"] is None
+    app.drive_queue()
+    settled = app.handle(_req("GET", f"/v1/runs/{run_id}", token=requester))
+    assert settled.body["phase"] == "completed"
     conn.close()
 
 

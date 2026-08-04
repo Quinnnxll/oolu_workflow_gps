@@ -139,6 +139,11 @@ def test_the_promoted_code_is_what_the_next_run_executes(tmp_path):
         before = len(runner._synthesizer.repair_calls)
         again = _chat(app, ident, GOAL)
         assert again.status == 200, again.body
+        # V1: the ask only queued the run — nothing has executed yet, so
+        # the healed-copy proof lives under the worker's hands: drive.
+        assert again.body["run"]["phase"] == "intake"
+        assert app.drive_queue() >= 1
+        assert app._durable.get(again.body["run_id"]).phase.value == "completed"
         # The second run executed the HEALED code and needed no repair.
         assert runner._backend.requests[-1].script == HEALED
         assert len(runner._synthesizer.repair_calls) == before

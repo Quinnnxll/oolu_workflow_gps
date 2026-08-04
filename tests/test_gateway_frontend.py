@@ -255,9 +255,12 @@ def test_members_cannot_read_the_sweep_screen(host_server):
 
 def test_the_task_flow_pauses_are_actionable_in_the_browser(tmp_path):
     """Step 2 of the unified migration, end to end: a run that pauses for
-    clarification and then route confirmation is driven to completion
-    entirely from the browser — including the paste-a-token sign-in path
-    an IdP-fronted host would use."""
+    clarification and then route confirmation is decided entirely from
+    the browser — including the paste-a-token sign-in path an IdP-fronted
+    host would use. V1 wrinkle: the resume doors only consume the
+    decision; the drive belongs to the worker, and this harness speaks
+    no ASGI lifespan (so no worker thread runs) — the test holds the
+    gateway and drives the queue deterministically between clicks."""
     from test_http_gateway import _app, _clarify
 
     from oolu.gateway.asgi import GatewayASGI
@@ -281,16 +284,29 @@ def test_the_task_flow_pauses_are_actionable_in_the_browser(tmp_path):
             page.get_by_role("button", name="Start", exact=True).click()
 
             # The run paused for clarification: the question is a form.
+            # (POST /v1/runs — the API door — still drives synchronously
+            # at submit, so the first pause is already on screen.)
             expect(page.get_by_text("needs clarification")).to_be_visible()
             page.locator("#q-size").fill("large")
             page.get_by_role("button", name="Answer").click()
+
+            # The answer door consumed the decision (the re-render drops
+            # the panel) but the run has NOT advanced — drive the queue
+            # ourselves, then reload to see where it paused next.
+            expect(page.get_by_text("needs clarification")).not_to_be_visible()
+            assert gateway.drive_queue() >= 1
+            page.reload()
 
             # Next pause: route confirmation, with the estimated cost.
             expect(page.get_by_text("confirm the route")).to_be_visible()
             expect(page.get_by_text("estimated cost")).to_be_visible()
             page.get_by_role("button", name="Confirm", exact=True).click()
 
-            # Confirmed: the run executes to completion.
+            # Confirmed at the door; the worker's drive executes the run
+            # to completion.
+            expect(page.get_by_text("confirm the route")).not_to_be_visible()
+            assert gateway.drive_queue() >= 1
+            page.reload()
             expect(page.get_by_text("completed", exact=True)).to_be_visible()
             browser.close()
     conn.close()

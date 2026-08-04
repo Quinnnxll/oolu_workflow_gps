@@ -300,6 +300,69 @@ describe("NodeInteract — the server-side thread (V0)", () => {
     expect(screen.getByText(/the reply lands when it's ready/)).toBeTruthy();
   });
 
+  it("folds the worker's report into the node thread when its run settles (V1)", async () => {
+    vi.useFakeTimers();
+    try {
+      routes["GET /v1/chat/history"] = { status: 200, body: { items: [] } };
+      routes["POST /v1/chat"] = {
+        status: 200,
+        body: {
+          reply: "On it!",
+          source: "intent",
+          actions: [],
+          run_id: "r9",
+          run: { run_id: "r9", phase: "intake", awaiting: null },
+        },
+      };
+      routes["GET /v1/runs/r9"] = {
+        status: 200,
+        body: {
+          run_id: "r9",
+          intent: "tally the ledger",
+          phase: "completed",
+          awaiting: null,
+          prompt: null,
+          failure_reason: null,
+          result: null,
+        },
+      };
+      render(<NodeInteract node={node()} />);
+      await act(async () => {});
+      fireEvent.change(
+        screen.getByPlaceholderText("Message OoLu about Invoice Cleaner…"),
+        { target: { value: "tally the ledger" } },
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      await act(async () => {});
+      expect(screen.getByText("On it!")).toBeTruthy();
+
+      routes["GET /v1/chat/history"] = {
+        status: 200,
+        body: {
+          items: [
+            { seq: 1, kind: "user", body: "tally the ledger", at: "t" },
+            { seq: 2, kind: "assistant", body: "On it!", at: "t" },
+            { seq: 3, kind: "run", body: "r9", at: "t" },
+            {
+              seq: 4,
+              kind: "assistant",
+              body: "Done — “tally the ledger” finished.",
+              at: "t",
+            },
+          ],
+        },
+      };
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2600);
+      });
+      expect(
+        screen.getByText(/Done — “tally the ledger” finished\./),
+      ).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("a genuine failure — reachable host, not working, no reply — still apologizes", async () => {
     routes["POST /v1/chat"] = {
       status: 500,

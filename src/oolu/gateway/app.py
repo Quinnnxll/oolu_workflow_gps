@@ -17,6 +17,7 @@ import logging
 import random
 import re
 import secrets
+import threading
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -212,7 +213,7 @@ from ..skills.contract import (
 from ..skills.inputs import bind_inputs, inputs_manifest, validate_user_inputs
 from ..skills.models import ActionEvent, ExecutionStatus, ReusableSkill
 from ..skills.ports import ActionExecutor
-from ..social import MAX_MESSAGE_CHARS, MAX_PHOTO_BYTES
+from ..social import MAX_MESSAGE_CHARS, MAX_PHOTO_BYTES, RunReportStore
 from .errors import GatewayError, WebhookError
 from .http import (
     Request,
@@ -1112,7 +1113,22 @@ class GatewayApp:
         self._connections: dict[str, dict[str, dict]] = defaultdict(dict)
         self._metrics: dict[str, int] = defaultdict(int)
         self._router = Router()
+        # V1: where a run's finish REPORTS — the thread that asked. The
+        # chat lane files a row at enqueue; the worker (or a fresh boot)
+        # lands the report turn there exactly once at terminal/incident.
+        self._run_reports = RunReportStore(durable.conn)
+        # The ONE deliberate daemon (Part IV decision 2): a per-instance
+        # owner name so two gateways over one durable store can never
+        # complete each other's leases.
+        self._worker_owner = f"gateway-worker:{uuid4().hex[:8]}"
+        self._worker_thread: threading.Thread | None = None
+        self._worker_stop = threading.Event()
         self._register_routes()
+        # V1 restart re-drive: work accepted before a death is still
+        # owed — re-queue what lost its task, report what finished
+        # unreported. Runs AFTER every attribute stands; drives nothing
+        # itself (the worker drives).
+        self._recover_owed_runs()
 
     # ------------------------------------------------------------------ #
     # Entry point.                                                        #
@@ -2654,41 +2670,25 @@ class GatewayApp:
                         built = self._autobuild_before_run(session, turn.task)
                     if built:
                         say = f"{say} {built}".strip()
-                    # The drive narrates itself (V0): each phase step
-                    # lands a progress frame on the stream, so the
-                    # working bubble says WHERE the run stands instead
-                    # of a bare ellipsis.
-                    progress = (
-                        (
-                            lambda state: emit(
-                                {
-                                    "type": "progress",
-                                    "phase": state.phase.value,
-                                }
-                            )
-                        )
-                        if emit is not None
-                        else None
-                    )
-                    run = self._start_intent_run(
-                        session, turn.task, progress=progress
-                    )
+                    # V1: the ask is ACCEPTED, not driven — the run is
+                    # durable and QUEUED, the worker drives it, and the
+                    # turn returns now. The reply is the model's word;
+                    # the run marker below is the client's live window
+                    # into the run; and the REPORT (success words, the
+                    # failure's exact node, the growth offer, the P2
+                    # reminder offer) lands as its own assistant turn
+                    # when the run settles — so closing the window stops
+                    # nothing and "I'll ping you when it's done" is
+                    # finally true.
+                    run = self._enqueue_intent_run(session, turn.task)
                     self._metrics["chat_runs"] += 1
-                    # The run may have already failed DURING execution
-                    # (submit runs synchronously to the first pause or
-                    # terminal phase). The growth check must fire here too
-                    # — not only on the planning-time refusal below — so a
-                    # failed execution names the failing node and offers
-                    # to grow what's missing.
-                    say = self._describe_run_failure(
-                        say, run, autobuild_hint=in_node
+                    self._run_reports.file(
+                        run_id=str(run["run_id"]),
+                        tenant=session.tenant_id,
+                        principal=session.principal_id,
+                        agent=thread_agent,
+                        intent=str(turn.task),
                     )
-                    if not in_node:
-                        # P2: a task the run dated offers its reminder.
-                        say = self._offer_task_reminder(say, session, run)
-                        say = self._offer_growth(
-                            say, session, turn.task, run=run
-                        )
             except GatewayError as exc:
                 if exc.code not in ("cannot_execute", "release_revoked"):
                     raise
@@ -9962,6 +9962,108 @@ class GatewayApp:
                 return state, "retry"
         return None
 
+    def _intent_run_metadata(
+        self,
+        session,
+        intent: str,
+        *,
+        extra_bindings: dict | None = None,
+        pulse: dict | None = None,
+    ) -> dict:
+        """The contract metadata an intent run carries — one builder for
+        the synchronous and the queued (V1) submission paths, so the two
+        can never drift on what a run knows about itself."""
+        metadata: dict = {"tenant_id": session.tenant_id}
+        if pulse:
+            metadata["pulse"] = dict(pulse)
+        # A goal the user already built a node for runs THAT node's own
+        # function — the route is the stored code, not a fresh plan.
+        function = self._resolve_node_function(session, intent)
+        self._refuse_revoked(function)
+        if function is not None and extra_bindings:
+            function = {
+                **function,
+                "bindings": {
+                    **(function.get("bindings") or {}),
+                    **extra_bindings,
+                },
+            }
+        if function is not None:
+            # P3: a binding that NAMES a delivered document (a file in
+            # the node's message drawer) stages that document into the
+            # run — the sandbox reads what was forwarded, nothing more.
+            attachments = self._binding_attachments(session, function)
+            if attachments:
+                function = {**function, "_attachments": attachments}
+        if function is not None:
+            metadata["node_function"] = function
+        return metadata
+
+    def _enqueue_intent_run(
+        self,
+        session,
+        intent: str,
+        *,
+        max_recovery: int = 1,
+        extra_bindings: dict | None = None,
+    ) -> dict:
+        """V1: the chat lane's submission — accepted, durable, QUEUED.
+
+        Nothing drives here: the run row and its advance task land
+        durably and the turn returns, so the work belongs to the worker,
+        not to the window that asked for it. Revival keeps its law (the
+        same goal's FAILED run restarts in place, its INCIDENT pause
+        retries) with the decision applied durably before the enqueue.
+        Planning refusals that the synchronous path raised as 422 now
+        surface at drive time as a FAILED run the report speaks for."""
+        metadata = self._intent_run_metadata(
+            session, intent, extra_bindings=extra_bindings
+        )
+        revivable = self._revivable_run_for(session, intent)
+        if revivable is not None:
+            previous, mode = revivable
+            # The revived attempt resolves the node FRESH: a node built
+            # (or revised) since the failure now carries the route.
+            previous.contract = previous.contract.model_copy(
+                update={"metadata": metadata}
+            )
+            self._durable.runs.save(previous)
+            try:
+                if mode == "restart":
+                    state = self._durable.restart_async(previous.run_id)
+                else:
+                    state = self._durable.resume_async(
+                        previous.run_id,
+                        ResumeInput(
+                            kind=PauseKind.INCIDENT,
+                            incident_decision="retry",
+                            principal=session.principal_id,
+                        ),
+                    )
+            except OrchestratorError as exc:
+                raise GatewayError(422, "cannot_execute", str(exc)) from exc
+            self._metrics["runs_submitted"] += 1
+            return self._run_dict(state)
+        tenant_runs = sum(
+            1
+            for s in self._durable.runs.list()
+            if s.contract.metadata.get("tenant_id") == session.tenant_id
+        )
+        if tenant_runs >= self._config.max_runs_per_tenant:
+            raise GatewayError(429, "quota_exceeded", "tenant run quota exceeded")
+        contract = TaskContract(
+            intent=intent,
+            submitted_by=session.principal_id,
+            metadata=metadata,
+        )
+        run_id = self._durable.submit_async(
+            contract, max_recovery_attempts=max_recovery
+        )
+        self._metrics["runs_submitted"] += 1
+        state = self._durable.get(run_id)
+        assert state is not None
+        return self._run_dict(state)
+
     def _start_intent_run(
         self,
         session,
@@ -9989,30 +10091,9 @@ class GatewayApp:
         ``pulse`` (P0) marks a SCHEDULED fire: the schedule, the
         occurrence, and how many occurrences the host slept through —
         stamped on the run's metadata so the record says why it ran."""
-        metadata: dict = {"tenant_id": session.tenant_id}
-        if pulse:
-            metadata["pulse"] = dict(pulse)
-        # A goal the user already built a node for runs THAT node's own
-        # function — the route is the stored code, not a fresh plan.
-        function = self._resolve_node_function(session, intent)
-        self._refuse_revoked(function)
-        if function is not None and extra_bindings:
-            function = {
-                **function,
-                "bindings": {
-                    **(function.get("bindings") or {}),
-                    **extra_bindings,
-                },
-            }
-        if function is not None:
-            # P3: a binding that NAMES a delivered document (a file in
-            # the node's message drawer) stages that document into the
-            # run — the sandbox reads what was forwarded, nothing more.
-            attachments = self._binding_attachments(session, function)
-            if attachments:
-                function = {**function, "_attachments": attachments}
-        if function is not None:
-            metadata["node_function"] = function
+        metadata = self._intent_run_metadata(
+            session, intent, extra_bindings=extra_bindings, pulse=pulse
+        )
         revivable = self._revivable_run_for(session, intent)
         if revivable is not None:
             previous, mode = revivable
@@ -14948,6 +15029,210 @@ class GatewayApp:
             self._scheduled_sweep_tick(request.now or self._clock())
         except Exception:  # noqa: BLE001 - maintenance never breaks serving
             logging.getLogger("oolu.gateway").exception("scheduled sweep tick failed")
+
+    # ------------------------------------------------------------------ #
+    # The run worker (V1): the one deliberate daemon.                     #
+    #                                                                     #
+    # The no-daemon doctrine stays for scheduled work (the lazy tick);    #
+    # USER-INITIATED runs get exactly one worker thread, built on the     #
+    # standing async seam (Part IV decision 2) — so accepted work         #
+    # survives the request, the window, and (with the boot recovery)      #
+    # the process.                                                        #
+    # ------------------------------------------------------------------ #
+    def drive_queue(self, *, budget: int | None = None, should_stop=None) -> int:
+        """Drain the durable run queue NOW — the worker's hands, also
+        callable inline (tests, embedded hosts). Each driven run gets
+        its post-drive bookkeeping and, at terminal/incident, its report
+        turn. Returns how many queue items were taken up."""
+        driven = 0
+        while budget is None or driven < budget:
+            if should_stop is not None and should_stop():
+                break
+            task = self._durable.process_next(
+                self._worker_owner, should_stop=should_stop
+            )
+            if task is None:
+                break
+            driven += 1
+            if task.status.value != "done":
+                # A drained lease (handed back) or a failed queue item —
+                # nothing settled, nothing to report.
+                continue
+            run_id = (task.payload or {}).get("run_id")
+            state = self._durable.get(str(run_id)) if run_id else None
+            if state is None:
+                continue
+            try:
+                # The same post-drive bookkeeping every synchronous door
+                # runs — verification evidence must not depend on which
+                # thread finished the run.
+                self._record_function_verification(state)
+            except Exception:  # noqa: BLE001 - bookkeeping never stops the drain
+                logging.getLogger("oolu.gateway").exception(
+                    "post-run bookkeeping failed for %s", state.run_id
+                )
+            self._report_run_outcome(state)
+        return driven
+
+    def _report_run_outcome(self, state: RunState) -> None:
+        """The finish reports to the thread that asked (V1), exactly
+        once per arming: the report turn lands under the bound agent,
+        and a short reminder-ring ping surfaces it in the main chat.
+        Claim-first: a crashed compose loses one report (the run card
+        still tells the story); the reverse order would duplicate the
+        turn forever."""
+        binding = self._run_reports.get(state.run_id)
+        if binding is None or binding.get("reported_at"):
+            return
+        incident = (
+            state.pause is not None and state.pause.kind is PauseKind.INCIDENT
+        )
+        if not (state.is_terminal or incident):
+            return
+        if not self._run_reports.mark_reported(state.run_id):
+            return
+        try:
+            run = self._run_dict(state)
+            say, ping = self._compose_run_report(binding, run)
+            if self._assistant_history is not None:
+                self._assistant_history.append(
+                    tenant=binding["tenant_id"],
+                    principal=binding["principal"],
+                    kind="assistant",
+                    body=say,
+                    agent=binding["agent"],
+                )
+            if ping and self._reminders is not None:
+                try:
+                    self._reminders.add(
+                        tenant=binding["tenant_id"],
+                        principal=binding["principal"],
+                        text=ping,
+                        due_at=self._clock() + timedelta(minutes=2),
+                    )
+                except Exception:  # noqa: BLE001 - the ping is a courtesy;
+                    pass  # the report turn above is the record.
+        except Exception:  # noqa: BLE001 - a broken compose must not kill
+            # the drain loop; the run card still tells the story.
+            logging.getLogger("oolu.gateway").exception(
+                "run report failed for %s", state.run_id
+            )
+
+    def _compose_run_report(
+        self, binding: dict, run: dict
+    ) -> tuple[str, str | None]:
+        """The report's words, from the run as it settled — the same
+        vocabulary the synchronous reply used to carry (the failing
+        node's name, the growth offer, the P2 reminder offer), now told
+        AFTER the work instead of promised before it."""
+        from types import SimpleNamespace
+
+        title = concise_name(str(binding["intent"] or run.get("intent") or ""))
+        session = SimpleNamespace(
+            tenant_id=binding["tenant_id"], principal_id=binding["principal"]
+        )
+        in_node = str(binding["agent"] or "").startswith("node:")
+        phase = run.get("phase")
+        if phase == "completed":
+            say = f"Done — “{title}” finished."
+            say = self._offer_task_reminder(say, session, run)
+            return say, f"✅ “{title}” is done — the report is in the chat."
+        if phase == "cancelled":
+            reason = run.get("failure_reason") or "stopped before execution"
+            return f"“{title}” was cancelled — {reason}.", None
+        say = f"“{title}” didn't make it."
+        say = self._describe_run_failure(say, run, autobuild_hint=in_node)
+        if not in_node:
+            say = self._offer_growth(say, session, str(binding["intent"]), run=run)
+        return say, f"⚠️ “{title}” hit a problem — the details are in the chat."
+
+    def _recover_owed_runs(self) -> None:
+        """Restart re-drive (V1): on boot, expired leases go back to the
+        pool, runs owed a drive but missing their queue task are
+        re-queued, and settled-but-unreported runs get their report —
+        so a kill -9 mid-run costs at most the step in flight, never the
+        work. Nothing here drives; the worker does."""
+        try:
+            self._durable.queue.reclaim_expired()
+            queued = self._durable.queued_run_ids()
+            for binding in self._run_reports.unreported():
+                run_id = str(binding["run_id"])
+                state = self._durable.get(run_id)
+                if state is None:
+                    # The run row is gone (retention, a torn write): say
+                    # so instead of owing a report forever.
+                    if self._run_reports.mark_reported(run_id) and (
+                        self._assistant_history is not None
+                    ):
+                        title = concise_name(str(binding["intent"] or ""))
+                        self._assistant_history.append(
+                            tenant=binding["tenant_id"],
+                            principal=binding["principal"],
+                            kind="assistant",
+                            body=(
+                                f"“{title}” was lost in a restart — ask "
+                                "again and I'll take it from the top."
+                            ),
+                            agent=binding["agent"],
+                        )
+                    continue
+                incident = (
+                    state.pause is not None
+                    and state.pause.kind is PauseKind.INCIDENT
+                )
+                if state.is_terminal or incident:
+                    self._report_run_outcome(state)
+                elif not state.is_paused and run_id not in queued:
+                    self._durable.ensure_queued(run_id)
+        except Exception:  # noqa: BLE001 - recovery hygiene never blocks boot
+            logging.getLogger("oolu.gateway").exception(
+                "run recovery failed at boot"
+            )
+
+    def start_worker(self, *, poll_seconds: float = 1.0) -> None:
+        """Start the one deliberate worker thread: it drains the run
+        queue and gives the lazy tick a heartbeat while the app is open
+        but idle. Idempotent — a second call is a no-op."""
+        if self._worker_thread is not None and self._worker_thread.is_alive():
+            return
+        self._worker_stop = threading.Event()
+        self._worker_thread = threading.Thread(
+            target=self._worker_loop,
+            args=(poll_seconds,),
+            name="oolu-run-worker",
+            daemon=True,
+        )
+        self._worker_thread.start()
+
+    def stop_worker(self, *, timeout: float = 10.0) -> None:
+        """Graceful drain: the worker finishes its current step (the
+        staged row is the checkpoint), hands its lease back, and exits.
+        A killed process skips this — the boot recovery covers it."""
+        thread = self._worker_thread
+        if thread is None:
+            return
+        self._worker_stop.set()
+        thread.join(timeout)
+        self._worker_thread = None
+
+    def close(self) -> None:
+        self.stop_worker()
+
+    def _worker_loop(self, poll_seconds: float) -> None:
+        stop = self._worker_stop
+        from types import SimpleNamespace
+
+        while not stop.wait(poll_seconds):
+            try:
+                self.drive_queue(should_stop=stop.is_set)
+            except Exception:  # noqa: BLE001 - the worker outlives any one drive
+                logging.getLogger("oolu.gateway").exception(
+                    "run worker drive failed"
+                )
+            # The pulse's heartbeat: scheduled work fires even when the
+            # app is open but idle — no request needed to advance the
+            # clock. The tick keeps its own gates and never raises.
+            self._maybe_scheduled_sweep(SimpleNamespace(now=None))
 
     def _maybe_retention(self, now_mono: float, now) -> None:
         """The activity log's retention, applied for real: once an hour,
@@ -20982,15 +21267,20 @@ class GatewayApp:
         return state
 
     def _resume(self, run_id: str, session: Session, resume: ResumeInput) -> RunState:
+        """Fold the human's decision in durably and QUEUE the drive (V1).
+
+        The decision lands before the response (a poll never shows a
+        stale "needs a decision"), but the drive belongs to the worker —
+        a confirmed run must not die with the window that confirmed it.
+        The client's run card polls the phases as they move; the
+        post-drive bookkeeping and the report turn land worker-side."""
         self._load(run_id, session)  # tenant guard before mutating
         try:
-            state = self._durable.resume(run_id, resume)
+            state = self._durable.resume_async(run_id, resume)
         except OrchestratorError as exc:
             raise GatewayError(409, "conflict", str(exc)) from exc
-        # A resumed run (e.g. the human confirmed model-written code) may
-        # complete HERE — the verification evidence must not depend on
-        # which door the run finished behind.
-        self._record_function_verification(state)
+        # A chat-born run owes a fresh report when this decision settles.
+        self._run_reports.rearm(run_id)
         return state
 
     def _persist_rebuilt_route(self, state: RunState) -> None:

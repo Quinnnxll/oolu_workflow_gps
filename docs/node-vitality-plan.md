@@ -310,6 +310,38 @@ the run completed while away, the reply and the file are waiting;
 kill -9 mid-run → restart re-drives to completion or a worded
 failure; nothing is silently lost.
 
+**Status: LANDED.** The chat task lane submits async now: the ask is
+ACCEPTED (durable run row + `workflow.advance` queue task, via
+`submit_async`/`resume_async`/`restart_async` — the engine grew
+`apply_restart` and `abort` to split decisions from drives) and the
+turn returns with the queued run; the client's run card narrates the
+drive as before. The ONE deliberate worker (Part IV decision 2) lives
+on `GatewayApp` (`start_worker`/`stop_worker`/`drive_queue`), started
+by the ASGI lifespan wherever the app is served and closed through
+`HostRuntime`; it drains the queue and gives the lazy tick a heartbeat
+while the app is idle. `process_next` hardened: per-step lease
+heartbeats, graceful drain between steps (`should_stop` → the lease is
+handed back with the attempt refunded — the staged row is the
+checkpoint), and a RAISED drive becomes a FAILED run in the
+exception's words instead of an eternal reclaim loop. The finish
+REPORTS: a `run_reports` binding (filed at enqueue, re-armed by the
+resume doors and revivals) lands one report turn in the thread that
+asked — success words, or the failing node + growth offer + P2
+reminder offer, the exact vocabulary the synchronous reply used to
+carry — plus a reminder-ring ping, exactly once per arming
+(claim-first). The four resume doors queue their drives the same way
+(a confirmed run no longer dies with the window that confirmed it).
+Restart re-drive at boot: reclaim expired leases, re-queue owed runs
+that lost their task, report what settled unreported, and say plainly
+when a run row is gone. The frontend watches a queued run
+(`watchRunReport`) and folds the report turn in when it settles.
+Pinned by tests/test_run_worker.py and the V1 cases in Chat.test.tsx /
+NodeInteract.test.tsx; the synchronous-era chat tests were updated to
+the accepted-queued-reported order. (Typed run commands, tool-lane
+runs, and POST /v1/runs submissions still drive synchronously — the
+V3 budget work revisits the tool lane; the Tauri shell's hard kill is
+the kill -9 case, covered by boot recovery.)
+
 ### V2 — birth without lies (report 7)
 
 Goal: a node that publishes is a node whose contract, code, and run
@@ -512,6 +544,11 @@ import-scan pins stay green.
 
 ## Part IV — decisions taken, and questions for the owner
 
+Decisions 1–4 were ratified by the owner on 2026-08-04, in these
+words: the reaper nodes retire with notice; the daemon amendment is
+explicit; the requested energy-based model lands as an additive; the
+deterministic wall stands above the advisory reviewer.
+
 1. **Retire, not delete** (V6): the −$5/year rule triggers the
    standing revocation with notice — never row deletion. Provenance
    and audit laws outrank tidiness; the reaped node's history is what
@@ -528,12 +565,17 @@ import-scan pins stay green.
    input-agreement check becomes law in code; the LLM reviewer remains
    as judgment on top and keeps failing open — a dead model must
    never block a build, and now it cannot let a lie through either.
-5. Open questions the owner should answer before V2/V6 land:
-   - Which sandbox backend ran the failing tests (Docker vs
-     subprocess)? It decides which honest-error path to pin first.
-   - Was a `node.review` reviewer model seated during the tests?
-   - Should ad-dividend earnings (keyed to contributor principals,
-     no node linkage) count toward a node's vitality income, or is
-     vitality marketplace-run income only?
-   - The vitality thresholds: −$5/year and the 90-day grace are
-     placeholders to confirm or tune.
+5. Open questions — answered by the owner on 2026-08-04:
+   - Sandbox backend during the failing tests: **Docker**. V2 pins
+     the Docker honest-error path first (the subprocess backend
+     converges on the same verdict, but Docker is the reproduced
+     failure).
+   - Reviewer seated during the tests: **probably not** (owner
+     unsure). V2 therefore assumes the wall carried nothing at test
+     time — the deterministic wall is law regardless of the seat.
+   - **Ad-dividend earnings count** toward vitality income (V6): the
+     income join brings press reward citations in beside
+     marketplace-run income when the paid principal traces to a
+     node's lineage.
+   - The vitality thresholds are **confirmed**: −$5/year and the
+     90-day grace land as law in V6, tunable by settings later.

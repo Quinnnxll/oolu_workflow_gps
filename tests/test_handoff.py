@@ -99,11 +99,17 @@ def _producer_and_consumer(app):
 
 
 def _seed_producer(tmp_path):
-    """Build A, run it once (its port files), build B, ask to run B."""
+    """Build A, ask to run it, drive the queued run so its port files,
+    build B, ask to run B."""
     app, conn, ident, desk, backend = _handoff_rig(tmp_path)
     _build(app, ident, ANSWER_A, GOAL_A)
     ran, _model = _run(app, ident, TURN_A, GOAL_A)
     assert ran.status == 200 and ran.body["run_id"], ran.body
+    # V1: the ask only ACCEPTED the run — a queued intake snapshot,
+    # nothing driven, no port filed yet. The drive belongs to the
+    # worker; here the test lends it hands.
+    assert ran.body["run"]["phase"] == "intake", ran.body
+    assert app.drive_queue() >= 1
     # The producer's standing output is on the port index.
     producers = app._values.producers_of("t1", "invoice_csv")
     assert producers, "the producer's run filed its port"

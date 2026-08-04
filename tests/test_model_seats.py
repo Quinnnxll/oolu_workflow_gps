@@ -161,6 +161,9 @@ def test_editing_src_main_edits_the_node_with_no_stale_cache(tmp_path):
             )
         )
         assert again.status == 200, again.body
+        # V1: the re-ask only QUEUES — the worker's drive executes it.
+        assert again.body["run"]["phase"] == "intake"
+        app.drive_queue()
         action = script_exec.actions[-1]
         # The run executed the EDITED file — not the version snapshot.
         assert action.parameters["script"] == edited
@@ -190,6 +193,9 @@ def test_a_deleted_drawer_copy_falls_back_to_the_version_snapshot(tmp_path):
             )
         )
         assert again.status == 200, again.body
+        # V1: the re-ask only QUEUES — the worker's drive executes it.
+        assert again.body["run"]["phase"] == "intake"
+        app.drive_queue()
         action = script_exec.actions[-1]
         # The snapshot inside the version still answers.
         assert "http_request" in action.parameters["script"]

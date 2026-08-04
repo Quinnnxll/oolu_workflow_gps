@@ -424,13 +424,23 @@ class GatewayASGI:
         )
         await send({"type": "http.response.body", "body": body})
 
-    @staticmethod
-    async def _lifespan(receive: Any, send: Any) -> None:
+    async def _lifespan(self, receive: Any, send: Any) -> None:
+        # The served lifecycle IS the worker's lifecycle (V1): any host
+        # that serves this app gets the one deliberate run-queue worker,
+        # and a graceful shutdown drains it (finish the current step,
+        # checkpoint, hand the lease back). A killed process skips this
+        # — the gateway's boot recovery re-drives what it was owed.
         while True:
             message = await receive()
             if message["type"] == "lifespan.startup":
+                starter = getattr(self._app, "start_worker", None)
+                if callable(starter):
+                    starter()
                 await send({"type": "lifespan.startup.complete"})
             elif message["type"] == "lifespan.shutdown":
+                stopper = getattr(self._app, "stop_worker", None)
+                if callable(stopper):
+                    stopper()
                 await send({"type": "lifespan.shutdown.complete"})
                 return
 

@@ -914,3 +914,110 @@ describe("RunCard", () => {
     ).toBe(false);
   });
 });
+
+// ---- V1: the queued run's report folds into the thread --------------------
+describe("Chat — the run report watch (V1)", () => {
+  it("folds the worker's report turn in when the queued run settles", async () => {
+    vi.useFakeTimers();
+    try {
+      routes["POST /v1/chat"] = {
+        status: 200,
+        body: {
+          reply: "On it! 🚀 I'll ping you the second it's done or I need a hand.",
+          source: "intent",
+          run_id: "r1",
+          run: { run_id: "r1", phase: "intake", awaiting: null },
+        },
+      };
+      // The run is already settled by the worker when the watch looks.
+      routes["GET /v1/runs/r1"] = {
+        status: 200,
+        body: baseRun({ phase: "completed" }),
+      };
+      routes["GET /v1/chat/history"] = { status: 200, body: { items: [] } };
+      render(<Chat />);
+      await act(async () => {});
+
+      fireEvent.change(screen.getByPlaceholderText(/Message OoLu/), {
+        target: { value: "tidy the ledger" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      await act(async () => {});
+      expect(screen.getByText(/On it!/)).toBeTruthy();
+
+      // The worker lands the report server-side; the next watch tick
+      // folds the fresh thread in — no reload, no extra ask.
+      routes["GET /v1/chat/history"] = {
+        status: 200,
+        body: {
+          items: [
+            { seq: 1, kind: "user", body: "tidy the ledger", at: "t" },
+            { seq: 2, kind: "assistant", body: "On it! 🚀", at: "t" },
+            { seq: 3, kind: "run", body: "r1", at: "t" },
+            {
+              seq: 4,
+              kind: "assistant",
+              body: "Done — “tidy the ledger” finished.",
+              at: "t",
+            },
+          ],
+        },
+      };
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2600);
+      });
+      expect(
+        screen.getByText(/Done — “tidy the ledger” finished\./),
+      ).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a run paused on a question stops the watch — the card carries it", async () => {
+    vi.useFakeTimers();
+    try {
+      routes["POST /v1/chat"] = {
+        status: 200,
+        body: {
+          reply: "On it!",
+          source: "intent",
+          run_id: "r1",
+          run: { run_id: "r1", phase: "intake", awaiting: null },
+        },
+      };
+      routes["GET /v1/runs/r1"] = {
+        status: 200,
+        body: baseRun({
+          phase: "confirmation",
+          awaiting: "confirmation",
+          prompt: "Confirm the planned route.",
+        }),
+      };
+      routes["GET /v1/chat/history"] = { status: 200, body: { items: [] } };
+      render(<Chat />);
+      await act(async () => {});
+
+      fireEvent.change(screen.getByPlaceholderText(/Message OoLu/), {
+        target: { value: "tidy the ledger" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      await act(async () => {});
+
+      const historyCalls = () =>
+        calls.filter((c) => c.path === "/v1/chat/history").length;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2600);
+      });
+      const seen = historyCalls();
+      // The watch stood down after seeing the pause: further ticks ask
+      // the run card's questions, not the history door.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5200);
+      });
+      expect(historyCalls()).toBe(seen);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

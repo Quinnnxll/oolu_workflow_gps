@@ -7,6 +7,7 @@ import {
   Reasoning,
   replyLanded,
   serverStillWorking,
+  watchRunReport,
 } from "./Chat";
 import { ForwardMenu } from "./ForwardMenu";
 import { loadCompose, saveCompose, t, tf, useT } from "../ui";
@@ -102,6 +103,10 @@ export function NodeInteract({ node }: { node: WorkNode }) {
   // reply.
   const [serverWorking, setServerWorking] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
+  // The standing run-report watch (V1): a queued run's finish lands as
+  // a report turn in this node's server thread — the watch folds it in.
+  const reportWatchRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => reportWatchRef.current?.(), []);
 
   useEffect(() => {
     saveCompose(`node:${node.node_id}`, draft);
@@ -171,6 +176,16 @@ export function NodeInteract({ node }: { node: WorkNode }) {
           reasoning: turn.reasoning || undefined,
         },
       ]);
+      // A queued run (V1): watch for the worker's report turn and fold
+      // it into the thread when the run settles.
+      if (turn.run_id) {
+        reportWatchRef.current?.();
+        reportWatchRef.current = watchRunReport(
+          turn.run_id,
+          `node:${node.node_id}`,
+          (items) => setThread(nodeThreadFromServer(items)),
+        );
+      }
     } catch (e) {
       // The request broke — the server's record decides what shows
       // (V0): a standing marker keeps the bubble, a landed reply shows

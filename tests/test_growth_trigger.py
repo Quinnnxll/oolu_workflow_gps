@@ -3,15 +3,19 @@
 Borrowed from n8n's editor: when the workflow is missing the node it
 needs, the answer is a proposal to ADD that node — never the same refusal
 again. Exit gate: a chat task the machine cannot execute ends with an
-in-conversation offer; the user's plain "yes" IS the consent (one goal,
-one build) — the node is built through the same gated path as the
-interact window's build and the task re-fires through the node's own
+in-conversation offer — since V1 the ask is QUEUED, so the failure and
+its offer arrive in the run's REPORT turn once the worker drives, not in
+the reply that accepted the task; the user's plain "yes" IS the consent
+(one goal, one build) — the node is built through the same gated path as
+the interact window's build and the task re-fires through the node's own
 function; a "no" (or any other message) withdraws the offer; and consent
 is never assumed: no model to write the function means no offer, and the
 yes builds exactly the offered goal, nothing else.
 """
 
 from __future__ import annotations
+
+from types import SimpleNamespace
 
 from test_chat_assistant import _FakeModel
 from test_http_gateway import _autonomous, _Identity, _req
@@ -45,6 +49,7 @@ from oolu.orchestrator import (
     StatusOutcomeMonitor,
     WorkflowOrchestrator,
 )
+from oolu.social import AssistantHistoryStore
 
 GOAL = "normalize invoice csv files"
 TASK_TURN = '{"say": "On it!", "task": "' + GOAL + '"}'
@@ -56,7 +61,10 @@ def _rig(tmp_path, script_exec=None):
     The stub scenario would happily run any plain intent, so the machine
     under test is made honest: a goal with no node function raises the
     same ``cannot_execute`` a real install raises when no capable node
-    reaches it — the exact wall the growth trigger exists to open.
+    reaches it — the exact wall the growth trigger exists to open. V1
+    moved the chat lane's wall to the worker, so the same honesty guards
+    the DRIVE too: a queued run for a functionless goal FAILS in the same
+    words, and the report turn carries the refusal and the offer.
 
     ``script_exec`` swaps the recording stub for a real script hand (a
     ``NodeScriptRunner``) where a test needs actual execute/repair
@@ -99,6 +107,9 @@ def _rig(tmp_path, script_exec=None):
         nodeplace=NodeplaceService(registry),
         desk=desk,
         files=UserFileStore(conn),
+        # V1: the failure reports to the thread that asked — the report
+        # turn is where the wall's words and the offer now live.
+        assistant_history=AssistantHistoryStore(conn),
     )
     real = app._start_intent_run
 
@@ -110,6 +121,21 @@ def _rig(tmp_path, script_exec=None):
         return real(session, intent, **kwargs)
 
     app._start_intent_run = picky
+    # The same honesty at the DRIVE (V1): the chat lane queues its ask,
+    # so the wall falls under the worker's hands — a raised drive fails
+    # the run in the exception's own words, which the report speaks.
+    real_drive = durable._orch.run
+
+    def picky_drive(state, **kwargs):
+        drive_session = SimpleNamespace(
+            tenant_id=state.contract.metadata.get("tenant_id"),
+            principal_id=state.contract.submitted_by,
+        )
+        if app._resolve_node_function(drive_session, state.contract.intent) is None:
+            raise RuntimeError("no capable node reaches that goal")
+        return real_drive(state, **kwargs)
+
+    durable._orch.run = picky_drive
     return app, conn, ident, desk, script_exec
 
 
@@ -130,6 +156,13 @@ def _speak_work(app, replies):
     app._tenant_model = lambda tenant: model
     app._node_function_author = lambda tenant: FakeAuthor()
     return model
+
+
+def _report(app, *, principal="user-1"):
+    """The newest turn in the asker's thread — after a drive, the REPORT."""
+    turns = app._assistant_history.history(tenant="t1", principal=principal)
+    assert turns and turns[-1]["kind"] == "assistant"
+    return turns[-1]["body"]
 
 
 # --------------------------------------------------------------------------- #
@@ -183,14 +216,31 @@ def test_a_stuck_task_becomes_an_offer_not_a_wall(tmp_path):
         _speak_work(app, [TASK_TURN])
         response = _chat(app, ident, "please tidy up my invoice files")
         assert response.status == 200, response.body
-        reply = response.body["reply"]
-        assert "I can't run that on this machine yet" in reply
-        assert "grow that missing piece" in reply
-        assert GOAL in reply
+        # V1: the ask is ACCEPTED, not driven — the reply is the model's
+        # bare ACK, the run stands QUEUED, and no wall has been hit yet.
+        assert response.body["reply"] == "On it!"
+        run_id = response.body["run_id"]
+        assert run_id is not None
+        assert response.body["run"]["phase"] == "intake"
+        assert not response.body["run"]["result"]
+        assert not response.body["run"]["failure"]
+        assert app._growth_offers.get("t1", "user-1") is None
+        # The worker drives; the wall falls at drive time; and the REPORT
+        # turn asks, instead of repeating the refusal.
+        assert app.drive_queue() >= 1
+        assert app._durable.get(run_id).phase.value == "failed"
+        turns = app._assistant_history.history(tenant="t1", principal="user-1")
+        assert [t["kind"] for t in turns] == [
+            "user", "assistant", "run", "assistant",
+        ]
+        report = turns[-1]["body"]
+        assert "didn't make it" in report
+        assert "The run failed — no capable node reaches that goal" in report
+        assert "grow that missing piece" in report
+        assert GOAL in report
         # The offer NAMES the node it will build (concise_name of the goal),
         # not just the goal sentence.
-        assert "Normalize Invoice Csv" in reply
-        assert response.body["run_id"] is None
+        assert "Normalize Invoice Csv" in report
         # The offer stands, keyed to the person, holding the exact goal.
         assert app._growth_offers.get("t1", "user-1") == ("build", GOAL, GOAL)
     finally:
@@ -294,6 +344,9 @@ def test_yes_builds_the_node_and_refires_the_task(tmp_path):
     try:
         _speak_work(app, [TASK_TURN])
         _chat(app, ident, "please tidy up my invoice files")
+        # V1: the queued ask must be DRIVEN before any yes means anything
+        # — the offer is written when the failed run reports.
+        app.drive_queue()
 
         agreed = _chat(app, ident, "yes")
         assert agreed.status == 200, agreed.body
@@ -323,6 +376,7 @@ def test_no_leaves_things_as_they_are(tmp_path):
     try:
         _speak_work(app, [TASK_TURN])
         _chat(app, ident, "please tidy up my invoice files")
+        app.drive_queue()  # the failed drive's report makes the offer
 
         declined = _chat(app, ident, "no thanks")
         assert "leaving it as is" in declined.body["reply"]
@@ -340,6 +394,7 @@ def test_any_other_message_withdraws_the_offer(tmp_path):
             app, [TASK_TURN, '{"say": "Sunny all week!", "task": null}']
         )
         _chat(app, ident, "please tidy up my invoice files")
+        app.drive_queue()  # the failed drive's report makes the offer
 
         # The user changes the subject: the offer is withdrawn — consent
         # detached from the question it answered is not consent — and the
@@ -358,12 +413,15 @@ def test_any_other_message_withdraws_the_offer(tmp_path):
 def test_no_offer_without_a_model_to_write_the_function(tmp_path):
     app, conn, ident, desk, script_exec = _rig(tmp_path)
     try:
-        # Model-less: the message becomes the intent, the engine refuses,
-        # and no offer is made — a build that cannot happen is not offered.
+        # Model-less: the message becomes the intent, the queued drive
+        # refuses, and no offer is made — a build that cannot happen is
+        # not offered.
         response = _chat(app, ident, GOAL)
-        reply = response.body["reply"]
-        assert "I can't run that on this machine yet" in reply
-        assert "grow that missing piece" not in reply
+        assert "On it!" in response.body["reply"]  # the fallback ACK
+        app.drive_queue()
+        report = _report(app)
+        assert "The run failed — no capable node reaches that goal" in report
+        assert "grow that missing piece" not in report
         assert app._growth_offers.get("t1", "user-1") is None
     finally:
         conn.close()
@@ -374,6 +432,7 @@ def test_the_offer_survives_only_in_the_main_conversation(tmp_path):
     try:
         _speak_work(app, [TASK_TURN, '{"say": "Hi there!", "task": null}'])
         _chat(app, ident, "please tidy up my invoice files")
+        app.drive_queue()  # the failed drive's report makes the offer
         assert app._growth_offers.get("t1", "user-1") == ("build", GOAL, GOAL)
         # Another person's yes answers nothing — the offer is keyed to
         # the person who was asked.
@@ -394,6 +453,7 @@ PARAPHRASE_TURN = '{"say": "On it!", "task": "' + PARAPHRASE + '"}'
 def _built_first_node(app, ident):
     """Walk the plain growth flow once: the GOAL node exists afterwards."""
     _chat(app, ident, "please tidy up my invoice files")
+    app.drive_queue()  # V1: the failed drive's report makes the offer
     agreed = _chat(app, ident, "yes")
     assert "Built a NEW node" in agreed.body["reply"]
 
@@ -404,13 +464,15 @@ def test_a_paraphrase_offers_reuse_instead_of_a_twin(tmp_path):
         _speak_work(app, [TASK_TURN, PARAPHRASE_TURN])
         _built_first_node(app, ident)
 
-        # The SAME work, said differently: the exact key misses, but the
-        # twin guard finds the node and offers to REUSE it — not to build.
-        response = _chat(app, ident, "tidy the invoice csvs for me")
-        reply = response.body["reply"]
-        assert "answers for nearly this" in reply
-        assert "Normalize Invoice Csv Files" in reply
-        assert "grow that missing piece" not in reply
+        # The SAME work, said differently: the exact key misses, but once
+        # the queued run fails, the twin guard finds the node and the
+        # REPORT offers to REUSE it — not to build.
+        _chat(app, ident, "tidy the invoice csvs for me")
+        app.drive_queue()
+        report = _report(app)
+        assert "answers for nearly this" in report
+        assert "Normalize Invoice Csv Files" in report
+        assert "grow that missing piece" not in report
         assert app._growth_offers.get("t1", "user-1") == (
             "reuse",
             GOAL,
@@ -427,6 +489,7 @@ def test_yes_to_reuse_runs_the_existing_node_and_mints_nothing(tmp_path):
         _built_first_node(app, ident)
         runs_before = len(script_exec.actions)
         _chat(app, ident, "tidy the invoice csvs for me")
+        app.drive_queue()  # the failed drive's report makes the reuse offer
 
         agreed = _chat(app, ident, "yes")
         reply = agreed.body["reply"]
@@ -451,6 +514,7 @@ def test_no_to_reuse_rolls_into_a_distinct_build_offer(tmp_path):
         _speak_work(app, [TASK_TURN, PARAPHRASE_TURN])
         _built_first_node(app, ident)
         _chat(app, ident, "tidy the invoice csvs for me")
+        app.drive_queue()  # the failed drive's report makes the reuse offer
 
         # "No" means this is different work — the plain build offer
         # follows, marked so the twin guard honors the user's answer.
@@ -474,8 +538,6 @@ def test_no_to_reuse_rolls_into_a_distinct_build_offer(tmp_path):
 
 
 def test_the_build_door_refuses_a_twin_in_words(tmp_path):
-    from types import SimpleNamespace
-
     app, conn, ident, desk, script_exec = _rig(tmp_path)
     try:
         _speak_work(app, [TASK_TURN])
@@ -505,6 +567,7 @@ def test_the_offer_survives_a_restart(tmp_path):
     try:
         _speak_work(app, [TASK_TURN])
         _chat(app, ident, "please tidy up my invoice files")
+        app.drive_queue()  # V1: the offer is written at REPORT time
         assert app._growth_offers.get("t1", "user-1") == ("build", GOAL, GOAL)
 
         # The host restarts: a fresh store over the same durable connection
@@ -666,6 +729,9 @@ def test_the_inbox_carries_failures_not_only_approvals(tmp_path):
         app._tenant_model = lambda tenant: model
         ran = _chat(app, ident, "please " + GOAL)
         assert ran.status == 200
+        # V1: the ask only queued the run — the explosion happens under
+        # the worker's hands, so drive before reading the inbox.
+        app.drive_queue()
 
         # The member's inbox: their own failed workflow, no tenant keys.
         mine = app.handle(

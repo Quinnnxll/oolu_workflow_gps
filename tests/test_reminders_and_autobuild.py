@@ -16,7 +16,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from test_chat_assistant import _FakeModel
-from test_growth_trigger import GOAL, TASK_TURN, _chat, _rig, _speak_work
+from test_growth_trigger import GOAL, TASK_TURN, _chat, _report, _rig, _speak_work
 from test_http_gateway import _req
 
 from oolu.chat import ChatAssistant
@@ -283,16 +283,22 @@ def test_standing_consent_builds_the_node_before_the_run(tmp_path):
         _speak_work(app, [TASK_TURN, TASK_TURN])
         resp = _chat(app, ident, f"please {GOAL}")
         assert resp.status == 200, resp.body
-        # The node was built FIRST — function written, on the desk — and
-        # the run routed through it instead of failing for want of one.
+        # The node was built FIRST — function written, on the desk —
+        # before the ask was even queued (V1: the build is the reply's
+        # own work; the RUN belongs to the worker).
         entries = desk.overview(principal="user-1", tenant="t1")
         assert len(entries) == 1
         assert resp.body["run_id"], "the task ran through the fresh node"
         assert "node" in resp.body["reply"].lower()
+        assert resp.body["run"]["phase"] == "intake"  # queued, not driven
+        # The worker drives: the run routed through the fresh node
+        # instead of failing for want of one.
+        assert app.drive_queue() >= 1
         assert script_exec.actions, "the node's own function executed"
         # Run again: the SAME node answers — nothing new is minted.
         again = _chat(app, ident, f"please {GOAL}")
         assert again.status == 200 and again.body["run_id"]
+        app.drive_queue()
         assert len(desk.overview(principal="user-1", tenant="t1")) == 1
     finally:
         conn.close()
@@ -304,9 +310,12 @@ def test_without_consent_the_offer_still_asks_first(tmp_path):
         _speak_work(app, [TASK_TURN])
         resp = _chat(app, ident, f"please {GOAL}")
         assert resp.status == 200
-        # No silent build: the reply asks, and the desk stays empty.
+        # No silent build: the desk stays empty — at the ask and through
+        # the drive — and once the queued run fails, the REPORT asks.
         assert desk.overview(principal="user-1", tenant="t1") == []
-        assert "yes" in resp.body["reply"].lower()
+        app.drive_queue()
+        assert desk.overview(principal="user-1", tenant="t1") == []
+        assert "yes" in _report(app).lower()
     finally:
         conn.close()
 
@@ -326,15 +335,19 @@ def test_a_completed_rebuild_lands_in_my_nodes(tmp_path):
     try:
         _speak_work(app, [])
         # A completed run whose route the model rebuilt: minimal state.
+        # V1: the queued door stages the run WITHOUT driving it — the
+        # rig's honest drive would refuse this functionless intent — and
+        # the test settles the state by hand.
         from oolu.orchestrator.state import TaskContract
 
-        state = app._durable.submit(
+        run_id = app._durable.submit_async(
             TaskContract(
                 intent="autonomous window",
                 submitted_by="user-1",
                 metadata={"tenant_id": "t1"},
             )
         )
+        state = app._durable.get(run_id)
         script = (
             "from _oolu_runtime import emit_result\nemit_result('done')\n"
         )

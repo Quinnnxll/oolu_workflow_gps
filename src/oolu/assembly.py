@@ -1404,7 +1404,9 @@ def build_host_runtime(
         accounts=accounts,
         identity=identity,
         conn=conn,
-        _closers=(users, identity, price_book, traces),
+        # The gateway first: its worker thread (V1) must drain before
+        # the stores under it close.
+        _closers=(gateway, users, identity, price_book, traces),
     )
 
 

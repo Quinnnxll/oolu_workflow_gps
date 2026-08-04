@@ -506,6 +506,9 @@ def _grown_web_node(tmp_path):
     app._tenant_model = lambda tenant: model
     app._node_function_author = lambda tenant: FakeAuthor(WEB_FUNCTION_ANSWER)
     _chat(app, ident, "get me today's fx rates")
+    # V1: the ask queued — the drive must fail and REPORT before the
+    # offer exists for the yes to answer.
+    app.drive_queue()
     agreed = _chat(app, ident, "yes")
     return app, conn, ident, desk, script_exec, agreed
 
@@ -547,6 +550,8 @@ def test_drawer_src_files_ride_the_nodes_runs(tmp_path):
 
         again = _chat(app, ident, WEB_GOAL)
         assert again.status == 200, again.body
+        # V1: the re-ask stands queued; the files ride when the worker drives.
+        app.drive_queue()
         action = script_exec.actions[-1]
         assert action.parameters["files"] == {"helper.py": "WISDOM = 42\n"}
     finally:

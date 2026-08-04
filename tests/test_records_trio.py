@@ -276,16 +276,38 @@ def test_a_dated_task_offers_a_reminder_created_only_on_yes(tmp_path):
     try:
         model = _FakeModel(['{"say": "On it!", "task": "' + goal + '"}'])
         app._tenant_model = lambda tenant: model
+        # V1: the ask only ACCEPTS — the reply is the model's ACK, the
+        # run stands queued, and the reminder offer waits on the drive.
         ran = _chat(app, ident, "please " + goal)
         assert ran.status == 200, ran.body
-        assert "want a reminder" in ran.body["reply"]
+        assert ran.body["reply"] == "On it!"
+        assert ran.body["run_id"]
+        assert ran.body["run"]["phase"] == "intake"
+        assert app.drive_queue() >= 1
+        # The finish reported to the thread that asked, offer attached.
+        turns = app._assistant_history.history(
+            tenant="t1", principal="user-1"
+        )
+        assert [t["kind"] for t in turns] == [
+            "user", "assistant", "run", "assistant"
+        ]
+        assert "want a reminder" in turns[-1]["body"]
         assert app._growth_offers.get("t1", "user-1")[0] == "task_reminder"
-        # Nothing filed yet — the offer is a question, not an act.
-        assert app._reminders.upcoming(tenant="t1", principal="user-1") == []
+        # Nothing filed yet — the offer is a question, not an act. (The
+        # drive's own reminder-ring ping is bookkeeping, not the offer.)
+        assert [
+            r
+            for r in app._reminders.upcoming(tenant="t1", principal="user-1")
+            if r.text == "pay the rent"
+        ] == []
 
         agreed = _chat(app, ident, "yes")
         assert "Reminder set" in agreed.body["reply"]
-        (row,) = app._reminders.upcoming(tenant="t1", principal="user-1")
+        (row,) = [
+            r
+            for r in app._reminders.upcoming(tenant="t1", principal="user-1")
+            if r.text == "pay the rent"
+        ]
         assert row.text == "pay the rent"
         assert app._growth_offers.get("t1", "user-1") is None
     finally:
@@ -299,8 +321,16 @@ def test_no_leaves_the_task_without_a_reminder(tmp_path):
         model = _FakeModel(['{"say": "On it!", "task": "' + goal + '"}'])
         app._tenant_model = lambda tenant: model
         _chat(app, ident, "please " + goal)
+        # V1: the offer only stands once the drive lands the report —
+        # answer before it and there is no question on the table.
+        assert app.drive_queue() >= 1
         declined = _chat(app, ident, "no")
         assert "no reminder" in declined.body["reply"].lower()
-        assert app._reminders.upcoming(tenant="t1", principal="user-1") == []
+        # No offered reminder filed — only the drive's report ping stands.
+        assert [
+            r
+            for r in app._reminders.upcoming(tenant="t1", principal="user-1")
+            if r.text == "pay the rent"
+        ] == []
     finally:
         conn.close()

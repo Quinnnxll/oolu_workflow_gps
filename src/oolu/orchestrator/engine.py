@@ -124,12 +124,10 @@ class WorkflowOrchestrator:
                 on_step(state)
         return state
 
-    def restart(self, state: RunState, *, on_step=None) -> RunState:
-        """Re-drive a FAILED run IN PLACE — the same run_id, the same
-        thread — instead of minting a sibling. Asking the same goal
-        again must not pile a new dead thread onto the Noder list every
-        time: the retry lives where the failure lives, the history keeps
-        both, and ``user_retries`` counts honestly.
+    def apply_restart(self, state: RunState) -> RunState:
+        """Reset a FAILED run for a fresh attempt WITHOUT driving it —
+        the restart half of the V0/V1 seam: an async caller stages the
+        reborn state durably and enqueues the drive for the worker.
 
         Every per-phase output resets (a fresh attempt re-plans, and the
         human gates — confirmation, approval — are re-earned, never
@@ -164,7 +162,25 @@ class WorkflowOrchestrator:
             "workflow.restarted",
             {"run_id": state.run_id, "user_retries": state.user_retries},
         )
-        return self.run(state, on_step=on_step)
+        return state
+
+    def restart(self, state: RunState, *, on_step=None) -> RunState:
+        """Re-drive a FAILED run IN PLACE — the same run_id, the same
+        thread — instead of minting a sibling. Asking the same goal
+        again must not pile a new dead thread onto the Noder list every
+        time: the retry lives where the failure lives, the history keeps
+        both, and ``user_retries`` counts honestly."""
+        return self.run(self.apply_restart(state), on_step=on_step)
+
+    def abort(self, state: RunState, reason: str) -> RunState:
+        """Fail a run from OUTSIDE the phase machine — the worker's
+        honest verdict when a drive RAISED instead of pausing or
+        finishing (V1). The alternative is a silent retry loop: the
+        lease expires, the task is reclaimed, the same exception fires
+        again, forever. The run keeps its history; the reason carries
+        the exception's own words, so the report can speak them."""
+        state.pause = None
+        return self._fail(state, reason)
 
     def step(self, state: RunState) -> RunState:
         """Execute exactly the phase named by ``state.phase`` once."""

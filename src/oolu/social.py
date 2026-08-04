@@ -477,6 +477,115 @@ class AssistantHistoryStore:
 
 
 # --------------------------------------------------------------------------- #
+# Where a run's finish reports: the thread that asked for it (V1).             #
+# --------------------------------------------------------------------------- #
+_RUN_REPORTS_SCHEMA = """CREATE TABLE IF NOT EXISTS run_reports (
+    run_id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    principal TEXT NOT NULL,
+    agent TEXT NOT NULL,
+    intent TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    reported_at TEXT
+)"""
+
+
+class RunReportStore:
+    """The chat lane enqueues a run and returns (V1); this table
+    remembers which conversation the outcome belongs to, so the worker —
+    or a fresh boot, if the worker died first — can land the report turn
+    there, exactly once, when the run reaches a terminal phase or an
+    incident. Filing again for the same run (a revival, a resumed pause)
+    RE-ARMS the report: the next finish reports too."""
+
+    def __init__(self, conn, *, clock: Callable[[], datetime] | None = None) -> None:
+        self._conn = conn
+        self._clock = clock or (lambda: datetime.now(UTC))
+        with self._conn.transaction() as db:
+            db.execute(_RUN_REPORTS_SCHEMA)
+
+    def file(
+        self,
+        *,
+        run_id: str,
+        tenant: str,
+        principal: str,
+        agent: str,
+        intent: str,
+    ) -> None:
+        with self._conn.transaction() as db:
+            db.execute(
+                """INSERT INTO run_reports
+                     (run_id, tenant_id, principal, agent, intent,
+                      created_at, reported_at)
+                   VALUES (?, ?, ?, ?, ?, ?, NULL)
+                   ON CONFLICT(run_id) DO UPDATE SET
+                     tenant_id = excluded.tenant_id,
+                     principal = excluded.principal,
+                     agent = excluded.agent,
+                     intent = excluded.intent,
+                     created_at = excluded.created_at,
+                     reported_at = NULL""",
+                (
+                    str(run_id),
+                    tenant,
+                    principal,
+                    str(agent),
+                    str(intent),
+                    self._clock().isoformat(),
+                ),
+            )
+
+    def rearm(self, run_id: str) -> bool:
+        """A resumed pause owes a fresh report when it next settles."""
+        with self._conn.transaction() as db:
+            cursor = db.execute(
+                "UPDATE run_reports SET reported_at = NULL WHERE run_id = ?",
+                (str(run_id),),
+            )
+        return bool(getattr(cursor, "rowcount", 0) or 0)
+
+    def mark_reported(self, run_id: str) -> bool:
+        """Claim the report — exactly once. False: someone else already
+        reported (or nothing was filed), so the caller stays silent."""
+        with self._conn.transaction() as db:
+            cursor = db.execute(
+                """UPDATE run_reports SET reported_at = ?
+                   WHERE run_id = ? AND reported_at IS NULL""",
+                (self._clock().isoformat(), str(run_id)),
+            )
+        return bool(getattr(cursor, "rowcount", 0) or 0)
+
+    def get(self, run_id: str) -> dict | None:
+        with self._conn.lock:
+            row = self._conn.db.execute(
+                "SELECT * FROM run_reports WHERE run_id = ?", (str(run_id),)
+            ).fetchone()
+        return self._row(row) if row else None
+
+    def unreported(self) -> list[dict]:
+        """Every report still owed, oldest first — the boot scan's list."""
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                """SELECT * FROM run_reports WHERE reported_at IS NULL
+                   ORDER BY created_at ASC"""
+            ).fetchall()
+        return [self._row(row) for row in rows]
+
+    @staticmethod
+    def _row(row) -> dict:
+        return {
+            "run_id": row["run_id"],
+            "tenant_id": row["tenant_id"],
+            "principal": row["principal"],
+            "agent": row["agent"],
+            "intent": row["intent"],
+            "created_at": row["created_at"],
+            "reported_at": row["reported_at"],
+        }
+
+
+# --------------------------------------------------------------------------- #
 # The byline's face: one small photo per account.                              #
 # --------------------------------------------------------------------------- #
 # Stored as base64 text, not a BLOB column — the durable connection speaks

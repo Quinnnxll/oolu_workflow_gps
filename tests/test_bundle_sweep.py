@@ -158,10 +158,15 @@ def test_the_gateway_recomputes_live_ids_from_current_drawers(tmp_path):
     # A node with a multi-file tree is live; a stale bundle from an earlier
     # tree is dead. The gateway recomputes live ids from the CURRENT drawer,
     # so the stale one is reclaimed and the live one is kept.
-    from test_node_hands import _grown_web_node
+    from test_growth_trigger import _chat
+    from test_node_hands import WEB_GOAL, _grown_web_node
 
     app, conn, ident, desk, script_exec, agreed = _grown_web_node(tmp_path)
     try:
+        # V1: the helper's chat asks QUEUED — no node grew at submit. The
+        # build door still runs synchronously, so walk it: the node lands
+        # on the desk now (a twin ask would be refused, never copied).
+        _chat(app, ident, "build me a node that " + WEB_GOAL)
         node_id = desk.overview(principal="user-1", tenant="t1")[0].node_id
         # Wire the bundle store onto the gateway (assembly does this live).
         cas = FilesystemArtifactStore(tmp_path / "cas")
@@ -201,12 +206,17 @@ def test_the_inventory_route_lists_trees_with_their_holders(tmp_path):
     holder — ``live`` computed exactly like the sweep's reachability, so
     the inventory and the sweep can never disagree about what is dead.
     Behind the same hygiene:sweep permission as the other read routes."""
-    from test_node_hands import _grown_web_node
+    from test_growth_trigger import _chat
+    from test_node_hands import WEB_GOAL, _grown_web_node
 
     from oolu.identity import AuthorityGrant, Role
 
     app, conn, ident, desk, script_exec, agreed = _grown_web_node(tmp_path)
     try:
+        # V1: the helper's chat asks QUEUED — no node grew at submit. The
+        # build door still runs synchronously, so walk it: the node lands
+        # on the desk now (a twin ask would be refused, never copied).
+        _chat(app, ident, "build me a node that " + WEB_GOAL)
         node_id = desk.overview(principal="user-1", tenant="t1")[0].node_id
         app._bundle_store = BundleStore(conn, FilesystemArtifactStore(tmp_path / "cas"))
         app._files.save(

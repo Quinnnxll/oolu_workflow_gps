@@ -280,6 +280,43 @@ class DurableTaskQueue:
                 )
         return self.get(task_id)
 
+    def release(
+        self, task_id: str, owner: str, *, now: datetime | None = None
+    ) -> bool:
+        """Hand a leased task back untouched — a graceful drain, not a
+        failure (V1). The lease's attempt is refunded: a worker stopping
+        to exit cleanly must never walk a task toward ``dead``."""
+        moment = now or _now()
+        with self._conn.transaction() as db:
+            cursor = db.execute(
+                """UPDATE tasks
+                   SET status = ?, lease_owner = NULL, lease_expires_at = NULL,
+                       attempts = CASE WHEN attempts > 0 THEN attempts - 1
+                                       ELSE 0 END,
+                       available_at = ?, updated_at = ?
+                   WHERE task_id = ? AND lease_owner = ? AND status = ?""",
+                (
+                    TaskStatus.PENDING.value,
+                    _iso(moment),
+                    _iso(moment),
+                    task_id,
+                    owner,
+                    TaskStatus.LEASED.value,
+                ),
+            )
+        return cursor.rowcount > 0
+
+    def active(self, kind: str) -> list[Task]:
+        """Every pending or leased task of one kind — the boot scan's
+        view of work still owed (V1's restart re-drive)."""
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                f"""SELECT {_COLUMNS} FROM tasks
+                    WHERE kind = ? AND status IN (?, ?)""",
+                (kind, TaskStatus.PENDING.value, TaskStatus.LEASED.value),
+            ).fetchall()
+        return [self._row_to_task(row) for row in rows]
+
     def cancel(self, task_id: str) -> bool:
         now = _now()
         with self._conn.transaction() as db:

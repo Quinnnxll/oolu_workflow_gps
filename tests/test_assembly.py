@@ -139,6 +139,10 @@ def test_model_intake_drives_clarification_through_the_runtime(tmp_path):
             f"/v1/runs/{run['run_id']}/answers",
             {"answers": {"city": "Lisbon"}},
         ).body
+        # The decision landed durably; the DRIVE belongs to the worker.
+        assert resumed["awaiting"] is None
+        runtime.gateway.drive_queue()
+        resumed = _call(runtime, token, "GET", f"/v1/runs/{run['run_id']}").body
         assert resumed["phase"] == "failed"
         assert "no executable route" in (resumed["failure_reason"] or "")
     finally:
@@ -197,6 +201,10 @@ def test_registry_and_cli_executor_run_a_real_command(tmp_path):
             f"/v1/runs/{run['run_id']}/confirmation",
             {"approved": True},
         ).body
+        # The decision landed durably; the DRIVE belongs to the worker.
+        assert done["awaiting"] is None
+        runtime.gateway.drive_queue()
+        done = _call(runtime, token, "GET", f"/v1/runs/{run['run_id']}").body
         assert done["phase"] == "completed"
         assert done["result"]["status"] == "succeeded"
         assert done["result"]["route"] == "cli-task"

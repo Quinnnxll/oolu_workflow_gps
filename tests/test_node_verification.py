@@ -200,6 +200,9 @@ def test_a_personal_run_verifies_the_node_and_goes_live(tmp_path):
         app._metering = metering
         _speak_work(app, [TASK_TURN])
         _chat(app, ident, "please tidy up my invoice files")
+        # V1: the ask is queued — the failed drive's report makes the
+        # offer, so the worker must run before any yes means anything.
+        app.drive_queue()
 
         agreed = _chat(app, ident, "yes")
         reply = agreed.body["reply"]
@@ -268,6 +271,7 @@ def test_a_failed_personal_run_is_evidence_too(tmp_path):
         app._metering = metering
         _speak_work(app, [TASK_TURN, TASK_TURN])
         _chat(app, ident, "please tidy up my invoice files")
+        app.drive_queue()  # V1: the failed drive's report makes the offer
         _chat(app, ident, "yes")  # built, ran, verified: 1 success, live
 
         # The function starts failing (the upstream format changed).
@@ -284,9 +288,13 @@ def test_a_failed_personal_run_is_evidence_too(tmp_path):
         second = _chat(app, ident, "please tidy up my invoice files")
         run_id = second.body["run_id"]
         assert run_id is not None
+        # V1: the ask only queued the run — the function fails under the
+        # worker's hands, pausing the run at the incident.
+        app.drive_queue()
 
         # A paused run is not evidence yet: the user's abort makes it
         # terminal, and THAT is when the failure lands in the ledger.
+        # V1: the door folds the decision in; the worker's drive lands it.
         resolved = app.handle(
             _req(
                 "POST",
@@ -296,7 +304,12 @@ def test_a_failed_personal_run_is_evidence_too(tmp_path):
             )
         )
         assert resolved.status == 200, resolved.body
-        assert resolved.body["phase"] == "failed"
+        assert resolved.body["awaiting"] is None  # the decision is consumed
+        app.drive_queue()
+        settled = app.handle(
+            _req("GET", f"/v1/runs/{run_id}", token=ident.token("user-1", "t1"))
+        )
+        assert settled.body["phase"] == "failed"
 
         events = metering.events()
         assert [e.outcome for e in events] == ["succeeded", "failed"]

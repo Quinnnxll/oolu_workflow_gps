@@ -161,6 +161,60 @@ export function replyLanded(items: ChatHistoryTurn[], sent: string): boolean {
   return false;
 }
 
+// V1: a chat ask is QUEUED now — the worker drives it while the window
+// is free to close, and the finish lands as its own report turn in the
+// server thread. This watcher folds that report in for whoever stayed:
+// poll the run until it settles (terminal, or an incident awaiting the
+// user), then poll the thread until the report turn shows, and hand the
+// fresh items to the caller. A run paused on a QUESTION (confirmation,
+// clarification, approval) stops the watch — the run card carries it.
+// Returns a stop function; callers stop the old watch before arming a
+// new one and on unmount.
+export function watchRunReport(
+  runId: string,
+  agent: string | undefined,
+  onItems: (items: ChatHistoryTurn[]) => void,
+): () => void {
+  let baseline: number | null = null;
+  let stopped = false;
+  const stop = () => {
+    stopped = true;
+    clearInterval(timer);
+  };
+  const tick = async () => {
+    if (stopped) return;
+    try {
+      if (baseline === null) {
+        const { items } = await api.chatHistory(agent);
+        baseline = Math.max(0, ...(items ?? []).map((t) => t.seq));
+        return;
+      }
+      const run = await api.task(runId);
+      if (run.awaiting && run.awaiting !== "incident") {
+        stop();
+        return;
+      }
+      const settled =
+        run.awaiting === "incident" ||
+        run.phase === "completed" ||
+        run.phase === "failed" ||
+        run.phase === "cancelled";
+      if (!settled) return;
+      const { items } = await api.chatHistory(agent);
+      const top = Math.max(0, ...(items ?? []).map((t) => t.seq));
+      if (items && top > baseline) {
+        onItems(items);
+        stop();
+      }
+    } catch {
+      /* the host answers a later tick — the card still tells the story */
+    }
+  };
+  const timer = setInterval(() => void tick(), 2500);
+  void tick();
+  return stop;
+}
+
 export function Chat({
   headerAside,
   inlineBlock,
@@ -200,6 +254,10 @@ export function Chat({
   // silence lives in Settings (app.voice_replies), not in the chat.
   const [speakReplies, setSpeakReplies] = useState(true);
   const endRef = useRef<HTMLDivElement>(null);
+  // The standing run-report watch (V1): at most one, stopped before a
+  // new run arms it and on unmount.
+  const reportWatchRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => reportWatchRef.current?.(), []);
   const recognizerRef = useRef<Recognizer | null>(null);
   const pressRef = useRef<{ timer: number | null; long: boolean }>({
     timer: null,
@@ -513,6 +571,16 @@ export function Chat({
         if (turn.run_id) next.push({ kind: "run", runId: turn.run_id });
         return next;
       });
+      // The run is QUEUED (V1) — the card narrates the drive, and this
+      // watch folds the worker's report turn in when the run settles.
+      if (turn.run_id) {
+        reportWatchRef.current?.();
+        reportWatchRef.current = watchRunReport(
+          turn.run_id,
+          undefined,
+          (items) => setThread(fromServer(items)),
+        );
+      }
       // The welcome-back reminder: the user was gone long enough for the
       // idle loop to go dormant, so their return is the moment the open
       // work surfaces again — once, right after their answer.

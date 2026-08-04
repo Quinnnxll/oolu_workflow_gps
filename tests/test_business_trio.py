@@ -26,6 +26,7 @@ from oolu.nodeplace.personal_templates import starter_script
 from oolu.reminders import ReminderStore
 from oolu.runtime import NodeScriptRunner, StubBackend
 from oolu.runtime.backend import make_success
+from oolu.social import AssistantHistoryStore
 from oolu.values import ValueStore
 
 
@@ -194,6 +195,9 @@ def _business_rig(tmp_path, payloads):
     holder["store"] = store
     app._values = store
     app._reminders = ReminderStore(conn)
+    # V1: a queued chat task reports its finish as an assistant turn —
+    # the report needs a thread to land in.
+    app._assistant_history = AssistantHistoryStore(conn)
     app._seed_starter_shelf("t1", "user-1")
     return app, conn, ident, backend
 
@@ -318,11 +322,28 @@ def test_low_stock_offers_a_restock_reminder_through_chat(tmp_path):
         goal = SPECS["stock"].goal
         model = _FakeModel(['{"say": "On it!", "task": "' + goal + '"}'])
         app._tenant_model = lambda tenant: model
+        # V1: the ask only ACCEPTS — the reply is the model's ACK, the
+        # run stands queued, and the reminder offer waits on the drive.
         ran = _chat(app, ident, "please " + goal)
-        assert "want a reminder" in ran.body["reply"]
+        assert ran.body["reply"] == "On it!"
+        assert ran.body["run_id"]
+        assert ran.body["run"]["phase"] == "intake"
+        assert app.drive_queue() >= 1
+        # The finish reported to the thread that asked, offer attached.
+        turns = app._assistant_history.history(
+            tenant="t1", principal="user-1"
+        )
+        assert [t["kind"] for t in turns] == [
+            "user", "assistant", "run", "assistant"
+        ]
+        assert "want a reminder" in turns[-1]["body"]
         agreed = _chat(app, ident, "yes")
         assert "Reminder set" in agreed.body["reply"]
-        (row,) = app._reminders.upcoming(tenant="t1", principal="user-1")
+        (row,) = [
+            r
+            for r in app._reminders.upcoming(tenant="t1", principal="user-1")
+            if "restock" in r.text
+        ]
         assert "restock" in row.text
     finally:
         conn.close()

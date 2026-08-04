@@ -13,7 +13,17 @@ without edits.
 from __future__ import annotations
 
 from test_growth_trigger import _chat
-from test_handoff import _seed_producer
+from test_handoff import (
+    ANSWER_A,
+    ANSWER_B,
+    GOAL_A,
+    GOAL_B,
+    TURN_A,
+    TURN_B,
+    _build,
+    _handoff_rig,
+    _run,
+)
 
 from oolu.orchestrator.state import (
     PauseKind,
@@ -35,6 +45,29 @@ BUILD_KEYS = {
 def _service(app, conn):
     app._metrics_store = MetricsSnapshotStore(conn)
     return app._investor_metrics()
+
+
+def _seed_producer(tmp_path):
+    """Build A, ask to run it, DRIVE the queue, build B, ask to run B.
+
+    V1: the chat ask only QUEUES the producer's run — the worker's
+    drive is what executes it and files its port, so the drive sits
+    between the ask and everything that reads the standing output."""
+    app, conn, ident, desk, backend = _handoff_rig(tmp_path)
+    _build(app, ident, ANSWER_A, GOAL_A)
+    ran, _model = _run(app, ident, TURN_A, GOAL_A)
+    assert ran.status == 200 and ran.body["run_id"], ran.body
+    # Nothing has driven yet — the accepted ask hands back a QUEUED
+    # snapshot; the worker's hands settle it.
+    assert ran.body["run"]["phase"] == "intake", ran.body
+    app.drive_queue()
+    # The producer's standing output is on the port index.
+    producers = app._values.producers_of("t1", "invoice_csv")
+    assert producers, "the producer's run filed its port"
+    _build(app, ident, ANSWER_B, GOAL_B)
+    asked, _model = _run(app, ident, TURN_B, GOAL_B)
+    assert asked.status == 200, asked.body
+    return app, conn, ident, desk, backend, asked
 
 
 def test_the_catalog_carries_all_five_with_their_contracts():

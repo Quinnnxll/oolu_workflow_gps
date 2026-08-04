@@ -22,6 +22,7 @@ from oolu.durable.connection import DurableConnection
 from oolu.gateway import GatewayApp
 from oolu.providers.keyring import ModelKeyring, fingerprint
 from oolu.settings_node import SettingsNode, SettingsStore
+from oolu.social import AssistantHistoryStore
 
 KEY = "sk-ant-live-0123456789"
 
@@ -227,7 +228,10 @@ def test_an_unexecutable_plan_is_said_not_crashed(tmp_path):
     """Found live: with the starter pack loaded, an intent whose planned
     route needs a capability no executor provides raised PreflightError
     straight through /v1/chat as a 500. The engine's refusal must become
-    words in the conversation (and a 422 on /v1/runs), never a crash."""
+    words in the conversation (and a 422 on /v1/runs), never a crash.
+    V1 queued the chat lane, so the words moved: the ask is accepted,
+    the worker's drive hits the refusal, and the FAILED run's report
+    says the same reason in the thread that asked."""
     from test_http_gateway import _autonomous, _blueprint, _Executor
 
     def _unexecutable():
@@ -243,16 +247,47 @@ def test_an_unexecutable_plan_is_said_not_crashed(tmp_path):
         )
 
     app, conn, ident = _app(tmp_path, _unexecutable)
+    # The refusal now arrives as a report turn, so this gateway needs
+    # the thread it reports to.
+    history = AssistantHistoryStore(conn)
+    gateway = GatewayApp(
+        app._durable,
+        validator=ident.validator,
+        resolver=ident.resolver,
+        approval_authority=ident.authority,
+        assistant_history=history,
+    )
     token = ident.token("user-1")
 
-    turn = app.handle(
+    turn = gateway.handle(
         _req("POST", "/v1/chat", token=token, body={"message": "auto"})
     )
     assert turn.status == 200
-    assert "can't run that on this machine" in turn.body["reply"]
-    assert turn.body["run_id"] is None
+    # V1: the ask is ACCEPTED, not refused at the door — a queued run,
+    # nothing driven yet.
+    run_id = turn.body["run_id"]
+    assert run_id is not None
+    assert turn.body["run"]["phase"] == "intake"
+    assert turn.body["run"]["result"] is None
+    assert turn.body["run"]["failure_reason"] is None
 
-    submit = app.handle(
+    # The worker's drive hits the preflight refusal: a FAILED run that
+    # says why, never a crash.
+    assert gateway.drive_queue() >= 1
+    shown = gateway.handle(_req("GET", f"/v1/runs/{run_id}", token=token))
+    assert shown.body["phase"] == "failed"
+    assert "missing capabilities" in shown.body["failure_reason"]
+
+    # The engine's refusal became words in the conversation: the report
+    # turn carries the same reason the synchronous reply used to.
+    turns = history.history(tenant="t1", principal="user-1")
+    assert [t["kind"] for t in turns] == ["user", "assistant", "run", "assistant"]
+    report = turns[-1]["body"]
+    assert "didn't make it" in report
+    assert f"The run failed — {shown.body['failure_reason']}" in report
+
+    # The API door still refuses at submit — that lane never queued.
+    submit = gateway.handle(
         _req("POST", "/v1/runs", token=token, body={"intent": "auto"})
     )
     assert submit.status == 422

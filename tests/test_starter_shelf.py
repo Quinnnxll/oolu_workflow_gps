@@ -155,6 +155,7 @@ def test_seeding_mints_seven_ordinary_nodes_exactly_once(tmp_path):
 def test_a_starter_runs_through_the_standing_run_door(tmp_path):
     # Live-runnable: a seeded node's goal fires ITS OWN function
     # through the ordinary chat run door — no build, no model spend.
+    # V1: the ask queues; the worker's drive fires the function.
     app, conn, ident, desk, script_exec = _rig(tmp_path)
     try:
         app._seed_starter_shelf("t1", "user-1")
@@ -164,6 +165,8 @@ def test_a_starter_runs_through_the_standing_run_door(tmp_path):
         ran = _chat(app, ident, "please " + goal)
         assert ran.status == 200, ran.body
         assert ran.body["run_id"], ran.body
+        assert ran.body["run"]["phase"] == "intake"  # queued, not driven
+        assert app.drive_queue() >= 1
         (action,) = script_exec.actions
         assert "Tasks —" in action.parameters["script"]
         assert action.parameters["goal"] == goal
