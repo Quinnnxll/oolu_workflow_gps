@@ -184,6 +184,17 @@ class PaveStore:
             {**self._paved_row(row), "web_id": row["web_id"]} for row in rows
         ]
 
+    def owner_webs(self, tenant: str, owner_principal: str) -> list[str]:
+        """The web ids promoted under one principal (P4) — the standing
+        property an agent's own surfaces consult ("does MY web stand?")."""
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                "SELECT web_id FROM paver_paved"
+                " WHERE tenant = ? AND owner_principal = ? ORDER BY web_id",
+                (tenant, owner_principal),
+            ).fetchall()
+        return [str(row["web_id"]) for row in rows]
+
     def promoted_node_ids(self, tenant: str) -> set[str]:
         """The registry node ids the Paver's promotions minted — excluded
         from the survey whoever owns them (P4: an agent-owned web node is

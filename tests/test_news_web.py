@@ -99,6 +99,7 @@ NEWS_PAYLOADS = {
         "press_post_published": {
             "topic_key": "gap:listing-42",
             "headline": "The steel kettle, measured",
+            "prose": "Lab mean 88; verified feedback mean 5.",
             "publish": True,
         }
     },
@@ -537,6 +538,246 @@ def test_replacing_one_desk_repaves_without_touching_the_others(tmp_path):
 # --------------------------------------------------------------------------- #
 # The observer seat: models propose, the owner disposes.                       #
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# N7.1 — the boundary wired: the day's readings feed the anchor, the           #
+# published post lands in the stores, and the edition pulse cedes             #
+# composition to the standing web.                                            #
+# --------------------------------------------------------------------------- #
+def _full_news_app(tmp_path, payloads):
+    """The paver gateway WITH the press wired — the boundary's two
+    sides both real: stores in, stores out."""
+    from test_http_gateway import _app
+    from test_paver_pave import _ResolverStub
+
+    from oolu.gateway import GatewayApp
+    from oolu.metering.attribution import AttributionStore
+    from oolu.metering.store import MeteringLedger
+    from oolu.nodeplace import (
+        CandidateAssembler,
+        LiveVersionStats,
+        NodeplaceService,
+        PriceBook,
+        RatingService,
+        RatingStore,
+        RegistryStore,
+    )
+    from oolu.press import (
+        ContributionStore,
+        GenreDemandStore,
+        PairwiseStore,
+        PreferenceStore,
+        PressDesk,
+        StoryMetricsStore,
+        StoryStore,
+        SurveyDesk,
+        SurveyStore,
+        TopicBriefStore,
+    )
+    from oolu.settings_node import SettingsNode, SettingsStore
+    from oolu.social import AssistantHistoryStore
+    from oolu.values import ValueStore
+
+    base, conn, ident = _app(tmp_path)
+    registry = RegistryStore(conn)
+    metering = MeteringLedger(conn)
+    attribution = AttributionStore(conn)
+    ratings = RatingService(RatingStore(conn), verified_run=metering.verified_run)
+    assembler = CandidateAssembler(
+        registry=registry,
+        stats=LiveVersionStats(
+            metering=metering, audit=base._durable.audit, attribution=attribution
+        ),
+        ratings=ratings,
+    )
+    values = ValueStore(conn)
+    executor = _ResolverStub(values, payloads)
+    pairwise = PairwiseStore(conn)
+    press = PressDesk(
+        ContributionStore(conn),
+        stories=StoryStore(conn),
+        preferences=PreferenceStore(conn),
+        pairwise=pairwise,
+        metrics=StoryMetricsStore(conn),
+        demand=GenreDemandStore(conn),
+        topics=TopicBriefStore(conn),
+        surveys=SurveyDesk(SurveyStore(conn), pairwise),
+    )
+    app = GatewayApp(
+        base._durable,
+        validator=ident.validator,
+        resolver=ident.resolver,
+        approval_authority=ident.authority,
+        nodeplace=NodeplaceService(registry),
+        ratings=ratings,
+        market=assembler,
+        price_book=PriceBook(tmp_path / "prices.db"),
+        attribution=attribution,
+        contract_executors={"script": executor},
+        values=values,
+        press=press,
+        settings_node=SettingsNode(SettingsStore(conn)),
+        assistant_history=AssistantHistoryStore(conn),
+    )
+    return app, conn, ident, executor, press
+
+
+def _stand_web(app, ident, *, now=NOW):
+    """Contribute the desks, pave, and consent — the standing web."""
+    token = ident.token("user", "t1")
+    stood = app.handle(
+        _req(
+            "POST",
+            "/v1/press/desks",
+            token=token,
+            body={"schedule": True, "at_minute": 7 * 60},
+        )
+    )
+    assert stood.status == 201, stood.body
+    desks = {d["name"]: d["node_id"] for d in stood.body["desks"]}
+    app._paver_schedule.enable(
+        interval_hours=6, granted_by="quinn", tenant="t1", now=now
+    )
+    app._scheduled_survey_tick(now)
+    paved = [
+        r
+        for r in app._durable.audit.records()
+        if r.event_type == "paver.web_paved"
+    ]
+    assert paved, "the magazine web should have paved"
+    web_id = paved[-1].payload["web_id"]
+    app._propagation_consent.grant("t1", web_id, granted_by="user", now=now)
+    return desks, web_id
+
+
+def test_the_boundary_feeds_the_anchor_and_the_post_lands_in_the_stores(
+    tmp_path,
+):
+    payloads = {
+        name: {slot: dict(value) for slot, value in payload.items()}
+        for name, payload in NEWS_PAYLOADS.items()
+    }
+    app, conn, ident, executor, press = _full_news_app(tmp_path, payloads)
+    # A member's real piece anchors the post — the lineage the boundary
+    # must resolve LIVE so the dividend keeps paying.
+    piece = press.publish(
+        tenant="t1",
+        author="alice",
+        title="The kettle, tested",
+        body="Four minutes to a litre; the handle stayed cool.",
+        genres=("products",),
+        license="oolu-members-1",
+        consent=True,
+    )
+    payloads[PUBLICATION_DESK]["press_post_published"] = {
+        **payloads[PUBLICATION_DESK]["press_post_published"],
+        "genre": "products",
+        "sources": [
+            {"kind": "lab", "ref": "listing-42", "summary": "lab mean 88"},
+            {
+                "kind": "contribution",
+                "ref": piece.contribution_id,
+                "summary": "“The kettle, tested” by alice",
+            },
+        ],
+    }
+    desks, web_id = _stand_web(app, ident)
+    app._web_router(NOW).on_trigger("t1", desks[GENRE_DESK], "run-1")
+    app._drain_propagation(NOW)
+
+    # The INPUT boundary: the day's readings were filed for the anchor —
+    # the same stores the desks' library reads, plus the recorded seed.
+    resolved, _ = app._values.resolve_bindings(
+        {"report": "output://press_boundary/press_engagement_report"},
+        tenant="t1",
+    )
+    report = resolved["report"]
+    if isinstance(report, str):
+        import json as _json
+
+        report = _json.loads(report)
+    assert isinstance(report["draw_seed"], int)
+    assert report["genres"]["products"]["pieces"] == 1
+    assert "beat" in report and "sample" in report
+
+    # The OUTPUT boundary: the published slot became a REAL story —
+    # sources stored beside it, lineage resolved live, topic recorded.
+    [story] = press.stories.list(tenant="t1")
+    assert story.headline == "The steel kettle, measured"
+    assert story.source == "web" and story.topic_key == "gap:listing-42"
+    assert story.genres == ("products",)
+    assert [(s.author, s.weight) for s in story.lineage] == [("alice", 1.0)]
+    rows = press.stories.sources_of(story.story_id)
+    assert {(r["kind"], r["ref"]) for r in rows} == {
+        ("lab", "listing-42"),
+        ("contribution", piece.contribution_id),
+    }
+    # A second morning never twins the told topic.
+    app._web_router(NOW).on_trigger("t1", desks[GENRE_DESK], "run-2")
+    app._drain_propagation(NOW)
+    assert len(press.stories.list(tenant="t1")) == 1
+    conn.close()
+
+
+HARBOR = (
+    "After two years of repairs the harbor market reopened this morning "
+    "with forty stalls and a queue down the pier."
+)
+HARBOR_AGREE = (
+    "The harbor market reopened today — forty stalls, and the queue down "
+    "the pier said everything about the wait."
+)
+
+
+def test_a_standing_web_cedes_the_edition_pulses_composition(tmp_path):
+    app, conn, ident, executor, press = _full_news_app(
+        tmp_path,
+        payloads={
+            name: {slot: dict(value) for slot, value in payload.items()}
+            for name, payload in NEWS_PAYLOADS.items()
+        },
+    )
+    desks, web_id = _stand_web(app, ident)
+    # Two agreeing pieces the newsroom WOULD compose into a cluster
+    # story — published while the web stands.
+    for author, title, body in (
+        ("alice", "Harbor market reopened", HARBOR),
+        ("bob", "Market back at the harbor", HARBOR_AGREE),
+    ):
+        press.publish(
+            tenant="t1",
+            author=author,
+            title=title,
+            body=body,
+            genres=("local",),
+            license="oolu-members-1",
+            consent=True,
+        )
+    schedule = app._pulse.add(
+        "t1",
+        "alice",
+        cadence="daily",
+        at_minute=8 * 60,
+        goal="press.morning_edition",
+    )
+    # The web stands: the pulse only DELIVERS — no inline composition.
+    app._fire_edition(schedule, "occ-1", 0)
+    fired = [
+        r
+        for r in app._durable.audit.records()
+        if r.event_type == "pulse.fired"
+        and r.payload.get("occurrence") == "occ-1"
+    ]
+    assert fired, "the edition should still fire (delivery only)"
+    assert press.stories.list(tenant="t1") == []
+    # Revoking the web's consent hands composition BACK to the pulse.
+    app._propagation_consent.revoke("t1", web_id, now=NOW)
+    app._fire_edition(schedule, "occ-2", 0)
+    stories = press.stories.list(tenant="t1")
+    assert stories, "with no standing web the pulse composes inline"
+    assert any("harbor" in s.prose.lower() for s in stories)
+    conn.close()
+
+
 class _Voice:
     def __init__(self, reply):
         self._reply = reply

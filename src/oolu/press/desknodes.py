@@ -181,6 +181,7 @@ else:
     else:
         emit_result({"press_topic_brief": {
             "topic_key": str(best.get("topic_key") or ""),
+            "genre": str(best.get("genre") or ""),
             "subject": str(best.get("subject") or ""),
             "facts": best.get("facts") or [],
             "disclosure": str(best.get("disclosure") or ""),
@@ -222,6 +223,7 @@ else:
     else:
         emit_result({"press_research_bundle": {
             "topic_key": str(brief.get("topic_key") or ""),
+            "genre": str(brief.get("genre") or ""),
             "subject": str(brief.get("subject") or ""),
             "facts": facts,
             "sources_resolved": len(facts),
@@ -287,6 +289,7 @@ else:
         prose = (prose + " " + disclosure).strip()
     emit_result({"press_post_draft": {
         "topic_key": str(brief.get("topic_key") or ""),
+        "genre": str(brief.get("genre") or ""),
         "headline": str(brief.get("subject") or "")[:140],
         "prose": prose,
         "sources": sources,
@@ -314,6 +317,7 @@ elif not draft.get("headline") or not draft.get("prose"):
 else:
     emit_result({"press_post_published": {
         "topic_key": str(draft.get("topic_key") or ""),
+        "genre": str(draft.get("genre") or ""),
         "headline": str(draft.get("headline") or ""),
         "prose": str(draft.get("prose") or ""),
         "sources": draft.get("sources") or [],

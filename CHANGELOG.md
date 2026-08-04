@@ -4,6 +4,28 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+N7.1 landed — the boundary wired: the web run replaces the edition
+pulse's composition (docs/news-agent-benchmark-roadmap.md, N7 status):
+
+- **The input boundary** — firing the news web files the day's
+  engagement report (N0's per-genre book, the anonymous taps, live
+  supply, the mined topic candidates from the same four miners the
+  topic desk's library reads, the consented sample frame, a recorded
+  draw seed) under the `press_boundary` producer and binds the web's
+  unproduced consumed slots to it — fire-time only, so the stored,
+  rehearsed contract stays byte-identical and the P2 signature never
+  moves.
+- **The output boundary** — a succeeded run's `press_post_published`
+  slot lands as a real story: sources stored beside it, contribution
+  lineage resolved live (the N6 dividend keeps paying), the told-topic
+  guard keeping composition twin-free; audit `press.web_published`.
+- **The authority shift** — when the magazine's paved web stands
+  (promoted under the News principal, propagation consented), the
+  edition pulse cedes composition and only delivers: matching,
+  exactly-once receipts, story blocks, and the desks' store-side
+  ticks. Revoking the web's consent hands composition back the same
+  morning — the fallback path never rots.
+
 N7 landed — the web assembled: the magazine company stands
 (docs/news-agent-benchmark-roadmap.md, phase N7 + the P-series):
 

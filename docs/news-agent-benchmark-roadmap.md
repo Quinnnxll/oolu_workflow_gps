@@ -656,6 +656,31 @@ the editorial hold halts, lists, RESUMES on release, and settles on
 denial; replacing one desk re-paves without touching the other five;
 observer and proposal laws.
 
+**N7.1 — the boundary wired (the web run replaces the edition pulse's
+composition).** The web is a dataflow over the day's typed readings;
+store I/O lives at the boundary, and both sides are now real. INPUT:
+`_fire_web` files the day's engagement report — per-genre engagement
+from N0's book, the anonymous taps, live supply, the mined topic
+candidates (the SAME four miners the topic desk's library reads —
+one mining, two consumers, never divergent), the consented sample
+frame, and a recorded draw seed — under the `press_boundary` producer,
+and binds the web's unproduced consumed slots to it at fire time only
+(the stored, rehearsed contract stays byte-identical; the signature
+never moves). OUTPUT: a succeeded run's `press_post_published` slot
+lands as a REAL story — sources stored beside it (the N4 provenance
+law), contribution lineage resolved LIVE so the N6 dividend keeps
+paying, the told-topic guard keeping composition twin-free, audit
+`press.web_published`. THE AUTHORITY SHIFT: when the magazine's paved
+web STANDS (promoted under the News principal, propagation consented),
+`_fire_edition` cedes composition — no inline `Newsroom.run`, no
+inline topic-post composition — and the pulse only DELIVERS (matching,
+exactly-once receipts, blocks, and the desks' store-side ticks);
+revoking the web's consent hands composition back the same morning.
+Named, not faked: rehearsing the desk scripts on a REAL script runner
+needs a staged boundary sample in the severed sandbox — future work;
+today's rehearsal judges the composed web through the standing
+executors. Pinned by the N7.1 cases in `tests/test_news_web.py`.
+
 Goal: with P1–P4 landed, the desks become the paved web.
 
 - Each desk contributed as a node under the News agent's principal,

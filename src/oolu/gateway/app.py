@@ -273,6 +273,11 @@ _PAVER_PRINCIPAL = "oolu-paver"
 _NEWS_PRINCIPAL = "oolu-agent-news"
 _AGENT_WEB_OWNERS = frozenset({_NEWS_PRINCIPAL})
 
+# The boundary producer key (N7.1): the gateway files a web's unproduced
+# consumed slots (the news web's engagement report) under this key at
+# fire time, so the anchor's binding resolves the day's real readings.
+_PRESS_BOUNDARY = "press_boundary"
+
 _NODE_BUILD_RE = re.compile(
     r"^\s*"
     # optional polite / addressing lead-in
@@ -4070,27 +4075,23 @@ class GatewayApp:
             for row in rows
         ]
 
-    def _topic_reading(self, tenant: str):
-        """The topic desk's decision (N2): mine the beat and the shelf
-        for typed events, select against the genre desk's standing
-        demand, record the slate whole. Deterministic end to end — no
-        model call anywhere in the decision. Returns [] on a host
-        without the desk's stores."""
+    def _topic_candidates(self, tenant: str):
+        """The four miners over the beat and the shelf — the typed
+        candidates BOTH the topic desk's library slate and the news
+        web's boundary report read. One mining, two consumers: the
+        readings can never diverge from the web's inputs."""
         from ..press import (
             ClusterPiece,
             mine_clusters,
             mine_measured_gaps,
             mine_price_moves,
             mine_trust_bands,
-            select_topics,
         )
 
         press = self._press
-        if press is None or press.topics is None:
-            return []
         now = self._clock()
         rows = self._beat_rows(tenant)
-        candidates = [
+        return [
             *mine_price_moves(rows, now=now),
             *mine_trust_bands(rows, now=now),
             *mine_measured_gaps(rows, now=now),
@@ -4108,6 +4109,20 @@ class GatewayApp:
                 ]
             ),
         ]
+
+    def _topic_reading(self, tenant: str):
+        """The topic desk's decision (N2): mine the beat and the shelf
+        for typed events, select against the genre desk's standing
+        demand, record the slate whole. Deterministic end to end — no
+        model call anywhere in the decision. Returns [] on a host
+        without the desk's stores."""
+        from ..press import select_topics
+
+        press = self._press
+        if press is None or press.topics is None:
+            return []
+        now = self._clock()
+        candidates = self._topic_candidates(tenant)
         demand_rank = {
             row["genre"]: row["rank"]
             for row in (
@@ -4961,13 +4976,21 @@ class GatewayApp:
                 self._tenant_model(schedule.tenant, purpose="news.compose"),
                 schedule.principal,
             )
-            Newsroom(press.store, press.stories).run(
-                tenant=schedule.tenant, model=model
-            )
-            # The composition desk (N4): closed surveys become posts
-            # BEFORE the edition assembles, so today's post rides
-            # today's edition.
-            self._compose_topic_posts(schedule.tenant, model=model)
+            # N7.1 — the authority shift: when the magazine's paved web
+            # STANDS (promoted under the News principal, propagation
+            # consented), the WEB is the composition authority — its
+            # morning run composes and lands the post through the
+            # boundary — and this pulse only DELIVERS. Without a
+            # standing web the pulse composes inline, exactly as before:
+            # revoking the web's consent hands composition back.
+            if not self._news_web_stands(schedule.tenant):
+                Newsroom(press.store, press.stories).run(
+                    tenant=schedule.tenant, model=model
+                )
+                # The composition desk (N4): closed surveys become posts
+                # BEFORE the edition assembles, so today's post rides
+                # today's edition.
+                self._compose_topic_posts(schedule.tenant, model=model)
             stories = press.stories.list(tenant=schedule.tenant, limit=100)
             # The publication desk (N5): exactly-once per (post,
             # member) — a story already pushed to THIS member never
@@ -15483,6 +15506,18 @@ class GatewayApp:
             return FireResult(web_id, "skipped", reason="web is not paved")
         try:
             contract = NodeContract.model_validate_json(stored["contract_json"])
+            # The boundary, fed (N7.1): the day's readings are filed for
+            # the web's unproduced consumed slots and the children bound
+            # to them — fire-time only; the stored contract never moves.
+            boundary = self._web_boundary_values(tenant, contract)
+            if boundary:
+                contract = self._bind_web_boundary(contract, set(boundary))
+                self._values.snapshot_outputs(
+                    tenant,
+                    boundary,
+                    label=_PRESS_BOUNDARY,
+                    producer=_PRESS_BOUNDARY,
+                )
             compiled, value_pipe, _ = self._prepare_web_run(contract, namespace=tenant)
             # Two sources of a hold: the compiled contract's own reserved
             # (irreversible) actions, and the tenant SOP's ``approval``
@@ -15532,12 +15567,328 @@ class GatewayApp:
             contract.body.nodes if hasattr(contract.body, "nodes") else [contract]
         )
         if record.status is ExecutionStatus.SUCCEEDED:
+            # The boundary, applied (N7.1): a succeeded run's published
+            # post lands in the press stores — best-effort, so a store
+            # refusal never turns a fired web into a failed delivery.
+            try:
+                self._apply_web_publication(tenant, contract)
+            except Exception:  # noqa: BLE001 - the fire itself succeeded
+                logging.getLogger("oolu.gateway").warning(
+                    "web publication apply failed for %s", web_id,
+                    exc_info=True,
+                )
             return FireResult(
                 web_id, "fired", fired=fired, run_id=record.idempotency_key
             )
         return FireResult(
             web_id, "failed", fired=fired, run_id=record.idempotency_key,
             reason=record.error or "the web run failed",
+        )
+
+    # -- the news web's boundary (N7.1) --------------------------------- #
+    # The web is a dataflow over the day's typed readings; store I/O
+    # lives HERE, at the boundary: the fire files the engagement report
+    # the anchor consumes, and a succeeded run's published-post slot
+    # lands back in the press stores as a real story. The desks' library
+    # code keeps the per-member work (delivery, receipts, surveys).
+
+    def _news_web_stands(self, tenant: str) -> bool:
+        """Does the magazine's paved web stand — promoted under the News
+        principal AND propagation-consented? When it does, the WEB is
+        the composition authority and the edition pulse only delivers."""
+        if self._pave_store is None or self._propagation_consent is None:
+            return False
+        try:
+            for web_id in self._pave_store.owner_webs(tenant, _NEWS_PRINCIPAL):
+                if self._propagation_consent.stands(tenant, web_id):
+                    return True
+        except Exception:  # noqa: BLE001 - no web book, no authority shift
+            return False
+        return False
+
+    def _web_boundary_values(self, tenant: str, contract) -> dict:
+        """The values the gateway files for a web's UNPRODUCED consumed
+        slots — today exactly one: the news web's engagement report. A
+        web that consumes nothing known, or a host without the press
+        stores, files nothing and fires exactly as before."""
+        from ..press.desknodes import SLOT_ENGAGEMENT_REPORT
+
+        body = getattr(contract, "body", None)
+        children = getattr(body, "nodes", None) or []
+        consumed = {s.name for c in children for s in c.consumes}
+        produced = {s.name for c in children for s in c.produces}
+        if SLOT_ENGAGEMENT_REPORT not in (consumed - produced):
+            return {}
+        press = self._press
+        if press is None or press.metrics is None or press.stories is None:
+            return {}
+        try:
+            return {
+                SLOT_ENGAGEMENT_REPORT: self._press_engagement_report(tenant)
+            }
+        except Exception:  # noqa: BLE001 - a broken reading files nothing
+            logging.getLogger("oolu.gateway").warning(
+                "engagement report failed for %s", tenant, exc_info=True
+            )
+            return {}
+
+    def _press_engagement_report(self, tenant: str) -> dict:
+        """The day's typed readings bundle — the news web's boundary
+        input: per-genre engagement (N0's book), the anonymous interest
+        taps, live supply, the mined topic candidates (the SAME four
+        miners the topic desk's library reads), the consented sample
+        frame, and a recorded draw seed so the genre desk's sampled
+        reading replays exactly."""
+        from ..press import EDITION_PULSE_GOAL, GENRES
+
+        press = self._press
+        story_genres = {
+            s.story_id: tuple(s.genres)
+            for s in press.stories.list(tenant=tenant, limit=500)
+        }
+        evidence = press.metrics.genre_evidence(
+            tenant=tenant, genres_of=lambda sid: story_genres.get(sid, ())
+        )
+        taps = (
+            press.demand.taps(tenant=tenant)
+            if press.demand is not None
+            else {}
+        )
+        supply: dict[str, int] = {}
+        for record in press.store.list(tenant=tenant, limit=500):
+            for genre in record.genres:
+                supply[genre] = supply.get(genre, 0) + 1
+        genres: dict[str, dict] = {}
+        for genre in sorted(
+            set(GENRES) | set(taps) | set(supply) | set(evidence)
+        ):
+            row = evidence.get(genre)
+            genres[genre] = {
+                "opens": int(row.opens) if row else 0,
+                "completions": int(row.completions) if row else 0,
+                "taps": int(taps.get(genre, 0)),
+                "pieces": int(supply.get(genre, 0)),
+            }
+        try:
+            beat = [
+                {
+                    "topic_key": candidate.key,
+                    "genre": candidate.genre,
+                    "subject": candidate.subject,
+                    "facts": [
+                        {
+                            "kind": fact.kind,
+                            "ref": fact.ref,
+                            "summary": fact.summary,
+                        }
+                        for fact in candidate.facts
+                    ],
+                    "disclosure": candidate.disclosure,
+                }
+                for candidate in self._topic_candidates(tenant)
+            ]
+        except Exception:  # noqa: BLE001 - a beatless morning is honest
+            beat = []
+        frame: list[str] = []
+        for schedule in self._pulse.all_enabled():
+            if (
+                schedule.tenant != tenant
+                or schedule.goal != EDITION_PULSE_GOAL
+            ):
+                continue
+            effective = (
+                self._settings.effective(tenant, schedule.principal)
+                if self._settings is not None
+                else {}
+            )
+            if effective.get("press.personalize") is True:
+                frame.append(schedule.principal)
+        return {
+            "day": self._clock().date().isoformat(),
+            "draw_seed": self._draw_seed(),
+            "genres": genres,
+            "beat": beat,
+            "sample": sorted(frame),
+        }
+
+    @staticmethod
+    def _bind_web_boundary(contract, ports: set[str]):
+        """Bind each child's UNPRODUCED consumed slots in ``ports`` to
+        the gateway's boundary producer — fire-time only, so the stored
+        (rehearsed) contract stays byte-identical and the signature
+        never moves. An already-bound slot is never overwritten."""
+        from ..skills.contract import ActionsBody, ScriptBody, SubgraphBody
+
+        body = contract.body
+        if not isinstance(body, SubgraphBody):
+            return contract
+        produced = {s.name for child in body.nodes for s in child.produces}
+        wired = []
+        changed = False
+        for child in body.nodes:
+            wanted = sorted(
+                s.name
+                for s in child.consumes
+                if s.name in ports and s.name not in produced
+            )
+            if wanted and isinstance(child.body, ScriptBody):
+                bound = dict(child.body.bindings or {})
+                additions = {
+                    name: f"output://{_PRESS_BOUNDARY}/{name}"
+                    for name in wanted
+                    if name not in bound
+                }
+                if additions:
+                    child = child.model_copy(
+                        update={
+                            "body": child.body.model_copy(
+                                update={"bindings": {**bound, **additions}}
+                            )
+                        }
+                    )
+                    changed = True
+            elif (
+                wanted
+                and isinstance(child.body, ActionsBody)
+                and len(child.body.actions) == 1
+                and child.body.actions[0].adapter == "script"
+            ):
+                action = child.body.actions[0]
+                bound = dict(action.parameters.get("bindings") or {})
+                additions = {
+                    name: f"output://{_PRESS_BOUNDARY}/{name}"
+                    for name in wanted
+                    if name not in bound
+                }
+                if additions:
+                    new_action = action.model_copy(
+                        update={
+                            "parameters": {
+                                **action.parameters,
+                                "bindings": {**bound, **additions},
+                            }
+                        }
+                    )
+                    child = child.model_copy(
+                        update={
+                            "body": child.body.model_copy(
+                                update={"actions": [new_action]}
+                            )
+                        }
+                    )
+                    changed = True
+            wired.append(child)
+        if not changed:
+            return contract
+        return contract.model_copy(
+            update={"body": body.model_copy(update={"nodes": wired})}
+        )
+
+    def _apply_web_publication(self, tenant: str, contract) -> None:
+        """The web's effect slot, applied at the boundary: a succeeded
+        run's ``press_post_published`` value becomes a REAL story in the
+        press stores — sources stored beside it (the N4 provenance law),
+        contribution lineage resolved LIVE (the dividend keeps paying),
+        and the told-topic guard keeping composition twin-free. The
+        member editions then deliver it exactly-once, as ever."""
+        from ..press import RUBRIC_VERSION, Story, lineage_from
+        from ..press.desknodes import SLOT_POST_PUBLISHED
+        from ..press.newsroom import MAX_HEADLINE_CHARS
+
+        press = self._press
+        if press is None or press.stories is None or self._values is None:
+            return
+        body = getattr(contract, "body", None)
+        children = getattr(body, "nodes", None) or []
+        producer = next(
+            (
+                child
+                for child in children
+                if any(
+                    slot.name == SLOT_POST_PUBLISHED
+                    for slot in child.produces
+                )
+            ),
+            None,
+        )
+        if producer is None:
+            return
+        try:
+            resolved, _ = self._values.resolve_bindings(
+                {"post": f"output://{producer.id}/{SLOT_POST_PUBLISHED}"},
+                tenant=tenant,
+            )
+        except Exception:  # noqa: BLE001 - nothing published, no effect
+            return
+        payload = resolved.get("post")
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except Exception:  # noqa: BLE001
+                return
+        if not isinstance(payload, dict) or not payload.get("publish"):
+            return
+        headline = str(payload.get("headline") or "").strip()
+        prose = str(payload.get("prose") or "").strip()
+        topic_key = str(payload.get("topic_key") or "")
+        if not headline or not prose:
+            return
+        if topic_key and topic_key in press.stories.told_topic_keys(
+            tenant=tenant
+        ):
+            return  # composition never twins
+        sources = [
+            {
+                "kind": str(row.get("kind") or ""),
+                "ref": str(row.get("ref") or ""),
+                "summary": str(row.get("summary") or ""),
+            }
+            for row in (payload.get("sources") or [])
+            if isinstance(row, dict)
+        ]
+        sources = [
+            row
+            for row in sources
+            if row["kind"] and row["ref"] and row["summary"]
+        ]
+        lineage = lineage_from(
+            {"facts": sources},
+            lambda ref: press.store.get(ref, tenant=tenant),
+        )
+        if not lineage and not sources:
+            return  # the provenance law would refuse — nothing to store
+        story = Story(
+            story_id=uuid4().hex,
+            tenant_id=tenant,
+            headline=headline[:MAX_HEADLINE_CHARS],
+            prose=prose,
+            genres=(str(payload.get("genre") or "local"),),
+            lineage=tuple(lineage),
+            breakdown={
+                "selection": float(payload.get("selection") or 0.5)
+            },
+            rubric_version=RUBRIC_VERSION,
+            source="web",
+            created_at=self._clock(),
+            topic_key=topic_key,
+            disclosure=str(payload.get("disclosure") or ""),
+        )
+        try:
+            press.stories.insert(story, sources=sources)
+        except Exception:  # noqa: BLE001 - a refused post is audited by absence
+            logging.getLogger("oolu.gateway").warning(
+                "web-published post refused for %s", tenant, exc_info=True
+            )
+            return
+        self._durable.audit.append(
+            "press.web_published",
+            {
+                "run_id": "paver:propagation",
+                "tenant": tenant,
+                "story_id": story.story_id,
+                "topic_key": topic_key,
+                "sources": len(sources),
+            },
         )
 
     def _sop_reserved_names(self, tenant: str, contract) -> list[str]:
