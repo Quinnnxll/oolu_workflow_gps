@@ -76,7 +76,8 @@ def test_a_seeded_reading_replays_exactly_and_explains_itself():
         assert set(item.factors) == {"engagement", "interest", "supply"}
         assert isinstance(item.factors["engagement"], float)
         assert set(item.evidence) == {
-            "readers", "opens", "completions", "likes", "taps", "pieces",
+            "readers", "opens", "completions", "likes", "pushed",
+            "taps", "pieces",
         }
     # Below the reader floor the rank rests on a draw — and says so.
     by_genre = {d.genre: d for d in first}

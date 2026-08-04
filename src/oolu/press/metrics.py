@@ -25,7 +25,7 @@ the durable substrate for all three, under the reporter's fourth law:
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Callable
+from typing import Callable, Sequence
 
 # Below this many distinct readers, no aggregate renders. A working
 # default, deliberately the poll floor's old K.
@@ -49,10 +49,23 @@ _LIKES_SCHEMA = """CREATE TABLE IF NOT EXISTS press_story_likes (
     PRIMARY KEY (tenant_id, story_id, principal)
 )"""
 
+# The delivery receipts (N5): which post was PUSHED to which member —
+# exactly-once by key, the benchmark's denominator (pushed → opened →
+# finished → liked is the whole engagement report).
+_DELIVERIES_SCHEMA = """CREATE TABLE IF NOT EXISTS press_deliveries (
+    tenant_id TEXT NOT NULL,
+    story_id TEXT NOT NULL,
+    principal TEXT NOT NULL,
+    at TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, story_id, principal)
+)"""
+
 
 class StoryMetricsStore:
-    """Read receipts and likes, per story — durable, tenant-scoped,
-    consent-gated at the doors, erasable per member."""
+    """Delivery receipts, read receipts, and likes, per story — the
+    whole engagement report in one durable, tenant-scoped store;
+    reader rows consent-gated at the doors, everything erasable per
+    member."""
 
     def __init__(self, conn, *, clock: Callable[[], datetime] | None = None) -> None:
         self._conn = conn
@@ -60,6 +73,44 @@ class StoryMetricsStore:
         with self._conn.transaction() as db:
             db.execute(_RECEIPTS_SCHEMA)
             db.execute(_LIKES_SCHEMA)
+            db.execute(_DELIVERIES_SCHEMA)
+
+    # -- delivery (the desk's own act — no consent needed to COUNT it) -- #
+    def record_pushed(
+        self, *, tenant: str, story_ids: Sequence[str], principal: str
+    ) -> None:
+        """Exactly-once per (post, member): a re-push is a no-op, so a
+        member's morning never repeats a story they were already
+        handed."""
+        stamp = self._clock().isoformat()
+        with self._conn.transaction() as db:
+            for story_id in story_ids:
+                db.execute(
+                    """INSERT INTO press_deliveries
+                         (tenant_id, story_id, principal, at)
+                       VALUES (?, ?, ?, ?)
+                       ON CONFLICT (tenant_id, story_id, principal)
+                       DO NOTHING""",
+                    (tenant, story_id, principal, stamp),
+                )
+
+    def pushed_ids(self, *, tenant: str, principal: str) -> set[str]:
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                """SELECT story_id FROM press_deliveries
+                   WHERE tenant_id = ? AND principal = ?""",
+                (tenant, principal),
+            ).fetchall()
+        return {str(row["story_id"]) for row in rows}
+
+    def pushed_count(self, *, tenant: str, story_id: str) -> int:
+        with self._conn.lock:
+            row = self._conn.db.execute(
+                """SELECT COUNT(*) AS n FROM press_deliveries
+                   WHERE tenant_id = ? AND story_id = ?""",
+                (tenant, story_id),
+            ).fetchone()
+        return int(row["n"])
 
     # -- writing (the caller has already checked consent) --------------- #
     def read_receipt(
@@ -129,15 +180,20 @@ class StoryMetricsStore:
                 (tenant, story_id),
             ).fetchone()
         opens = int(row["opens"])
+        # The pushed count is the desk's own act — it rides both shapes
+        # (the engagement report's denominator reveals no reader).
+        pushed = self.pushed_count(tenant=tenant, story_id=story_id)
         if opens < int(k_floor):
             return {
                 "story_id": story_id,
                 "revealed": False,
                 "reason": "not enough readers yet",
+                "pushed": pushed,
             }
         return {
             "story_id": story_id,
             "revealed": True,
+            "pushed": pushed,
             "opens": opens,
             "likes": int(likes["n"]),
             "mean_attention_ms": int(round(float(row["mean_dwell"]))),
@@ -168,6 +224,11 @@ class StoryMetricsStore:
                     WHERE tenant_id = ?""",
                 (tenant,),
             ).fetchall()
+            deliveries = self._conn.db.execute(
+                """SELECT story_id FROM press_deliveries
+                    WHERE tenant_id = ?""",
+                (tenant,),
+            ).fetchall()
         readers: dict[str, set[str]] = {}
         tally: dict[str, dict[str, int]] = {}
         for row in receipts:
@@ -187,6 +248,13 @@ class StoryMetricsStore:
                     {"opens": 0, "completions": 0, "dwell_ms": 0, "likes": 0},
                 )
                 book["likes"] += 1
+        for row in deliveries:
+            for genre in genres_of(str(row["story_id"])):
+                book = tally.setdefault(
+                    genre,
+                    {"opens": 0, "completions": 0, "dwell_ms": 0, "likes": 0},
+                )
+                book["pushed"] = book.get("pushed", 0) + 1
         return {
             genre: GenreEvidence(
                 readers=len(readers.get(genre, ())),
@@ -194,6 +262,7 @@ class StoryMetricsStore:
                 completions=book["completions"],
                 dwell_ms=book["dwell_ms"],
                 likes=book["likes"],
+                pushed=book.get("pushed", 0),
             )
             for genre, book in tally.items()
         }
@@ -204,7 +273,11 @@ class StoryMetricsStore:
         honestly shrink."""
         erased = 0
         with self._conn.transaction() as db:
-            for table in ("press_read_receipts", "press_story_likes"):
+            for table in (
+                "press_read_receipts",
+                "press_story_likes",
+                "press_deliveries",
+            ):
                 cursor = db.execute(
                     f"DELETE FROM {table}"
                     " WHERE tenant_id = ? AND principal = ?",

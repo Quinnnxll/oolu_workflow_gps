@@ -4236,7 +4236,13 @@ class GatewayApp:
                 prose=parts["prose"],
                 genres=(genre,),
                 lineage=tuple(parts["lineage"]),
-                breakdown=dict(survey.brief.get("factors") or {}),
+                # The brief's factors, plus its slate score AS the
+                # selection — so a topic post ranks and matches in the
+                # edition machinery like any story, never at zero.
+                breakdown={
+                    **dict(survey.brief.get("factors") or {}),
+                    "selection": float(survey.brief.get("score") or 0.0),
+                },
                 rubric_version=0,  # a topic post: the brief, not the rubric
                 source=parts["source"],
                 created_at=press.stories.now(),
@@ -4620,7 +4626,7 @@ class GatewayApp:
         into the serving request."""
         from types import SimpleNamespace
 
-        from ..press import Newsroom, edition_message, rank_edition
+        from ..press import Newsroom, edition_message, match_edition
 
         press = self._press
         if press is None or press.stories is None:
@@ -4641,6 +4647,16 @@ class GatewayApp:
             # today's edition.
             self._compose_topic_posts(schedule.tenant, model=model)
             stories = press.stories.list(tenant=schedule.tenant, limit=100)
+            # The publication desk (N5): exactly-once per (post,
+            # member) — a story already pushed to THIS member never
+            # repeats in their morning.
+            if press.metrics is not None:
+                pushed = press.metrics.pushed_ids(
+                    tenant=schedule.tenant, principal=schedule.principal
+                )
+                stories = [
+                    s for s in stories if s.story_id not in pushed
+                ]
             affinity = None
             taste = None
             if (
@@ -4651,10 +4667,20 @@ class GatewayApp:
                     tenant=schedule.tenant, principal=schedule.principal
                 )
                 taste = self._member_taste(session, press)
-            edition = rank_edition(
+            # The matcher: a consented member gets the posts whose bent
+            # score clears THEIR bar (plus the serendipity slot); a
+            # member without signals keeps the neutral digest they
+            # subscribed to.
+            edition = match_edition(
                 stories, affinity=affinity or None, taste=taste
             )
             message = edition_message(edition, skipped=skipped)
+            if press.metrics is not None and edition:
+                press.metrics.record_pushed(
+                    tenant=schedule.tenant,
+                    story_ids=[s.story_id for s in edition],
+                    principal=schedule.principal,
+                )
             if self._assistant_history is not None:
                 # The words stay for old clients; the STORY BLOCK rides
                 # beside them (N0) — previews the thread renders as an

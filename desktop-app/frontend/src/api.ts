@@ -717,6 +717,9 @@ export interface StoryMetrics {
   story_id: string;
   revealed: boolean;
   reason?: string;
+  // The report's denominator (N5): how many members this post was
+  // pushed to — the desk's own act, so it rides both shapes.
+  pushed?: number;
   opens?: number;
   likes?: number;
   mean_attention_ms?: number;

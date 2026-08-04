@@ -50,8 +50,10 @@ from .editions import (
     EDITION_LABEL,
     EDITION_PULSE_GOAL,
     EDITION_SIZE,
+    MATCH_FLOOR,
     PreferenceStore,
     edition_message,
+    match_edition,
     rank_edition,
 )
 from .intake import (
@@ -124,6 +126,7 @@ __all__ = [
     "LICENSES",
     "MAX_BODY_CHARS",
     "MAX_MEDIA",
+    "MATCH_FLOOR",
     "MAX_TITLE_CHARS",
     "METRICS_K_FLOOR",
     "RUBRIC_VERSION",
@@ -176,6 +179,7 @@ __all__ = [
     "leak_report",
     "lineage_from",
     "looks_like_material",
+    "match_edition",
     "mine_clusters",
     "mine_measured_gaps",
     "mine_price_moves",

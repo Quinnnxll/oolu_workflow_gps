@@ -511,6 +511,25 @@ disclosure flag survives from topic brief to rendered post.
 
 ### N5 — the publication desk (push to the readers it fits)
 
+**Status: LANDED** — `press/editions.py` grows `match_edition`
+(`MATCH_FLOOR`): a consented member's morning holds the posts whose
+BENT score (the rubric selection bent by their affinity and taste)
+clears the bar — not a fixed digest — with the serendipity slot
+surviving the threshold (the best story outside the leaning may take
+the last slot even below the bar; tastes never fully close). A member
+without consented signals keeps the neutral digest they subscribed to.
+Delivery receipts land in the benchmark store (`press_deliveries` on
+`StoryMetricsStore`): exactly-once per (post, member) by key, so a
+morning never repeats a story and a morning with nothing new says so
+honestly (no block, the plain words). The engagement report IS the
+benchmark aggregate — one store, pushed → opened → finished → liked —
+with `pushed` riding both aggregate shapes and per-genre evidence
+(`GenreEvidence.pushed`), read by the genre desk next cycle.
+Deliveries ride account erasure. Also fixed here: a topic post's
+breakdown gains `selection` (its slate score), so N4 posts rank and
+match like any story instead of at zero. Pinned by
+`tests/test_publication.py`.
+
 Goal: the post reaches matched readers in conversation, as the N0
 block, and the loop closes.
 

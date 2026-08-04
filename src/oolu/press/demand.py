@@ -62,6 +62,7 @@ class GenreEvidence:
     completions: int = 0
     dwell_ms: int = 0  # summed over receipts
     likes: int = 0
+    pushed: int = 0  # deliveries (N5) — the report's denominator
 
 
 @dataclass(frozen=True)
@@ -112,6 +113,7 @@ def rank_demand(
             "opens": ev.opens,
             "completions": ev.completions,
             "likes": ev.likes,
+            "pushed": ev.pushed,
             "taps": int(taps.get(genre, 0)),
             "pieces": int(supply.get(genre, 0)),
         }

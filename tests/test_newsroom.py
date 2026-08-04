@@ -824,6 +824,7 @@ def test_reading_is_measured_only_under_consent_and_reveals_over_the_floor(
         "story_id": other["story_id"],
         "revealed": False,
         "reason": "not enough readers yet",
+        "pushed": 0,
     }
 
     # At the floor: the three benchmark numbers, exactly.

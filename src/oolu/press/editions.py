@@ -199,6 +199,45 @@ def _story_text(story: Story) -> str:
     return f"{story.headline}\n{story.prose}"
 
 
+def _bent_score(
+    story: Story,
+    affinity: dict[str, float] | None,
+    taste: Taste | None,
+) -> float:
+    """The member's score for one story: the neutral rubric selection
+    bent (bounded) by consented genre affinity and semantic taste."""
+    bend = 1.0
+    if affinity:
+        bend += AFFINITY_PULL * _affinity_of(story, affinity)
+    if taste:
+        bend += SEMANTIC_PULL * semantic_affinity(_story_text(story), taste)
+    return float(story.breakdown.get("selection", 0.0)) * bend
+
+
+def _with_serendipity(
+    edition: list[Story],
+    neutral: list[Story],
+    affinity: dict[str, float] | None,
+    taste: Taste | None,
+) -> list[Story]:
+    """The slice: the member's leaning must not be the whole edition. A
+    story leans in when it wears a positively-weighted genre or the
+    member's taste is drawn to its words. If every chosen story leans
+    in, the best story OUTSIDE the leaning takes the last slot."""
+    leaning_genres = {g for g, v in (affinity or {}).items() if v > 0}
+
+    def _leans_in(story: Story) -> bool:
+        if leaning_genres and set(story.genres) & leaning_genres:
+            return True
+        return bool(taste) and semantic_affinity(_story_text(story), taste) > 0
+
+    if edition:
+        outside = [s for s in neutral if not _leans_in(s)]
+        if outside and all(_leans_in(s) for s in edition):
+            return [*edition[:-1], outside[0]]
+    return edition
+
+
 def rank_edition(
     stories: list[Story],
     *,
@@ -213,43 +252,55 @@ def rank_edition(
     neutral = sorted(stories, key=_neutral_key, reverse=True)
     if not affinity and not taste:
         return neutral[: int(size)]
-
-    def _bend(story: Story) -> float:
-        bend = 1.0
-        if affinity:
-            bend += AFFINITY_PULL * _affinity_of(story, affinity)
-        if taste:
-            bend += SEMANTIC_PULL * semantic_affinity(
-                _story_text(story), taste
-            )
-        return bend
-
     ranked = sorted(
         stories,
         key=lambda s: (
-            float(s.breakdown.get("selection", 0.0)) * _bend(s),
+            _bent_score(s, affinity, taste),
             s.created_at.isoformat(),
         ),
         reverse=True,
     )
-    edition = ranked[: int(size)]
+    return _with_serendipity(
+        ranked[: int(size)], neutral, affinity, taste
+    )
 
-    # The slice: the member's leaning must not be the whole edition. A
-    # story leans in when it wears a positively-weighted genre or the
-    # member's taste is drawn to its words. If every chosen story leans
-    # in, the best story OUTSIDE the leaning takes the last slot.
-    leaning_genres = {g for g, v in (affinity or {}).items() if v > 0}
 
-    def _leans_in(story: Story) -> bool:
-        if leaning_genres and set(story.genres) & leaning_genres:
-            return True
-        return bool(taste) and semantic_affinity(_story_text(story), taste) > 0
+# The publication bar (N5): a bent score must clear this floor before a
+# post interrupts a matched member's morning. Working default — the
+# benchmark's own numbers tune it.
+MATCH_FLOOR = 0.3
 
-    if edition:
-        outside = [s for s in neutral if not _leans_in(s)]
-        if outside and all(_leans_in(s) for s in edition):
-            edition = [*edition[:-1], outside[0]]
-    return edition
+
+def match_edition(
+    stories: list[Story],
+    *,
+    affinity: dict[str, float] | None = None,
+    taste: Taste | None = None,
+    size: int = EDITION_SIZE,
+    floor: float = MATCH_FLOOR,
+) -> list[Story]:
+    """The publication desk's matcher (N5): not a fixed digest — THIS
+    post lands with THIS member only when its bent score clears the
+    floor. A member without consented signals keeps the neutral digest
+    they subscribed to (there is nothing to match on, and the door says
+    which). The serendipity slot survives the threshold: the best story
+    outside the member's leaning may take the last slot even below the
+    bar — tastes never fully close."""
+    if not affinity and not taste:
+        return rank_edition(stories, size=size)
+    neutral = sorted(stories, key=_neutral_key, reverse=True)
+    ranked = sorted(
+        stories,
+        key=lambda s: (
+            _bent_score(s, affinity, taste),
+            s.created_at.isoformat(),
+        ),
+        reverse=True,
+    )
+    cleared = [
+        s for s in ranked if _bent_score(s, affinity, taste) >= floor
+    ][: int(size)]
+    return _with_serendipity(cleared, neutral, affinity, taste)
 
 
 def edition_message(edition: list[Story], *, skipped: int = 0) -> str:

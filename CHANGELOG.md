@@ -4,6 +4,29 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+N5 landed — the publication desk
+(docs/news-agent-benchmark-roadmap.md, phase N5):
+
+- **Push to the readers it fits** — `match_edition` (`MATCH_FLOOR`): a
+  consented member's morning holds the posts whose bent score clears
+  THEIR bar, not a fixed digest; the serendipity slot survives the
+  threshold (the best story outside the leaning may take the last slot
+  even below the bar — tastes never fully close); a member without
+  consented signals keeps the neutral digest they subscribed to.
+- **Exactly-once delivery** — receipts land in the benchmark store
+  (`press_deliveries`), one per (post, member) by key: a morning never
+  repeats a story already handed to that member, and a morning with
+  nothing new says so honestly (plain words, no block).
+- **The engagement report IS the benchmark aggregate** — one store,
+  pushed → opened → finished → liked: `pushed` rides both aggregate
+  shapes on the metrics door and the per-genre evidence
+  (`GenreEvidence.pushed`) the genre desk reads next cycle; deliveries
+  ride account erasure like every per-member row.
+- **A ranking defect fixed on the way** — a topic post's breakdown now
+  carries `selection` (its slate score), so N4 posts rank and match in
+  the edition machinery like any story instead of scoring zero
+  forever.
+
 N4 landed — the composition desk
 (docs/news-agent-benchmark-roadmap.md, phase N4):
 
