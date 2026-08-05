@@ -2977,3 +2977,27 @@ button.ghost {
   opacity: 0.75;
   border-style: dashed;
 }
+
+/* The secret ask (V2): masked entry inside the bubble — the key goes to
+   its one dedicated door, never into chat text. */
+.secret-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid var(--line, #d0d4da);
+  border-radius: 10px;
+}
+.secret-form .secret-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.92em;
+}
+.secret-form button {
+  align-self: flex-start;
+}
+.secret-form.settled {
+  opacity: 0.85;
+}

@@ -292,6 +292,7 @@ class SubprocessBackend(_TwoPhaseBackend):
         python_executable: str = sys.executable,
         default_index_url: str | None = None,
         web_fetch: GuardedFetch | None = None,
+        web_secrets=None,  # V2: the broker's credential resolver (resolve(ref))
         materialized_dir=None,  # runtime.bundle.MaterializedBundleDir | None
     ):
         self._python = python_executable
@@ -301,6 +302,7 @@ class SubprocessBackend(_TwoPhaseBackend):
         # = no web hand on this host; a granted run still gets the honest
         # refusal from the shim instead of a hang.
         self._web_fetch = web_fetch
+        self._web_secrets = web_secrets
         # The mounted tier: when set, a bundle is materialized to a
         # read-only dir once and STAGED BY SYMLINK into the workspace,
         # skipping the per-run tar extraction. None -> unpack the tar
@@ -421,7 +423,9 @@ class SubprocessBackend(_TwoPhaseBackend):
         logger.info(
             "subprocess Phase B execute (timeout=%.0fs)", request.limits.wall_timeout_s
         )
-        with serve_web(exchange, request.web, self._web_fetch) as serving:
+        with serve_web(
+            exchange, request.web, self._web_fetch, self._web_secrets
+        ) as serving:
             raw = _run_command(
                 [self._python, "user_script.py"],
                 cwd=str(ws),
@@ -469,6 +473,7 @@ class LocalDockerBackend(_TwoPhaseBackend):
         default_index_url: str | None = None,
         run_as_user: str | None = None,
         web_fetch: GuardedFetch | None = None,
+        web_secrets=None,  # V2: the broker's credential resolver (resolve(ref))
         materialized_dir=None,  # runtime.bundle.MaterializedBundleDir | None
     ):
         try:
@@ -491,6 +496,7 @@ class LocalDockerBackend(_TwoPhaseBackend):
         # container itself NEVER gets a network; a web grant only mounts
         # the file exchange this hand serves.
         self._web_fetch = web_fetch
+        self._web_secrets = web_secrets
         # The mounted tier: when set, a bundle is materialized to a host
         # directory once and bind-mounted READ-ONLY into the container,
         # then symlinked into /sandbox — no per-run tar extraction, and the
@@ -783,7 +789,9 @@ class LocalDockerBackend(_TwoPhaseBackend):
         cmd = ["python", _CONTAINER_ENTRYPOINT, "/sandbox/user_script.py"]
         # The web hand serves the HOST side of the exchange while the
         # container runs — network stays severed; files are the only door.
-        with serve_web(exchange, request.web, self._web_fetch) as serving:
+        with serve_web(
+            exchange, request.web, self._web_fetch, self._web_secrets
+        ) as serving:
             raw = self._exec(ws.container, cmd, env, request.limits.wall_timeout_s)
         if serving.calls:
             logger.info(

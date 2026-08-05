@@ -273,8 +273,9 @@ def test_a_built_node_carries_plain_labels_to_the_library(tmp_path):
             '"example": "~/Invoices"}, {"name": "report_name", '
             '"type": "str"}], '
             '"outputs": [{"name": "result", "type": "str"}]}\n'
-            "```python\nfrom _oolu_runtime import emit_result\n"
-            "emit_result(''.join(['o', 'k']))\n```"
+            "```python\nimport json\nfrom _oolu_runtime import emit_result\n"
+            "b = json.load(open('bindings.json'))\n"
+            "emit_result(b['source_folder'] + b['report_name'])\n```"
         )
         app._node_function_author = lambda tenant: labeled
         response = _chat(app, ident, "build me a node that " + GOAL)

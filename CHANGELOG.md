@@ -4,6 +4,50 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+V2 landed — birth without lies
+(docs/node-vitality-plan.md, phase V2): a node that publishes is a
+node whose contract, code, and run were proven to agree — and a build
+that needs a key asks for it cleanly instead of failing.
+
+- **The agreement wall, deterministic.** The static wall gained the
+  forward direction: a declared input the script never reads refuses
+  at the door in exact words ("the interface promises `source_file`;
+  the function never reads it") — the reported repro's exact hole.
+  Birth verify now STAGES a typed sample bindings.json for every
+  declared slot (examples win; path slots stage a real sample file),
+  holds the declared outputs against the emitted payload on every
+  path (the agentic finish gate included — `already_verified` finally
+  means checked), and an honest error against those staged samples is
+  a FAILED birth, not a pass. The one honest error that still passes
+  is the web-grant gap, because nothing leaves the box at birth — and
+  the receipt now says so, along with any repair rounds: a patched
+  birth stops reading like a clean one. The reviewer stays advisory
+  above the wall — judgment above law, never instead of it.
+- **The secret ask.** A new `secret_form` chat block (masked entry, in
+  the main chat and the node window alike) posts to one dedicated
+  door — never chat text, never echoed. Values seal into the durable
+  vault: encrypted at rest under the install's machine key with the
+  keyring's stdlib encrypt-then-MAC, so the key appears nowhere
+  greppable and a wrong key fails closed. The author declares keyed
+  APIs (the finish_node `secrets` field or the prose `SECRETS:` line);
+  a declaring build PAUSES with the form — the judged build waits
+  durably, nothing publishes — and the door completes the publish,
+  binds the credential beside the node's host grants (rotation
+  revokes the old ref), and grants the host itself: providing the key
+  IS the consent to reach what it opens.
+- **Injection at the broker seam.** The run's actions carry credential
+  REFS (`_egress_auth`), never values; the web broker resolves them
+  host-side and mints the auth header for granted hosts only — the
+  script's own header never wins, and the secret never enters the
+  sandbox, the durable state, or a log. The node's first run
+  authenticates.
+
+Pinned by tests/test_birth_wall.py and tests/test_secret_ask.py
+(including a raw-database-bytes grep for the key) and the
+SecretFormBlock case in Chat.test.tsx. Four test fixtures that
+declared inputs their scripts never read — the exact lie the wall now
+refuses — were corrected to consume their contracts.
+
 V1 landed — work survives the window
 (docs/node-vitality-plan.md, phase V1): leaving, closing, or crashing
 the client never stops accepted work.

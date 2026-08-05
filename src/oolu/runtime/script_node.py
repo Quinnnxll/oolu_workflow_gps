@@ -43,7 +43,13 @@ from ..cache.store import ScriptCache
 from ..models import ErrorClass, ExecutionResult, Phase
 from ..nodeplace.screening import screen_script
 from ..skills.models import ActionEvent, ExecutionOutcome, ExecutionStatus
-from .backend import ExecutionBackend, ExecutionRequest, ResourceLimits, WebGrant
+from .backend import (
+    ExecutionBackend,
+    ExecutionRequest,
+    ResourceLimits,
+    WebAuth,
+    WebGrant,
+)
 from .dependency import classify
 
 logger = logging.getLogger(__name__)
@@ -191,7 +197,11 @@ def _web_grant(action: ActionEvent) -> WebGrant | None:
     way the http hand reads it: ``_egress_open`` beats the allow-grant;
     a present-but-empty ``_egress_hosts`` fails closed (the broker then
     answers every call with the words to fix it); no stamp at all means
-    no web hand — the exchange is never even mounted."""
+    no web hand — the exchange is never even mounted. ``_egress_auth``
+    (V2) rides beside either regime: credential REFS the broker resolves
+    host-side — never values, so nothing secret enters the action, the
+    durable state, or the sandbox."""
+    auth = _web_auth(action)
     if action.parameters.get("_egress_open"):
         raw = action.parameters.get("_egress_blocked") or []
         return WebGrant(
@@ -199,13 +209,38 @@ def _web_grant(action: ActionEvent) -> WebGrant | None:
             blocked_hosts=tuple(
                 str(h).strip().lower() for h in raw if str(h).strip()
             ),
+            auth=auth,
         )
     if "_egress_hosts" in action.parameters:
         raw = action.parameters.get("_egress_hosts") or []
         return WebGrant(
-            hosts=tuple(str(h).strip().lower() for h in raw if str(h).strip())
+            hosts=tuple(str(h).strip().lower() for h in raw if str(h).strip()),
+            auth=auth,
         )
     return None
+
+
+def _web_auth(action: ActionEvent) -> tuple[WebAuth, ...]:
+    raw = action.parameters.get("_egress_auth")
+    if not isinstance(raw, list):
+        return ()
+    out: list[WebAuth] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        host = str(item.get("host") or "").strip().lower()
+        ref = str(item.get("ref") or "").strip()
+        if not host or not ref:
+            continue
+        out.append(
+            WebAuth(
+                host=host,
+                ref=ref,
+                header=str(item.get("header") or "Authorization"),
+                scheme=str(item.get("scheme", "Bearer")),
+            )
+        )
+    return tuple(out)
 
 
 def _staged_files(action: ActionEvent) -> dict[str, str]:
@@ -729,9 +764,11 @@ class NodeScriptRunner:
         ran clean (and, when ``ports`` are declared, the payload carries
         them — a run that skips its declared ports is a mocked answer).
         ``honest_error``: the contract WORKED and the function reported
-        a structured failure (emit_error) — at birth, with no real
-        bindings staged, that is an honest function naming its missing
-        data, not a broken one; the caller decides what it is worth."""
+        a structured failure (emit_error). What that is worth belongs
+        to the caller: the V2 birth gate stages typed sample bindings
+        through ``files`` and treats an honest error against them as a
+        failed birth (the function proved it cannot consume real
+        bindings), sparing only the web-grant gap birth cannot stage."""
         from .contract import ContractStatus, parse_stdout
 
         deps: list[str] = []

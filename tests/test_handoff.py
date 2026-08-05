@@ -36,15 +36,16 @@ ANSWER_A = (
     "```python\nfrom _oolu_runtime import emit_result\n"
     "import glob\nemit_result(str(len(glob.glob('*.csv'))))\n```"
 )
-# The consumer declares the SAME slot as an input, plainly labeled.
+# The consumer declares the SAME slot as an input, plainly labeled —
+# and READS it by name (the V2 forward wall holds promised = consumed).
 ANSWER_B = (
     "1. Normalize the rows.\n"
     'IO: {"inputs": [{"name": "invoice_csv", "type": "str", '
     '"label": "Which file holds the invoices?"}], '
     '"outputs": [{"name": "result", "type": "str"}]}\n'
     "```python\nfrom _oolu_runtime import emit_result\n"
-    "import json\nrows = json.load(open('bindings.json'))\n"
-    "emit_result(str(len(rows)))\n```"
+    "import json\ncsv = json.load(open('bindings.json'))['invoice_csv']\n"
+    "emit_result(str(len(csv)))\n```"
 )
 
 

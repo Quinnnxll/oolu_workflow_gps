@@ -48,7 +48,7 @@ from .tools import (
     run_tool_loop,
     validate_arguments,
 )
-from .vault import CredentialRef, SecretVault
+from .vault import CredentialRef, DurableSecretVault, SecretVault
 
 # NB: ``HttpxTransport`` lives in ``providers.transport`` and is intentionally not
 # re-exported here — it requires the optional ``http`` extra (httpx), and importing
@@ -62,6 +62,7 @@ __all__ = [
     "Budget",
     "BudgetExceeded",
     "CredentialRef",
+    "DurableSecretVault",
     "GoogleOAuthAdapter",
     "GoogleOAuthConfig",
     "HttpTransport",

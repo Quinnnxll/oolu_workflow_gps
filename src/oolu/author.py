@@ -68,6 +68,24 @@ _IO_ITEM_SCHEMA: dict[str, Any] = {
 
 _DEFAULT_OUTPUTS = [{"name": "result", "type": "str"}]
 
+# One entry of a finish_node SECRETS declaration (V2): a keyed API the
+# function targets. The script never holds the key — the host's broker
+# injects the header for the named host; declaring it is what lets the
+# build ask the human for the value with a form instead of publishing a
+# node whose first run can only fail.
+_SECRET_ITEM_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "label": {"type": "string"},
+        "host": {"type": "string", "minLength": 1},
+        "header": {"type": "string"},
+        "scheme": {"type": "string"},
+    },
+    "required": ["name", "host"],
+    "additionalProperties": False,
+}
+
 # What a text-only turn (no hands used, no script recoverable) is told —
 # once per turn, so a chatty model is steered back, not abandoned.
 _NUDGE = (
@@ -198,13 +216,17 @@ class NodeAuthorAgent:
 
             script = extract_script(text)
             if script:
-                from .chat import parse_node_io
+                from .chat import parse_node_io, parse_node_secrets
 
-                problem = self._script_problem(script)
+                io = parse_node_io(text)
+                secrets = parse_node_secrets(text)
+                if secrets:
+                    io["secrets"] = secrets
+                problem = self._script_problem(script, io)
                 if problem is None:
                     return AuthoredFunction(
                         script,
-                        io=parse_node_io(text),
+                        io=io,
                         transcript=tuple(transcript),
                         consultations=consultations,
                     )
@@ -236,6 +258,10 @@ class NodeAuthorAgent:
                         "script": {"type": "string", "minLength": 1},
                         "inputs": {"type": "array", "items": _IO_ITEM_SCHEMA},
                         "outputs": {"type": "array", "items": _IO_ITEM_SCHEMA},
+                        "secrets": {
+                            "type": "array",
+                            "items": _SECRET_ITEM_SCHEMA,
+                        },
                     },
                     "required": ["script"],
                     "additionalProperties": False,
@@ -336,18 +362,29 @@ class NodeAuthorAgent:
 
     def _finish(self, arguments: dict, outcome: dict[str, Any]) -> str:
         script = arguments["script"]
-        problem = self._script_problem(script)
-        if problem is not None:
-            # A str return still SUCCEEDS as a tool result; the refusal
-            # must be an error the model corrects, so raise — the router
-            # answers it as a failed result, and the loop continues.
-            raise ValueError(problem)
+        # The io stands BEFORE the judgment (V2): the finish gate
+        # verifies the exact script against the exact declared contract
+        # — outputs held against the emitted payload, inputs staged as
+        # typed samples — never a portless dry run.
         io = {
             "inputs": list(arguments.get("inputs") or []),
             "outputs": list(arguments.get("outputs") or _DEFAULT_OUTPUTS),
         }
         for item in io["inputs"] + io["outputs"]:
             item.setdefault("type", "str")
+        secrets = [
+            s
+            for s in (arguments.get("secrets") or [])
+            if isinstance(s, dict) and s.get("host")
+        ]
+        if secrets:
+            io["secrets"] = secrets
+        problem = self._script_problem(script, io)
+        if problem is not None:
+            # A str return still SUCCEEDS as a tool result; the refusal
+            # must be an error the model corrects, so raise — the router
+            # answers it as a failed result, and the loop continues.
+            raise ValueError(problem)
         outcome["finished"] = {"script": script, "io": io}
         return "recorded — the node function is finished"
 
@@ -357,7 +394,7 @@ class NodeAuthorAgent:
         )
         return "recorded — nothing will be built"
 
-    def _script_problem(self, script: str) -> str | None:
+    def _script_problem(self, script: str, io: dict | None = None) -> str | None:
         from .nodeplace.screening import mock_smells
 
         smells = mock_smells(script)
@@ -370,7 +407,13 @@ class NodeAuthorAgent:
                 "with its final answer"
             )
         if self._verify is not None:
-            report = self._verify(script)
+            # An io-aware hand (the gateway's, V2) judges the script
+            # against its declared contract; a one-argument hand (test
+            # doubles, custom seams) keeps its exact old shape.
+            try:
+                report = self._verify(script, io)
+            except TypeError:
+                report = self._verify(script)
             if not report.get("ok", False):
                 detail = report.get("error") or json.dumps(
                     report, ensure_ascii=False, default=str

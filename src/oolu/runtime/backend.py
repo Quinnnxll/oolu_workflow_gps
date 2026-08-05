@@ -52,6 +52,20 @@ class BackendUnavailable(BackendError):
 # --------------------------------------------------------------------------- #
 # Request specs — what the graph asks a backend to run.                        #
 # --------------------------------------------------------------------------- #
+class WebAuth(BaseModel):
+    """One host's credential BINDING riding into the run — a ref, never
+    a secret (V2). The broker resolves the ref host-side and mints the
+    header at call time, so the value itself never enters the sandbox,
+    the durable run state, or a log."""
+
+    model_config = ConfigDict(frozen=True)
+
+    host: str
+    ref: str
+    header: str = "Authorization"
+    scheme: str = "Bearer"
+
+
 class WebGrant(BaseModel):
     """The node's consented web, carried INTO the run — never a network.
 
@@ -69,7 +83,9 @@ class WebGrant(BaseModel):
         org's own refusals), and ``hosts`` is ignored.
 
     ``max_calls`` bounds one run's appetite so a looping script cannot
-    turn a grant into a flood.
+    turn a grant into a flood. ``auth`` (V2) carries the node's
+    credential refs — the broker injects each host's header host-side
+    for granted hosts only.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -78,6 +94,7 @@ class WebGrant(BaseModel):
     open_web: bool = False
     blocked_hosts: tuple[str, ...] = ()
     max_calls: int = Field(default=32, gt=0)
+    auth: tuple[WebAuth, ...] = ()
 
 
 class ResourceLimits(BaseModel):

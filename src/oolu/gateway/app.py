@@ -1117,6 +1117,14 @@ class GatewayApp:
         # chat lane files a row at enqueue; the worker (or a fresh boot)
         # lands the report turn there exactly once at terminal/incident.
         self._run_reports = RunReportStore(durable.conn)
+        # V2: the secret ask — builds paused on their key, and the
+        # bindings that tell the broker which vault ref opens which
+        # granted host. Values live only in the vault.
+        from ..nodeplace.credentials import NodeCredentialStore
+        from ..pendingbuilds import PendingBuildStore
+
+        self._pending_builds = PendingBuildStore(durable.conn)
+        self._node_credentials = NodeCredentialStore(durable.conn)
         # The ONE deliberate daemon (Part IV decision 2): a per-instance
         # owner name so two gateways over one durable store can never
         # complete each other's leases.
@@ -1888,6 +1896,12 @@ class GatewayApp:
         r.add("DELETE", "/v1/files/{file_id}", self._files_delete)
         r.add("GET", "/v1/work/nodes", self._work_nodes)
         r.add("POST", "/v1/work/nodes/{node_id}/account", self._work_account)
+        # The secret-form doors (V2): values in, sealed into the vault,
+        # never echoed — a standing node's key, or the key that
+        # completes a build paused on it. Deliberately NOT chat text
+        # and NOT a setting.
+        r.add("POST", "/v1/work/nodes/{node_id}/secrets", self._node_secrets_put)
+        r.add("POST", "/v1/builds/{build_id}/secrets", self._build_secrets_put)
         r.add("GET", "/v1/work/nodes/{node_id}/activity", self._work_activity)
         # The Supernode's template button: preview resolves the org
         # structure (deterministic-first) and apply imports the member
@@ -2339,6 +2353,9 @@ class GatewayApp:
         emit=None,
     ) -> Response:
         """The turn's work — everything past the durable marker (V0)."""
+        # A structured block this turn carries (V2: the secret form) —
+        # persisted WITH the reply turn and returned to the client.
+        turn_block: dict | None = None
         # The assistant's hands: the caller's own files, tenant-bound —
         # and, inside a node's interact window, that node's own desk.
         tools = None
@@ -2563,7 +2580,13 @@ class GatewayApp:
         if turn is None and not in_node and self._nodeplace is not None:
             build_goal = explicit_node_build_goal(message)
             if build_goal is not None:
-                built = self._build_function_node(session, build_goal)
+                built = self._build_function_node(
+                    session, build_goal, thread_agent=thread_agent
+                )
+                if isinstance(built, tuple):
+                    # Paused on its key (V2): the words + the form block
+                    # ride this turn; the door completes the publish.
+                    built, turn_block = built
                 if built.startswith("error:"):
                     turn = ChatTurn(
                         say=f"I couldn't build that node: {built[7:].strip()}",
@@ -2640,7 +2663,11 @@ class GatewayApp:
             # the desk — never a workflow run on the meta-sentence: a
             # run for "build a node to X" executes nothing but noise
             # and leaves nothing in any node.
-            built = self._build_function_node(session, build_task)
+            built = self._build_function_node(
+                session, build_task, thread_agent=thread_agent
+            )
+            if isinstance(built, tuple):
+                built, turn_block = built
             if built.startswith("error:"):
                 say = f"I couldn't build that node: {built[7:].strip()}"
             else:
@@ -2668,27 +2695,34 @@ class GatewayApp:
                     built = None
                     if not in_node:
                         built = self._autobuild_before_run(session, turn.task)
-                    if built:
-                        say = f"{say} {built}".strip()
-                    # V1: the ask is ACCEPTED, not driven — the run is
-                    # durable and QUEUED, the worker drives it, and the
-                    # turn returns now. The reply is the model's word;
-                    # the run marker below is the client's live window
-                    # into the run; and the REPORT (success words, the
-                    # failure's exact node, the growth offer, the P2
-                    # reminder offer) lands as its own assistant turn
-                    # when the run settles — so closing the window stops
-                    # nothing and "I'll ping you when it's done" is
-                    # finally true.
-                    run = self._enqueue_intent_run(session, turn.task)
-                    self._metrics["chat_runs"] += 1
-                    self._run_reports.file(
-                        run_id=str(run["run_id"]),
-                        tenant=session.tenant_id,
-                        principal=session.principal_id,
-                        agent=thread_agent,
-                        intent=str(turn.task),
-                    )
+                    if isinstance(built, tuple):
+                        # The consented build paused on its key (V2):
+                        # the form rides this turn, and nothing stands
+                        # to run yet — the door completes the build.
+                        paused_words, turn_block = built
+                        say = f"{say} {paused_words}".strip()
+                    else:
+                        if built:
+                            say = f"{say} {built}".strip()
+                        # V1: the ask is ACCEPTED, not driven — the run is
+                        # durable and QUEUED, the worker drives it, and the
+                        # turn returns now. The reply is the model's word;
+                        # the run marker below is the client's live window
+                        # into the run; and the REPORT (success words, the
+                        # failure's exact node, the growth offer, the P2
+                        # reminder offer) lands as its own assistant turn
+                        # when the run settles — so closing the window stops
+                        # nothing and "I'll ping you when it's done" is
+                        # finally true.
+                        run = self._enqueue_intent_run(session, turn.task)
+                        self._metrics["chat_runs"] += 1
+                        self._run_reports.file(
+                            run_id=str(run["run_id"]),
+                            tenant=session.tenant_id,
+                            principal=session.principal_id,
+                            agent=thread_agent,
+                            intent=str(turn.task),
+                        )
             except GatewayError as exc:
                 if exc.code not in ("cannot_execute", "release_revoked"):
                     raise
@@ -2722,6 +2756,7 @@ class GatewayApp:
                 kind="assistant",
                 body=say,
                 agent=thread_agent,
+                block=turn_block,
             )
             if run:
                 self._assistant_history.append(
@@ -2750,6 +2785,7 @@ class GatewayApp:
                 "copy": getattr(turn, "copy", None),
                 "run_id": run["run_id"] if run else None,
                 "run": run,
+                "block": turn_block,
             },
         )
 
@@ -7366,8 +7402,16 @@ class GatewayApp:
                 parent = entries.get(entry.account.supernode_id)
                 if parent is not None:
                     under, under_id = parent, parent.node_id
-            return self._build_function_node(
-                session, goal, under_entry=under, under_node_id=under_id
+            return self._unpack_build(
+                session,
+                self._build_function_node(
+                    session,
+                    goal,
+                    under_entry=under,
+                    under_node_id=under_id,
+                    thread_agent=f"node:{node_id}",
+                ),
+                thread_agent=f"node:{node_id}",
             )
 
         def reviser(change: str) -> str:
@@ -7726,6 +7770,10 @@ class GatewayApp:
         ):
             return None
         result = self._build_function_node(session, goal)
+        if isinstance(result, tuple):
+            # Paused on its key (V2): there is no node to run yet — the
+            # caller shows the form and skips the doomed run.
+            return result
         if result.startswith("error:"):
             return None  # the run + offer flow explains, as before
         return result
@@ -7849,6 +7897,17 @@ class GatewayApp:
         screen) — and immediately re-fire the task, which now routes through
         the node's own function."""
         result = self._build_function_node(session, goal, allow_twin=allow_twin)
+        if isinstance(result, tuple):
+            # Paused on its key (V2): nothing stands to run — the form
+            # turn carries the ask, and the door finishes the build.
+            return (
+                ChatTurn(
+                    say=self._unpack_build(session, result),
+                    source="tool",
+                    actions=[{"tool": "build_node"}],
+                ),
+                None,
+            )
         if result.startswith("error:"):
             return (
                 ChatTurn(
@@ -8123,7 +8182,8 @@ class GatewayApp:
         under_node_id=None,
         allow_twin: bool = False,
         demonstrated: list[str] | None = None,
-    ) -> str:
+        thread_agent: str = "oolu",
+    ) -> "str | tuple[str, dict]":
         """Create ONE node born WITH its own execution function — the shared
         core behind the interact window's ``build`` and the chat's growth
         trigger. Consent belongs to the CALLER (the settings switch there,
@@ -8131,7 +8191,11 @@ class GatewayApp:
         judgement, the actually-written function, the contribute screen — is
         this one path, identical for both doors.
 
-        Returns words: an ``error: …`` prefix means refusal."""
+        Returns words (an ``error: …`` prefix means refusal) — or, when
+        the authored function targets a keyed API (V2), ``(words,
+        secret_form block)``: the judged build waits durably and the
+        form's door completes the publish. ``thread_agent`` names the
+        conversation the completion receipt belongs to."""
         goal = (goal or "").strip()
         if not goal:
             return "error: tell me what the node should do"
@@ -8276,20 +8340,27 @@ class GatewayApp:
             validated = "validated-static"
             if problem is None and already_verified and repair_rounds == 0:
                 # The agent's finish gate already ran this exact script
-                # in the sandbox — the walls stand; the run is not paid
-                # twice. A repaired script always re-verifies.
+                # against this exact declared contract (V2: outputs held
+                # against the payload, inputs staged as typed samples) —
+                # the walls stand; the run is not paid twice. A repaired
+                # script always re-verifies.
                 validated = "validated"
             elif problem is None:
-                verify = self._author_verifier(ports=(io or {}).get("outputs"))
+                verify = self._author_verifier(
+                    ports=(io or {}).get("outputs"),
+                    inputs=(io or {}).get("inputs"),
+                )
                 if verify is not None:
                     report = verify(script)
                     if report.get("ok"):
                         validated = "validated"
                         note = report.get("honest_error")
                         if note:
-                            # Executed, spoke the contract, and honestly
-                            # named the data it cannot reach at birth —
-                            # recorded, never punished.
+                            # The one honest error that still passes
+                            # (V2): the web-grant gap — birth never
+                            # touches the network, so a function naming
+                            # exactly that has proven everything birth
+                            # can stage. Recorded, never punished.
                             transaction.append(
                                 f"honest-error:{str(note)[:120]}"
                             )
@@ -8340,6 +8411,11 @@ class GatewayApp:
                 )
             script = edited
             if edited_io is not None:
+                # A repair that redeclares the interface never silently
+                # DROPS the declared keyed APIs (V2) — losing them would
+                # publish the very node the secret pause exists to hold.
+                if io.get("secrets") and not edited_io.get("secrets"):
+                    edited_io = {**edited_io, "secrets": io["secrets"]}
                 io = edited_io
         # --- draft → review (context-harness plan, Phase 6) ------------- #
         # A seated reviewer judges the VERIFIED function before it lists:
@@ -8375,6 +8451,100 @@ class GatewayApp:
                     f"{concern or 'no reason given'} — nothing was published"
                 )
         cost_note = self._build_cost_note(meter, spent_before)
+        # --- the secret ask (V2, 7b) ------------------------------------ #
+        # A function that targets a keyed API was DECLARED to (the
+        # author's secrets declaration): the build pauses with the form
+        # instead of publishing a node whose first run can only fail.
+        # The whole judged build — script, contract, walked states —
+        # waits durably; the form's door completes it the moment the
+        # key lands in the vault. Nothing is published until then.
+        declared_secrets = [
+            s
+            for s in (io or {}).get("secrets") or []
+            if isinstance(s, dict) and str(s.get("host") or "").strip()
+        ]
+        if declared_secrets:
+            build_id = self._pending_builds.put(
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+                agent=thread_agent,
+                goal=goal,
+                skill_id=skill_id,
+                script=script,
+                io=io,
+                states=transaction,
+                model=self._author_model_id(author),
+            )
+            hosts = ", ".join(
+                sorted({str(s["host"]).strip().lower() for s in declared_secrets})
+            )
+            name = concise_name(goal)
+            return (
+                (
+                    f"“{name}” is written and it passed birth "
+                    f"verification — but it calls {hosts}, which needs a "
+                    "key. Enter it below: it is sealed into this host's "
+                    "vault (never the conversation), and the build "
+                    "completes the moment it lands. Nothing is published "
+                    "until then." + cost_note
+                ),
+                {
+                    "kind": "secret_form",
+                    "build_id": build_id,
+                    "node_id": None,
+                    "title": name,
+                    "fields": [
+                        {
+                            "name": str(s.get("name") or "api_key"),
+                            "label": str(
+                                s.get("label") or f"API key for {s['host']}"
+                            ),
+                            "host": str(s["host"]).strip().lower(),
+                            "header": str(s.get("header") or "Authorization"),
+                            "scheme": str(s.get("scheme", "Bearer")),
+                        }
+                        for s in declared_secrets
+                    ],
+                },
+            )
+        say, _node_id = self._publish_authored_node(
+            session,
+            goal=goal,
+            skill_id=skill_id,
+            script=script,
+            io=io,
+            transaction=transaction,
+            author_model=self._author_model_id(author),
+            cost_note=cost_note,
+            repair_rounds=repair_rounds,
+            under_entry=under_entry,
+            under_node_id=under_node_id,
+        )
+        return say
+
+    def _publish_authored_node(
+        self,
+        session,
+        *,
+        goal: str,
+        skill_id: str,
+        script: str,
+        io: dict,
+        transaction: list[str],
+        author_model: str,
+        cost_note: str,
+        repair_rounds: int = 0,
+        under_entry=None,
+        under_node_id=None,
+    ) -> tuple[str, str | None]:
+        """The publish tail every judged build walks — contribute, desk
+        account, ledger, graph, drawer landing, receipt — shared by the
+        direct path and the secret-form completion (V2), so a build that
+        paused on its key publishes through the exact same door.
+        Returns ``(words, node_id)``; node_id None means refusal."""
+        nodeplace = self._nodeplace
+        if nodeplace is None or self._desk is None:
+            return "error: nodes are not enabled on this host", None
         name = concise_name(goal)
         skill = ReusableSkill.model_validate(
             {
@@ -8453,7 +8623,7 @@ class GatewayApp:
                 policy_version=NODE_POLICY_VERSION,
             )
         except (ContributionError, OwnershipError, ValueError) as exc:
-            return f"error: {exc}"
+            return f"error: {exc}", None
         new_id = result.node.node_id
         # The publish closes the book: this goal's open lessons are
         # superseded on the ledger — a warning about a problem that no
@@ -8465,7 +8635,7 @@ class GatewayApp:
             status="published",
             states=tuple(transaction) + ("published",),
             node_id=new_id,
-            model=self._author_model_id(author),
+            model=author_model,
         )
         # The publish lands its relations on the temporal graph — the
         # registry row is the provenance every edge cites.
@@ -8513,6 +8683,23 @@ class GatewayApp:
             "calls, what it writes — was decided for you; say "
             "“revise …” to change any of it in plain words."
         )
+        # The receipt stops lying (V2): a birth that took repairs, or
+        # that honestly named the one gap birth cannot stage (the web),
+        # says so — the residue was always on the ledger; now it is in
+        # the user's words too.
+        residue_note = ""
+        if repair_rounds:
+            rounds = "round" if repair_rounds == 1 else "rounds"
+            residue_note += (
+                f" It took {repair_rounds} repair {rounds} to pass birth "
+                "verification — the residue is on the build ledger."
+            )
+        if any(str(s).startswith("honest-error:") for s in transaction):
+            residue_note += (
+                " At birth it could not reach the web (nothing leaves "
+                "the box at birth) and said so honestly; its first "
+                "granted run completes the proof."
+            )
         if under_entry is not None:
             return (
                 f"Built a NEW node “{name}” ({new_id[:8]}) WITH its own "
@@ -8523,15 +8710,207 @@ class GatewayApp:
                 "becomes a callable, routable step as its runs verify; once "
                 "proven, the two can be merged into one throughout solution."
                 + decided_note
+                + residue_note
                 + src_note
                 + web_note
                 + cost_note
-            )
+            ), new_id
         return (
             f"Built a NEW node “{name}” ({new_id[:8]}) WITH its own "
             f"execution function ({interface}), {placing}. It starts "
             "needs-verification and becomes a callable, routable step as "
-            "its runs verify." + decided_note + src_note + web_note + cost_note
+            "its runs verify."
+            + decided_note
+            + residue_note
+            + src_note
+            + web_note
+            + cost_note
+        ), new_id
+
+    def _unpack_build(self, session, built, *, thread_agent: str = "oolu"):
+        """A paused build (V2) through a seam that cannot carry a block:
+        the form lands as its OWN turn in the named thread, and the words
+        return to the caller — every surface still gets the form."""
+        if not isinstance(built, tuple):
+            return built
+        say, block = built
+        if self._assistant_history is not None and block:
+            self._assistant_history.append(
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+                kind="assistant",
+                body="",
+                agent=thread_agent,
+                block=block,
+            )
+        return say
+
+    # ------------------------------------------------------------------ #
+    # The secret-form doors (V2): the one way a key comes in.             #
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _secret_items(body: dict) -> list[dict]:
+        """The form's items, validated — host and value required, header
+        and scheme defaulted. The values never leave the calling door:
+        not into a response, a log, a setting, or an error."""
+        from ..nodeplace.accounts import normalize_network_hosts
+
+        raw = body.get("items")
+        if not isinstance(raw, list) or not raw:
+            raise GatewayError(400, "invalid_request", "items are required")
+        items: list[dict] = []
+        for entry in raw:
+            if not isinstance(entry, dict):
+                raise GatewayError(
+                    400, "invalid_request", "each item is an object"
+                )
+            value = entry.get("value")
+            if not isinstance(value, str) or len(value.strip()) < 4:
+                raise GatewayError(
+                    400, "invalid_request", "that doesn't look like a key"
+                )
+            try:
+                normalized = normalize_network_hosts(
+                    [str(entry.get("host") or "")]
+                )
+            except ValueError as exc:
+                raise GatewayError(
+                    400, "invalid_request", f"bad host: {exc}"
+                ) from exc
+            if not normalized:
+                raise GatewayError(400, "invalid_request", "a host is required")
+            items.append(
+                {
+                    "host": normalized[0],
+                    "value": value.strip(),
+                    "header": str(
+                        entry.get("header") or "Authorization"
+                    ).strip()
+                    or "Authorization",
+                    "scheme": str(entry.get("scheme", "Bearer")).strip(),
+                    "label": str(entry.get("label") or ""),
+                }
+            )
+        return items
+
+    def _bind_node_secrets(
+        self, session, node_id: str, items: list[dict], *, now=None
+    ) -> list[str]:
+        """Seal each value into the vault and bind it beside the node's
+        host grants — GRANTING the host first, through the real account
+        door, so its ownership wall binds this hand exactly as it binds
+        the button (providing a host's key IS the consent to reach it).
+        Returns the hosts. A replaced credential's old ref is revoked:
+        a rotated key dies instead of lingering resolvable."""
+        hosts = sorted({item["host"] for item in items})
+        account = (
+            self._desk.account_for(node_id) if self._desk is not None else None
+        )
+        standing = list(account.network_hosts) if account is not None else []
+        merged = [*standing, *[h for h in hosts if h not in standing]]
+        call = Request(
+            method="POST",
+            path="/internal",
+            headers={},
+            query={},
+            body={"network_hosts": merged},
+            now=now,
+        )
+        self._work_account(call, session, {"node_id": node_id})
+        for item in items:
+            ref = self._vault.put(
+                item["value"],
+                kind="node_credential",
+                metadata={"node_id": node_id, "host": item["host"]},
+            )
+            previous = self._node_credentials.bind(
+                tenant=session.tenant_id,
+                node_id=node_id,
+                host=item["host"],
+                ref_id=ref.ref_id,
+                header=item["header"],
+                scheme=item["scheme"],
+                label=item["label"],
+            )
+            if previous:
+                try:
+                    self._vault.revoke(previous)
+                except Exception:  # noqa: BLE001 - a dead ref is already dead
+                    pass
+        # The audit names the binding, never the value.
+        self._durable.audit.append(
+            "node.credential_bound",
+            {
+                "tenant": session.tenant_id,
+                "node_id": node_id,
+                "hosts": hosts,
+                "by": session.principal_id,
+            },
+        )
+        return hosts
+
+    def _node_secrets_put(self, request, session, params) -> Response:
+        """A standing node's key(s) into the sealed vault (V2). Values
+        in; only counts and hosts come back — the key appears nowhere
+        greppable, and the node's next run authenticates."""
+        node_id = str(params["node_id"])
+        items = self._secret_items(request.body or {})
+        hosts = self._bind_node_secrets(
+            session, node_id, items, now=request.now
+        )
+        return json_response(201, {"stored": len(items), "hosts": hosts})
+
+    def _build_secrets_put(self, request, session, params) -> Response:
+        """The key that completes a build paused on it (V2): the judged
+        build publishes through the same tail every build walks, then
+        the key binds to the newborn node and its host is granted — the
+        first run authenticates. The pending build is consumed only on
+        a successful publish, so a refused contribute leaves it standing
+        for another try."""
+        build_id = str(params["build_id"])
+        items = self._secret_items(request.body or {})
+        pending = self._pending_builds.get(build_id, tenant=session.tenant_id)
+        if pending is None or pending["principal"] != session.principal_id:
+            raise GatewayError(
+                404,
+                "not_found",
+                "no such pending build — it may already be complete",
+            )
+        say, node_id = self._publish_authored_node(
+            session,
+            goal=pending["goal"],
+            skill_id=pending["skill_id"],
+            script=pending["script"],
+            io=pending["io"],
+            transaction=[*pending["states"], "secret-provided"],
+            author_model=pending["model"],
+            cost_note="",
+        )
+        if node_id is None:
+            raise GatewayError(
+                422, "cannot_publish", say.removeprefix("error: ")
+            )
+        self._pending_builds.pop(build_id, tenant=session.tenant_id)
+        hosts = self._bind_node_secrets(
+            session, node_id, items, now=request.now
+        )
+        say += (
+            " The key was sealed into this host's vault and "
+            + ", ".join(hosts)
+            + " granted — the node authenticates from its first run."
+        )
+        # The receipt lands in the conversation that asked for the
+        # build, so the thread tells the whole story on every device.
+        if self._assistant_history is not None:
+            self._assistant_history.append(
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+                kind="assistant",
+                body=say,
+                agent=pending["agent"],
+            )
+        return json_response(
+            201, {"node_id": node_id, "say": say, "stored": len(items)}
         )
 
     def _build_program_node(self, session, goal: str) -> str:
@@ -9670,6 +10049,23 @@ class GatewayApp:
                 extras["_egress_hosts"] = list(
                     account.network_hosts if account is not None else ()
                 )
+            # The node's credential BINDINGS ride as refs (V2) — the
+            # broker resolves them host-side into auth headers for
+            # granted hosts only; no value ever enters the action, the
+            # durable state, or the sandbox.
+            auth = self._node_credentials.for_node(
+                tenant=session.tenant_id, node_id=node_id
+            )
+            if auth:
+                extras["_egress_auth"] = [
+                    {
+                        "host": row["host"],
+                        "header": row["header"],
+                        "scheme": row["scheme"],
+                        "ref": row["ref"],
+                    }
+                    for row in auth
+                ]
         if self._files is not None:
             staged: dict[str, str] = {}
             for file in self._files.list(
@@ -11775,41 +12171,122 @@ class GatewayApp:
                 "interface lists no inputs — declare the inputs it "
                 "actually consumes so routes can bind them"
             )
+        # The FORWARD wall (V2), symmetric to the reverse one: the
+        # interface and the code are two model utterances, and a slot
+        # promised but never consumed becomes a real question the ask
+        # machinery mints for a value the run then ignores — the exact
+        # reported birth defect, held at the door in its exact words.
+        inputs = [
+            str(item.get("name") or "")
+            for item in (io or {}).get("inputs", [])
+            if isinstance(item, dict)
+        ]
+        if inputs and "bindings.json" not in script:
+            promised = ", ".join(f"`{name}`" for name in inputs if name)
+            return (
+                f"the interface promises inputs ({promised}) but the "
+                "function never reads ./bindings.json — consume them, or "
+                "drop them from the interface"
+            )
+        for name in inputs:
+            if name and name not in script:
+                return (
+                    f"the interface promises `{name}`; the function never "
+                    "reads it — consume it from ./bindings.json or drop "
+                    "it from the interface"
+                )
         return None
 
-    def _author_verifier(self, ports: list[dict] | None = None):
+    @staticmethod
+    def _sample_bindings(inputs: list[dict]) -> tuple[dict, dict[str, str]]:
+        """Typed sample values for every declared input (V2) — the
+        bindings.json birth verify stages, so the function is exercised
+        against its REAL contract instead of an empty box. The declared
+        example wins when present; a ``path`` input also stages a small
+        sample file the binding points at, so an opener opens something.
+        Returns ``(bindings, extra_files)``."""
+        bindings: dict = {}
+        extra: dict[str, str] = {}
+        for item in inputs or []:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            kind = str(item.get("type") or "str").strip().lower()
+            example = str(item.get("example") or "").strip()
+            if kind == "number":
+                try:
+                    value: object = float(example) if example else 2
+                    if isinstance(value, float) and value.is_integer():
+                        value = int(value)
+                except ValueError:
+                    value = 2
+                bindings[name] = value
+            elif kind == "path":
+                filename = example or f"sample_{name}.txt"
+                if "/" in filename or "\\" in filename or not filename:
+                    filename = f"sample_{name}.txt"
+                extra[filename] = f"sample content for {name}\n"
+                bindings[name] = filename
+            else:
+                bindings[name] = example or f"sample {name}"
+        return bindings, extra
+
+    def _author_verifier(
+        self,
+        ports: list[dict] | None = None,
+        inputs: list[dict] | None = None,
+    ):
         """The author's finish gate made real: a sandbox dry-run of the
         candidate script — safety screen, dependency healing, contract
-        classification — with NO web grant and NO staged files, so
-        nothing leaves the box. No script runtime on this host → None:
-        the caller's gate degrades to its static checks.
+        classification — with NO web grant, so nothing leaves the box.
+        No script runtime on this host → None: the caller's gate
+        degrades to its static checks.
 
-        Where the runner speaks ``verify_function`` (the birth-verify
-        primitive), the function under test is the function judged — no
-        repair, no resynthesis substituting a different script — and an
-        HONEST structured error passes: at birth no real bindings are
-        staged, so a function that names its missing data has proven it
-        executes and speaks the contract (the Phase 0 finding that an
-        honest input-reading function could never pass this hand,
-        fixed). Legacy runners without the primitive keep the old
-        execute-based dry run."""
+        The agreement wall (V2): the declared INPUTS are staged as a
+        typed sample bindings.json (plus sample files for path slots),
+        so an input-starved or input-ignoring script is exercised
+        against its real contract — and an honest structured error at
+        birth is now a FAILURE of the gate (the function proved it
+        cannot consume real bindings), not a pass. The one honest error
+        that still passes is the web-grant gap: birth never touches the
+        network by law, so a function that names exactly that missing
+        hand has proven everything birth can stage. The closure accepts
+        ``(script)`` or ``(script, io)`` — an io-aware caller (the
+        agent's finish gate) hands the declared contract in and both
+        directions are judged. Legacy runners without the primitive
+        keep the old execute-based dry run."""
         runner = self._contract_executors.get("script")
         if runner is None:
             return None
         verify_fn = getattr(runner, "verify_function", None)
 
-        def verify(script: str) -> dict:
+        def verify(script: str, io: dict | None = None) -> dict:
             import hashlib
 
+            effective_ports = (
+                (io or {}).get("outputs") if io is not None else ports
+            )
+            effective_inputs = (
+                (io or {}).get("inputs") if io is not None else inputs
+            )
             digest = hashlib.sha256(script.encode()).hexdigest()[:16]
             if callable(verify_fn):
+                files: dict[str, str] | None = None
+                if effective_inputs:
+                    bindings, extra = self._sample_bindings(
+                        list(effective_inputs)
+                    )
+                    files = {"bindings.json": json.dumps(bindings), **extra}
                 try:
                     report = verify_fn(
                         "verify the authored function executes and speaks "
                         "the contract",
                         script,
                         session_id=f"author-verify:{digest}",
-                        ports=list(ports or []),
+                        ports=list(effective_ports or []),
+                        files=files,
                     )
                 except Exception as exc:  # noqa: BLE001 - answered, never fatal
                     return {
@@ -11819,9 +12296,17 @@ class GatewayApp:
                 if report.get("ok"):
                     return {"ok": True}
                 if report.get("honest_error"):
+                    note = str(report.get("error") or "")
+                    if "no web grant" in note:
+                        # The one gap birth cannot stage: the network.
+                        # Honestly named, recorded, never punished.
+                        return {"ok": True, "honest_error": note}
                     return {
-                        "ok": True,
-                        "honest_error": str(report.get("error") or ""),
+                        "ok": False,
+                        "error": (
+                            "the function reported an error against its "
+                            f"staged sample inputs: {note or 'no reason given'}"
+                        ),
                     }
                 return {
                     "ok": False,
@@ -13807,8 +14292,11 @@ class GatewayApp:
             f"{s.text}" if s.kind == "say" else f"(observed: {s.text})"
             for s in lesson.steps
         ]
-        say = self._build_function_node(
-            session, lesson.goal, demonstrated=demonstrated
+        say = self._unpack_build(
+            session,
+            self._build_function_node(
+                session, lesson.goal, demonstrated=demonstrated
+            ),
         )
         if say.startswith("error:"):
             # The lesson stays recording: fix the goal or add a step and

@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { accountScope, api, TERMINAL_PHASES } from "../api";
-import type { ChatAction, ChatHistoryTurn, TurnFileRef } from "../api";
+import type {
+  ChatAction,
+  ChatHistoryTurn,
+  ChatTurnBlock,
+  SecretFormField,
+  TurnFileRef,
+} from "../api";
 import { humanizeEvent, statusSentence } from "../humanize";
 import { AttachmentStrip } from "./Attachments";
 import { ChartBlock } from "./Agents";
@@ -49,14 +55,9 @@ type Msg =
       actions?: ChatAction[];
       // The model's own thinking behind this reply, when it showed it.
       reasoning?: string;
-      // A book drawn in the bubble: the member's own Life/Files data
-      // as a chart — the data visualization conversation block.
-      block?: {
-        kind: "chart";
-        title: string;
-        unit: string;
-        points: { label: string; value: number }[];
-      } | null;
+      // A structured block in the bubble: the member's own book drawn
+      // as a chart, or the secret form a keyed build asks with (V2).
+      block?: ChatTurnBlock | null;
     }
   // The chat's own nudge about unfinished work — not a model turn, so it
   // never enters the history sent to the assistant. Each mentioned task
@@ -119,6 +120,17 @@ function loadThread(): Msg[] {
 // Reminder bubbles are presence, not conversation — they stay client-side.
 // A "working" marker is presence too (the server is still on that turn):
 // it renders as the thinking bubble, never as a message.
+// The blocks THIS thread renders: the chart, and the secret form (V2).
+// Everything else is a desk block — Agents renders those.
+function keepBlock(
+  block: ChatTurnBlock | null | undefined,
+): ChatTurnBlock | null {
+  if (block && (block.kind === "chart" || block.kind === "secret_form")) {
+    return block;
+  }
+  return null;
+}
+
 function fromServer(items: ChatHistoryTurn[]): Msg[] {
   return items
     .filter((turn) => turn.kind !== "working")
@@ -130,7 +142,7 @@ function fromServer(items: ChatHistoryTurn[]): Msg[] {
           text: turn.body,
           // A persisted chart block re-renders after reload — the same
           // bubble on every device.
-          block: turn.block?.kind === "chart" ? turn.block : null,
+          block: keepBlock(turn.block),
         };
       }
       return { kind: "user", text: turn.body, files: turn.files };
@@ -213,6 +225,87 @@ export function watchRunReport(
   const timer = setInterval(() => void tick(), 2500);
   void tick();
   return stop;
+}
+
+// The secret ask (V2): a keyed build's credential form. Masked entry,
+// one dedicated door (never chat text, never echoed), and a settled
+// note the moment the vault holds it — for a paused build the door
+// also completes the publish and says so.
+export function SecretFormBlock({
+  block,
+}: {
+  block: Extract<ChatTurnBlock, { kind: "secret_form" }>;
+}) {
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [settled, setSettled] = useState("");
+  const [problem, setProblem] = useState("");
+  const fields: SecretFormField[] = block.fields ?? [];
+  const ready =
+    fields.length > 0 &&
+    fields.every((f) => (values[f.name] ?? "").trim().length >= 4);
+
+  async function save() {
+    if (busy || settled || !ready) return;
+    setBusy(true);
+    setProblem("");
+    try {
+      const items = fields.map((f) => ({
+        host: f.host,
+        value: (values[f.name] ?? "").trim(),
+        header: f.header,
+        scheme: f.scheme,
+        name: f.name,
+        label: f.label,
+      }));
+      if (block.build_id) {
+        const done = await api.buildSecrets(block.build_id, items);
+        setSettled(done.say);
+      } else if (block.node_id) {
+        const done = await api.nodeSecrets(block.node_id, items);
+        setSettled(
+          `Sealed into the vault — ${done.hosts.join(", ")} authenticates ` +
+            "from the next run.",
+        );
+      }
+      setValues({});
+    } catch (e) {
+      setProblem((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (settled) {
+    return (
+      <div className="secret-form settled">
+        <span className="muted">{settled}</span>
+      </div>
+    );
+  }
+  return (
+    <div className="secret-form">
+      {fields.map((f) => (
+        <label key={f.name} className="secret-field">
+          <span>{f.label || `Key for ${f.host}`}</span>
+          <input
+            type="password"
+            autoComplete="off"
+            aria-label={f.label || `Key for ${f.host}`}
+            placeholder="••••••••"
+            value={values[f.name] ?? ""}
+            onChange={(e) =>
+              setValues((v) => ({ ...v, [f.name]: e.target.value }))
+            }
+          />
+        </label>
+      ))}
+      <button disabled={busy || !ready} onClick={() => void save()}>
+        {busy ? "…" : "Save the key"}
+      </button>
+      {problem && <span className="muted">{problem}</span>}
+    </div>
+  );
 }
 
 export function Chat({
@@ -556,7 +649,7 @@ export function Chat({
             text: turn.reply,
             actions: turn.actions,
             reasoning: turn.reasoning || undefined,
-            block: turn.block?.kind === "chart" ? turn.block : null,
+            block: keepBlock(turn.block),
           },
         ];
         // OoLu asked for a device sense: the request lands as grant
@@ -851,6 +944,11 @@ export function Chat({
                   unit={m.block.unit}
                   points={m.block.points}
                 />
+              )}
+              {/* The secret ask (V2): masked entry, one dedicated
+                  door — the key never becomes chat text. */}
+              {m.kind === "assistant" && m.block?.kind === "secret_form" && (
+                <SecretFormBlock block={m.block} />
               )}
               {m.kind === "assistant" && m.actions && m.actions.length > 0 && (
                 <div className="tool-chips">

@@ -1052,7 +1052,19 @@ values; the function computes with them:
   rows, no sample outputs, no emit_result of a baked-in value.
 - A function that cannot reach its real data must emit_error naming
   exactly what is missing — an honest failure outranks a fabricated
-  success every time."""
+  success every time.
+
+KEYED APIs — declare the credential, never hold it. When the API needs
+an API key or token, the script calls http_request WITHOUT any auth
+header: the host injects the credential for the granted host at call
+time, outside the sandbox. DECLARE what is needed so the build can ask
+the human for it with a safe form — through the finish_node tool's
+"secrets" field, or (on the prose channel) ONE line starting with
+SECRETS: as JSON:
+SECRETS: [{"name": "api_key", "label": "Your Example API key", "host": "api.example.com"}]
+Never write a key, a placeholder key, or an Authorization header into
+the script, and never ask for a key in conversation — the form is the
+only door."""
 
 
 # Any IO: line at all — the payload's validity is judged by json.loads,
@@ -1060,6 +1072,39 @@ values; the function computes with them:
 # be refused) instead of silently reading as absent.
 _IO_LINE_RE = re.compile(r"^\s*IO:\s*(.+?)\s*$", re.M)
 _IO_TYPES = {"str", "path", "number"}
+# The prose channel's secrets declaration (V2) — the keyed APIs the
+# function targets, so the build can pause with the form. Lenient like
+# the IO line's absent case: no line, no secrets.
+_SECRETS_LINE_RE = re.compile(r"^\s*SECRETS:\s*(.+?)\s*$", re.M)
+
+
+def parse_node_secrets(raw: str) -> list[dict]:
+    """The SECRETS: line's declarations — host required, the rest
+    defaulted at the form. Broken JSON reads as none (the prose channel
+    stays lenient; the agentic path declares through the tool)."""
+    match = _SECRETS_LINE_RE.search(raw or "")
+    if not match:
+        return []
+    try:
+        declared = json.loads(match.group(1))
+    except ValueError:
+        return []
+    if not isinstance(declared, list):
+        return []
+    out: list[dict] = []
+    for item in declared:
+        if not isinstance(item, dict):
+            continue
+        host = str(item.get("host", "")).strip().lower()
+        if not host:
+            continue
+        entry = {"name": str(item.get("name", "api_key")).strip() or "api_key",
+                 "host": host}
+        for extra in ("label", "header", "scheme"):
+            if extra in item:
+                entry[extra] = str(item.get(extra, "")).strip()
+        out.append(entry)
+    return out
 
 
 def parse_node_io_checked(raw: str) -> tuple[dict, str]:
@@ -1236,6 +1281,11 @@ def author_node_function(
             f"{io_problem} — so nothing was built; a node whose interface "
             "is guessed chains wrong on every route it joins"
         )
+    # A declared keyed API (V2): the build pauses with the secret form
+    # instead of publishing a node whose first run can only fail.
+    secrets = parse_node_secrets(raw)
+    if secrets:
+        io["secrets"] = secrets
     return script, io, ""
 
 

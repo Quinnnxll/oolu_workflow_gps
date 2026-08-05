@@ -517,6 +517,7 @@ def build_script_executor(
     bundle_resolver=None,  # runtime.BundleResolver: id -> PreparedBundle
     materialized_dir=None,  # runtime.MaterializedBundleDir: the mounted tier
     value_resolver=None,  # (bindings, tenant) -> (resolved, provenance)
+    web_secrets=None,  # V2: the broker's credential resolver (the vault)
 ) -> dict[str, ActionExecutor]:
     """The script hand: run planner-provided or synthesized code through the
     configured isolation backend (Docker when configured; the subprocess
@@ -550,6 +551,7 @@ def build_script_executor(
         _build_backend(
             settings.backend,
             web_fetch=web_hand.request,
+            web_secrets=web_secrets,
             materialized_dir=materialized_dir,
         ),
         LocalScriptCache(cache_path),
@@ -807,6 +809,13 @@ def build_host_runtime(
     # meter books every consultation, and the settings node carries the
     # provider/tier choice and the one spending cap that covers everything.
     model_keys = ModelKeyring(conn, key_path=data / "machine.key")
+    # The durable secret vault (V2): node API keys sealed at rest under
+    # the SAME machine key the model keyring and TOTP seeds trust; the
+    # web broker resolves its refs host-side, so a stored key never
+    # enters a sandbox, a setting, or a log.
+    from .providers.vault import DurableSecretVault
+
+    host_vault = DurableSecretVault(conn, key_path=data / "machine.key")
     model_meter = ModelCallMeter()
     settings_node = SettingsNode(SettingsStore(conn))
     _mail_codes = MailCodeStore(conn)
@@ -998,6 +1007,7 @@ def build_host_runtime(
                     ),
                     bundle_resolver=bundle_resolver,
                     materialized_dir=materialized_dir,
+                    web_secrets=host_vault,
                     value_resolver=lambda bindings, tenant: (
                         values_store.resolve_bindings(bindings, tenant=tenant)
                     ),
@@ -1253,6 +1263,9 @@ def build_host_runtime(
         resolver=resolver,
         approval_authority=IdentityApprovalAuthority(resolver),
         config=config,
+        # The durable vault (V2): the same rows the web broker resolves,
+        # so a key the secret-form door seals authenticates every run.
+        vault=host_vault,
         nodeplace=nodeplace_service,
         ratings=ratings,
         market=market,

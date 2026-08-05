@@ -43,7 +43,9 @@ IO_ANSWER = (
     "1. Read the rows.\n"
     'IO: {"inputs": [{"name": "invoice_csv", "type": "path"}],'
     ' "outputs": [{"name": "normalized_csv", "type": "path"}]}\n'
-    "```python\nfrom _oolu_runtime import emit_result\nemit_result(''.join(['t', 'i', 'd', 'y']))\n```"
+    "```python\nimport json\nfrom _oolu_runtime import emit_result\n"
+    "csv = json.load(open('bindings.json'))['invoice_csv']\n"
+    "emit_result(csv)\n```"
 )
 
 

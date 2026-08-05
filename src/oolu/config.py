@@ -192,10 +192,14 @@ def build_oolu(
     )
 
 
-def _build_backend(bs: BackendSettings, *, web_fetch=None, materialized_dir=None):
+def _build_backend(
+    bs: BackendSettings, *, web_fetch=None, web_secrets=None, materialized_dir=None
+):
     # ``web_fetch`` is the host-side guarded HTTP hand the web broker
     # answers a granted sandbox through (runtime.webhand). None = no web
     # hand: granted runs still get the honest refusal from the shim.
+    # ``web_secrets`` (V2) is the broker's credential resolver — the
+    # durable vault that mints auth headers host-side for granted hosts.
     # ``materialized_dir`` is the mounted bundle tier (runtime.bundle): when
     # set, a bundle is materialized once and staged by symlink / read-only
     # bind-mount instead of extracted per run.
@@ -209,6 +213,7 @@ def _build_backend(bs: BackendSettings, *, web_fetch=None, materialized_dir=None
             default_index_url=bs.pinned_index_url,
             run_as_user=bs.run_as_user,
             web_fetch=web_fetch,
+            web_secrets=web_secrets,
             materialized_dir=materialized_dir,
         )
     from .runtime.isolation import SubprocessBackend
@@ -216,5 +221,6 @@ def _build_backend(bs: BackendSettings, *, web_fetch=None, materialized_dir=None
     return SubprocessBackend(
         default_index_url=bs.pinned_index_url,
         web_fetch=web_fetch,
+        web_secrets=web_secrets,
         materialized_dir=materialized_dir,
     )

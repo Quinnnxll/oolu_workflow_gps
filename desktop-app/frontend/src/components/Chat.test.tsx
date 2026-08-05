@@ -1021,3 +1021,74 @@ describe("Chat — the run report watch (V1)", () => {
     }
   });
 });
+
+// ---- V2: the secret ask — masked entry, one dedicated door ----------------
+describe("SecretFormBlock (V2)", () => {
+  it("takes the key masked, posts it to the door, and never echoes it", async () => {
+    routes["GET /v1/chat/history"] = {
+      status: 200,
+      body: {
+        items: [
+          { seq: 1, kind: "user", body: "build me a node", at: "t" },
+          {
+            seq: 2,
+            kind: "assistant",
+            body: "It needs a key. Nothing is published until then.",
+            at: "t",
+            block: {
+              kind: "secret_form",
+              title: "call the api",
+              build_id: "b1",
+              fields: [
+                {
+                  name: "api_key",
+                  label: "Your Example API key",
+                  host: "api.example.com",
+                  header: "Authorization",
+                  scheme: "Bearer",
+                },
+              ],
+            },
+          },
+        ],
+      },
+    };
+    routes["POST /v1/builds/b1/secrets"] = {
+      status: 201,
+      body: {
+        node_id: "n1",
+        say: "Built a NEW node — the key was sealed into this host's vault.",
+        stored: 1,
+      },
+    };
+    render(<Chat />);
+    const field = (await screen.findByLabelText(
+      "Your Example API key",
+    )) as HTMLInputElement;
+    // Masked entry — the key is never visible on screen.
+    expect(field.type).toBe("password");
+    const save = screen.getByRole("button", { name: "Save the key" });
+    expect((save as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(field, { target: { value: "sk-live-XYZ" } });
+    expect((save as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(save);
+
+    // The value went to the ONE dedicated door — never a chat POST.
+    await waitFor(() => {
+      const posted = calls.find((c) => c.path === "/v1/builds/b1/secrets");
+      expect(posted).toBeTruthy();
+      expect(
+        (posted?.body as { items: { value: string; host: string }[] })
+          .items[0],
+      ).toMatchObject({ value: "sk-live-XYZ", host: "api.example.com" });
+    });
+    expect(calls.filter((c) => c.path === "/v1/chat")).toEqual([]);
+    // Settled: the receipt speaks; the masked field is gone, and the
+    // typed value appears nowhere in the document.
+    expect(
+      await screen.findByText(/sealed into this host's vault/),
+    ).toBeTruthy();
+    expect(screen.queryByLabelText("Your Example API key")).toBeNull();
+    expect(document.body.innerHTML).not.toContain("sk-live-XYZ");
+  });
+});

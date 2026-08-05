@@ -80,6 +80,12 @@ class WebBroker:
 
     fetch: GuardedFetch
     grant: WebGrant
+    # The credential resolver (V2): anything with ``resolve(ref) -> str``
+    # — the durable vault in production, None on hosts without secrets.
+    # Secrets exist transiently HERE only: resolved per call, minted
+    # into a header, never written to the exchange, the call log, or
+    # a response.
+    secrets: Any | None = None
     calls: list[dict[str, Any]] = field(default_factory=list)
     _stop: threading.Event = field(default_factory=threading.Event)
     _thread: threading.Thread | None = None
@@ -147,11 +153,20 @@ class WebBroker:
         method = str(request.get("method") or "GET")
         url = str(request.get("url") or "")
         headers = request.get("headers")
+        headers = dict(headers) if isinstance(headers, dict) else None
+        # The credential seam (V2): the node's stored key becomes this
+        # host's auth header HERE, host-side, for granted hosts only —
+        # the script never holds it, and its own header of the same
+        # name never overrides the vault's (the secret channel is the
+        # host's, not the sandbox's).
+        auth = self._auth_headers(url)
+        if auth:
+            headers = {**(headers or {}), **auth}
         body = request.get("body")
         result = self.fetch(
             method,
             url,
-            headers=headers if isinstance(headers, dict) else None,
+            headers=headers,
             body=str(body) if body is not None else None,
             grant=self._grant_hosts(),
             blocked=self._blocked_hosts(),
@@ -165,6 +180,40 @@ class WebBroker:
             }
         )
         return result
+
+    def _auth_headers(self, url: str) -> dict[str, str]:
+        """The vault-minted headers for this request's host — empty when
+        the node holds no credential for it, the host isn't granted, or
+        no resolver is standing. A ref that fails to resolve (revoked,
+        lost) is skipped silently: the request proceeds bare and the API
+        answers honestly."""
+        if self.secrets is None or not self.grant.auth:
+            return {}
+        from urllib.parse import urlparse
+
+        try:
+            host = (urlparse(url).hostname or "").lower()
+        except ValueError:
+            return {}
+        if not host:
+            return {}
+        granted = self._grant_hosts()
+        if granted is not None and not any(
+            host == g or host.endswith("." + g) for g in granted
+        ):
+            return {}
+        out: dict[str, str] = {}
+        for entry in self.grant.auth:
+            bound = entry.host.lower()
+            if host != bound and not host.endswith("." + bound):
+                continue
+            try:
+                secret = self.secrets.resolve(entry.ref)
+            except Exception:  # noqa: BLE001 - a dead ref never breaks the call
+                continue
+            value = f"{entry.scheme} {secret}" if entry.scheme else secret
+            out[entry.header] = value
+        return out
 
     def _grant_hosts(self) -> frozenset[str] | None:
         # Mirrors the http-action stamp exactly: open web means no allow
@@ -231,10 +280,15 @@ def serve_web(
     exchange: Path | None,
     grant: WebGrant | None,
     fetch: GuardedFetch | None,
+    secrets: Any | None = None,
 ) -> "_Serving | _NullServing":
     """The one-liner backends wrap Phase B in: a live broker when the run
     carries a grant AND the host wired a guarded fetch; a silent no-op
-    otherwise (the shim then refuses calls with the honest words)."""
+    otherwise (the shim then refuses calls with the honest words).
+    ``secrets`` (V2) is the credential resolver the broker mints auth
+    headers from — absent, requests go out bare exactly as before."""
     if exchange is None or grant is None or fetch is None:
         return _NullServing()
-    return _Serving(WebBroker(fetch=fetch, grant=grant), Path(exchange))
+    return _Serving(
+        WebBroker(fetch=fetch, grant=grant, secrets=secrets), Path(exchange)
+    )

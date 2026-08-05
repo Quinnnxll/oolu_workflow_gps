@@ -732,6 +732,17 @@ export interface StoryMetrics {
 // A structured piece riding a roster agent's reply — e.g. the genre
 // chips whose tap speaks back into the conversation, or the pushed
 // edition's story previews.
+// One field of the secret form (V2): a keyed API's credential ask. The
+// value the user types goes ONLY to the dedicated secrets door — never
+// into chat text, never echoed back.
+export interface SecretFormField {
+  name: string;
+  label: string;
+  host: string;
+  header: string;
+  scheme: string;
+}
+
 export type ChatTurnBlock =
   | { kind: "story"; items: StoryPreview[] }
   | { kind: "survey"; survey: SurveyRow }
@@ -748,6 +759,13 @@ export type ChatTurnBlock =
       items: CommerceListing[];
       mode: string;
       expires_at: string;
+    }
+  | {
+      kind: "secret_form";
+      title: string;
+      fields: SecretFormField[];
+      build_id?: string | null;
+      node_id?: string | null;
     };
 
 export interface PressLicense {
@@ -2027,6 +2045,42 @@ export const api = {
   settings: () => req<{ items: SettingItem[] }>("GET", "/v1/settings"),
   setSettings: (changes: Record<string, unknown>) =>
     req<{ items: SettingItem[] }>("PUT", "/v1/settings", { changes }),
+  // ---- the secret-form doors (V2): a node's API key goes in once,
+  // sealed into the host vault; only counts and hosts come back.
+  nodeSecrets: (
+    nodeId: string,
+    items: {
+      host: string;
+      value: string;
+      header?: string;
+      scheme?: string;
+      name?: string;
+      label?: string;
+    }[],
+  ) =>
+    req<{ stored: number; hosts: string[] }>(
+      "POST",
+      `/v1/work/nodes/${encodeURIComponent(nodeId)}/secrets`,
+      { items },
+    ),
+  // The key that completes a build paused on it: the node publishes,
+  // the key binds, the receipt lands in the thread that asked.
+  buildSecrets: (
+    buildId: string,
+    items: {
+      host: string;
+      value: string;
+      header?: string;
+      scheme?: string;
+      name?: string;
+      label?: string;
+    }[],
+  ) =>
+    req<{ node_id: string; say: string; stored: number }>(
+      "POST",
+      `/v1/builds/${encodeURIComponent(buildId)}/secrets`,
+      { items },
+    ),
   // ---- model keys: the BYO-key door. A key goes in once; only its
   // fingerprint ever comes back.
   modelKeys: () => req<{ items: ModelKeyView[] }>("GET", "/v1/keys/model"),

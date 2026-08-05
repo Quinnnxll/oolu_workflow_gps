@@ -390,6 +390,47 @@ node's first run authenticates; the key appears nowhere greppable;
 every publish either proves contract-code agreement or says exactly
 why not.
 
+**Status: LANDED.** The agreement wall (7a): `_birth_problem` gained
+the forward direction — a declared input the script never reads
+refuses in the planned words ("the interface promises `source_file`;
+the function never reads it"), and inputs with no bindings.json read
+at all refuse symmetrically. `_author_verifier` stages a typed sample
+bindings.json for every declared slot (`_sample_bindings`: example
+wins, numbers parse, `path` slots stage a real sample file the binding
+points at), holds declared outputs against the payload, and an honest
+error against those staged samples now FAILS the gate — the one
+honest error that still passes is the web-grant gap, because birth
+never touches the network by law (which is also why the plan's
+401-at-birth detection leg was deliberately not taken: the
+author-declared leg carries it). The agent's finish gate verifies with
+the declared contract (`_script_problem(script, io)`, io assembled
+before judgment; one-argument verify doubles keep working), so
+`already_verified` now means ports-and-inputs-checked. The reviewer
+stands unchanged, advisory above the wall. The receipt names its
+residue: repair rounds and the honest web note are in the user's
+words, not only on the ledger. The secret ask (7b):
+`DurableSecretVault` seals values at rest under the install's
+`machine.key` (the keyring's stdlib encrypt-then-MAC — nowhere
+greppable, wrong key fails closed); the author declares keyed APIs
+(the finish_node `secrets` field, or the prose `SECRETS:` line, both
+taught by the prompt); a declaring build PAUSES — the judged build
+waits in `pending_builds`, the reply carries the `secret_form` chat
+block (a seventh block kind, masked entry in Chat and NodeInteract) —
+and the door (`POST /v1/builds/{id}/secrets`, or
+`/v1/work/nodes/{id}/secrets` for a standing node) completes the
+publish through the same tail every build walks, binds the credential
+beside the node's host grants (`node_credentials`, rotation revokes
+the old ref), and GRANTS the host through the real account door.
+Injection at the broker seam: `_egress_auth` ref stamps ride the
+action into `WebGrant.auth`, and the `WebBroker` resolves them
+host-side for granted hosts only — the script's own header never
+wins, the value never enters the sandbox, the action, the call log,
+or the durable state. Pinned by tests/test_birth_wall.py and
+tests/test_secret_ask.py (including the raw-database-bytes grep) plus
+the SecretFormBlock case in Chat.test.tsx; four test fixtures that
+declared inputs their scripts never read — the exact lie the wall
+refuses — were corrected to consume their contracts.
+
 ### V3 — one ask earns its finish (report 3)
 
 Goal: reply → execute → verify → retry → review → report inside ONE

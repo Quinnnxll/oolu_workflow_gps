@@ -1,11 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import type { ChatAction, ChatHistoryTurn, WorkNode } from "../api";
+import type {
+  ChatAction,
+  ChatHistoryTurn,
+  ChatTurnBlock,
+  WorkNode,
+} from "../api";
 import { identityHue } from "../avatar";
 import {
   actionLabel,
   Reasoning,
   replyLanded,
+  SecretFormBlock,
   serverStillWorking,
   watchRunReport,
 } from "./Chat";
@@ -30,6 +36,9 @@ type Msg =
       actions?: ChatAction[];
       // The model's own thinking behind this reply, when it showed it.
       reasoning?: string;
+      // The secret form (V2): an in-node build against a keyed API
+      // asks for its credential right here, masked, never chat text.
+      block?: ChatTurnBlock | null;
     };
 
 // The node's thread now lives on the SERVER (V0) under agent
@@ -43,6 +52,7 @@ function nodeThreadFromServer(items: ChatHistoryTurn[]): Msg[] {
     .map((turn): Msg => ({
       kind: turn.kind as "user" | "assistant",
       text: turn.body,
+      block: turn.block?.kind === "secret_form" ? turn.block : null,
     }));
 }
 
@@ -174,6 +184,7 @@ export function NodeInteract({ node }: { node: WorkNode }) {
           text: turn.reply,
           actions: turn.actions,
           reasoning: turn.reasoning || undefined,
+          block: turn.block?.kind === "secret_form" ? turn.block : null,
         },
       ]);
       // A queued run (V1): watch for the worker's report turn and fold
@@ -234,6 +245,9 @@ export function NodeInteract({ node }: { node: WorkNode }) {
               <Reasoning text={m.reasoning} />
             )}
             {m.text}
+            {m.kind === "assistant" && m.block?.kind === "secret_form" && (
+              <SecretFormBlock block={m.block} />
+            )}
             {m.kind === "assistant" && m.actions && m.actions.length > 0 && (
               <div className="tool-chips">
                 {m.actions.map((a, j) => (
