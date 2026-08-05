@@ -4,6 +4,19 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+V7 landed — the open door, honestly bounded
+(docs/node-vitality-plan.md, phase V7): web search is governed by
+consent and money, not a magic 3. The hardcoded max_uses:3 became the
+model.web_search_depth setting (default 12, clamped to the wire's
+ceiling of 30) — model.web_search stays the consent switch, a legacy
+boolean means the generous default, a nonsense depth falls back to it
+(the switch is the off switch, never the number), and the real bound
+is the model budget, which prices every search-bearing call. The
+settings surface says all of this in words, doctrine line included.
+Node-side web bounds and the press closed-loop law are untouched.
+Pinned in tests/test_web_and_local_search.py. This completes the
+node-vitality program: V0–V7 all landed.
+
 V6 landed — the node books and the vitality law
 (docs/node-vitality-plan.md, phase V6): every node has honest books;
 the books select.

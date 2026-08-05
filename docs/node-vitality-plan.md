@@ -783,6 +783,28 @@ Exit gate: a research ask is no longer starved at 3 searches; the
 setting renders, binds, and is spoken in the settings surface; press
 import-scan pins stay green.
 
+**Status: LANDED.** The hardcoded ``max_uses: 3`` became the dial:
+``model.web_search_depth`` joined the settings catalog (NUMBER,
+default 12 — generous by design; the description names the real
+bound, the model budget that prices every search-bearing call, and
+restates the doctrine line: one-off questions search inline,
+repeatable web work becomes a node on the brokered hand). The adapter
+takes the DEPTH (``web_search: int | bool`` — a legacy ``True`` means
+the generous default, never a starved 1), clamped to the wire ceiling
+(``MAX_WEB_SEARCH_DEPTH = 30``); the router reads consent and depth
+separately (``_search_depth``: consent off = 0, a nonsense depth
+falls back to the default — the switch is the off switch, never the
+number); both construction sites (gateway per-tenant routers, the
+assembly's planning routers) wire the setting through.
+``model.web_search`` stays the consent switch untouched; the
+node-side web bounds (calls/hosts/SSRF) and the press closed-loop law
+are untouched. Pinned in tests/test_web_and_local_search.py (the
+default rides and exceeds 3; the dial binds and clamps; consent off
+ignores the depth; the catalog speaks the bound and the doctrine) —
+press pins green.
+
+**The seven-phase program is complete: V0–V7 all landed.**
+
 ---
 
 ## Part IV — decisions taken, and questions for the owner

@@ -141,6 +141,19 @@ SETTINGS_CATALOG: tuple[SettingField, ...] = (
         "a local model never searches).",
     ),
     SettingField(
+        key="model.web_search_depth",
+        group="model",
+        label="Web searches per reply",
+        kind=SettingKind.NUMBER,
+        default=12,
+        description="How many web searches ONE reply may run when the "
+        "switch above is on — the depth dial (V7), generous by default; "
+        "the real bound is your model budget, which prices every "
+        "search-bearing call. One-off questions search inline; "
+        "repeatable web work still becomes a node on the brokered hand "
+        "with its own run bounds.",
+    ),
+    SettingField(
         key="app.notifications",
         group="app",
         label="Notifications",

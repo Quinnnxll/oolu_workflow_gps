@@ -28,6 +28,14 @@ _anthropic_thinking_model = anthropic_thinking_model
 # Anthropic's floor for a thinking budget; below it the block is invalid.
 _MIN_THINKING_BUDGET = 1024
 
+# The web-search dial (V7): the generous default depth a reply may
+# search to, and the wire's hard ceiling. Consent lives in the
+# model.web_search switch; the DEPTH is a setting the owner reads and
+# sets, and the real bound is the seat's money budget — every
+# search-bearing call is priced like any other.
+DEFAULT_WEB_SEARCH_DEPTH = 12
+MAX_WEB_SEARCH_DEPTH = 30
+
 
 def openai_sse_events(
     lines: Iterator[str],
@@ -327,7 +335,7 @@ class AnthropicAdapter(ApiKeyProviderAdapter):
         tool_choice: str | None = None,
         idempotency_key: str | None = None,
         cost: float = 1.0,
-        web_search: bool = False,
+        web_search: int | bool = False,
         temperature: float | None = None,
         thinking_budget: int | None = None,
     ) -> dict:
@@ -373,13 +381,22 @@ class AnthropicAdapter(ApiKeyProviderAdapter):
         # The provider's own web-search tool: the SEARCH runs on Anthropic's
         # servers inside this same API call — the machine here needs no web
         # access of its own, which is exactly what lets a keyed OoLu answer
-        # current-facts questions from any install.
+        # current-facts questions from any install. ``web_search`` is the
+        # DEPTH (V7): how many searches this one reply may run — the magic
+        # 3 became a dial; a legacy ``True`` means the generous default,
+        # and the real bound is the seat's money budget, which already
+        # prices every search-bearing call.
         if web_search:
+            depth = (
+                DEFAULT_WEB_SEARCH_DEPTH
+                if web_search is True
+                else max(1, min(int(web_search), MAX_WEB_SEARCH_DEPTH))
+            )
             wire_tools.append(
                 {
                     "type": "web_search_20250305",
                     "name": "web_search",
-                    "max_uses": 3,
+                    "max_uses": depth,
                 }
             )
         if wire_tools:

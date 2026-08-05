@@ -194,6 +194,12 @@ class ChatModelRouter:
         # (Anthropic today). The search happens inside the API call — the
         # local machine needs no web access of its own.
         web_search: Callable[[], bool] | None = None,
+        # V7: how DEEP one reply may search — the model.web_search_depth
+        # setting. The boolean above stays the consent switch; this dial
+        # replaces the old hardcoded 3, and the real bound is the seat's
+        # money budget, which prices every search-bearing call. None (or
+        # an unreadable value) means the generous default.
+        web_search_depth: Callable[[], int] | None = None,
         # None = the seat profile decides (providers/profiles.py) — the
         # per-purpose effort table that replaced the old universal 1024.
         # A number here is an explicit override (benches, tests).
@@ -216,6 +222,7 @@ class ChatModelRouter:
         self._local_url = local_url or (lambda: "")
         self._local_model = local_model or (lambda: "")
         self._web_search = web_search or (lambda: False)
+        self._web_search_depth = web_search_depth
         self._purpose = purpose
         # The seat's standing effort, with the constructor's max_tokens
         # (when given) as an explicit ceiling override on top of it.
@@ -235,6 +242,25 @@ class ChatModelRouter:
         """Name the account the NEXT consultations are drawn by — the
         per-user dimension of the usage books on a shared tenant."""
         self._actor = str(principal or "")
+
+    def _search_depth(self) -> int:
+        """The dial's read (V7): 0 when consent is off; otherwise the
+        configured depth clamped to the wire's bounds, with the generous
+        default standing in for an absent or unreadable setting — the
+        consent switch is the off switch, never the number."""
+        from .apikey import DEFAULT_WEB_SEARCH_DEPTH, MAX_WEB_SEARCH_DEPTH
+
+        if not self._web_search():
+            return 0
+        depth = DEFAULT_WEB_SEARCH_DEPTH
+        if self._web_search_depth is not None:
+            try:
+                configured = int(self._web_search_depth())
+                if configured > 0:
+                    depth = configured
+            except (TypeError, ValueError):
+                pass
+        return max(1, min(depth, MAX_WEB_SEARCH_DEPTH))
 
     # ------------------------------------------------------------------ #
     def web_search_ready(self) -> bool:
@@ -808,7 +834,7 @@ class ChatModelRouter:
                 system=system,
                 tools=tools,
                 tool_choice=tool_choice,
-                web_search=self._web_search(),
+                web_search=self._search_depth(),
                 temperature=effort.temperature,
                 # The annex (ToolReply.thinking_blocks) now carries
                 # thoughts back across tool turns verbatim, so the

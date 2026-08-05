@@ -28,7 +28,7 @@ from oolu.providers.keyring import ModelKeyring
 # --------------------------------------------------------------------------- #
 # The web door.                                                                #
 # --------------------------------------------------------------------------- #
-def _router(tmp_path, *, web_search: bool):
+def _router(tmp_path, *, web_search: bool, depth=None):
     conn = DurableConnection(tmp_path / "durable.db")
     keyring = ModelKeyring(conn, key_path=tmp_path / "machine.key")
     keyring.store("t1", "anthropic", "sk-ant-test-key")
@@ -41,10 +41,13 @@ def _router(tmp_path, *, web_search: bool):
         source=lambda: "own-api",
         preference=lambda: "anthropic",
         web_search=lambda: web_search,
+        web_search_depth=(lambda: depth) if depth is not None else None,
     )
     return conn, router, transport
 
 def test_the_model_searches_the_web_inside_its_own_api_call(tmp_path):
+    from oolu.providers.apikey import DEFAULT_WEB_SEARCH_DEPTH
+
     conn, router, transport = _router(tmp_path, web_search=True)
     transport.script("anthropic.com", 200, _anthropic_reply("It's sunny."))
 
@@ -53,8 +56,60 @@ def test_the_model_searches_the_web_inside_its_own_api_call(tmp_path):
     [tool] = request["body"]["tools"]
     assert tool["type"] == "web_search_20250305"
     assert tool["name"] == "web_search"
-    assert tool["max_uses"] == 3
+    # V7: the magic 3 became a dial — with no depth configured, the
+    # generous default rides, and the money budget is the real bound.
+    assert tool["max_uses"] == DEFAULT_WEB_SEARCH_DEPTH
+    assert tool["max_uses"] > 3
     conn.close()
+
+
+def test_the_depth_dial_binds_and_clamps(tmp_path):
+    from oolu.providers.apikey import MAX_WEB_SEARCH_DEPTH
+
+    # A research-friendly depth flows through to the wire verbatim…
+    conn, router, transport = _router(tmp_path, web_search=True, depth=20)
+    transport.script("anthropic.com", 200, _anthropic_reply("Deep dive."))
+    assert router.reply([{"role": "user", "content": "research this"}])
+    [tool] = transport.requests[0]["body"]["tools"]
+    assert tool["max_uses"] == 20
+    conn.close()
+
+    # …a runaway number clamps to the wire's ceiling…
+    conn, router, transport = _router(tmp_path, web_search=True, depth=999)
+    transport.script("anthropic.com", 200, _anthropic_reply("Bounded."))
+    assert router.reply([{"role": "user", "content": "go"}])
+    [tool] = transport.requests[0]["body"]["tools"]
+    assert tool["max_uses"] == MAX_WEB_SEARCH_DEPTH
+    conn.close()
+
+    # …and a nonsense depth falls back to the default, never to zero:
+    # the consent switch is the off switch, not the number.
+    from oolu.providers.apikey import DEFAULT_WEB_SEARCH_DEPTH
+
+    conn, router, transport = _router(tmp_path, web_search=True, depth=0)
+    transport.script("anthropic.com", 200, _anthropic_reply("Still on."))
+    assert router.reply([{"role": "user", "content": "go"}])
+    [tool] = transport.requests[0]["body"]["tools"]
+    assert tool["max_uses"] == DEFAULT_WEB_SEARCH_DEPTH
+    conn.close()
+
+
+def test_consent_off_ignores_the_depth(tmp_path):
+    conn, router, transport = _router(tmp_path, web_search=False, depth=20)
+    transport.script("anthropic.com", 200, _anthropic_reply("No tools."))
+    assert router.reply([{"role": "user", "content": "hi"}])
+    assert "tools" not in transport.requests[0]["body"]
+    conn.close()
+
+
+def test_the_catalog_speaks_the_depth_dial():
+    from oolu.settings_node import field_for
+
+    field = field_for("model.web_search_depth")
+    assert field is not None and field.group == "model"
+    assert field.default == 12
+    assert "budget" in field.description  # the real bound, named
+    assert "node" in field.description  # the doctrine line stays
 
 
 def test_the_setting_closes_the_web_door(tmp_path):

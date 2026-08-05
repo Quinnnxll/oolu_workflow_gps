@@ -895,6 +895,11 @@ def build_host_runtime(
             local_url=lambda: str(_model_setting("model.local_url", "")),
             local_model=lambda: str(_model_setting("model.local_model", "")),
             web_search=lambda: bool(_model_setting("model.web_search", True)),
+            # The depth dial (V7): consent above, depth here, the seat's
+            # money budget the real bound.
+            web_search_depth=lambda: int(
+                float(_model_setting("model.web_search_depth", 12) or 0)
+            ),
             purpose=purpose,
         )
 
