@@ -127,6 +127,10 @@ def _rig(tmp_path, script_exec=None):
     real_drive = durable._orch.run
 
     def picky_drive(state, **kwargs):
+        # A run whose contract already carries its node function (V4's
+        # via_node routing) IS capable — the wall guards bare intents.
+        if state.contract.metadata.get("node_function") is not None:
+            return real_drive(state, **kwargs)
         drive_session = SimpleNamespace(
             tenant_id=state.contract.metadata.get("tenant_id"),
             principal_id=state.contract.submitted_by,
@@ -536,6 +540,34 @@ def test_no_to_reuse_rolls_into_a_distinct_build_offer(tmp_path):
         mine = desk.overview(principal="user-1", tenant="t1")
         assert len(mine) == 2
         assert script_exec.actions[-1].parameters["goal"] == PARAPHRASE
+    finally:
+        conn.close()
+
+
+def test_a_node_built_after_the_ask_still_offers_reuse_in_the_report(tmp_path):
+    """The report-time half of the reuse offer: when the at-ask search
+    (V4) saw nothing because the node landed AFTER the ask queued, the
+    failed drive's report still finds it and offers reuse."""
+    app, conn, ident, desk, script_exec = _rig(tmp_path)
+    try:
+        _speak_work(app, [PARAPHRASE_TURN])
+        asked = _chat(app, ident, "tidy the invoice csvs for me")
+        assert asked.body["run_id"] is not None  # nothing stood at ask time
+        # The node lands between the enqueue and the worker's drive.
+        app._contract_executors = {}
+        app._node_function_author = lambda tenant: FakeAuthor()
+        built = app._build_function_node(
+            SimpleNamespace(tenant_id="t1", principal_id="user-1"), GOAL
+        )
+        assert "Built a NEW node" in built
+        app.drive_queue()
+        report = _report(app)
+        assert "answers for nearly this" in report
+        assert app._growth_offers.get("t1", "user-1") == (
+            "reuse",
+            GOAL,
+            PARAPHRASE,
+        )
     finally:
         conn.close()
 

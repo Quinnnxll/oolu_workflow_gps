@@ -10,34 +10,45 @@ existing node before anything builds — the reported
 standing-reminder-node failure, closed at every door it leaked through.
 
 - **Built-ins yield to standing nodes.** An explicit "remind me…" ask
-  with a reminder-shaped node on the caller's own desk is now a
+  with a reminder-shaped, runnable node the caller BUILT is now a
   QUESTION — "your node can take this — use it, or the built-in?" —
-  instead of the deterministic regex silently filing the row. Yes runs
-  the node with the user's own words as the run's intent (the route
-  forced through the chosen node's function); no files the plain row
-  through the same old door, confirmed from the store; either choice
-  lands on the audit chain (node.builtin_route). With no standing node
-  the old deterministic door is untouched.
+  instead of the deterministic regex silently filing the row. Yes
+  re-checks the node still resolves, then runs it with the user's own
+  words as the run's intent (the route forced through the chosen
+  node's function); no files the plain row through the same old door,
+  confirmed from the store; either choice lands on the audit chain
+  (node.builtin_route). The SEEDED starter shelf earns no question —
+  its reminders node files into the same store the built-in does —
+  and with no standing node the old deterministic door is untouched.
 - **Search-at-ask.** The chat task lane consults discovery BEFORE
   queueing a bare contract: exact goals already route through their
   node; a near-twin on the caller's own desk now RUNS under the
-  standing delegation (audited as reuse_at_ask) or becomes the reuse
-  question in the ask's own reply — fired before a doomed run, not
-  after one fails; and a tenant member's kin is NAMED in words (open
-  it under Nodes) instead of silently duplicated or silently ignored.
+  standing delegation (audited as reuse_at_ask, the route FORCED
+  through the found node so the "lands in its one log" words can
+  never ride a bare plan) or becomes the reuse question in the ask's
+  own reply — fired before a doomed run, not after one fails (a node
+  landing after the enqueue still gets the report-time offer); and a
+  tenant member's kin is NAMED in words with a standing yes-door —
+  "ask them about running it, or yes builds your own" — instead of
+  silently duplicated, silently ignored, or dead-ended.
 - **Search-before-build widens.** The build door's twin guard now also
   scans the TENANT registry by derived fn:/io: capability tokens plus
   goal similarity (DRAFT listings included — a desk node needn't be
-  marketplace-published to be standing work); minting a private copy
-  of a member's standing capability refuses naming the node and its
-  owner, and the explicit "different work" answer still builds, with
-  the considered node on the log. Program nodes joined the twin
+  marketplace-published to be standing work — but UNLISTED and
+  PRIVATE nodes keep their word to tenant siblings too; the
+  capability signal is strict for guard postures, so a generic
+  verb+noun echo ranks in search but never blocks work); minting a
+  private copy of a member's standing capability refuses naming the
+  node and its owner, and the refusal's promised "yes builds your own
+  anyway" really stands as an offer. Program nodes joined the twin
   guard's field: their stored goal sentence is scanned like any fn-
   node's.
 - **Program nodes became findable.** A goal-derived ALIAS row lands
-  beside a program node's random id at publish (node_aliases, newest
-  wins), so re-asking the goal that minted it resolves the node —
-  through the same resolver every run-route reads — instead of
+  beside a program node's random id at publish (node_aliases, keyed
+  per OWNER — a tenant sibling's same-goal publish writes their own
+  row instead of silently breaking the first owner's routing; newest
+  wins per owner), so re-asking the goal that minted it resolves the
+  node — through the same resolver every run-route reads — instead of
   planning a bare contract past it.
 - **The model can look.** The chat toolbox gained find_nodes: the
   caller's own desk plus the tenant registry, by capability and words,
@@ -47,12 +58,18 @@ standing-reminder-node failure, closed at every door it leaked through.
   claim nothing exists without looking.
 
 Pinned by tests/test_standing_first.py (the reminder ask surfacing the
-node and both answers honored; the alias resolving and repointing on
-rebuild; the similar scan seeing programs; the at-ask reuse running
-under delegation and asking without it; the tenant kin named, not run
-and not duplicated; the capability found without naming the node;
-find_nodes speaking own and tenant work); the reworked reuse tests in
-tests/test_growth_trigger.py pin the offer firing BEFORE a doomed run.
+node, both answers honored, and the yes-path driven through the node's
+function; the seeded shelf never hijacking the ask; the alias
+resolving, repointing on rebuild, and surviving a sibling's same-goal
+publish; the similar scan seeing programs and a pre-alias program
+reuse still routing through the node; the at-ask reuse running under
+delegation and asking without it; the tenant kin named with its
+yes-door, not run and not duplicated; unlisted nodes staying out of
+the registry; the capability found without naming the node and a
+partial echo blocking nothing; find_nodes speaking own and tenant
+work); the reworked reuse tests in tests/test_growth_trigger.py pin
+the offer firing BEFORE a doomed run, with the report-time half kept
+for nodes landing after the enqueue.
 
 V3 landed — one ask earns its finish
 (docs/node-vitality-plan.md, phase V3): reply → execute → retry →

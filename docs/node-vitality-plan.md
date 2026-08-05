@@ -526,42 +526,59 @@ Exit gate: a reminder-work ask with a standing reminder node surfaces
 that node; a re-ask of a program node's goal finds it; a capability
 present in the tenant registry is found without naming the node.
 
-**Status: LANDED.** The four legs, in the order the ask meets them.
-The BUILT-IN YIELDS: an explicit reminder ask (`reminder_shaped`, the
-deterministic door's own regexes exported) with a reminder-stemmed
-node on the caller's desk becomes the which-door question — a
-`reminder_route` growth offer; yes runs the node with the USER'S OWN
-WORDS as the run's intent (`via_node` threads `_function_for_node`
-through `_intent_run_metadata`, forcing the route the way the webhook
-door always has), no files the plain row through the unchanged
+**Status: LANDED** (then hardened by an adversarial review pass — 15
+confirmed findings folded back before the phase closed). The four
+legs, in the order the ask meets them. The BUILT-IN YIELDS: an
+explicit reminder ask (`reminder_shaped`, the deterministic door's
+own regexes exported) with a reminder-stemmed RUNNABLE node the
+person BUILT (the seeded starter shelf is excluded — its reminders
+node files into the same store the built-in does, so the question
+would be friction answering nothing; and a node with no script
+action never earns a question its yes couldn't keep) becomes the
+which-door question — a `reminder_route` growth offer; yes re-checks
+the node still resolves and runs it with the USER'S OWN WORDS as the
+run's intent (`via_node` threads `_function_for_node` through
+`_intent_run_metadata`, forcing the route the way the webhook door
+always has), no files the plain row through the unchanged
 deterministic door, and the choice audits as `node.builtin_route`.
 SEARCH-AT-ASK (`_reuse_at_ask`, ahead of V3's first-run question in
 the lane): exact goals already route through their node; an own
-near-twin runs under the standing delegation (audited
-`reuse_at_ask`, the report machinery riding along) or becomes the
-reuse question IN THE ASK'S REPLY — the offer now fires before a
-doomed run, and the reworked test_growth_trigger reuse tests pin
-exactly that; a tenant member's kin is named in words, never run and
-never duplicated (the auto-build steps aside for it too). The BUILD
-DOOR's twin guard widened to the tenant registry
+near-twin runs under the standing delegation with the route FORCED
+via `via_node` (a pre-alias program node must never let "lands in
+its one log" ride a bare plan — `_reuse_node_and_run` re-finds by
+goal sentence for the same reason) or becomes the reuse question IN
+THE ASK'S REPLY — the offer fires before a doomed run (the reworked
+test_growth_trigger tests pin that, and the report-time half keeps
+its own test for nodes landing after the enqueue); a tenant member's
+kin is NAMED in words with a standing `build_despite_kin` offer —
+"ask them about running it, or yes builds your own" — never a dead
+end, never a silent duplicate (the auto-build steps aside). The
+BUILD DOOR's twin guard widened to the tenant registry
 (`_find_tenant_capability`: derived fn:/io: capability words plus
-goal similarity over `tenant_registry()` — DRAFT listings included,
-bounded newest-200, V5 indexes it) and to PROGRAM nodes (their goal
-sentence scans like any fn- node's); the tenant refusal names the
-node and its owner, `allow_twin` still builds with the considered
-node audited. Program nodes carry a goal-derived ALIAS row
-(`node_aliases`, tenant-scoped, newest wins) written at publish and
-read by `_resolve_node_function` as its fallback — the re-asked goal
-resolves the node instead of planning past it. And the model can
-LOOK: the `find_nodes` chat tool (own desk + tenant registry, words
-report only what is stored) with prompt doctrine to route to standing
-work and never claim absence without looking. Pinned by
-tests/test_standing_first.py. (Noted honestly: a tenant member's node
-is FOUND and NAMED, never run from the ask lane — running another's
-node stays behind the marketplace's own doors, V5+ work; and the
-which-door question is asked per reminder ask while the node stands —
-a sticky per-node preference is future polish, not consent to
-assume.)
+goal similarity over `tenant_registry()` — DRAFT listings included
+but UNLISTED and PRIVATE nodes keep their word to tenant siblings
+too; bounded newest-200, V5 indexes it; the capability signal is
+STRICT for guard postures — every asked word covered, at least two —
+so a generic verb+noun echo ranks in search but never blocks work)
+and to PROGRAM nodes; the tenant refusal names the node and its
+owner and stands the same yes-door offer at the chat call sites;
+`allow_twin` still builds with the considered node audited. Program
+nodes carry a goal-derived ALIAS row (`node_aliases`, keyed per
+OWNER — tenant, principal, alias — so a sibling's same-goal publish
+writes their own row instead of silently breaking the first owner's
+routing; newest wins per owner) written at publish and read by
+`_resolve_node_function` as its fallback. And the model can LOOK:
+the `find_nodes` chat tool (own desk + tenant registry, words report
+only what is stored) with prompt doctrine to route to standing work
+and never claim absence without looking. Pinned by
+tests/test_standing_first.py. (Noted honestly: a tenant member's
+node is FOUND and NAMED, never run from the ask lane — running
+another's node stays behind the marketplace's own doors, V5+ work;
+the which-door question is asked per reminder ask while a built node
+stands — a sticky per-node preference is future polish, not consent
+to assume; and the explicit "build me a program …" door keeps its
+F0-documented no-twin-guard stance — the explicit request is the
+caller's reuse decision there, unchanged by V4.)
 
 ### V5 — the web at scale: links and the energy reading (report 4, scale)
 

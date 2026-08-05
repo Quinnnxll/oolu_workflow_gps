@@ -40,14 +40,18 @@ _SCHEMA = (
         payload_json TEXT NOT NULL
     )""",
     # V4: a second, MEANINGFUL lookup key beside a node's random id — the
-    # goal-derived alias a program node is findable by. One alias, one
-    # node, per tenant; a rebuild of the same goal repoints the alias.
+    # goal-derived alias a program node is findable by. Keyed per OWNER:
+    # one alias, one node, per (tenant, principal) — a tenant sibling
+    # publishing the same goal writes THEIR row, never repointing (and
+    # so silently breaking) the first owner's routing. A rebuild by the
+    # same owner repoints their own alias to the newest node.
     """CREATE TABLE IF NOT EXISTS node_aliases (
         tenant_id TEXT NOT NULL,
+        noder_principal TEXT NOT NULL,
         alias TEXT NOT NULL,
         node_id TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        PRIMARY KEY (tenant_id, alias)
+        PRIMARY KEY (tenant_id, noder_principal, alias)
     )""",
 )
 
@@ -56,6 +60,20 @@ class RegistryStore:
     def __init__(self, conn) -> None:
         self._conn = conn
         with self._conn.transaction() as db:
+            # A node_aliases table from V4's first (principal-blind) cut
+            # is rebuilt to the owner-keyed shape: aliases are a finding
+            # aid regenerated at the next publish, so dropping the old
+            # rows loses nothing durable.
+            row = db.execute(
+                "SELECT 1 FROM pragma_table_info('node_aliases')"
+                " WHERE name = 'noder_principal'"
+            ).fetchone()
+            had_table = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table'"
+                " AND name = 'node_aliases'"
+            ).fetchone()
+            if had_table and row is None:
+                db.execute("DROP TABLE node_aliases")
             for statement in _SCHEMA:
                 db.execute(statement)
 
@@ -218,34 +236,46 @@ class RegistryStore:
         return PricingPolicy.model_validate_json(row["payload_json"]) if row else None
 
     def add_alias(
-        self, tenant_id: str, alias: str, node_id: str, *, created_at: str
+        self,
+        tenant_id: str,
+        noder_principal: str,
+        alias: str,
+        node_id: str,
+        *,
+        created_at: str,
     ) -> None:
-        """Point the tenant's alias at this node — newest wins, so a
-        rebuilt goal resolves to the node that answers for it NOW."""
+        """Point the OWNER's alias at this node — newest wins, so their
+        rebuilt goal resolves to the node that answers for it NOW, and
+        a tenant sibling's same-goal publish never touches this row."""
         with self._conn.transaction() as db:
             db.execute(
                 """INSERT OR REPLACE INTO node_aliases
-                   (tenant_id, alias, node_id, created_at)
-                   VALUES (?, ?, ?, ?)""",
-                (tenant_id, alias, node_id, created_at),
+                   (tenant_id, noder_principal, alias, node_id, created_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (tenant_id, noder_principal, alias, node_id, created_at),
             )
 
-    def node_by_alias(self, tenant_id: str, alias: str) -> Node | None:
+    def node_by_alias(
+        self, tenant_id: str, noder_principal: str, alias: str
+    ) -> Node | None:
         with self._conn.lock:
             row = self._conn.db.execute(
                 """SELECT n.payload_json AS payload_json
                    FROM node_aliases a JOIN nodes n ON a.node_id = n.node_id
-                   WHERE a.tenant_id = ? AND a.alias = ?""",
-                (tenant_id, alias),
+                   WHERE a.tenant_id = ? AND a.noder_principal = ?
+                     AND a.alias = ?""",
+                (tenant_id, noder_principal, alias),
             ).fetchone()
         return Node.model_validate_json(row["payload_json"]) if row else None
 
     def tenant_listings(
         self, tenant_id: str, limit: int = 200
     ) -> list[tuple[Node, Listing]]:
-        """The tenant's standing registry: every member's live nodes with
-        their newest listing — DRAFT included, because a desk-standing
-        node needn't be marketplace-published to be standing work. One
+        """The tenant's standing registry: every member's live PUBLIC
+        nodes with their newest listing — DRAFT listings included,
+        because a desk-standing node needn't be marketplace-published to
+        be standing work, but unlisted and private nodes keep their
+        word: neither is discoverable, to tenant siblings included. One
         pair per node (the newest listing speaks for it), newest first,
         bounded — the V4 capability search scans this; V5 indexes it."""
         with self._conn.lock:
@@ -256,11 +286,13 @@ class RegistryStore:
                    JOIN node_versions v ON l.version_id = v.version_id
                    JOIN nodes n ON v.node_id = n.node_id
                    WHERE n.tenant_id = ? AND n.revoked_at IS NULL
+                     AND n.visibility = ?
                      AND l.status IN (?, ?)
                    ORDER BY l.updated_at DESC
                    LIMIT ?""",
                 (
                     tenant_id,
+                    Visibility.PUBLIC.value,
                     ListingStatus.DRAFT.value,
                     ListingStatus.ACTIVE.value,
                     limit,

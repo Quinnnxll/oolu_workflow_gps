@@ -2592,9 +2592,11 @@ class GatewayApp:
                     turn, run = self._grow_node_and_run(
                         session,
                         offered_goal,
-                        # The user already said this is different work: the
-                        # twin guard asked, was answered, and steps aside.
-                        allow_twin=kind == "build_distinct",
+                        # The user already said this is different work (or
+                        # their own despite a tenant kin): the twin guard
+                        # asked, was answered, and steps aside.
+                        allow_twin=kind
+                        in ("build_distinct", "build_despite_kin"),
                     )
                 elif answer == "no" and kind == "reuse":
                     # Different work after all — the plain build offer
@@ -2651,6 +2653,16 @@ class GatewayApp:
                     # Paused on its key (V2): the words + the form block
                     # ride this turn; the door completes the publish.
                     built, turn_block = built
+                if built.startswith(self._KIN_REFUSAL):
+                    # The refusal promises a yes-door: stand the offer so
+                    # "yes" really builds their own despite the kin.
+                    self._growth_offers.put(
+                        session.tenant_id,
+                        session.principal_id,
+                        kind="build_despite_kin",
+                        goal=build_goal,
+                        original_goal=build_goal,
+                    )
                 if built.startswith("error:"):
                     turn = ChatTurn(
                         say=f"I couldn't build that node: {built[7:].strip()}",
@@ -2773,6 +2785,16 @@ class GatewayApp:
             )
             if isinstance(built, tuple):
                 built, turn_block = built
+            if built.startswith(self._KIN_REFUSAL):
+                # The refusal promises a yes-door: stand the offer so
+                # "yes" really builds their own despite the kin.
+                self._growth_offers.put(
+                    session.tenant_id,
+                    session.principal_id,
+                    kind="build_despite_kin",
+                    goal=build_task,
+                    original_goal=build_task,
+                )
             if built.startswith("error:"):
                 say = f"I couldn't build that node: {built[7:].strip()}"
             else:
@@ -8092,17 +8114,58 @@ class GatewayApp:
             say += f" If you want me to auto-build what's missing: {hint}"
         return say
 
+    def _own_node_for_goal(self, session, goal: str) -> str | None:
+        """The caller's own node whose stored goal IS this sentence
+        (normalized), fn- or program- — the deterministic re-find behind
+        a reuse "yes", for the nodes hash/alias resolution cannot reach
+        (a program node from before the alias table existed)."""
+        if self._nodeplace is None:
+            return None
+        wanted = self._function_goal_key(goal)
+        try:
+            nodes = self._nodeplace.list_own_nodes(
+                noder_principal=session.principal_id,
+                tenant_id=session.tenant_id,
+            )
+        except Exception:  # noqa: BLE001 - the re-find is best-effort
+            return None
+        for node in nodes:  # newest first
+            if not node.skill_id.startswith(("fn-", "program-")):
+                continue
+            if self._node_deleted(node.node_id):
+                continue
+            version = self._nodeplace.latest_version(node.node_id)
+            if version is None:
+                continue
+            try:
+                skill = ReusableSkill.model_validate_json(
+                    version.sanitized_skill_json
+                )
+            except Exception:  # noqa: BLE001
+                continue
+            if self._function_goal_key(skill.description) == wanted:
+                return node.node_id
+        return None
+
     def _reuse_node_and_run(
         self, session, goal: str
     ) -> tuple[ChatTurn, dict | None]:
         """The reuse half of the twin guard: the user said yes to running
         the node that already answers for (nearly) this — the run routes
         through that node's OWN function, so the execution lands in its
-        one log instead of a twin's."""
+        one log instead of a twin's. When hash/alias resolution misses
+        (a pre-alias program node), the node is re-found by its stored
+        goal sentence and the route FORCED through it — the words above
+        must never ride a bare plan."""
         function = self._resolve_node_function(session, goal)
+        via = None
+        if function is None:
+            via = self._own_node_for_goal(session, goal)
+            if via is not None:
+                function = self._function_for_node(session, via)
         title = function["title"] if function is not None else concise_name(goal)
         try:
-            run = self._start_intent_run(session, goal)
+            run = self._start_intent_run(session, goal, via_node=via)
         except GatewayError as exc:
             if exc.code not in ("cannot_execute", "release_revoked"):
                 raise
@@ -8172,7 +8235,13 @@ class GatewayApp:
                         "tenant": session.tenant_id,
                     },
                 )
-                run = self._enqueue_intent_run(session, similar["goal"])
+                # via_node FORCES the route through the found node: a
+                # program node whose goal predates the alias table would
+                # otherwise re-resolve to nothing and the "lands in its
+                # one log" words would ride a bare plan.
+                run = self._enqueue_intent_run(
+                    session, similar["goal"], via_node=similar["node_id"]
+                )
                 self._metrics["chat_runs"] += 1
                 meter = getattr(self, "_model_meter", None)
                 self._run_reports.file(
@@ -8210,12 +8279,22 @@ class GatewayApp:
         )
         if kin:
             near = kin[0]
+            # Another member's node can be NAMED, never run from here —
+            # and the naming must not be a dead end: the standing offer
+            # is the consent door to building one's own anyway.
+            self._growth_offers.put(
+                session.tenant_id,
+                session.principal_id,
+                kind="build_despite_kin",
+                goal=goal,
+                original_goal=goal,
+            )
             return (
                 "Found standing work for this in your tenant's registry: "
                 f"“{near['title']}” ({near['node_id'][:8]}), built for "
-                f"“{near['goal']}” by {near['owner']}. Open it under "
-                "Nodes to use it there — or say the goal more distinctly "
-                "and I'll build your own.",
+                f"“{near['goal']}” by {near['owner']}. Ask them about "
+                "running it for you — or say “yes” and I'll build your "
+                "own for this, “no” to leave it.",
                 None,
             )
         return None
@@ -8241,11 +8320,18 @@ class GatewayApp:
         )
         if use_node:
             standing = self._standing_reminder_node(session)
-            if standing is None:
+            # The promise is re-earned at answer time: the node must
+            # still resolve to a runnable function, or the words "Running
+            # X" would ride a bare plan that lands in no log.
+            if standing is None or (
+                self._function_for_node(session, standing["node_id"]) is None
+            ):
                 return (
                     ChatTurn(
-                        say="That node is gone from your desk — tell me "
-                        "the reminder again and I'll file the plain row.",
+                        say="That node can't take it right now (it's gone "
+                        "from your desk or has no runnable function) — "
+                        "tell me the reminder again and I'll file the "
+                        "plain row.",
                         source="tool",
                     ),
                     None,
@@ -8696,12 +8782,12 @@ class GatewayApp:
             near = kin[0]
             if not allow_twin:
                 return (
-                    "error: a node in your tenant's registry already "
+                    f"{self._KIN_REFUSAL} already "
                     f"answers for nearly this — “{near['title']}” "
                     f"({near['node_id'][:8]}), built for “{near['goal']}” "
-                    f"by {near['owner']}. Find it under Nodes to use it; "
-                    "if this is truly different work, say the goal more "
-                    "distinctly and I'll build your own."
+                    f"by {near['owner']}. Ask them about running it for "
+                    "you; if you want your own anyway, say “yes” and "
+                    "I'll build it."
                 )
             self._durable.audit.append(
                 "node.reuse_decision",
@@ -9956,11 +10042,12 @@ class GatewayApp:
         )
         if node is None:
             # V4: the goal-derived ALIAS row — a program node carries a
-            # random id, but the goal that minted it filed an alias, so
-            # re-asking that goal finds the node instead of a bare plan.
+            # random id, but the goal that minted it filed the OWNER's
+            # alias, so re-asking that goal finds the node instead of a
+            # bare plan.
             try:
                 aliased = self._nodeplace.node_by_alias(
-                    session.tenant_id, skill_id
+                    session.tenant_id, session.principal_id, skill_id
                 )
             except Exception:  # noqa: BLE001 - resolution is best-effort
                 aliased = None
@@ -10400,6 +10487,7 @@ class GatewayApp:
         try:
             self._nodeplace.add_alias(
                 session.tenant_id,
+                session.principal_id,
                 self._function_skill_id(session.tenant_id, goal),
                 node_id,
             )
@@ -10806,7 +10894,7 @@ class GatewayApp:
             # The alias-resolved exact match (a program node built for THIS
             # goal) is _resolve_node_function's find, never a "twin".
             aliased = self._nodeplace.node_by_alias(
-                session.tenant_id, exact_id
+                session.tenant_id, session.principal_id, exact_id
             )
         except Exception:  # noqa: BLE001 - the alias is a finding aid
             aliased = None
@@ -10872,18 +10960,33 @@ class GatewayApp:
         return False
 
     def _registry_match_score(
-        self, goal: str, title: str, summary: str, capabilities
+        self,
+        goal: str,
+        title: str,
+        summary: str,
+        capabilities,
+        *,
+        strict_caps: bool = True,
     ) -> float:
         """How well a listed node answers an ask, 0..1: the twin guard's
         own goal similarity against the listing's words, OR the coverage
         of the ask's content words by the node's derived capability
-        vocabulary — whichever signal is stronger."""
+        vocabulary — whichever signal is stronger.
+
+        ``strict_caps`` (the GUARD posture): the capability signal
+        counts only when EVERY asked word is covered and there are at
+        least two — a generic verb+noun echo ("create" + "reminder")
+        must not block or reroute work that only partly overlaps.
+        Search surfaces (find_nodes) relax this: ranking may use the
+        partial signal, refusing may not."""
         spoken = goal_similarity(goal, f"{title} {summary}")
         asked = keywords(goal, limit=0)
         if not asked:
             return spoken
         vocabulary = self._capability_words(capabilities)
         covered = sum(1 for w in asked if self._word_hit(w, vocabulary))
+        if strict_caps and (covered < len(asked) or len(asked) < 2):
+            return spoken
         return max(spoken, covered / len(asked))
 
     def _find_tenant_capability(
@@ -10894,6 +10997,7 @@ class GatewayApp:
         exclude_principal: str | None = None,
         floor: float = NEAR_GOAL_SIMILARITY,
         limit: int = 3,
+        strict_caps: bool = True,
     ) -> list[dict]:
         """V4: the tenant-registry capability search — derived ``fn:``/
         ``io:`` tokens plus goal similarity over every member's standing
@@ -10920,7 +11024,11 @@ class GatewayApp:
             if self._node_deleted(node.node_id):
                 continue
             score = self._registry_match_score(
-                goal, listing.title, listing.summary, listing.capabilities
+                goal,
+                listing.title,
+                listing.summary,
+                listing.capabilities,
+                strict_caps=strict_caps,
             )
             if score >= floor:
                 scored.append(
@@ -10938,12 +11046,30 @@ class GatewayApp:
         scored.sort(key=lambda pair: -pair[0])
         return [item for _score, item in scored[:limit]]
 
+    def _starter_skill_ids(self, tenant: str) -> set[str]:
+        """The seeded starter shelf's goal-hash ids for this tenant —
+        the nodes OoLu itself minted at sign-in, recognizable because
+        their skill ids derive from the shelf's fixed goal sentences."""
+        from ..nodeplace.personal_templates import STARTER_SHELF
+
+        return {
+            self._function_skill_id(tenant, spec.goal)
+            for spec in STARTER_SHELF
+        }
+
     def _standing_reminder_node(self, session) -> dict | None:
         """The caller's own standing node that does REMINDER work, if one
         exists — matched deterministically on the reminder stem in its
         title or goal sentence. V4: the built-in reminder door checks
         for this node FIRST and asks which door, instead of silently
-        taking the ask the user built a node for."""
+        taking the ask the user built a node for.
+
+        Two honest exclusions: a node with no runnable script action
+        never earns the question (the yes-answer must be able to run
+        it), and the SEEDED starter shelf stays out — its reminders
+        node files into the same store the built-in does, so asking
+        which door on every seeded desk would be friction answering
+        nothing. The question belongs to nodes the person built."""
         if self._nodeplace is None:
             return None
         try:
@@ -10953,8 +11079,11 @@ class GatewayApp:
             )
         except Exception:  # noqa: BLE001 - the check is best-effort
             return None
+        seeded = self._starter_skill_ids(session.tenant_id)
         for node in nodes:  # newest first: the freshest desk wins
             if not node.skill_id.startswith(("fn-", "program-")):
+                continue
+            if node.skill_id in seeded:
                 continue
             if self._node_deleted(node.node_id):
                 continue
@@ -10967,6 +11096,11 @@ class GatewayApp:
                 )
             except Exception:  # noqa: BLE001
                 continue
+            action = next(
+                (a for a in skill.actions if a.adapter == "script"), None
+            )
+            if action is None or not (action.parameters or {}).get("script"):
+                continue  # unrunnable: the yes-answer could keep no promise
             if "remind" in f"{skill.name} {skill.description}".lower():
                 return {
                     "node_id": node.node_id,
@@ -10976,6 +11110,11 @@ class GatewayApp:
         return None
 
     _FIND_NODES_FLOOR = 0.15
+
+    # The tenant-kin refusal's stable opening — the chat call sites
+    # recognize it to stand the "yes builds your own anyway" offer the
+    # refusal's words promise.
+    _KIN_REFUSAL = "error: a node in your tenant's registry"
 
     def _find_nodes_words(self, session, query: str) -> str:
         """The ``find_nodes`` tool's answer (V4): standing work matching
@@ -11020,6 +11159,7 @@ class GatewayApp:
                 skill.name,
                 skill.description,
                 listing.capabilities if listing is not None else (),
+                strict_caps=False,
             )
             if score >= self._FIND_NODES_FLOOR:
                 own_lines.append(
@@ -11040,6 +11180,7 @@ class GatewayApp:
                 exclude_principal=session.principal_id,
                 floor=self._FIND_NODES_FLOOR,
                 limit=5,
+                strict_caps=False,
             )
         ]
         lines = [line for _s, line in own_lines[:5]] + tenant_lines
@@ -11196,6 +11337,7 @@ class GatewayApp:
         extra_bindings: dict | None = None,
         pulse: dict | None = None,
         progress=None,
+        via_node: str | None = None,
     ) -> dict:
         """Submit a plain intent as a run: the non-marketplace core of
         ``_submit_run``, shared with the chat surface.
@@ -11215,7 +11357,11 @@ class GatewayApp:
         occurrence, and how many occurrences the host slept through —
         stamped on the run's metadata so the record says why it ran."""
         metadata = self._intent_run_metadata(
-            session, intent, extra_bindings=extra_bindings, pulse=pulse
+            session,
+            intent,
+            extra_bindings=extra_bindings,
+            pulse=pulse,
+            via_node=via_node,
         )
         revivable = self._revivable_run_for(session, intent)
         if revivable is not None:

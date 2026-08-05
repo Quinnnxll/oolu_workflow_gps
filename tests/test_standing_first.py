@@ -112,7 +112,7 @@ def test_a_reminder_ask_surfaces_the_standing_node_first(tmp_path):
 
 
 def test_yes_routes_the_ask_through_the_standing_node(tmp_path):
-    app, conn, ident, desk, _script = _rig(tmp_path)
+    app, conn, ident, desk, script_exec = _rig(tmp_path)
     try:
         app._reminders = ReminderStore(conn, clock=lambda: NOW)
         node_id = _built_node(app, ident, "reminds me about important things")
@@ -133,6 +133,14 @@ def test_yes_routes_the_ask_through_the_standing_node(tmp_path):
         assert app._reminders.upcoming(tenant="t1", principal="user-1") == []
         routes = _audits(app, "node.builtin_route")
         assert routes and routes[-1].payload["choice"] == "node"
+        # And the worker really executes THROUGH the node's function —
+        # the promise is a run in the node's log, not queued words.
+        app.drive_queue()
+        expected = app._function_skill_id(
+            "t1", "reminds me about important things"
+        )
+        action = script_exec.actions[-1]
+        assert action.parameters["node_key"] == f"node:{expected}"
     finally:
         conn.close()
 
@@ -291,6 +299,12 @@ def test_at_ask_a_tenant_kin_is_named_not_run(tmp_path):
             )
             == []
         )
+        # The naming is never a dead end: the consent door stands.
+        assert app._growth_offers.get("t1", "user-2") == (
+            "build_despite_kin",
+            PARAPHRASE,
+            PARAPHRASE,
+        )
     finally:
         conn.close()
 
@@ -410,12 +424,176 @@ def test_the_alias_survives_in_the_registry_store(tmp_path):
             visibility=Visibility.PUBLIC,
         )
         service._store.add_node(node)
-        service.add_alias("t1", "fn-deadbeef", node.node_id)
-        found = service.node_by_alias("t1", "fn-deadbeef")
+        service.add_alias("t1", "user-1", "fn-deadbeef", node.node_id)
+        found = service.node_by_alias("t1", "user-1", "fn-deadbeef")
         assert found is not None and found.node_id == node.node_id
-        # Tenant-scoped: another tenant's lookup sees nothing.
-        assert service.node_by_alias("t2", "fn-deadbeef") is None
+        # Owner-scoped: another tenant OR another member sees nothing.
+        assert service.node_by_alias("t2", "user-1", "fn-deadbeef") is None
+        assert service.node_by_alias("t1", "user-2", "fn-deadbeef") is None
         # And unknown aliases answer honestly.
-        assert service.node_by_alias("t1", "fn-unknown") is None
+        assert service.node_by_alias("t1", "user-1", "fn-unknown") is None
+    finally:
+        conn.close()
+
+
+def test_a_siblings_same_goal_publish_never_breaks_the_owners_alias(tmp_path):
+    """The alias is OWNER-keyed: Bob publishing Alice's goal writes HIS
+    row — Alice's re-ask still resolves her node, and neither sees the
+    other's as a twin of their own exact goal."""
+    app, conn, ident, runner = _program_app(tmp_path)
+    alice = SimpleNamespace(tenant_id="t1", principal_id="alice")
+    bob = SimpleNamespace(tenant_id="t1", principal_id="bob")
+    io = {"outputs": [{"name": "summary", "type": "str"}]}
+    first = app.publish_program_node(
+        alice,
+        goal="compute the answer",
+        script=ENTRY,
+        files=dict(LIB),
+        program=SPEC,
+        io=io,
+    )
+    second = app.publish_program_node(
+        bob,
+        goal="compute the answer",
+        script=ENTRY + "\n# bob's own\n",
+        files=dict(LIB),
+        program=SPEC,
+        io=io,
+    )
+    assert first["ok"] and second["ok"]
+    mine = app._resolve_node_function(alice, "compute the answer")
+    theirs = app._resolve_node_function(bob, "compute the answer")
+    assert mine is not None and mine["node_id"] == first["node_id"]
+    assert theirs is not None and theirs["node_id"] == second["node_id"]
+    # The exact goal is resolution's find for each owner — never a twin.
+    assert app._find_similar_function_node(alice, "compute the answer") is None
+    conn.close()
+
+
+def test_a_pre_alias_program_node_reuse_still_runs_through_the_node(tmp_path):
+    """A program node published before the alias table exists has no
+    alias row — the reuse 'yes' must still FORCE the route through the
+    node (via_node), never ride its own words on a bare plan."""
+    app, conn, ident, runner = _program_app(tmp_path)
+    session = SimpleNamespace(tenant_id="t1", principal_id="noder")
+    result = app.publish_program_node(
+        session,
+        goal="compute the answer",
+        script=ENTRY,
+        files=dict(LIB),
+        program=SPEC,
+        io={"outputs": [{"name": "summary", "type": "str"}]},
+    )
+    assert result["ok"], result
+    with conn.transaction() as db:
+        db.execute("DELETE FROM node_aliases")  # the pre-V4 world
+    assert app._resolve_node_function(session, "compute the answer") is None
+    similar = app._find_similar_function_node(session, "compute the answer")
+    assert similar is not None and similar["node_id"] == result["node_id"]
+
+    turn, run = app._reuse_node_and_run(session, "compute the answer")
+    assert run is not None
+    state = app._durable.get(run["run_id"])
+    function = state.contract.metadata.get("node_function")
+    assert function is not None and function["node_id"] == result["node_id"]
+    assert "already answers for this" in turn.say
+    conn.close()
+
+
+def test_unlisted_nodes_stay_out_of_the_tenant_registry(tmp_path):
+    from oolu.nodeplace.models import Visibility
+
+    app, conn, ident, desk, _script = _rig(tmp_path)
+    try:
+        node_id = _built_node(app, ident, GOAL, principal="user-1")
+        assert app._find_tenant_capability(_session("user-2"), PARAPHRASE)
+        registry = app._nodeplace._store
+        node = registry.get_node(node_id)
+        registry.update_node(
+            node.model_copy(update={"visibility": Visibility.UNLISTED})
+        )
+        # Unlisted keeps its word to tenant siblings too.
+        assert app._find_tenant_capability(_session("user-2"), PARAPHRASE) == []
+    finally:
+        conn.close()
+
+
+def test_yes_after_the_kin_naming_builds_your_own(tmp_path):
+    app, conn, ident, desk, _script = _rig(tmp_path)
+    try:
+        _built_node(app, ident, GOAL, principal="user-1")
+        _speak_work(app, [PARAPHRASE_TURN])
+        asked = _chat(
+            app, ident, "tidy the invoice csvs for me", principal="user-2"
+        )
+        assert "build your own" in asked.body["reply"]
+        agreed = _chat(app, ident, "yes", principal="user-2")
+        assert "Built a NEW node" in agreed.body["reply"]
+        assert app._nodeplace.list_own_nodes(
+            noder_principal="user-2", tenant_id="t1"
+        )
+    finally:
+        conn.close()
+
+
+def test_the_explicit_build_door_stands_the_kin_offer(tmp_path):
+    app, conn, ident, desk, _script = _rig(tmp_path)
+    try:
+        _built_node(app, ident, GOAL, principal="user-1")
+        refused = _chat(
+            app,
+            ident,
+            f"build me a node that can {PARAPHRASE}",
+            principal="user-2",
+        )
+        assert "I couldn't build that node" in refused.body["reply"]
+        assert "tenant's registry" in refused.body["reply"]
+        # The refusal's promised yes-door really builds.
+        agreed = _chat(app, ident, "yes", principal="user-2")
+        assert "Built a NEW node" in agreed.body["reply"]
+    finally:
+        conn.close()
+
+
+def test_the_seeded_starter_shelf_never_hijacks_the_reminder_ask(tmp_path):
+    app, conn, ident, desk, _script = _rig(tmp_path)
+    try:
+        app._reminders = ReminderStore(conn, clock=lambda: NOW)
+        seeded = app._seed_starter_shelf("t1", "user-1")
+        assert seeded, "the shelf should land"
+        mine = desk.overview(principal="user-1", tenant="t1")
+        assert any("remind" in e.title.lower() for e in mine)
+        # The SEEDED reminders node earns no question — the built-in
+        # stays deterministic; the question belongs to built nodes.
+        asked = _chat(app, ident, "remind me to check the oven in 20 minutes")
+        assert "bring it up here" in asked.body["reply"]
+        assert app._growth_offers.get("t1", "user-1") is None
+    finally:
+        conn.close()
+
+
+def test_a_partial_capability_echo_never_blocks_work(tmp_path):
+    app, conn, ident, desk, _script = _rig(tmp_path)
+    try:
+        _built_node(
+            app,
+            ident,
+            "keep the kitchen timer honest",
+            principal="user-1",
+            answer=CAPABILITY_FN,
+        )
+        # Guard posture: 2 of 3 asked words echoing a capability is NOT
+        # "the same work" — nothing is blocked or rerouted by it.
+        assert (
+            app._find_tenant_capability(
+                _session("user-2"), "create a reminder for standup"
+            )
+            == []
+        )
+        # Search posture still surfaces it for the model's find_nodes.
+        words = app._find_nodes_words(
+            _session("user-2"), "create a reminder for standup"
+        )
+        assert "Kitchen" in words
     finally:
         conn.close()

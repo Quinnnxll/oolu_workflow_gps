@@ -332,18 +332,24 @@ class NodeplaceService:
     def discover(self, query: str = "") -> list[Listing]:
         return self._store.discover(query)
 
-    def add_alias(self, tenant_id: str, alias: str, node_id: str) -> None:
-        """V4: file the goal-derived alias beside a node's random id, so
-        a program node is findable by the goal that minted it."""
+    def add_alias(
+        self, tenant_id: str, noder_principal: str, alias: str, node_id: str
+    ) -> None:
+        """V4: file the OWNER's goal-derived alias beside a node's random
+        id, so a program node is findable by the goal that minted it —
+        and a tenant sibling's same-goal publish never repoints it."""
         self._store.add_alias(
             tenant_id,
+            noder_principal,
             alias,
             node_id,
             created_at=datetime.now(UTC).isoformat(),
         )
 
-    def node_by_alias(self, tenant_id: str, alias: str) -> Node | None:
-        return self._store.node_by_alias(tenant_id, alias)
+    def node_by_alias(
+        self, tenant_id: str, noder_principal: str, alias: str
+    ) -> Node | None:
+        return self._store.node_by_alias(tenant_id, noder_principal, alias)
 
     def tenant_registry(
         self, tenant_id: str, limit: int = 200
