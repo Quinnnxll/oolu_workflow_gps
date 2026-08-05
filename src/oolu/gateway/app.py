@@ -65,6 +65,8 @@ from ..chat import (
     messaging_intent,
     mood_directive,
     obviously_chat,
+    reminder_command,
+    reminder_shaped,
     repair_node_function,
     units_directive,
 )
@@ -126,7 +128,12 @@ from ..marketplace import (
 from ..metering.attribution import AttributionStore
 from ..metering.models import MeteringEvent
 from ..metering.store import MeteringLedger
-from ..naming import NEAR_GOAL_SIMILARITY, concise_name, goal_similarity
+from ..naming import (
+    NEAR_GOAL_SIMILARITY,
+    concise_name,
+    goal_similarity,
+    keywords,
+)
 from ..nodeplace import (
     NODE_POLICY,
     NODE_POLICY_VERSION,
@@ -2403,6 +2410,13 @@ class GatewayApp:
                             body.get("tz_offset_minutes")
                         ),
                     ),
+                    # The standing-work search (V4): find_nodes over the
+                    # caller's own desk and the tenant registry, by
+                    # capability and words — so the model routes to
+                    # standing work instead of describing a build.
+                    node_search=lambda query: self._find_nodes_words(
+                        session, query
+                    ),
                 )
         # Inside a fleet member's interact window, the model consultation
         # is the ORG's draw: it rides under the "node.interact" purpose,
@@ -2560,6 +2574,18 @@ class GatewayApp:
                     turn = self._answer_task_reminder(
                         session, offered_goal, accept=answer == "yes"
                     )
+                elif answer is not None and kind == "reminder_route":
+                    # The built-in-vs-node answer (V4): yes runs the
+                    # standing reminder node with the original ask; no
+                    # files the plain row through the same deterministic
+                    # door the regex always used.
+                    turn, run = self._route_reminder_choice(
+                        session,
+                        offered_goal,
+                        use_node=answer == "yes",
+                        tools=tools,
+                        thread_agent=thread_agent,
+                    )
                 elif answer == "yes" and kind == "reuse":
                     turn, run = self._reuse_node_and_run(session, offered_goal)
                 elif answer == "yes":
@@ -2644,6 +2670,34 @@ class GatewayApp:
             if spoken is not None:
                 turn = ChatTurn(
                     say=spoken, source="tool", actions=[{"tool": "pulse"}]
+                )
+        # V4: the built-in yields to standing work. An explicit reminder
+        # ask, with a reminder-shaped node on the caller's own desk, is a
+        # QUESTION (which door?) — the deterministic regex door would
+        # otherwise take it before the node the user built is ever seen:
+        # the exact failure report 4 pinned.
+        if (
+            turn is None
+            and not in_node
+            and self._reminders is not None
+            and reminder_shaped(message)
+        ):
+            standing = self._standing_reminder_node(session)
+            if standing is not None:
+                self._growth_offers.put(
+                    session.tenant_id,
+                    session.principal_id,
+                    kind="reminder_route",
+                    goal=message,
+                    original_goal=message,
+                )
+                turn = ChatTurn(
+                    say=(
+                        f"Your “{standing['title']}” node can take this — "
+                        "use it, or the built-in reminder? (yes — run the "
+                        "node / no — the plain reminder row)"
+                    ),
+                    source="tool",
                 )
         if turn is None:
             cleaned = [h for h in history if isinstance(h, dict)]
@@ -2735,18 +2789,31 @@ class GatewayApp:
                     if not in_node
                     else None
                 )
+                # V4 search-at-ask: standing work answers BEFORE a bare
+                # contract queues — the caller's own near-twin runs
+                # (under the delegation) or becomes the reuse question,
+                # and a tenant member's kin is named in words.
+                reused = (
+                    self._reuse_at_ask(session, turn.task, thread_agent)
+                    if handoff is None and not in_node
+                    else None
+                )
                 # The first-run question (V3): a buildable task with the
                 # delegation NEVER answered becomes the question itself —
                 # consent surfaces on the first ask that needs it, not as
                 # a buried default the user finds after three failures.
                 first_ask = (
                     handoff is None
+                    and reused is None
                     and not in_node
                     and self._delegation_unanswered(session)
                     and self._goal_buildable(session, turn.task)
                 )
                 if handoff is not None:
                     say = f"{say} {handoff}".strip()
+                elif reused is not None:
+                    found_words, run = reused
+                    say = f"{say} {found_words}".strip()
                 elif first_ask:
                     self._growth_offers.put(
                         session.tenant_id,
@@ -7939,6 +8006,13 @@ class GatewayApp:
             # A near-twin is a QUESTION (reuse or build distinct?), never
             # a silent build — the growth offer handles it in words.
             or self._find_similar_function_node(session, goal) is not None
+            # V4: a tenant member's standing kin is surfaced at ask time,
+            # never silently duplicated by an auto-build.
+            or bool(
+                self._find_tenant_capability(
+                    session, goal, exclude_principal=session.principal_id
+                )
+            )
         ):
             return None
         result = self._build_function_node(session, goal)
@@ -8059,6 +8133,169 @@ class GatewayApp:
         )
         say = self._describe_run_failure(say, run, autobuild_hint=False)
         return ChatTurn(say=say, source="tool"), run
+
+    def _reuse_at_ask(
+        self, session, goal: str, thread_agent: str
+    ) -> tuple[str, dict | None] | None:
+        """V4 search-at-ask: standing work answers BEFORE a bare contract
+        is queued. Exact goals already route through their node
+        (``_intent_run_metadata``), so this covers what an exact key
+        cannot see: the caller's own near-twin RUNS under the standing
+        delegation (the consent that covers building covers reusing) or
+        becomes the reuse QUESTION — fired before a doomed run, not
+        after it fails — and a tenant member's kin is NAMED in words:
+        finding it is this phase's job; running another's node stays
+        behind its own doors. Returns ``(words, run|None)``, or None
+        when nothing stands and the normal flow should proceed."""
+        goal = (goal or "").strip()
+        if (
+            not goal
+            or obviously_chat(goal)
+            or messaging_intent(goal)
+            or self._nodeplace is None
+            or self._resolve_node_function(session, goal) is not None
+        ):
+            return None
+        similar = self._find_similar_function_node(session, goal)
+        if similar is not None:
+            if self._task_delegated(session.tenant_id, session.principal_id):
+                # The standing consent IS the reuse answer: run the node
+                # that already answers, say so, and land the execution
+                # in its one log — the report turn still closes the ask.
+                self._durable.audit.append(
+                    "node.reuse_decision",
+                    {
+                        "decision": "reuse_at_ask",
+                        "node_id": similar["node_id"],
+                        "goal": goal,
+                        "by": session.principal_id,
+                        "tenant": session.tenant_id,
+                    },
+                )
+                run = self._enqueue_intent_run(session, similar["goal"])
+                self._metrics["chat_runs"] += 1
+                meter = getattr(self, "_model_meter", None)
+                self._run_reports.file(
+                    run_id=str(run["run_id"]),
+                    tenant=session.tenant_id,
+                    principal=session.principal_id,
+                    agent=thread_agent,
+                    intent=str(similar["goal"]),
+                    charges_before=(
+                        len(meter.charges()) if meter is not None else 0
+                    ),
+                )
+                return (
+                    f"You already have “{similar['title']}” — the node "
+                    f"that answers for this (built for “{similar['goal']}”)."
+                    " Running it now, so the execution lands in its one "
+                    "log.",
+                    run,
+                )
+            self._growth_offers.put(
+                session.tenant_id,
+                session.principal_id,
+                kind="reuse",
+                goal=similar["goal"],
+                original_goal=goal,
+            )
+            return (
+                GROWTH_REUSE_OFFER.format(
+                    title=similar["title"], existing=similar["goal"]
+                ).strip(),
+                None,
+            )
+        kin = self._find_tenant_capability(
+            session, goal, exclude_principal=session.principal_id
+        )
+        if kin:
+            near = kin[0]
+            return (
+                "Found standing work for this in your tenant's registry: "
+                f"“{near['title']}” ({near['node_id'][:8]}), built for "
+                f"“{near['goal']}” by {near['owner']}. Open it under "
+                "Nodes to use it there — or say the goal more distinctly "
+                "and I'll build your own.",
+                None,
+            )
+        return None
+
+    def _route_reminder_choice(
+        self, session, ask: str, *, use_node: bool, tools, thread_agent: str
+    ) -> "tuple[ChatTurn, dict | None]":
+        """The which-door answer (V4): yes runs the standing reminder
+        node with the ORIGINAL ask as the run's intent — the user's own
+        words reach the node's function and the execution lands in its
+        log; no files the plain row through the same deterministic door
+        the regex always used, confirmed from the store. Either way the
+        choice lands on the audit chain."""
+        self._durable.audit.append(
+            "node.builtin_route",
+            {
+                "door": "reminder",
+                "choice": "node" if use_node else "builtin",
+                "ask": ask,
+                "by": session.principal_id,
+                "tenant": session.tenant_id,
+            },
+        )
+        if use_node:
+            standing = self._standing_reminder_node(session)
+            if standing is None:
+                return (
+                    ChatTurn(
+                        say="That node is gone from your desk — tell me "
+                        "the reminder again and I'll file the plain row.",
+                        source="tool",
+                    ),
+                    None,
+                )
+            try:
+                run = self._enqueue_intent_run(
+                    session, ask, via_node=standing["node_id"]
+                )
+            except GatewayError as exc:
+                if exc.code not in ("cannot_execute", "release_revoked"):
+                    raise
+                return (
+                    ChatTurn(
+                        say=f"I couldn't run “{standing['title']}” — "
+                        f"{exc.message}.",
+                        source="tool",
+                    ),
+                    None,
+                )
+            self._metrics["chat_runs"] += 1
+            meter = getattr(self, "_model_meter", None)
+            self._run_reports.file(
+                run_id=str(run["run_id"]),
+                tenant=session.tenant_id,
+                principal=session.principal_id,
+                agent=thread_agent,
+                intent=ask,
+                charges_before=(
+                    len(meter.charges()) if meter is not None else 0
+                ),
+            )
+            return (
+                ChatTurn(
+                    say=f"Running “{standing['title']}” with your ask — "
+                    "the execution lands in the node's own log.",
+                    source="tool",
+                ),
+                run,
+            )
+        made = reminder_command(ask, tools)
+        if made is not None:
+            return made, None
+        return (
+            ChatTurn(
+                say="Tell me the reminder again (e.g. “remind me to X in "
+                "20 minutes”) and I'll file it.",
+                source="tool",
+            ),
+            None,
+        )
 
     def _grow_node_and_run(
         self, session, goal: str, *, allow_twin: bool = False
@@ -8446,6 +8683,38 @@ class GatewayApp:
                         "tenant": session.tenant_id,
                     },
                 )
+        # V4: the twin guard's field widens to the TENANT's registry —
+        # minting a private copy of a capability a tenant member already
+        # stands behind is the same split-history mistake, said across
+        # desks. The refusal names the node and its owner; ``allow_twin``
+        # (the user's explicit "different work") builds anyway, with the
+        # considered node on the log.
+        kin = self._find_tenant_capability(
+            session, goal, exclude_principal=session.principal_id
+        )
+        if kin:
+            near = kin[0]
+            if not allow_twin:
+                return (
+                    "error: a node in your tenant's registry already "
+                    f"answers for nearly this — “{near['title']}” "
+                    f"({near['node_id'][:8]}), built for “{near['goal']}” "
+                    f"by {near['owner']}. Find it under Nodes to use it; "
+                    "if this is truly different work, say the goal more "
+                    "distinctly and I'll build your own."
+                )
+            self._durable.audit.append(
+                "node.reuse_decision",
+                {
+                    "decision": "create_new_node_with_justification",
+                    "considered": [near["node_id"]],
+                    "considered_title": near["title"],
+                    "considered_owner": near["owner"],
+                    "goal": goal,
+                    "by": session.principal_id,
+                    "tenant": session.tenant_id,
+                },
+            )
         author = self._seat_actor(
             self._node_function_author(session.tenant_id),
             session.principal_id,
@@ -9686,6 +9955,22 @@ class GatewayApp:
             None,
         )
         if node is None:
+            # V4: the goal-derived ALIAS row — a program node carries a
+            # random id, but the goal that minted it filed an alias, so
+            # re-asking that goal finds the node instead of a bare plan.
+            try:
+                aliased = self._nodeplace.node_by_alias(
+                    session.tenant_id, skill_id
+                )
+            except Exception:  # noqa: BLE001 - resolution is best-effort
+                aliased = None
+            if (
+                aliased is not None
+                and aliased.noder_principal == session.principal_id
+                and not self._node_deleted(aliased.node_id)
+            ):
+                node = aliased
+        if node is None:
             return None
         version = self._nodeplace.latest_version(node.node_id)
         if version is None:
@@ -9715,13 +10000,16 @@ class GatewayApp:
         return self._finalize_function(
             {
                 "node_id": node.node_id,
-                "skill_id": skill_id,
+                # The node's REAL identity: for a goal-hashed fn- node this
+                # IS the lookup key; for an alias-resolved program node it
+                # is the program id the alias pointed at.
+                "skill_id": node.skill_id,
                 "title": skill.name,
                 "goal": skill.description,
                 "script": str(script),
                 "node_key": str(
                     (action.parameters or {}).get("node_key")
-                    or f"node:{skill_id}"
+                    or f"node:{node.skill_id}"
                 ),
                 # The node's egress consent and its drawer's src/ programs
                 # ride the function into the run — the same regimes the
@@ -10106,6 +10394,17 @@ class GatewayApp:
         except Exception as exc:  # noqa: BLE001 - refusal over half-publish
             return {"ok": False, "problem": f"contribute refused: {exc}"}
         node_id = result.node.node_id
+        # V4: the goal-derived alias row beside the random program id —
+        # the same key a re-ask of this goal hashes to, so the node is
+        # findable by the sentence that minted it, not only by accident.
+        try:
+            self._nodeplace.add_alias(
+                session.tenant_id,
+                self._function_skill_id(session.tenant_id, goal),
+                node_id,
+            )
+        except Exception:  # noqa: BLE001 - the alias is a finding aid
+            notes.append("the goal alias did not land; the node runs by id")
         if self._desk is not None:
             try:
                 self._desk.create_account(
@@ -10489,8 +10788,10 @@ class GatewayApp:
         Exact goals are :meth:`_resolve_node_function`'s job — this finds
         what an exact key can never see ('csvs' vs 'csv files'), by
         ``goal_similarity`` against each function node's stored goal
-        sentence. A human-sized scan over one person's desk, never the
-        marketplace; best match at or above ``NEAR_GOAL_SIMILARITY`` wins."""
+        sentence. Program nodes count too (V4): their ids are random, but
+        their stored goal sentence is exactly as comparable. A human-sized
+        scan over one person's desk, never the marketplace; best match at
+        or above ``NEAR_GOAL_SIMILARITY`` wins."""
         if self._nodeplace is None:
             return None
         exact_id = self._function_skill_id(session.tenant_id, goal)
@@ -10501,9 +10802,20 @@ class GatewayApp:
             )
         except Exception:  # noqa: BLE001 - the guard is best-effort
             return None
+        try:
+            # The alias-resolved exact match (a program node built for THIS
+            # goal) is _resolve_node_function's find, never a "twin".
+            aliased = self._nodeplace.node_by_alias(
+                session.tenant_id, exact_id
+            )
+        except Exception:  # noqa: BLE001 - the alias is a finding aid
+            aliased = None
+        exact_node_id = aliased.node_id if aliased is not None else None
         best: tuple[float, dict] | None = None
         for node in nodes:
-            if not node.skill_id.startswith("fn-") or node.skill_id == exact_id:
+            if not node.skill_id.startswith(("fn-", "program-")):
+                continue
+            if node.skill_id == exact_id or node.node_id == exact_node_id:
                 continue
             if self._node_deleted(node.node_id):
                 continue  # a deleted twin is no twin
@@ -10529,6 +10841,214 @@ class GatewayApp:
                     },
                 )
         return best[1] if best is not None else None
+
+    @staticmethod
+    def _capability_words(capabilities) -> set[str]:
+        """The plain words inside derived ``fn:``/``io:`` tokens —
+        ``fn:create_reminder`` speaks {'create', 'reminder'} — so an
+        ask's own words can meet what a node's function actually DOES."""
+        words: set[str] = set()
+        for token in capabilities or ():
+            bare = str(token).split(":", 1)[-1]
+            words.update(
+                w for w in re.split(r"[^0-9a-zA-Z]+", bare.lower()) if w
+            )
+        return words
+
+    @staticmethod
+    def _word_hit(word: str, vocabulary: set[str]) -> bool:
+        """Exact or stem-close: 'remind' meets 'reminder'. The prefix
+        rule needs four letters on both sides so 'the' never meets
+        'theme' by accident."""
+        for known in vocabulary:
+            if word == known:
+                return True
+            if (
+                len(word) >= 4
+                and len(known) >= 4
+                and (known.startswith(word) or word.startswith(known))
+            ):
+                return True
+        return False
+
+    def _registry_match_score(
+        self, goal: str, title: str, summary: str, capabilities
+    ) -> float:
+        """How well a listed node answers an ask, 0..1: the twin guard's
+        own goal similarity against the listing's words, OR the coverage
+        of the ask's content words by the node's derived capability
+        vocabulary — whichever signal is stronger."""
+        spoken = goal_similarity(goal, f"{title} {summary}")
+        asked = keywords(goal, limit=0)
+        if not asked:
+            return spoken
+        vocabulary = self._capability_words(capabilities)
+        covered = sum(1 for w in asked if self._word_hit(w, vocabulary))
+        return max(spoken, covered / len(asked))
+
+    def _find_tenant_capability(
+        self,
+        session,
+        goal: str,
+        *,
+        exclude_principal: str | None = None,
+        floor: float = NEAR_GOAL_SIMILARITY,
+        limit: int = 3,
+    ) -> list[dict]:
+        """V4: the tenant-registry capability search — derived ``fn:``/
+        ``io:`` tokens plus goal similarity over every member's standing
+        nodes (DRAFT listings included: a desk node needn't be
+        marketplace-published to be standing work), bounded and scored,
+        best first. The TENANT's shelf, never the global marketplace —
+        the shared registry an ask should reach before anything builds."""
+        if self._nodeplace is None:
+            return []
+        goal = (goal or "").strip()
+        if not goal:
+            return []
+        try:
+            pairs = self._nodeplace.tenant_registry(session.tenant_id)
+        except Exception:  # noqa: BLE001 - the search is best-effort
+            return []
+        scored: list[tuple[float, dict]] = []
+        for node, listing in pairs:
+            if (
+                exclude_principal is not None
+                and node.noder_principal == exclude_principal
+            ):
+                continue
+            if self._node_deleted(node.node_id):
+                continue
+            score = self._registry_match_score(
+                goal, listing.title, listing.summary, listing.capabilities
+            )
+            if score >= floor:
+                scored.append(
+                    (
+                        score,
+                        {
+                            "node_id": node.node_id,
+                            "title": listing.title,
+                            "goal": listing.summary,
+                            "owner": node.noder_principal,
+                            "score": round(score, 3),
+                        },
+                    )
+                )
+        scored.sort(key=lambda pair: -pair[0])
+        return [item for _score, item in scored[:limit]]
+
+    def _standing_reminder_node(self, session) -> dict | None:
+        """The caller's own standing node that does REMINDER work, if one
+        exists — matched deterministically on the reminder stem in its
+        title or goal sentence. V4: the built-in reminder door checks
+        for this node FIRST and asks which door, instead of silently
+        taking the ask the user built a node for."""
+        if self._nodeplace is None:
+            return None
+        try:
+            nodes = self._nodeplace.list_own_nodes(
+                noder_principal=session.principal_id,
+                tenant_id=session.tenant_id,
+            )
+        except Exception:  # noqa: BLE001 - the check is best-effort
+            return None
+        for node in nodes:  # newest first: the freshest desk wins
+            if not node.skill_id.startswith(("fn-", "program-")):
+                continue
+            if self._node_deleted(node.node_id):
+                continue
+            version = self._nodeplace.latest_version(node.node_id)
+            if version is None:
+                continue
+            try:
+                skill = ReusableSkill.model_validate_json(
+                    version.sanitized_skill_json
+                )
+            except Exception:  # noqa: BLE001
+                continue
+            if "remind" in f"{skill.name} {skill.description}".lower():
+                return {
+                    "node_id": node.node_id,
+                    "title": skill.name,
+                    "goal": skill.description,
+                }
+        return None
+
+    _FIND_NODES_FLOOR = 0.15
+
+    def _find_nodes_words(self, session, query: str) -> str:
+        """The ``find_nodes`` tool's answer (V4): standing work matching
+        the ask — the caller's own desk first (fn- and program- nodes,
+        scored by the twin guard's own metric plus capability words),
+        then the tenant registry — each line naming the node, whose it
+        is, and the goal it was built for. Words only: running or
+        opening a found node is the user's move, through the standing
+        doors."""
+        wanted = " ".join(str(query or "").split())
+        if not wanted:
+            return "error: tell me what the work needs done"
+        if self._nodeplace is None:
+            return "error: nodes are not enabled on this host"
+        own_lines: list[tuple[float, str]] = []
+        try:
+            nodes = self._nodeplace.list_own_nodes(
+                noder_principal=session.principal_id,
+                tenant_id=session.tenant_id,
+            )
+        except Exception:  # noqa: BLE001 - the search is best-effort
+            nodes = []
+        for node in nodes:
+            if not node.skill_id.startswith(("fn-", "program-")):
+                continue
+            if self._node_deleted(node.node_id):
+                continue
+            version = self._nodeplace.latest_version(node.node_id)
+            if version is None:
+                continue
+            try:
+                skill = ReusableSkill.model_validate_json(
+                    version.sanitized_skill_json
+                )
+                listing = self._nodeplace.listing_for_version(
+                    version.version_id
+                )
+            except Exception:  # noqa: BLE001
+                continue
+            score = self._registry_match_score(
+                wanted,
+                skill.name,
+                skill.description,
+                listing.capabilities if listing is not None else (),
+            )
+            if score >= self._FIND_NODES_FLOOR:
+                own_lines.append(
+                    (
+                        score,
+                        f"“{skill.name}” — yours, built for "
+                        f"“{skill.description}” (node {node.node_id[:8]})",
+                    )
+                )
+        own_lines.sort(key=lambda pair: -pair[0])
+        tenant_lines = [
+            f"“{hit['title']}” — in your tenant's registry by "
+            f"{hit['owner']}, built for “{hit['goal']}” "
+            f"(node {hit['node_id'][:8]})"
+            for hit in self._find_tenant_capability(
+                session,
+                wanted,
+                exclude_principal=session.principal_id,
+                floor=self._FIND_NODES_FLOOR,
+                limit=5,
+            )
+        ]
+        lines = [line for _s, line in own_lines[:5]] + tenant_lines
+        if not lines:
+            return (
+                "no standing node matches — nothing on your desk or in "
+                "the tenant's registry answers for that"
+            )
+        return "\n".join(lines[:8])
 
     def _revivable_run_for(self, session, intent: str):
         """``(state, mode)`` for the caller's own dead-or-stuck run of
@@ -10563,16 +11083,24 @@ class GatewayApp:
         *,
         extra_bindings: dict | None = None,
         pulse: dict | None = None,
+        via_node: str | None = None,
     ) -> dict:
         """The contract metadata an intent run carries — one builder for
         the synchronous and the queued (V1) submission paths, so the two
-        can never drift on what a run knows about itself."""
+        can never drift on what a run knows about itself. ``via_node``
+        (V4) forces the route through a CHOSEN own node — the user's
+        answer to "use your node for this?" — while the intent keeps
+        their words."""
         metadata: dict = {"tenant_id": session.tenant_id}
         if pulse:
             metadata["pulse"] = dict(pulse)
         # A goal the user already built a node for runs THAT node's own
         # function — the route is the stored code, not a fresh plan.
-        function = self._resolve_node_function(session, intent)
+        function = (
+            self._function_for_node(session, via_node)
+            if via_node is not None
+            else self._resolve_node_function(session, intent)
+        )
         self._refuse_revoked(function)
         if function is not None and extra_bindings:
             function = {
@@ -10600,6 +11128,7 @@ class GatewayApp:
         *,
         max_recovery: int = 1,
         extra_bindings: dict | None = None,
+        via_node: str | None = None,
     ) -> dict:
         """V1: the chat lane's submission — accepted, durable, QUEUED.
 
@@ -10611,7 +11140,7 @@ class GatewayApp:
         Planning refusals that the synchronous path raised as 422 now
         surface at drive time as a FAILED run the report speaks for."""
         metadata = self._intent_run_metadata(
-            session, intent, extra_bindings=extra_bindings
+            session, intent, extra_bindings=extra_bindings, via_node=via_node
         )
         revivable = self._revivable_run_for(session, intent)
         if revivable is not None:

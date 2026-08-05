@@ -464,15 +464,18 @@ def test_a_paraphrase_offers_reuse_instead_of_a_twin(tmp_path):
         _speak_work(app, [TASK_TURN, PARAPHRASE_TURN])
         _built_first_node(app, ident)
 
-        # The SAME work, said differently: the exact key misses, but once
-        # the queued run fails, the twin guard finds the node and the
-        # REPORT offers to REUSE it — not to build.
-        _chat(app, ident, "tidy the invoice csvs for me")
-        app.drive_queue()
-        report = _report(app)
-        assert "answers for nearly this" in report
-        assert "Normalize Invoice Csv Files" in report
-        assert "grow that missing piece" not in report
+        # The SAME work, said differently: the exact key misses, but the
+        # twin guard now looks AT ASK TIME (V4) — the reply itself offers
+        # to REUSE the node, before any doomed run is queued at all.
+        runs_before = len(app._durable.runs.list())
+        asked = _chat(app, ident, "tidy the invoice csvs for me")
+        reply = asked.body["reply"]
+        assert "answers for nearly this" in reply
+        assert "Normalize Invoice Csv Files" in reply
+        assert "grow that missing piece" not in reply
+        # No run was spent asking the question: the offer fired FIRST.
+        assert len(app._durable.runs.list()) == runs_before
+        assert asked.body["run_id"] is None
         assert app._growth_offers.get("t1", "user-1") == (
             "reuse",
             GOAL,
@@ -489,7 +492,7 @@ def test_yes_to_reuse_runs_the_existing_node_and_mints_nothing(tmp_path):
         _built_first_node(app, ident)
         runs_before = len(script_exec.actions)
         _chat(app, ident, "tidy the invoice csvs for me")
-        app.drive_queue()  # the failed drive's report makes the reuse offer
+        # V4: the ask's own reply carried the reuse question — no drive.
 
         agreed = _chat(app, ident, "yes")
         reply = agreed.body["reply"]
@@ -514,7 +517,7 @@ def test_no_to_reuse_rolls_into_a_distinct_build_offer(tmp_path):
         _speak_work(app, [TASK_TURN, PARAPHRASE_TURN])
         _built_first_node(app, ident)
         _chat(app, ident, "tidy the invoice csvs for me")
-        app.drive_queue()  # the failed drive's report makes the reuse offer
+        # V4: the ask's own reply carried the reuse question — no drive.
 
         # "No" means this is different work — the plain build offer
         # follows, marked so the twin guard honors the user's answer.

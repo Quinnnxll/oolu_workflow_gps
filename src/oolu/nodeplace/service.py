@@ -332,6 +332,26 @@ class NodeplaceService:
     def discover(self, query: str = "") -> list[Listing]:
         return self._store.discover(query)
 
+    def add_alias(self, tenant_id: str, alias: str, node_id: str) -> None:
+        """V4: file the goal-derived alias beside a node's random id, so
+        a program node is findable by the goal that minted it."""
+        self._store.add_alias(
+            tenant_id,
+            alias,
+            node_id,
+            created_at=datetime.now(UTC).isoformat(),
+        )
+
+    def node_by_alias(self, tenant_id: str, alias: str) -> Node | None:
+        return self._store.node_by_alias(tenant_id, alias)
+
+    def tenant_registry(
+        self, tenant_id: str, limit: int = 200
+    ) -> list[tuple[Node, Listing]]:
+        """The tenant's standing nodes with their newest listings — the
+        bounded field the V4 capability search scans."""
+        return self._store.tenant_listings(tenant_id, limit=limit)
+
     def listing_for_version(self, version_id: str) -> Listing | None:
         """The version's marketplace listing — the declared slot
         vocabulary (consumes/produces, with their plain-word labels)

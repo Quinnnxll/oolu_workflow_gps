@@ -39,6 +39,16 @@ _SCHEMA = (
         version_id TEXT NOT NULL UNIQUE,
         payload_json TEXT NOT NULL
     )""",
+    # V4: a second, MEANINGFUL lookup key beside a node's random id — the
+    # goal-derived alias a program node is findable by. One alias, one
+    # node, per tenant; a rebuild of the same goal repoints the alias.
+    """CREATE TABLE IF NOT EXISTS node_aliases (
+        tenant_id TEXT NOT NULL,
+        alias TEXT NOT NULL,
+        node_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, alias)
+    )""",
 )
 
 
@@ -206,6 +216,69 @@ class RegistryStore:
                 (version_id,),
             ).fetchone()
         return PricingPolicy.model_validate_json(row["payload_json"]) if row else None
+
+    def add_alias(
+        self, tenant_id: str, alias: str, node_id: str, *, created_at: str
+    ) -> None:
+        """Point the tenant's alias at this node — newest wins, so a
+        rebuilt goal resolves to the node that answers for it NOW."""
+        with self._conn.transaction() as db:
+            db.execute(
+                """INSERT OR REPLACE INTO node_aliases
+                   (tenant_id, alias, node_id, created_at)
+                   VALUES (?, ?, ?, ?)""",
+                (tenant_id, alias, node_id, created_at),
+            )
+
+    def node_by_alias(self, tenant_id: str, alias: str) -> Node | None:
+        with self._conn.lock:
+            row = self._conn.db.execute(
+                """SELECT n.payload_json AS payload_json
+                   FROM node_aliases a JOIN nodes n ON a.node_id = n.node_id
+                   WHERE a.tenant_id = ? AND a.alias = ?""",
+                (tenant_id, alias),
+            ).fetchone()
+        return Node.model_validate_json(row["payload_json"]) if row else None
+
+    def tenant_listings(
+        self, tenant_id: str, limit: int = 200
+    ) -> list[tuple[Node, Listing]]:
+        """The tenant's standing registry: every member's live nodes with
+        their newest listing — DRAFT included, because a desk-standing
+        node needn't be marketplace-published to be standing work. One
+        pair per node (the newest listing speaks for it), newest first,
+        bounded — the V4 capability search scans this; V5 indexes it."""
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                """SELECT n.payload_json AS node_json,
+                          l.payload_json AS listing_json
+                   FROM listings l
+                   JOIN node_versions v ON l.version_id = v.version_id
+                   JOIN nodes n ON v.node_id = n.node_id
+                   WHERE n.tenant_id = ? AND n.revoked_at IS NULL
+                     AND l.status IN (?, ?)
+                   ORDER BY l.updated_at DESC
+                   LIMIT ?""",
+                (
+                    tenant_id,
+                    ListingStatus.DRAFT.value,
+                    ListingStatus.ACTIVE.value,
+                    limit,
+                ),
+            ).fetchall()
+        pairs: list[tuple[Node, Listing]] = []
+        seen: set[str] = set()
+        for row in rows:
+            try:
+                node = Node.model_validate_json(row["node_json"])
+                listing = Listing.model_validate_json(row["listing_json"])
+            except Exception:  # noqa: BLE001 - one bad row never hides the rest
+                continue
+            if node.node_id in seen:
+                continue  # ordered newest-first: the first listing speaks
+            seen.add(node.node_id)
+            pairs.append((node, listing))
+        return pairs
 
     def discover(self, query: str = "") -> list[Listing]:
         pattern = "%" + query.lower() + "%"

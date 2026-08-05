@@ -526,6 +526,43 @@ Exit gate: a reminder-work ask with a standing reminder node surfaces
 that node; a re-ask of a program node's goal finds it; a capability
 present in the tenant registry is found without naming the node.
 
+**Status: LANDED.** The four legs, in the order the ask meets them.
+The BUILT-IN YIELDS: an explicit reminder ask (`reminder_shaped`, the
+deterministic door's own regexes exported) with a reminder-stemmed
+node on the caller's desk becomes the which-door question — a
+`reminder_route` growth offer; yes runs the node with the USER'S OWN
+WORDS as the run's intent (`via_node` threads `_function_for_node`
+through `_intent_run_metadata`, forcing the route the way the webhook
+door always has), no files the plain row through the unchanged
+deterministic door, and the choice audits as `node.builtin_route`.
+SEARCH-AT-ASK (`_reuse_at_ask`, ahead of V3's first-run question in
+the lane): exact goals already route through their node; an own
+near-twin runs under the standing delegation (audited
+`reuse_at_ask`, the report machinery riding along) or becomes the
+reuse question IN THE ASK'S REPLY — the offer now fires before a
+doomed run, and the reworked test_growth_trigger reuse tests pin
+exactly that; a tenant member's kin is named in words, never run and
+never duplicated (the auto-build steps aside for it too). The BUILD
+DOOR's twin guard widened to the tenant registry
+(`_find_tenant_capability`: derived fn:/io: capability words plus
+goal similarity over `tenant_registry()` — DRAFT listings included,
+bounded newest-200, V5 indexes it) and to PROGRAM nodes (their goal
+sentence scans like any fn- node's); the tenant refusal names the
+node and its owner, `allow_twin` still builds with the considered
+node audited. Program nodes carry a goal-derived ALIAS row
+(`node_aliases`, tenant-scoped, newest wins) written at publish and
+read by `_resolve_node_function` as its fallback — the re-asked goal
+resolves the node instead of planning past it. And the model can
+LOOK: the `find_nodes` chat tool (own desk + tenant registry, words
+report only what is stored) with prompt doctrine to route to standing
+work and never claim absence without looking. Pinned by
+tests/test_standing_first.py. (Noted honestly: a tenant member's node
+is FOUND and NAMED, never run from the ask lane — running another's
+node stays behind the marketplace's own doors, V5+ work; and the
+which-door question is asked per reminder ask while the node stands —
+a sticky per-node preference is future polish, not consent to
+assume.)
+
 ### V5 — the web at scale: links and the energy reading (report 4, scale)
 
 Goal: at millions of nodes, discovery is indexed, multi-dimensional,

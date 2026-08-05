@@ -4,6 +4,56 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+V4 landed — find the standing node first
+(docs/node-vitality-plan.md, phase V4): an ask reaches the right
+existing node before anything builds — the reported
+standing-reminder-node failure, closed at every door it leaked through.
+
+- **Built-ins yield to standing nodes.** An explicit "remind me…" ask
+  with a reminder-shaped node on the caller's own desk is now a
+  QUESTION — "your node can take this — use it, or the built-in?" —
+  instead of the deterministic regex silently filing the row. Yes runs
+  the node with the user's own words as the run's intent (the route
+  forced through the chosen node's function); no files the plain row
+  through the same old door, confirmed from the store; either choice
+  lands on the audit chain (node.builtin_route). With no standing node
+  the old deterministic door is untouched.
+- **Search-at-ask.** The chat task lane consults discovery BEFORE
+  queueing a bare contract: exact goals already route through their
+  node; a near-twin on the caller's own desk now RUNS under the
+  standing delegation (audited as reuse_at_ask) or becomes the reuse
+  question in the ask's own reply — fired before a doomed run, not
+  after one fails; and a tenant member's kin is NAMED in words (open
+  it under Nodes) instead of silently duplicated or silently ignored.
+- **Search-before-build widens.** The build door's twin guard now also
+  scans the TENANT registry by derived fn:/io: capability tokens plus
+  goal similarity (DRAFT listings included — a desk node needn't be
+  marketplace-published to be standing work); minting a private copy
+  of a member's standing capability refuses naming the node and its
+  owner, and the explicit "different work" answer still builds, with
+  the considered node on the log. Program nodes joined the twin
+  guard's field: their stored goal sentence is scanned like any fn-
+  node's.
+- **Program nodes became findable.** A goal-derived ALIAS row lands
+  beside a program node's random id at publish (node_aliases, newest
+  wins), so re-asking the goal that minted it resolves the node —
+  through the same resolver every run-route reads — instead of
+  planning a bare contract past it.
+- **The model can look.** The chat toolbox gained find_nodes: the
+  caller's own desk plus the tenant registry, by capability and words,
+  each line naming the node, whose it is, and the goal it was built
+  for — and the prompt teaches: route to standing work (set the task
+  to the found node's goal) instead of describing a build, and never
+  claim nothing exists without looking.
+
+Pinned by tests/test_standing_first.py (the reminder ask surfacing the
+node and both answers honored; the alias resolving and repointing on
+rebuild; the similar scan seeing programs; the at-ask reuse running
+under delegation and asking without it; the tenant kin named, not run
+and not duplicated; the capability found without naming the node;
+find_nodes speaking own and tenant work); the reworked reuse tests in
+tests/test_growth_trigger.py pin the offer firing BEFORE a doomed run.
+
 V3 landed — one ask earns its finish
 (docs/node-vitality-plan.md, phase V3): reply → execute → retry →
 repair → review → report inside one ask, bounded by the task budget.

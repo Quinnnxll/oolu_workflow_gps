@@ -105,6 +105,7 @@ one, answer with EXACTLY one JSON object of the shape:
   {"tool": "list_runs", "args": {}}
   {"tool": "run_log", "args": {"run_id": "<a run id, or a phrase from its intent>"}}
   {"tool": "list_nodes", "args": {}}
+  {"tool": "find_nodes", "args": {"query": "<what the work needs done>"}}   (searches the user's standing nodes AND the tenant registry, by capability and words)
   {"tool": "get_settings", "args": {}}
   {"tool": "set_setting", "args": {"key": "<a settings key>", "value": <the new value>}}
   {"tool": "send_message", "args": {"to": "<a friend or node, by name>", "text": "<the message>"}}
@@ -134,6 +135,16 @@ user's real friends and nodes, and delivers WHAT the user wants said
 (marked as forwarded via OoLu from them). Do not put "reply to <friend>"
 in "task", and never propose building a node for it. When the user wants
 a reply drafted in their own voice, that is representative mode's job.
+
+Standing work first: before treating repeatable work as something new,
+call find_nodes with what the ask needs done — it searches the user's
+own nodes AND the tenant registry by capability and words, and reports
+only what is actually stored. When one of the USER'S OWN found nodes
+answers the ask, set "task" to that node's goal sentence verbatim so
+the run lands in its one log. A node found in the tenant registry
+belongs to someone else: name it in "say" so the user can open it under
+Nodes — never claim to run it yourself. Never say no node exists
+without having called find_nodes this turn.
 
 Reminders are ROWS with a clock, not workflows: create one ONLY with the
 create_reminder tool — never by handing "remind me…" to the engine as a
@@ -572,6 +583,15 @@ class FriendSearchTools(Protocol):
 
 
 @runtime_checkable
+class NodeSearchTools(Protocol):
+    """V4: the standing-work search — capability and words over the
+    caller's own nodes and the tenant registry, answered in words that
+    report only what is actually stored."""
+
+    def find_nodes(self, query: str) -> str: ...
+
+
+@runtime_checkable
 class ReminderTools(Protocol):
     """Reminders as rows with a clock — created deterministically, and
     every confirmation read back from the STORED row, never assumed."""
@@ -618,6 +638,10 @@ class GatewayChatTools(FileChatTools):
         # roster, the owner's own name notes, and when each friendship
         # began — what find_friend searches. None when friends are off.
         friendships=None,
+        # The standing-work search (V4): (query) -> words over the
+        # caller's own nodes and the tenant registry, gateway-scoped.
+        # None when this host keeps no nodes.
+        node_search=None,
     ):
         # The file hands are OWNER-gated: this account's documents only.
         super().__init__(store, tenant=tenant, owner=principal)
@@ -632,6 +656,7 @@ class GatewayChatTools(FileChatTools):
         self._representative = representative
         self._reminders = reminders
         self._friendships = friendships
+        self._node_search = node_search
 
     def local_search_enabled(self) -> bool:
         return self._local_root is not None
@@ -738,6 +763,13 @@ class GatewayChatTools(FileChatTools):
                 principal=self._principal, tenant=self._chat_tenant
             )
         ]
+
+    def find_nodes(self, query: str) -> str:
+        """Standing work matching the ask — the gateway's search over the
+        caller's own desk and the tenant registry (V4). Words only."""
+        if self._node_search is None:
+            return "error: node search is not enabled on this host"
+        return self._node_search(query)
 
     def exact_friend(self, name: str) -> dict | None:
         """An account by EXACT username — the one reach past the target
@@ -2412,7 +2444,22 @@ _LIST_REMINDERS_PHRASES = frozenset(
 )
 
 
-def _reminder_command(text: str, tools: ChatTools | None) -> ChatTurn | None:
+def reminder_shaped(text: str) -> bool:
+    """An explicit CREATE-a-reminder phrasing — the deterministic door's
+    own shapes, exported so the gateway can ask WHICH door first (V4: a
+    standing reminder node yields a question, never a silent row).
+    Listing phrases are reads, not creations, and stay deterministic."""
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return False
+    if cleaned.casefold().rstrip(".!?") in _LIST_REMINDERS_PHRASES:
+        return False
+    return bool(
+        _REMIND_TAIL_RE.match(cleaned) or _REMIND_LEAD_RE.match(cleaned)
+    )
+
+
+def reminder_command(text: str, tools: ChatTools | None) -> ChatTurn | None:
     """Explicit reminder phrasings, deterministic and store-backed: the
     row is created through the reminder hands and the confirmation reads
     the stored time back. Anything less explicit falls to the model,
@@ -2452,6 +2499,11 @@ def _reminder_command(text: str, tools: ChatTools | None) -> ChatTurn | None:
     return ChatTurn(
         say=result, source="tool", actions=[{"tool": "create_reminder"}]
     )
+
+
+# The door's original private name — kept so nothing that grew around it
+# has to move; the public name exists for the gateway's V4 yield check.
+_reminder_command = reminder_command
 
 
 # A reply CLAIMING a configuration change: a done-deed verb ("I've set…",
@@ -2623,6 +2675,10 @@ def _run_tool(tools: ChatTools, call: _ToolCall) -> tuple[str, dict | None]:
             or "(none)"
         )
         return listing, {"tool": "list_nodes"}
+    if call.name == "find_nodes" and isinstance(tools, NodeSearchTools):
+        return tools.find_nodes(str(call.args.get("query", ""))), {
+            "tool": "find_nodes"
+        }
     if call.name == "node_holds" and isinstance(tools, NodeTools):
         holds = tools.node_holds()
         listing = (
