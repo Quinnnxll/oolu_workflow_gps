@@ -31,6 +31,9 @@ _REPLACE_PK: dict[str, tuple[str, ...]] = {
     "market_reference_prices": ("class_key",),
     "market_policies": ("tenant", "principal"),
     "market_sales_policies": ("tenant", "principal"),
+    # V4/V6: the owner-keyed goal alias and the denormalized node face.
+    "node_aliases": ("tenant_id", "noder_principal", "alias"),
+    "node_faces": ("node_id",),
 }
 
 

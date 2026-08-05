@@ -20,7 +20,15 @@ from oolu.skills.models import ActionEvent, ReusableSkill, SkillSignature
 
 PG_DSN = os.environ.get("OOLU_TEST_PG_DSN") or os.environ.get("DATABASE_URL")
 
-_PG_TABLES = ("nodes", "node_versions", "listings", "pricing_policies")
+_PG_TABLES = (
+    "nodes",
+    "node_versions",
+    "listings",
+    "pricing_policies",
+    # V4/V6 companions — dropped too, so every pg run starts clean.
+    "node_aliases",
+    "node_faces",
+)
 
 
 def _new_pg() -> PostgresDurableConnection:
