@@ -518,6 +518,7 @@ def build_script_executor(
     materialized_dir=None,  # runtime.MaterializedBundleDir: the mounted tier
     value_resolver=None,  # (bindings, tenant) -> (resolved, provenance)
     web_secrets=None,  # V2: the broker's credential resolver (the vault)
+    compute_meter=None,  # V6: (node_key, seconds, run_key) — measured compute
 ) -> dict[str, ActionExecutor]:
     """The script hand: run planner-provided or synthesized code through the
     configured isolation backend (Docker when configured; the subprocess
@@ -563,6 +564,7 @@ def build_script_executor(
         ),
         bundle_resolver=bundle_resolver,
         value_resolver=value_resolver,
+        compute_meter=compute_meter,
     )
     return {runner.name: runner}
 
@@ -816,6 +818,11 @@ def build_host_runtime(
     from .providers.vault import DurableSecretVault
 
     host_vault = DurableSecretVault(conn, key_path=data / "machine.key")
+    # V6: measured sandbox compute — the executor meters every run's wall
+    # time here, and the books/economics read it back.
+    from .metering.compute import ComputeMeterStore
+
+    compute_store = ComputeMeterStore(conn)
     model_meter = ModelCallMeter()
     settings_node = SettingsNode(SettingsStore(conn))
     _mail_codes = MailCodeStore(conn)
@@ -1014,6 +1021,9 @@ def build_host_runtime(
                     value_resolver=lambda bindings, tenant: (
                         values_store.resolve_bindings(bindings, tenant=tenant)
                     ),
+                    compute_meter=lambda key, seconds, run: (
+                        compute_store.record(key, seconds, run_id=run)
+                    ),
                 )
             )
         except Exception as exc:  # noqa: BLE001 - hosts without a script
@@ -1085,22 +1095,52 @@ def build_host_runtime(
         stats=stats,
         attribution=attribution,
     )
+    # The Work environment's operator view: node accounts + earnings +
+    # verified health + per-node execution feeds, over the same stores —
+    # with the billing hands (V6), so desk earnings and the books read
+    # the same chain the payouts walk.
+    from .billing import BillingService
+    from .billing import EarningsLedger as _EarningsLedger
+
+    _books_ledger = _EarningsLedger(conn)
+    desk = WorkDesk(
+        registry=registry,
+        accounts=node_accounts,
+        billing=BillingService(_books_ledger),
+        metering=metering,
+        stats=stats,
+        attribution=attribution,
+        audit=durable.audit,
+    )
+    # V6: the composed books read — income, measured costs, vitality.
+    from .nodeplace.books import BooksReader
+
+    books_reader = BooksReader(
+        registry=registry,
+        desk=desk,
+        model_usage=model_usage,
+        compute=compute_store,
+        trust=kyc.trust_multiplier,
+        ledger=_books_ledger,
+    )
+
+    def _measured_compute(version_id: str):
+        version = registry.get_version(version_id)
+        if version is None:
+            return None
+        node = registry.get_node(version.node_id)
+        if node is None:
+            return None
+        return compute_store.mean_cost(f"node:{node.skill_id}")
+
     market = CandidateAssembler(
         registry=registry,
         stats=stats,
         ratings=ratings,
         trust=kyc.trust_multiplier,
         restricted=hygiene.is_restricted,
-    )
-    # The Work environment's operator view: node accounts + earnings +
-    # verified health + per-node execution feeds, over the same stores.
-    desk = WorkDesk(
-        registry=registry,
-        accounts=node_accounts,
-        metering=metering,
-        stats=stats,
-        attribution=attribution,
-        audit=durable.audit,
+        compute_costs=_measured_compute,
+        vitality=books_reader.vitality,
     )
     price_book = PriceBook(data / "prices.db")
     traces = TraceStore(data / "traces.db")
@@ -1310,6 +1350,9 @@ def build_host_runtime(
         # metered, and one spending cap covers chat AND planning.
         model_keys=model_keys,
         model_meter=model_meter,
+        # V6: the books and the measured-compute store behind them.
+        compute_meter=compute_store,
+        books=books_reader,
         # The hosted plan's brain and the per-tenant usage books behind it.
         subscription=subscription_brain,
         model_usage=model_usage,

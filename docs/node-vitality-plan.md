@@ -707,6 +707,62 @@ records; the sweep retires a net-negative node with notice and an
 auditable reason; vitality measurably and boundedly shifts assembly
 choice; no payout pool changes size.
 
+**Status: LANDED.** The PREREQUISITE, driven: the gateway constructs
+``MeteringDeriver`` and drives it on the standing tick (a new minute
+gate in ``_maybe_scheduled_sweep``, which V1's worker already
+heartbeats) with a resume cursor — ``audit.max_seq()`` read BEFORE
+each scan, ``records(since_seq=...)`` bounding the read — so executed
+runs finally materialize as metering events in production, exactly
+once each. THE EXPENSE SIDE, measured: ``ModelUsageStore`` gained the
+per-node table (``model_usage_nodes`` + ``record_node``/``node_cost``)
+and both build doors book their meter windows against the newborn's
+line (``_book_node_model_cost`` — the same window the receipt speaks;
+run-time repair spend still rides tenant books, a named follow-up);
+sandbox compute is metered at the isolation seam
+(``NodeScriptRunner(compute_meter=...)`` lands every execute-path
+run's already-measured ``duration_s`` into the new
+``ComputeMeterStore``, priced at the declared
+``COMPUTE_RATE_PER_HOUR``), and candidate economics read the MEASURED
+mean (``CandidateAssembler(compute_costs=...)``) before falling back
+to the old ledger mean — the self-referential estimate replaced. THE
+BOOKS: ``nodeplace/books.py`` — ``NodeBooks`` (windowed income,
+model + compute cost, net, health, trust, staleness, vitality) read
+by ``BooksReader`` from durable records only, served at GET
+/v1/work/nodes/{id}/books; income hardened from even-split to
+BINDING-WEIGHTED (``RunBinding.version_weights`` — each participant's
+cleared price, stamped at bind; ``node_income_micros`` splits over
+the owner's whole desk so one node's read can never claim a shared
+run's entry; pre-V6 bindings keep the even split); the production
+assembly finally passes the desk its billing hands. THE VITALITY LAW:
+an economics sweep on its own ``SweepScheduleStore``
+(``economics_schedule``, platform-seeded daily at first construction,
+an operator's explicit disable always standing) — after the 90-day
+grace, a node whose windowed net sits below −$5 RETIRES through the
+standing revocation, ``node.retired`` on the audit chain with the
+books snapshot, and the OWNER NOTIFIED by the report-turn idiom (an
+assistant turn carrying the books + the reminder ring) — history
+intact, drawer intact, republish always open. The platform namespace
+and the seeded starter shelf stand aside. GRAVITY:
+``vitality_multiplier`` (net through tanh ±0.15, stability ±0.05,
+verified trust +0.05, staleness decay, hard-clamped [0.75, 1.25])
+enters ``CandidateAssembler`` as ONE bounded touch on reputation —
+through which utility(), the reward slices, and V5's energy trust
+term all shift — plus bounded pseudo-counts (VITALITY_STRENGTH=4)
+into the assembler's posterior, the proposal-strength idiom that
+washes out under real evidence; ``neighbor_adjusted`` folds the
+co-occurrence partners' standing at NEIGHBOR_WEIGHT=0.25, re-clamped.
+Redistribute, never inflate: the PricingEngine's normalization is
+untouched and the conservation pin holds with gravity applied.
+Pinned by tests/test_node_books.py. (Noted honestly: ad-dividend
+income counts by the owner's ratification but attributes per
+PRINCIPAL through the press chain — the per-node bridge needs
+story→run provenance the press schema does not yet record, a named
+follow-up; the books meanwhile show the owner's ad income as a
+context line, outside the retirement net, which errs protective in
+no direction that retires wrongly. Run-time script-repair model
+spend books to the tenant, not yet the node — same follow-up
+family.)
+
 ### V7 — the open door, honestly bounded (report 6)
 
 Goal: web search is governed by consent and money, not a magic 3.

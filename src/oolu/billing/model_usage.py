@@ -18,7 +18,7 @@ Allowances are data, not code: repriced by editing the table.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Callable
 
 # The keyring row platform keys live under. Reserved: registration tenants
@@ -70,6 +70,23 @@ _ACCOUNTS_SCHEMA = """CREATE TABLE IF NOT EXISTS model_usage_accounts (
     PRIMARY KEY (tenant_id, account, month, source)
 )"""
 
+# The per-NODE books beside the tenant and account books (V6): the model
+# spend a node's own life drew — its build, its repairs — keyed by the
+# node the seat audit already names, so the vitality books can answer
+# "what did this node's intelligence cost" from a durable table instead
+# of never.
+_NODES_SCHEMA = """CREATE TABLE IF NOT EXISTS model_usage_nodes (
+    tenant_id TEXT NOT NULL,
+    node_id TEXT NOT NULL,
+    month TEXT NOT NULL,
+    source TEXT NOT NULL,
+    calls INTEGER NOT NULL DEFAULT 0,
+    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (tenant_id, node_id, month, source)
+)"""
+
 
 class ModelUsageStore:
     """Durable per-tenant model usage, bucketed by calendar month and by
@@ -82,9 +99,71 @@ class ModelUsageStore:
         with self._conn.transaction() as db:
             db.execute(_SCHEMA)
             db.execute(_ACCOUNTS_SCHEMA)
+            db.execute(_NODES_SCHEMA)
 
     def _month(self, month: str | None = None) -> str:
         return month or self._clock().strftime("%Y-%m")
+
+    def record_node(
+        self,
+        tenant: str,
+        node_id: str,
+        *,
+        source: str,
+        cost: float,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+    ) -> None:
+        """Book measured model spend against one NODE's line (V6) — the
+        build's meter window, a repair's meter window — so the vitality
+        books read what its intelligence actually cost."""
+        if not node_id:
+            return
+        with self._conn.transaction() as db:
+            db.execute(
+                """INSERT INTO model_usage_nodes
+                     (tenant_id, node_id, month, source, calls,
+                      prompt_tokens, completion_tokens, cost_usd)
+                   VALUES (?, ?, ?, ?, 1, ?, ?, ?)
+                   ON CONFLICT(tenant_id, node_id, month, source)
+                   DO UPDATE SET
+                     calls = model_usage_nodes.calls + 1,
+                     prompt_tokens =
+                       model_usage_nodes.prompt_tokens
+                         + excluded.prompt_tokens,
+                     completion_tokens =
+                       model_usage_nodes.completion_tokens
+                         + excluded.completion_tokens,
+                     cost_usd =
+                       model_usage_nodes.cost_usd + excluded.cost_usd""",
+                (
+                    tenant,
+                    node_id,
+                    self._month(),
+                    source,
+                    int(prompt_tokens),
+                    int(completion_tokens),
+                    float(cost),
+                ),
+            )
+
+    def node_cost(
+        self, tenant: str, node_id: str, *, months: int = 12
+    ) -> float:
+        """The node's booked model spend over the last ``months`` monthly
+        buckets — the books' model-cost line. Month-bucket granularity
+        is the honest resolution this store keeps."""
+        floor = (
+            self._clock().replace(day=1) - timedelta(days=31 * (months - 1))
+        ).strftime("%Y-%m")
+        with self._conn.lock:
+            row = self._conn.db.execute(
+                """SELECT COALESCE(SUM(cost_usd), 0) AS c
+                   FROM model_usage_nodes
+                   WHERE tenant_id = ? AND node_id = ? AND month >= ?""",
+                (tenant, node_id, floor),
+            ).fetchone()
+        return float(row["c"])
 
     def record(
         self,

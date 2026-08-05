@@ -352,6 +352,11 @@ class CandidateEconomics(BaseModel):
     difficulty: float = 1.0
     scarcity: float = 1.0
     liability: float = 1.0
+    # The books' bounded gravity (V6), already folded into reputation —
+    # carried separately so the assembler's posterior can read it as
+    # pseudo-counts without double-counting the KYC trust that also
+    # rides reputation.
+    vitality: float = 1.0
 
     @property
     def success_mean(self) -> float:

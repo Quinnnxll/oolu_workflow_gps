@@ -407,6 +407,12 @@ def execute_contract(
                 run_id=run_id,
                 version_id=representative,
                 version_ids=[n.version_id for n in market_nodes],
+                # Each participant's cleared-price share (V6): the
+                # weights the earnings split reads, so income follows
+                # what each node actually cleared at, never a flat split.
+                version_weights={
+                    n.version_id: float(n.cleared) for n in market_nodes
+                },
                 consumer_tenant=consumer_tenant,
                 consumer_principal=consumer_principal,
                 gross=gross_total,

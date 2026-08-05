@@ -811,6 +811,10 @@ class GatewayApp:
         # find_local_files tool; a multi-user host never sets this
         value_patcher=None,  # orchestrator.ValuePatcher: fills creative inputs
         isolation=None,  # worker.IsolationPolicy: powers /v1/worker-health
+        compute_meter=None,  # metering.ComputeMeterStore: measured sandbox
+        # wall time per node run (V6) — the books' compute-cost line
+        books=None,  # nodeplace.books.BooksReader: the composed per-node
+        # books + vitality read (V6); None serves no books door
         docker_available: bool = True,
         clock: Callable[[], datetime] | None = None,
     ):
@@ -1122,6 +1126,41 @@ class GatewayApp:
         from ..worker.policy import IsolationPolicy
 
         self._isolation = isolation or IsolationPolicy()
+        self._compute_meter = compute_meter
+        self._books = books
+        # V6: the deriver that turns executed-run audit records into
+        # metering events, DRIVEN on the standing tick — and the
+        # economics schedule the vitality law fires on.
+        self._metering_deriver = None
+        self._metering_seq = 0
+        self._metering_gate = 0.0
+        self._economics_gate = 0.0
+        self._economics_schedule = None
+        if self._metering is not None:
+            from ..metering.deriver import MeteringDeriver
+            from ..runtime.sweep import SweepScheduleStore
+
+            self._metering_deriver = MeteringDeriver(
+                durable.audit, self._metering, self._attribution
+            )
+            try:
+                self._economics_schedule = SweepScheduleStore(
+                    durable.conn, table="economics_schedule"
+                )
+                # The vitality law is the PLATFORM's standing law: seed
+                # the schedule once, daily, unless an operator has ever
+                # touched it — their explicit state (a disable included)
+                # always stands.
+                if self._economics_schedule.view() is None:
+                    self._economics_schedule.enable(
+                        interval_hours=24.0,
+                        granted_by="platform",
+                        tenant="",
+                        now=(clock or (lambda: datetime.now(UTC)))(),
+                    )
+            except Exception:  # noqa: BLE001 - a host without the store
+                # keeps serving; the law simply has no clock here.
+                self._economics_schedule = None
         self._docker_available = docker_available
         self._vault = vault or SecretVault()
         self._config = config or GatewayConfig()
@@ -1923,6 +1962,9 @@ class GatewayApp:
         r.add("POST", "/v1/work/nodes/{node_id}/secrets", self._node_secrets_put)
         r.add("POST", "/v1/builds/{build_id}/secrets", self._build_secrets_put)
         r.add("GET", "/v1/work/nodes/{node_id}/activity", self._work_activity)
+        # V6: one node's honest books — income, measured costs, net, and
+        # the vitality reading the law judges by — from durable records.
+        r.add("GET", "/v1/work/nodes/{node_id}/books", self._work_node_books)
         # The Supernode's template button: preview resolves the org
         # structure (deterministic-first) and apply imports the member
         # nodes — role by role, each with its essential function.
@@ -9074,6 +9116,12 @@ class GatewayApp:
             under_entry=under_entry,
             under_node_id=under_node_id,
         )
+        if _node_id is not None:
+            # The build's measured model spend lands on the NODE's own
+            # line (V6) — the same meter window the receipt spoke.
+            self._book_node_model_cost(
+                session.tenant_id, _node_id, "node.build", meter, spent_before
+            )
         return say
 
     def _publish_authored_node(
@@ -9525,6 +9573,15 @@ class GatewayApp:
         )
         if not result.get("ok"):
             return f"error: {result.get('problem', 'the program did not publish')}"
+        # The program build's measured model spend lands on the node's
+        # own line (V6) — the same meter window the receipt speaks.
+        self._book_node_model_cost(
+            session.tenant_id,
+            str(result["node_id"]),
+            "node.build",
+            meter,
+            spent_before,
+        )
         modules = len(build.spec.modules) if build.spec else 0
         note = (
             (" " + "; ".join(build.notes[:2])) if build.notes else ""
@@ -10002,6 +10059,33 @@ class GatewayApp:
             else f"about ${cost:.4f} of model compute"
         )
         return f" Building it drew ≈{tokens:,} tokens ({drew})."
+
+    def _book_node_model_cost(
+        self, tenant: str, node_id: str, source: str, meter, before_count: int
+    ) -> None:
+        """Land a build's measured model spend on the NODE's own line
+        (V6): the same meter window the receipt spoke, booked durably so
+        the vitality books read what its intelligence actually cost. A
+        free build (local model, stubbed author) books nothing."""
+        if meter is None or self._model_usage is None or not node_id:
+            return
+        try:
+            spent = meter.charges()[before_count:]
+            cost = sum(c.cost for c in spent)
+            if cost <= 0:
+                return
+            self._model_usage.record_node(
+                tenant,
+                node_id,
+                source=source,
+                cost=cost,
+                prompt_tokens=sum(c.prompt_tokens for c in spent),
+                completion_tokens=sum(c.completion_tokens for c in spent),
+            )
+        except Exception:  # noqa: BLE001 - the books are bookkeeping
+            logging.getLogger("oolu.gateway").warning(
+                "node model-cost booking failed", exc_info=True
+            )
 
     @staticmethod
     def _function_goal_key(text: str) -> str:
@@ -16387,12 +16471,185 @@ class GatewayApp:
                         - timedelta(minutes=_WORKING_STALE_MINUTES),
                         note=_WORKING_INTERRUPTED_NOTE,
                     )
+            # The metering deriver, DRIVEN (V6): executed-run audit
+            # records become metering events on the standing tick — the
+            # books' income chain finally materializes in production.
+            if now_mono >= self._metering_gate:
+                self._metering_gate = now_mono + 60.0
+                if self._metering_deriver is not None:
+                    # High-water read BEFORE the scan: a record appended
+                    # mid-scan lands after the mark and is never skipped.
+                    high = self._durable.audit.max_seq()
+                    self._metering_deriver.derive(
+                        since_seq=self._metering_seq
+                    )
+                    self._metering_seq = high
+            # The vitality law's clock (V6): the economics sweep fires on
+            # its own standing schedule, daily by default.
+            if now_mono >= self._economics_gate:
+                self._economics_gate = now_mono + 60.0
+                self._economics_sweep_tick(request.now or self._clock())
             if now_mono < self._sweep_gate:
                 return
             self._sweep_gate = now_mono + 60.0
             self._scheduled_sweep_tick(request.now or self._clock())
         except Exception:  # noqa: BLE001 - maintenance never breaks serving
             logging.getLogger("oolu.gateway").exception("scheduled sweep tick failed")
+
+    def _economics_sweep_tick(self, now) -> None:
+        """The vitality law's firing (V6): when the standing economics
+        schedule is due, read every living node's books and RETIRE the
+        ones whose rolling-window net sits below the floor — through the
+        standing revocation, with the owner NOTIFIED (the report-turn
+        idiom: an assistant turn carrying the books, plus the reminder
+        ring), the reason on the audit chain, history intact. A newborn
+        inside the grace age is never reaped for being new; the platform
+        namespace and anything already revoked or deleted stand aside."""
+        from ..nodeplace.books import (
+            VITALITY_GRACE_DAYS,
+            VITALITY_NET_FLOOR_USD,
+        )
+
+        if (
+            self._economics_schedule is None
+            or self._books is None
+            or self._nodeplace is None
+        ):
+            return
+        if not self._economics_schedule.claim_due(now):
+            return
+        checked, retired = 0, 0
+        starter_ids_by_tenant: dict[str, set[str]] = {}
+        for node in self._nodeplace.all_nodes():
+            if node.revoked_at is not None:
+                continue
+            if self._node_deleted(node.node_id):
+                continue
+            if node.skill_id.startswith("oolu."):
+                continue  # the platform's own limbs are not market citizens
+            seeded = starter_ids_by_tenant.setdefault(
+                node.tenant_id, self._starter_skill_ids(node.tenant_id)
+            )
+            if node.skill_id in seeded:
+                continue  # the seeded shelf is furniture, not commerce
+            age_days = (now - node.created_at).total_seconds() / 86_400
+            if age_days < VITALITY_GRACE_DAYS:
+                continue
+            checked += 1
+            books = self._books.books(node.node_id)
+            if books is None or books.net_usd >= VITALITY_NET_FLOOR_USD:
+                continue
+            if not self._nodeplace.revoke(
+                node.node_id,
+                noder_principal=node.noder_principal,
+                tenant_id=node.tenant_id,
+            ):
+                continue
+            retired += 1
+            self._durable.audit.append(
+                "node.retired",
+                {
+                    "run_id": f"economics:{node.node_id}",
+                    "node_id": node.node_id,
+                    "tenant": node.tenant_id,
+                    "owner": node.noder_principal,
+                    "net_usd": round(books.net_usd, 4),
+                    "window_days": books.window_days,
+                    "reason": (
+                        "vitality law: rolling net below "
+                        f"${abs(VITALITY_NET_FLOOR_USD):.0f} after the "
+                        "grace age"
+                    ),
+                    "books": {
+                        "income_usd": round(books.income_usd, 4),
+                        "model_cost_usd": round(books.model_cost_usd, 4),
+                        "compute_cost_usd": round(
+                            books.compute_cost_usd, 4
+                        ),
+                    },
+                    "by": "economics-sweep",
+                },
+            )
+            self._notify_retirement(node, books)
+        self._economics_schedule.record_result(
+            now, summary={"checked": checked, "retired": retired}
+        )
+        if retired:
+            self._durable.audit.append(
+                "economics.swept",
+                {
+                    "run_id": "economics:sweep",
+                    "checked": checked,
+                    "retired": retired,
+                },
+            )
+
+    def _notify_retirement(self, node, books) -> None:
+        """The owner hears it FROM the platform, with the books attached
+        — never discovers it from a 409. The report-turn idiom: an
+        assistant turn in their main thread plus the reminder ring."""
+        title = node.skill_id[:12]
+        try:
+            faces = self._nodeplace.own_faces(
+                node.tenant_id, node.noder_principal
+            )
+            for face in faces:
+                if face["node_id"] == node.node_id:
+                    title = face["title"] or title
+                    break
+        except Exception:  # noqa: BLE001 - the name is a courtesy
+            pass
+        say = (
+            f"Your node “{title}” ({node.node_id[:8]}) was retired by the "
+            "vitality law: over the last "
+            f"{books.window_days} days it earned "
+            f"${books.income_usd:.2f} against "
+            f"${books.cost_usd:.2f} of measured costs "
+            f"(${books.model_cost_usd:.2f} model, "
+            f"${books.compute_cost_usd:.2f} compute) — a net of "
+            f"${books.net_usd:.2f}, below the −$5 floor. Its history and "
+            "drawer are intact, and it is only delisted: you can revise "
+            "and republish it any time, and a successor built for the "
+            "same goal starts fresh."
+        )
+        try:
+            if self._assistant_history is not None:
+                self._assistant_history.append(
+                    tenant=node.tenant_id,
+                    principal=node.noder_principal,
+                    kind="assistant",
+                    body=say,
+                    agent="oolu",
+                )
+            if self._reminders is not None:
+                self._reminders.add(
+                    tenant=node.tenant_id,
+                    principal=node.noder_principal,
+                    text=f"a node was retired: “{title}” — books in chat",
+                    due_at=self._clock() + timedelta(minutes=2),
+                )
+        except Exception:  # noqa: BLE001 - the audit row above is the record
+            logging.getLogger("oolu.gateway").warning(
+                "retirement notice failed", exc_info=True
+            )
+
+    def _work_node_books(self, request, session, params) -> Response:
+        """One node's honest books (V6), from durable records only."""
+        if self._books is None or self._nodeplace is None:
+            raise GatewayError(404, "not_found", "books are not kept here")
+        node_id = str(params["node_id"])
+        books = self._books.books(node_id)
+        if books is None:
+            raise GatewayError(404, "not_found", "no such node")
+        return json_response(
+            200,
+            {
+                **books.model_dump(mode="json"),
+                "income_usd": round(books.income_usd, 6),
+                "cost_usd": round(books.cost_usd, 6),
+                "net_usd": round(books.net_usd, 6),
+            },
+        )
 
     # ------------------------------------------------------------------ #
     # The run worker (V1): the one deliberate daemon.                     #

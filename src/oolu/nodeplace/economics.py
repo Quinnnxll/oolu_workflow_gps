@@ -178,6 +178,15 @@ class CandidateAssembler:
         trust=None,  # (node_id) -> float: KYC trust multiplier (>= 1.0)
         restricted=None,  # (node_id) -> bool: Node Policy restriction
         clock=None,
+        # V6: (version_id) -> float | None — the MEASURED mean compute
+        # cost per execution, replacing the self-referential estimate.
+        compute_costs=None,
+        # V6: (node_id) -> float — the bounded vitality multiplier (the
+        # books' gravity). Folds into reputation, so selection, reward
+        # slices, and the energy trust term all shift by ONE bounded
+        # touch; the PricingEngine's normalization keeps every pool the
+        # same size regardless (redistribute, never inflate).
+        vitality=None,
     ):
         self._registry = registry
         self._stats = stats
@@ -185,6 +194,8 @@ class CandidateAssembler:
         self._trust = trust
         self._restricted = restricted
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._compute_costs = compute_costs
+        self._vitality = vitality
 
     def contracts(self, query: str = "") -> list["MarketplaceContract"]:
         """The marketplace as an assembler library.
@@ -207,9 +218,18 @@ class CandidateAssembler:
                 continue
             if not skill.actions:
                 continue
+            # Gravity reaches the assembler's posterior (V6) the same
+            # bounded way model advice does: as pseudo-observations that
+            # decide thin history and wash out under real evidence — a
+            # thriving node earns a nudge, never a verdict.
+            vitality = float(getattr(entry.candidate, "vitality", 1.0))
+            from .books import VITALITY_STRENGTH
+
             stats = NodeStats(
-                successes=entry.candidate.verified_successes,
-                failures=entry.candidate.verified_failures,
+                successes=entry.candidate.verified_successes
+                + VITALITY_STRENGTH * max(0.0, vitality - 1.0),
+                failures=entry.candidate.verified_failures
+                + VITALITY_STRENGTH * max(0.0, 1.0 - vitality),
                 cost_ewma=entry.candidate.cost.automation_cost or None,
             )
             # Body-preserving (W2): a paved web's subgraph decodes back to
@@ -295,10 +315,32 @@ class CandidateAssembler:
                 # with a global trust multiplier — fraud has nowhere to
                 # rank, verified entities win workflow.
                 reputation *= max(1.0, float(self._trust(version.node_id)))
+            vitality = 1.0
+            if self._vitality is not None:
+                # Gravity (V6): the books' bounded multiplier — clamped
+                # again here so no reader mistake widens it — shifts
+                # reputation, and through it selection and slices; the
+                # pool math downstream normalizes, so nothing inflates.
+                try:
+                    vitality = min(
+                        1.25, max(0.75, float(self._vitality(node.node_id)))
+                    )
+                except Exception:  # noqa: BLE001 - gravity is advisory
+                    vitality = 1.0
+                reputation *= vitality
             node_class, class_key = classify_listing(listing.tags, listing.title)
             days_since_update = max(
                 0.0, (now - version.published_at).total_seconds() / 86_400.0
             )
+            measured_cost = None
+            if self._compute_costs is not None:
+                # The MEASURED mean compute cost (V6) — what the sandbox
+                # wall clock actually read, priced at the machine rate —
+                # replacing the mean-of-own-estimates loop.
+                try:
+                    measured_cost = self._compute_costs(listing.version_id)
+                except Exception:  # noqa: BLE001 - measurement is optional
+                    measured_cost = None
             drafts.append(
                 (
                     listing,
@@ -309,6 +351,8 @@ class CandidateAssembler:
                     node_class,
                     class_key,
                     days_since_update,
+                    vitality,
+                    measured_cost,
                 )
             )
 
@@ -327,13 +371,19 @@ class CandidateAssembler:
             node_class,
             class_key,
             days_since_update,
+            vitality,
+            measured_cost,
         ) in drafts:
             substitutes = per_class[class_key] - 1
-            cost = (
-                CostVector(compute=stats.provider_cost_mean)
-                if stats.provider_cost_mean is not None
-                else CostVector()
-            )
+            # Measured beats derived beats nothing (V6): the sandbox's
+            # own wall clock when it was metered, the ledger mean when
+            # only history speaks, an honest zero when neither does.
+            if measured_cost is not None:
+                cost = CostVector(compute=float(measured_cost))
+            elif stats.provider_cost_mean is not None:
+                cost = CostVector(compute=stats.provider_cost_mean)
+            else:
+                cost = CostVector()
             assembled.append(
                 AssembledCandidate(
                     listing_id=listing.listing_id,
@@ -349,6 +399,7 @@ class CandidateAssembler:
                         verified_successes=stats.successes,
                         verified_failures=stats.failures,
                         reputation=reputation,
+                        vitality=vitality,
                     ),
                     signals=RewardSignals(
                         node_class=node_class,

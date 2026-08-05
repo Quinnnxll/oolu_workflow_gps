@@ -52,6 +52,11 @@ class RunBinding(BaseModel):
     # several nodes at once); empty means just `version_id` — the
     # single-node runs written before this field existed.
     version_ids: list[str] = Field(default_factory=list)
+    # Each participant's share of the run's gross, by cleared price (V6):
+    # the weights the earnings split reads, so a dear node earns more of
+    # a shared run than a cheap one. Empty on bindings written before
+    # this field existed — those keep the even split.
+    version_weights: dict[str, float] = Field(default_factory=dict)
     consumer_tenant: str
     consumer_principal: str | None = None
     gross: float = 0.0

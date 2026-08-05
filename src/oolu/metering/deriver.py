@@ -20,9 +20,14 @@ class MeteringDeriver:
         self._ledger = ledger
         self._attribution = attribution
 
-    def derive(self) -> list[MeteringEvent]:
+    def derive(self, *, since_seq: int = 0) -> list[MeteringEvent]:
+        """Fold executed-run audit records into metering events, exactly
+        once each (the ledger's idempotency key is the wall). V6:
+        ``since_seq`` lets the standing tick resume from its high-water
+        mark instead of re-reading the whole log every minute — the
+        default 0 keeps every existing caller whole-log, as before."""
         recorded: list[MeteringEvent] = []
-        for record in self._audit.records():
+        for record in self._audit.records(since_seq=since_seq):
             if record.event_type != _EXECUTED_EVENT:
                 continue
             if record.payload.get("status") != ExecutionStatus.SUCCEEDED.value:

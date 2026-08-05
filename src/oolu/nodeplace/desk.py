@@ -152,16 +152,21 @@ class WorkDesk:
         return concise_name(stem.replace(".", " ").replace("_", " ")) or skill_id
 
     def _earnings_by_version(
-        self, principal: str, owned: set[str]
+        self, principal: str, owned: set[str], *, since=None
     ) -> dict[str, int]:
         """The noder's cumulative earnings, keyed by their versions that
         earned them: billing entry -> metering event -> the run's bound
         participants. A run that used several of the noder's nodes splits
-        the entry evenly among them (exact for the single-node case)."""
+        the entry by the BINDING's own per-version weights (V6 — each
+        node's cleared price share, recorded when the run bound), falling
+        back to the even split for bindings written before weights
+        existed. ``since`` windows the read for the vitality books."""
         if self._billing is None or self._metering is None:
             return {}
         totals: dict[str, int] = {}
         for entry in self._billing.entries(principal):
+            if since is not None and entry.created_at < since:
+                continue
             # A key lookup per entry (the noder's own earnings history) —
             # never a materialization of everything ever metered.
             event = (
@@ -172,6 +177,7 @@ class WorkDesk:
             if event is None:
                 continue
             participants: list[str] = []
+            binding = None
             if self._attribution is not None:
                 binding = self._attribution.get_binding(event.run_id)
                 if binding is not None:
@@ -179,11 +185,62 @@ class WorkDesk:
             if not participants and event.version_id is not None:
                 participants = [event.version_id]
             mine = [v for v in participants if v in owned]
-            for version_id in mine:
-                totals[version_id] = totals.get(version_id, 0) + (
-                    entry.amount_micros // len(mine)
-                )
+            if not mine:
+                continue
+            weights = (
+                dict(getattr(binding, "version_weights", None) or {})
+                if binding is not None
+                else {}
+            )
+            total_weight = sum(
+                max(0.0, weights.get(v, 0.0)) for v in mine
+            )
+            if total_weight > 0:
+                for version_id in mine:
+                    totals[version_id] = totals.get(version_id, 0) + int(
+                        entry.amount_micros
+                        * max(0.0, weights.get(version_id, 0.0))
+                        / total_weight
+                    )
+            else:
+                for version_id in mine:
+                    totals[version_id] = totals.get(version_id, 0) + (
+                        entry.amount_micros // len(mine)
+                    )
         return totals
+
+    def node_income_micros(self, node_id: str, *, since=None) -> int:
+        """One node's attributed income (V6): the owner's earnings
+        entries resolved through metering and the run bindings, weighted
+        by the binding's own per-version shares, summed over this node's
+        versions — the books' income line, read from durable records."""
+        node = self._registry.get_node(node_id)
+        if node is None:
+            return 0
+        wanted = {
+            version.version_id
+            for version in self._registry.list_versions(node_id)
+        }
+        if not wanted:
+            return 0
+        # The split runs over the owner's WHOLE desk — the weight
+        # denominator must see every participating sibling, or one
+        # node's read would claim a shared run's entire entry.
+        owned = {
+            version.version_id
+            for sibling in self._registry.list_nodes(
+                node.tenant_id, node.noder_principal
+            )
+            for version in self._registry.list_versions(sibling.node_id)
+        }
+        totals = self._earnings_by_version(
+            node.noder_principal, owned, since=since
+        )
+        return sum(
+            micros
+            for version_id, micros in totals.items()
+            if version_id in wanted
+        )
 
     def _health(self, version_ids: list[str]) -> NodeHealth:
         if self._stats is None:

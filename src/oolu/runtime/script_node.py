@@ -298,6 +298,11 @@ class NodeScriptRunner:
         # binder — value:// references become their stored values just
         # before execution. None keeps literal bindings as they are.
         value_resolver=None,
+        # (node_key, seconds, run_key) -> None: the compute meter (V6) —
+        # every EXECUTE-path sandbox run's measured wall time lands
+        # durably, so a node's compute cost is measured, never invented.
+        # None meters nothing, exactly as before.
+        compute_meter=None,
     ):
         self._backend = backend
         self._cache = cache
@@ -307,6 +312,7 @@ class NodeScriptRunner:
         self._backend_kind = backend_kind or type(backend).__name__
         self._backend_image = backend_image
         self._environment = environment_fingerprint
+        self._compute_meter = compute_meter
         # The seam to the bundle layer: an action carrying a ``bundle`` id
         # is resolved to a packed ``PreparedBundle`` (cache-first) and
         # staged in one archive. No resolver -> the inline ``files`` path
@@ -468,6 +474,7 @@ class NodeScriptRunner:
                 files=files,
                 bundle=bundle,
                 limits=limits,
+                meter_key=node_key,
             )
             record = classify(result)
             gap = self._answer_gap(result, ports) if record is None else None
@@ -513,6 +520,7 @@ class NodeScriptRunner:
                     files=files,
                     bundle=bundle,
                     limits=limits,
+                    meter_key=node_key,
                 )
                 record = classify(result)
                 gap = self._answer_gap(result, ports) if record is None else None
@@ -588,6 +596,7 @@ class NodeScriptRunner:
                         files=files,
                         bundle=bundle,
                         limits=limits,
+                        meter_key=node_key,
                     )
                     record = classify(result)
                     gap = (
@@ -685,6 +694,7 @@ class NodeScriptRunner:
             files=files,
             bundle=bundle,
             limits=limits,
+            meter_key=node_key,
         )
         record = classify(result)
         gap = self._answer_gap(result, ports) if record is None else None
@@ -922,6 +932,7 @@ class NodeScriptRunner:
         files: dict[str, str] | None = None,
         bundle=None,
         limits: ResourceLimits | None = None,
+        meter_key: str = "",
     ) -> ExecutionResult:
         # The antivirus screen at the last gate: no script — provided,
         # synthesized, repaired, or replayed from cache — reaches the
@@ -935,7 +946,7 @@ class NodeScriptRunner:
                 stderr="refused by the safety screen: " + "; ".join(flags),
                 contract_ok=False,
             )
-        return self._backend.run(
+        result = self._backend.run(
             ExecutionRequest(
                 script=script,
                 dependencies=dependencies,
@@ -947,6 +958,14 @@ class NodeScriptRunner:
                 bundle=bundle,
             )
         )
+        if self._compute_meter is not None and meter_key:
+            # The measured wall time the backend already stamps, landed
+            # durably (V6). A meter failure never fails the run.
+            try:
+                self._compute_meter(meter_key, result.duration_s, session_id)
+            except Exception:  # noqa: BLE001 - the meter is bookkeeping
+                logger.warning("compute meter failed", exc_info=True)
+        return result
 
     @staticmethod
     def _outcome(

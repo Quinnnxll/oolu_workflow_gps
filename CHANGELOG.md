@@ -4,6 +4,53 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+V6 landed — the node books and the vitality law
+(docs/node-vitality-plan.md, phase V6): every node has honest books;
+the books select.
+
+- **The prerequisite, driven.** The metering deriver — which turns
+  executed-run audit records into metering events, and which nothing
+  in production ever called — now runs on the standing tick (the same
+  heartbeat V1's worker drives), with a resume cursor so each pass
+  reads only what's new. The income chain finally materializes.
+- **Costs measured, never invented.** Model spend books per NODE: both
+  build doors land their meter windows on the newborn's own line
+  (model_usage_nodes). Sandbox compute is metered at the isolation
+  seam — the wall time the backends already measured now lands
+  durably, priced at a declared machine rate — and candidate
+  economics read the measured mean instead of the old
+  mean-of-own-estimates loop (which, with nothing ever recorded,
+  answered zero).
+- **The books.** GET /v1/work/nodes/{id}/books answers income,
+  model + compute cost, net, health, trust, staleness, and the
+  vitality reading — from durable records only. Income hardened from
+  even-split to BINDING-WEIGHTED: each participant's cleared price
+  rides the run binding, so a dear node earns more of a shared run
+  than a cheap sibling; pre-V6 bindings keep the even split. The
+  production assembly finally gives the desk its billing hands.
+- **The vitality law.** A platform-seeded daily economics sweep: after
+  the 90-day grace, a node whose rolling-365-day net sits below −$5
+  retires through the standing revocation — the owner notified with
+  the books attached (an assistant turn plus the reminder ring), the
+  reason and books snapshot on the audit chain, history and drawer
+  intact, republish always open. Newborns, the platform namespace,
+  and the seeded starter shelf stand aside.
+- **Gravity.** A hard-bounded vitality multiplier ([0.75, 1.25]: net
+  income through a tanh, stability, verified trust, staleness decay)
+  enters candidate reputation as one bounded touch — shifting
+  utility, reward slices, and the energy trust term together — plus
+  bounded pseudo-counts into the assembler's posterior that wash out
+  under real evidence, and a bounded neighbor pull from co-occurrence
+  partners. Redistribute, never inflate: the conservation pin holds
+  with gravity applied.
+
+Pinned by tests/test_node_books.py (the deriver driven on the tick;
+compute metered at the declared rate through the executor; model cost
+on the node's line; the binding-weighted split; the books door; the
+sweep retiring with notice, grace and floor both protecting, the
+schedule claiming once; vitality bounded, selection-shifting, and
+pool-conserving).
+
 V5 landed — the web at scale
 (docs/node-vitality-plan.md, phase V5): discovery is indexed,
 multi-dimensional, and settles on the most effective web — with fresh

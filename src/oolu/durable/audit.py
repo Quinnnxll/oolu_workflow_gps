@@ -104,16 +104,32 @@ class DurableAuditLog:
             ).fetchone()
         return int(row["n"])
 
-    def records(self, *, run_id: str | None = None) -> list[AuditRecord]:
+    def max_seq(self) -> int:
+        """The newest row's sequence — the high-water mark a resuming
+        tick records BEFORE it scans, so nothing appended mid-scan is
+        ever skipped."""
+        with self._conn.lock:
+            row = self._conn.db.execute(
+                "SELECT COALESCE(MAX(seq), 0) AS m FROM audit_log"
+            ).fetchone()
+        return int(row["m"])
+
+    def records(
+        self, *, run_id: str | None = None, since_seq: int = 0
+    ) -> list[AuditRecord]:
+        """``since_seq`` (V6) bounds the read to rows after a high-water
+        mark, so a standing tick resumes instead of re-reading the log."""
         with self._conn.lock:
             if run_id is None:
                 rows = self._conn.db.execute(
-                    "SELECT * FROM audit_log ORDER BY seq ASC"
+                    "SELECT * FROM audit_log WHERE seq > ? ORDER BY seq ASC",
+                    (int(since_seq),),
                 ).fetchall()
             else:
                 rows = self._conn.db.execute(
-                    "SELECT * FROM audit_log WHERE run_id = ? ORDER BY seq ASC",
-                    (run_id,),
+                    "SELECT * FROM audit_log WHERE run_id = ? AND seq > ?"
+                    " ORDER BY seq ASC",
+                    (run_id, int(since_seq)),
                 ).fetchall()
         return [self._row(row) for row in rows]
 
