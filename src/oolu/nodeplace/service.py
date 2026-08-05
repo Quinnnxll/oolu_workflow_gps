@@ -352,11 +352,17 @@ class NodeplaceService:
         return self._store.node_by_alias(tenant_id, noder_principal, alias)
 
     def tenant_registry(
-        self, tenant_id: str, limit: int = 200
+        self, tenant_id: str, limit: int = 200, query: str = ""
     ) -> list[tuple[Node, Listing]]:
         """The tenant's standing nodes with their newest listings — the
-        bounded field the V4 capability search scans."""
-        return self._store.tenant_listings(tenant_id, limit=limit)
+        bounded field the V4 capability search scans, FTS-narrowed by
+        the ask's words when a query rides along (V5)."""
+        return self._store.tenant_listings(tenant_id, limit=limit, query=query)
+
+    def own_faces(self, tenant_id: str, noder_principal: str) -> list[dict]:
+        """The caller's desk as words (V5): node_id, skill_id, title,
+        goal, has_script, capabilities — one SQL, no version fetches."""
+        return self._store.own_faces(tenant_id, noder_principal)
 
     def listing_for_version(self, version_id: str) -> Listing | None:
         """The version's marketplace listing — the declared slot
@@ -377,6 +383,10 @@ class NodeplaceService:
         """The node's newest version — its current function."""
         versions = self._store.list_versions(node_id)
         return versions[-1] if versions else None
+
+    def get_version(self, version_id: str) -> NodeVersion | None:
+        """One version by id — the candidate graph's join key (V5)."""
+        return self._store.get_version(version_id)
 
     def runnable_version(self, version_id: str) -> NodeVersion | None:
         version = self._store.get_version(version_id)

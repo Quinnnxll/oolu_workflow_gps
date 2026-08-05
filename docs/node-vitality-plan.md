@@ -615,6 +615,61 @@ time; across 100 seeded assemblies a fresh fit node wins some and a
 proven node wins most (the N1-style statistical pin); the chosen
 web's energy and seed are recorded and replayable.
 
+**Status: LANDED.** INDEXED DISCOVERY: ``discover()`` reads an FTS5
+inverted index over title + summary + tags + derived capabilities
+(``listing_fts``, maintained beside the listings table, backfilled at
+construction for pre-V5 stores) — query words as conjoined quoted
+prefix terms, ranked by bm25 then recency; the empty query and the
+PostgreSQL adapter keep the portable paths (behavior, not the index,
+is the contract — and the V4 ``pragma_table_info`` probe is now
+SQLite-gated too, healing a latent pg break). The tenant capability
+search pre-narrows through the same index (OR over the ask's words,
+newest-bounded fallback when words find nothing), and the own-desk
+scans (twin guard, goal re-find, reminder check, find_nodes) read the
+new ``node_faces`` projection — title, goal, has_script, capabilities
+denormalized once at publish, backfilled at construction — instead of
+fetching and parsing a version per node. THE LINK DIMENSIONS:
+usage co-occurrence is read version-keyed and outcome-aware from
+``route_observations`` (``TraceStore.version_cooccurrence``) plus
+count-only from ``binding_versions``
+(``AttributionStore.version_pairs``); lineage and class join them in
+``nodeplace/links.py``'s ``candidate_graph`` (served at GET
+/v1/market/links), with class edges bounded to small classes; the
+embedding dimension RANKS — ``find_nodes`` ordering upgrades through
+the one retrieval seam when the host configures an embedding model —
+and PROPOSES near-misses to the negotiator
+(``WebSurveyor(similar=...)``, wired to ``retrieval.score``:
+model-backed when the host has an embedding model, the lexical floor
+otherwise) for same-type no-shared-role pairs the deterministic rule
+drops as noise; it never mints an edge and never crosses a guard
+floor (law 4 — the negotiator's pure type verdict and
+verify-by-execution still dispose). THE ENERGY READING:
+``nodeplace/energy.py`` computes ``E(web) = Σ [−log q + λ·cost +
+μ·(1−trust)] − ν·cohesion`` with declared constants (λ=0.05, μ=0.30,
+ν=0.20, q clamped at 1e-4 so unproven is expensive, never fatal);
+``ContractAssembler.assemble_alternatives`` grows a bounded
+diversifying beam (each branch stands the prior branches' first
+picks aside — documented honestly as such, not an exhaustive
+search); ``preview_assembly(beam_width, cohesion, seed)`` samples q
+per web from the caller's seeded rng, reads cohesion through
+``links.cohesion_lookup``, keeps the argmin web, and stamps energy +
+terms + alternatives + seed on the preview; the assemble door takes
+``beam`` (1–5) and ``seed``, mints a ``_draw_seed()`` under
+explore+beam when none rides in (plain explore keeps the standing
+app rng, exactly as before), echoes the seed, and lands the reading
+on the audit chain (``assembly.energy``) — recorded and replayable,
+the desk doctrine verbatim. Exit gate pinned by
+tests/test_web_scale.py: a 3,000-listing synthetic registry answers
+through the index (EXPLAIN QUERY PLAN names ``listing_fts``) in
+bounded time; 100 fixed-seed readings — proven wins most, fresh wins
+some, deterministically; the recorded seed replays the identical
+selection and energy. (Noted honestly: the beam diversifies first
+picks rather than branching every contested slot — bounded and
+faithful to "a bounded beam over the greedy chainer", named for what
+it is; and model advice still enters selection ONLY as the standing
+bounded pseudo-counts — the energy's trust term reads reputation,
+never a model's opinion.)
+
 ### V6 — the node books and the vitality law (report 5)
 
 Goal: every node has honest books; the books select.

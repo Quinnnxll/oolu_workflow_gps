@@ -94,6 +94,27 @@ class AttributionStore:
             ).fetchall()
         return [row["run_id"] for row in rows]
 
+    def version_pairs(self, *, limit: int = 5000) -> dict[tuple[str, str], int]:
+        """Which versions were BOUND to the same run, as unordered pair
+        counts ``{(a, b): together}`` with ``a < b`` (V5) — the binding
+        side of the usage co-occurrence dimension. Bindings carry no
+        outcome (the trace observations do); this dimension says only
+        that the pair kept being chosen together. One self-join over the
+        newest ``limit`` participation rows, bounded by construction."""
+        with self._conn.lock:
+            rows = self._conn.db.execute(
+                """SELECT a.version_id AS a, b.version_id AS b,
+                          COUNT(*) AS together
+                   FROM binding_versions a
+                   JOIN binding_versions b
+                     ON a.run_id = b.run_id AND a.version_id < b.version_id
+                   GROUP BY a.version_id, b.version_id
+                   ORDER BY together DESC
+                   LIMIT ?""",
+                (int(limit),),
+            ).fetchall()
+        return {(row["a"], row["b"]): int(row["together"]) for row in rows}
+
     def bindings_for_versions(self, version_ids: list[str]) -> list[RunBinding]:
         """Every run bound to any of these versions — a node's execution
         history, read through its versions (oldest binding first). The

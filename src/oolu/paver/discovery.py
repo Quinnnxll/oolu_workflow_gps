@@ -123,9 +123,45 @@ class _Components:
         return out
 
 
+# A semantically-proposed near-miss needs the names THIS close before
+# the pair is worth the negotiator's look — conservative, because every
+# proposal that survives the type verdict still costs an adapter build.
+_SIMILAR_NEAR_MISS = 0.6
+
+
 @dataclass
 class WebSurveyor:
-    """Survey a tenant's nodes into a web map — deterministic and pure."""
+    """Survey a tenant's nodes into a web map — deterministic and pure.
+
+    ``similar`` (V5, the embedding dimension): an optional
+    ``(text, text) -> 0..1`` hand — ``retrieval.score`` with the host's
+    embedder, model-backed when one is configured — that may PROPOSE
+    near-misses the deterministic rule drops as noise (same type,
+    different name, no shared declared role). Advice proposes the pair;
+    the negotiator's pure type verdict and the adapter's
+    verify-by-execution still dispose — an embedder never mints an edge
+    (law 4). None keeps the survey exactly as deterministic as before."""
+
+    similar: "object | None" = None
+
+    def _semantic_reason(self, produced, consumed) -> str | None:
+        if self.similar is None:
+            return None
+        if produced.value_type != consumed.value_type:
+            return None
+        if produced.name == consumed.name:
+            return None
+        if produced.role and consumed.role and produced.role == consumed.role:
+            return None  # the deterministic rule already speaks here
+        a = f"{produced.name} {produced.label or ''}".strip()
+        b = f"{consumed.name} {consumed.label or ''}".strip()
+        try:
+            close = float(self.similar(a, b))
+        except Exception:  # noqa: BLE001 - advice fails open, maps stay pure
+            return None
+        if close >= _SIMILAR_NEAR_MISS:
+            return "semantically close names, same type"
+        return None
 
     def survey(self, tenant: str, nodes: list[SurveyNode]) -> SurveyReport:
         by_key = {node.key: node for node in nodes}
@@ -176,6 +212,11 @@ class WebSurveyor:
                         if produced.matches(slot):
                             continue  # a direct match, already an edge
                         reason = _near_miss_reason(produced, slot)
+                        if reason is None:
+                            # V5: the embedding dimension may propose what
+                            # the deterministic rule dropped as noise —
+                            # the type verdict downstream still disposes.
+                            reason = self._semantic_reason(produced, slot)
                         if reason is None:
                             continue
                         key = (

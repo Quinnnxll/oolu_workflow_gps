@@ -516,6 +516,39 @@ class TraceStore:
     # ------------------------------------------------------------------ #
     # Structure: precedence matrix -> partial order.                      #
     # ------------------------------------------------------------------ #
+    def version_cooccurrence(
+        self, *, limit: int = 2000
+    ) -> dict[tuple[str, str], tuple[int, int]]:
+        """Which VERSIONS actually ran together, at what outcome (V5).
+
+        Read from the newest ``limit`` route observations — the rows that
+        carry both the run's bound ``node_versions`` and its success —
+        as unordered pairs: ``{(a, b): (together, successes)}`` with
+        ``a < b``. The usage co-occurrence dimension of the candidate
+        graph, and the cohesion signal the web energy reads; bounded by
+        construction, version-keyed by construction."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT node_versions, success FROM route_observations"
+                " ORDER BY id DESC LIMIT ?",
+                (int(limit),),
+            ).fetchall()
+        pairs: dict[tuple[str, str], tuple[int, int]] = {}
+        for row in rows:
+            try:
+                versions = sorted(set(json.loads(row["node_versions"])))
+            except Exception:  # noqa: BLE001 - one bad row hides nothing
+                continue
+            ok = bool(row["success"])
+            for i, a in enumerate(versions):
+                for b in versions[i + 1 :]:
+                    together, successes = pairs.get((a, b), (0, 0))
+                    pairs[(a, b)] = (
+                        together + 1,
+                        successes + (1 if ok else 0),
+                    )
+        return pairs
+
     def precedence(self, first: str, second: str) -> tuple[int, int]:
         """Directed win counts (first-before-second, second-before-first)."""
         with self._lock:

@@ -4,6 +4,48 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+V5 landed — the web at scale
+(docs/node-vitality-plan.md, phase V5): discovery is indexed,
+multi-dimensional, and settles on the most effective web — with fresh
+nodes still winning their share.
+
+- **Indexed discovery.** discover() reads a real FTS5 inverted index
+  over title, summary, tags, and derived capabilities (query words as
+  conjoined prefix terms, ranked by relevance then recency; empty
+  queries and the PostgreSQL adapter keep the portable paths — and
+  V4's SQLite-only schema probe is now gated too). The tenant
+  capability search pre-narrows through the same index, and the
+  own-desk scans (twin guard, goal re-find, reminder check,
+  find_nodes) read a denormalized node_faces projection — written at
+  publish, backfilled at construction — instead of fetching and
+  parsing a version per node.
+- **The link dimensions, one candidate graph.** Usage co-occurrence is
+  read version-keyed and outcome-aware from route observations, plus
+  count-only from run-binding participation; lineage and market class
+  join them in candidate_graph (GET /v1/market/links). The embedding
+  dimension RANKS (find_nodes ordering upgrades through the one
+  retrieval seam when the host configures an embedding model) and
+  PROPOSES near-misses to the negotiator for same-type no-shared-role
+  pairs the deterministic rule drops as noise — it never mints an
+  edge and never crosses a guard floor (law 4: the type verdict and
+  verify-by-execution dispose).
+- **The energy reading.** One additive scalar per candidate web —
+  E = Σ[−log(sampled success) + λ·cost + μ·(1−trust)] − ν·cohesion —
+  minimized across a bounded diversifying beam over the greedy
+  chainer. The assemble door takes beam (1–5) and seed, mints and
+  echoes a seed under explore, samples the posteriors with it
+  (Thompson: cold start explores by construction, a freshly published
+  fit node keeps earning draws), reads cohesion from the pairs that
+  actually ran together, and lands every reading on the audit chain —
+  recorded and replayable, the desk doctrine verbatim. Model advice
+  still enters selection only as the standing bounded pseudo-counts.
+
+Pinned by tests/test_web_scale.py: a 3,000-listing synthetic registry
+answers through the index in bounded time; across 100 fixed-seed
+readings the proven node wins most and the fresh node wins some,
+deterministically; the recorded seed replays the identical selection
+and energy; semantic near-misses are proposed, never minted.
+
 V4 landed — find the standing node first
 (docs/node-vitality-plan.md, phase V4): an ask reaches the right
 existing node before anything builds — the reported

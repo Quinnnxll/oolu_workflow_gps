@@ -30,6 +30,7 @@ from ..skills.contract import (
 from ..skills.inputs import inputs_manifest
 from .budget import BudgetPolicy, BudgetVerdict, assess_budget
 from .economics import CandidateAssembler
+from .energy import EnergyTerm, WebEnergy, web_energy
 from .market import PriceBook
 from .rewards import commission_rate, lineage_shares, reward_multiplier
 
@@ -93,6 +94,15 @@ class AssemblyPreview(BaseModel):
     # The plan's cost judged against caps, thresholds, spending behavior,
     # and the (possibly partial) linked wallet.
     budget: BudgetVerdict | None = None
+    # The energy reading (V5): the chosen web's additive scalar, its
+    # cohesion term, the per-node terms it summed, the seed the sampled
+    # draws replay from, and every alternative the beam weighed — so the
+    # reading is recorded and replayable, the desk doctrine verbatim.
+    energy: float | None = None
+    energy_cohesion: float | None = None
+    energy_terms: list[dict] = Field(default_factory=list)
+    seed: int | None = None
+    alternatives: list[dict] = Field(default_factory=list)
 
 
 def _personalize(
@@ -199,6 +209,13 @@ def preview_assembly(
     # assembly, and behavior is judged within its own class of goal.
     spend_lookup: Callable[[str | None], list[float] | None] | None = None,
     wallet_balance: float | None = None,
+    # V5, the energy reading: with beam_width > 1 the assembler grows up
+    # to that many alternative webs and the LOWEST-ENERGY one is the
+    # preview — q sampled from the same rng the picks explore with (the
+    # caller's recorded seed), cohesion read through the caller's hand.
+    beam_width: int = 1,
+    cohesion: Callable[[list[str]], float] | None = None,
+    seed: int | None = None,
 ) -> AssemblyPreview:
     """Assemble a goal over the marketplace and price the plan, read-only.
 
@@ -230,14 +247,75 @@ def preview_assembly(
     library = [entry.contract for entry in marketplace]
     if trace_store is not None:
         library = [_personalize(c, trace_store, trace_context) for c in library]
-    result = ContractAssembler(
+    personalized = {c.id: c for c in library}
+    engine = ContractAssembler(
         library,
         rng=rng,
         fill_gaps_with_scripts=fill_gaps,
         proposal_model=proposal_model,
         cost_weight=cost_weight,
-    ).assemble(goal)
-    personalized = {c.id: c for c in library}
+    )
+    energy_reading: WebEnergy | None = None
+    alternatives_summary: list[dict] = []
+    if beam_width > 1:
+        # The energy reading (V5): weigh up to beam_width alternative
+        # webs on ONE additive scalar and keep the lowest — sampled q
+        # under the caller's seeded rng (replayable), measured cost,
+        # trust, and the co-occurrence cohesion of the web's own pairs.
+        candidates = engine.assemble_alternatives(goal, width=beam_width)
+        readings: list[tuple[WebEnergy, object]] = []
+        for alt in candidates:
+            if alt.contract is None:
+                continue
+            terms: list[EnergyTerm] = []
+            for picked_id, picked_name in zip(
+                alt.selected_ids, alt.selected
+            ):
+                stats = (
+                    personalized.get(picked_id).stats
+                    if personalized.get(picked_id) is not None
+                    else None
+                ) or NodeStats()
+                s, f = float(stats.successes), float(stats.failures)
+                q = (
+                    rng.betavariate(1.0 + s, 1.0 + f)
+                    if rng is not None
+                    else (1.0 + s) / (2.0 + s + f)
+                )
+                entry = by_id.get(picked_id)
+                trust = (
+                    min(1.0, float(entry.assembled.signals.reputation))
+                    if entry is not None
+                    # A gap node: unproven synthesis is a coin flip in
+                    # trust as it is in success.
+                    else 0.5
+                )
+                terms.append(
+                    EnergyTerm(
+                        name=picked_name,
+                        q=q,
+                        cost=float(stats.cost_ewma or 0.0),
+                        trust=trust,
+                    )
+                )
+            coh = cohesion(list(alt.selected_ids)) if cohesion else 0.0
+            readings.append((web_energy(terms, cohesion=coh), alt))
+        if readings:
+            energy_reading, result = min(
+                readings, key=lambda pair: pair[0].total
+            )
+            alternatives_summary = [
+                {
+                    "selected": list(alt.selected),
+                    "energy": round(reading.total, 6),
+                    "chosen": alt is result,
+                }
+                for reading, alt in readings
+            ]
+        else:
+            result = engine.assemble(goal)
+    else:
+        result = engine.assemble(goal)
 
     contract = result.contract
     learned_order: list[dict[str, str]] = []
@@ -350,6 +428,29 @@ def preview_assembly(
             else []
         ),
         learned_order=learned_order,
+        energy=(
+            round(energy_reading.total, 6)
+            if energy_reading is not None
+            else None
+        ),
+        energy_cohesion=(
+            energy_reading.cohesion if energy_reading is not None else None
+        ),
+        energy_terms=(
+            [
+                {
+                    "name": term.name,
+                    "q": round(term.q, 6),
+                    "cost": term.cost,
+                    "trust": term.trust,
+                }
+                for term in energy_reading.terms
+            ]
+            if energy_reading is not None
+            else []
+        ),
+        seed=seed,
+        alternatives=alternatives_summary,
         budget=assess_budget(
             # Planning advice was real spend: budgets judge the whole cost
             # of the plan, not just the market's share of it.

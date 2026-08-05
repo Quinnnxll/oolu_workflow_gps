@@ -107,6 +107,9 @@ class AssemblyResult(BaseModel):
 
     contract: NodeContract | None = None
     selected: list[str] = Field(default_factory=list)  # contract names, in pick order
+    # The same picks by contract id (V5): what the beam diversifies on
+    # and the energy reading keys its terms by.
+    selected_ids: list[str] = Field(default_factory=list)
     gap_filled: list[str] = Field(default_factory=list)  # slot names given script nodes
     missing: list[Slot] = Field(default_factory=list)
     # What the proposal model's advice cost, summed over every consulted
@@ -164,7 +167,13 @@ class ContractAssembler:
         return list(self._contracts)
 
     # ------------------------------------------------------------------ #
-    def assemble(self, goal: GoalSpec) -> AssemblyResult:
+    def assemble(
+        self, goal: GoalSpec, *, exclude_ids: frozenset[str] = frozenset()
+    ) -> AssemblyResult:
+        """``exclude_ids`` (V5) is the beam's hand: contracts stood aside
+        for one alternative assembly, so a different web can form around
+        a different first pick. Empty (the default) is exactly the
+        assembly there always was."""
         library = self._library()
         have = list(goal.have)
         selected: dict[str, NodeContract] = {}
@@ -189,7 +198,11 @@ class ContractAssembler:
             if satisfied(slot) or any(m == slot for m in missing):
                 continue
             producer, advice_cost = self._pick_producer(
-                goal, slot, library, selected=selected_order, exclude=set(selected)
+                goal,
+                slot,
+                library,
+                selected=selected_order,
+                exclude=set(selected) | set(exclude_ids),
             )
             planning_cost += advice_cost
             if producer is None:
@@ -215,6 +228,7 @@ class ContractAssembler:
             return AssemblyResult(
                 contract=None,
                 selected=selected_order,
+                selected_ids=list(selected),
                 gap_filled=gap_filled,
                 missing=missing or list(goal.want),
                 planning_cost=planning_cost,
@@ -229,9 +243,43 @@ class ContractAssembler:
                 body=SubgraphBody(nodes=list(selected.values())),
             ),
             selected=selected_order,
+            selected_ids=list(selected),
             gap_filled=gap_filled,
             planning_cost=planning_cost,
         )
+
+    def assemble_alternatives(
+        self, goal: GoalSpec, *, width: int = 3
+    ) -> list[AssemblyResult]:
+        """A bounded beam over the greedy per-slot chainer (V5): the web
+        as picked, then up to ``width - 1`` alternatives, each assembled
+        with the previous branches' FIRST picks stood aside — a
+        different anchor grows a different web. Bounded by construction
+        (≤ ``width`` assemblies), deterministic given the rng's state,
+        and honest about its shape: a diversifying beam, not an
+        exhaustive search. Branches that assemble nothing, or reassemble
+        an already-seen web, end the beam."""
+        results = [self.assemble(goal)]
+        excluded: set[str] = set()
+        while len(results) < max(1, int(width)):
+            prev = results[-1]
+            if prev.contract is None or not prev.selected_ids:
+                break
+            anchor = next(
+                (i for i in prev.selected_ids if i not in excluded), None
+            )
+            if anchor is None:
+                break
+            excluded.add(anchor)
+            branch = self.assemble(goal, exclude_ids=frozenset(excluded))
+            if branch.contract is None:
+                break
+            if any(
+                branch.selected_ids == seen.selected_ids for seen in results
+            ):
+                break
+            results.append(branch)
+        return results
 
     # ------------------------------------------------------------------ #
     def _pick_producer(

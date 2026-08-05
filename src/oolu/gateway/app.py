@@ -162,6 +162,7 @@ from ..nodeplace import (
     WorkDesk,
     assess_budget,
     build_run_binding,
+    cohesion_lookup,
     compile_contract,
     enforce_budget,
     estimate_contract_gross,
@@ -889,7 +890,13 @@ class GatewayApp:
 
         self._paver_schedule = PaverScheduleStore(durable.conn)
         self._pave_store = PaveStore(durable.conn)
-        self._surveyor = WebSurveyor()
+        # V5: the survey may take SEMANTIC near-miss proposals through the
+        # one retrieval seam — model-backed when the host configures an
+        # embedding model, the lexical floor otherwise; either way the
+        # negotiator's type verdict disposes, never the embedder.
+        from ..retrieval import score as _retrieval_score
+
+        self._surveyor = WebSurveyor(similar=_retrieval_score)
         self._paver_gate = 0.0
         # The tenant SOP store (P1): the human's standing law, read by the
         # Paver's gate projection on every pave. Webs no longer pave
@@ -2153,6 +2160,9 @@ class GatewayApp:
         r.add("GET", "/v1/nodes/{node_id}/view", self._node_view)
         r.add("POST", "/v1/market/quotes", self._market_quote)
         r.add("POST", "/v1/market/assemble", self._market_assemble)
+        # V5: the candidate graph — discovery's versions joined with the
+        # stored link dimensions (co-occurrence, lineage, class).
+        r.add("GET", "/v1/market/links", self._market_links)
         r.add("POST", "/v1/runs/contract", self._submit_contract_run)
         r.add("GET", "/v1/runs/contract/holds", self._list_contract_holds)
         r.add("GET", "/v1/inbox", self._inbox_view)
@@ -8118,33 +8128,24 @@ class GatewayApp:
         """The caller's own node whose stored goal IS this sentence
         (normalized), fn- or program- — the deterministic re-find behind
         a reuse "yes", for the nodes hash/alias resolution cannot reach
-        (a program node from before the alias table existed)."""
+        (a program node from before the alias table existed). Reads the
+        desk FACES (V5) — no version fetched per node."""
         if self._nodeplace is None:
             return None
         wanted = self._function_goal_key(goal)
         try:
-            nodes = self._nodeplace.list_own_nodes(
-                noder_principal=session.principal_id,
-                tenant_id=session.tenant_id,
+            faces = self._nodeplace.own_faces(
+                session.tenant_id, session.principal_id
             )
         except Exception:  # noqa: BLE001 - the re-find is best-effort
             return None
-        for node in nodes:  # newest first
-            if not node.skill_id.startswith(("fn-", "program-")):
+        for face in faces:  # newest first
+            if not face["skill_id"].startswith(("fn-", "program-")):
                 continue
-            if self._node_deleted(node.node_id):
+            if self._node_deleted(face["node_id"]):
                 continue
-            version = self._nodeplace.latest_version(node.node_id)
-            if version is None:
-                continue
-            try:
-                skill = ReusableSkill.model_validate_json(
-                    version.sanitized_skill_json
-                )
-            except Exception:  # noqa: BLE001
-                continue
-            if self._function_goal_key(skill.description) == wanted:
-                return node.node_id
+            if self._function_goal_key(face["goal"]) == wanted:
+                return face["node_id"]
         return None
 
     def _reuse_node_and_run(
@@ -10878,15 +10879,15 @@ class GatewayApp:
         ``goal_similarity`` against each function node's stored goal
         sentence. Program nodes count too (V4): their ids are random, but
         their stored goal sentence is exactly as comparable. A human-sized
-        scan over one person's desk, never the marketplace; best match at
-        or above ``NEAR_GOAL_SIMILARITY`` wins."""
+        scan over one person's desk FACES (V5: words denormalized at
+        publish, no version fetched per node), never the marketplace;
+        best match at or above ``NEAR_GOAL_SIMILARITY`` wins."""
         if self._nodeplace is None:
             return None
         exact_id = self._function_skill_id(session.tenant_id, goal)
         try:
-            nodes = self._nodeplace.list_own_nodes(
-                noder_principal=session.principal_id,
-                tenant_id=session.tenant_id,
+            faces = self._nodeplace.own_faces(
+                session.tenant_id, session.principal_id
             )
         except Exception:  # noqa: BLE001 - the guard is best-effort
             return None
@@ -10900,32 +10901,23 @@ class GatewayApp:
             aliased = None
         exact_node_id = aliased.node_id if aliased is not None else None
         best: tuple[float, dict] | None = None
-        for node in nodes:
-            if not node.skill_id.startswith(("fn-", "program-")):
+        for face in faces:
+            if not face["skill_id"].startswith(("fn-", "program-")):
                 continue
-            if node.skill_id == exact_id or node.node_id == exact_node_id:
+            if face["skill_id"] == exact_id or face["node_id"] == exact_node_id:
                 continue
-            if self._node_deleted(node.node_id):
+            if self._node_deleted(face["node_id"]):
                 continue  # a deleted twin is no twin
-            version = self._nodeplace.latest_version(node.node_id)
-            if version is None:
-                continue
-            try:
-                skill = ReusableSkill.model_validate_json(
-                    version.sanitized_skill_json
-                )
-            except Exception:  # noqa: BLE001
-                continue
-            score = goal_similarity(goal, skill.description)
+            score = goal_similarity(goal, face["goal"])
             if score >= NEAR_GOAL_SIMILARITY and (
                 best is None or score > best[0]
             ):
                 best = (
                     score,
                     {
-                        "node_id": node.node_id,
-                        "title": skill.name,
-                        "goal": skill.description,
+                        "node_id": face["node_id"],
+                        "title": face["title"],
+                        "goal": face["goal"],
                     },
                 )
         return best[1] if best is not None else None
@@ -11011,7 +11003,12 @@ class GatewayApp:
         if not goal:
             return []
         try:
-            pairs = self._nodeplace.tenant_registry(session.tenant_id)
+            # V5: the FTS index pre-narrows the field by the ask's words
+            # (OR — the scorer below judges partial overlap itself); the
+            # bounded newest scan stands in when the words find nothing.
+            pairs = self._nodeplace.tenant_registry(
+                session.tenant_id, query=goal
+            )
         except Exception:  # noqa: BLE001 - the search is best-effort
             return []
         scored: list[tuple[float, dict]] = []
@@ -11069,43 +11066,31 @@ class GatewayApp:
         it), and the SEEDED starter shelf stays out — its reminders
         node files into the same store the built-in does, so asking
         which door on every seeded desk would be friction answering
-        nothing. The question belongs to nodes the person built."""
+        nothing. The question belongs to nodes the person built. Reads
+        the desk FACES (V5) — no version fetched per node."""
         if self._nodeplace is None:
             return None
         try:
-            nodes = self._nodeplace.list_own_nodes(
-                noder_principal=session.principal_id,
-                tenant_id=session.tenant_id,
+            faces = self._nodeplace.own_faces(
+                session.tenant_id, session.principal_id
             )
         except Exception:  # noqa: BLE001 - the check is best-effort
             return None
         seeded = self._starter_skill_ids(session.tenant_id)
-        for node in nodes:  # newest first: the freshest desk wins
-            if not node.skill_id.startswith(("fn-", "program-")):
+        for face in faces:  # newest first: the freshest desk wins
+            if not face["skill_id"].startswith(("fn-", "program-")):
                 continue
-            if node.skill_id in seeded:
+            if face["skill_id"] in seeded:
                 continue
-            if self._node_deleted(node.node_id):
+            if self._node_deleted(face["node_id"]):
                 continue
-            version = self._nodeplace.latest_version(node.node_id)
-            if version is None:
-                continue
-            try:
-                skill = ReusableSkill.model_validate_json(
-                    version.sanitized_skill_json
-                )
-            except Exception:  # noqa: BLE001
-                continue
-            action = next(
-                (a for a in skill.actions if a.adapter == "script"), None
-            )
-            if action is None or not (action.parameters or {}).get("script"):
+            if not face["has_script"]:
                 continue  # unrunnable: the yes-answer could keep no promise
-            if "remind" in f"{skill.name} {skill.description}".lower():
+            if "remind" in f"{face['title']} {face['goal']}".lower():
                 return {
-                    "node_id": node.node_id,
-                    "title": skill.name,
-                    "goal": skill.description,
+                    "node_id": face["node_id"],
+                    "title": face["title"],
+                    "goal": face["goal"],
                 }
         return None
 
@@ -11131,42 +11116,45 @@ class GatewayApp:
             return "error: nodes are not enabled on this host"
         own_lines: list[tuple[float, str]] = []
         try:
-            nodes = self._nodeplace.list_own_nodes(
-                noder_principal=session.principal_id,
-                tenant_id=session.tenant_id,
+            faces = self._nodeplace.own_faces(
+                session.tenant_id, session.principal_id
             )
         except Exception:  # noqa: BLE001 - the search is best-effort
-            nodes = []
-        for node in nodes:
-            if not node.skill_id.startswith(("fn-", "program-")):
+            faces = []
+        # The embedding dimension (V5): a model-backed embedder, when the
+        # operator turned one on, RANKS the findings — it never admits or
+        # refuses anything by itself (law 4: models advise ranking).
+        embedder = self._author_embedder(session)
+        for face in faces:
+            if not face["skill_id"].startswith(("fn-", "program-")):
                 continue
-            if self._node_deleted(node.node_id):
-                continue
-            version = self._nodeplace.latest_version(node.node_id)
-            if version is None:
-                continue
-            try:
-                skill = ReusableSkill.model_validate_json(
-                    version.sanitized_skill_json
-                )
-                listing = self._nodeplace.listing_for_version(
-                    version.version_id
-                )
-            except Exception:  # noqa: BLE001
+            if self._node_deleted(face["node_id"]):
                 continue
             score = self._registry_match_score(
                 wanted,
-                skill.name,
-                skill.description,
-                listing.capabilities if listing is not None else (),
+                face["title"],
+                face["goal"],
+                face["capabilities"],
                 strict_caps=False,
             )
             if score >= self._FIND_NODES_FLOOR:
+                rank = score
+                if embedder is not None:
+                    from ..retrieval import score as _semantic
+
+                    rank = max(
+                        rank,
+                        _semantic(
+                            wanted,
+                            f"{face['title']} {face['goal']}",
+                            embedder=embedder,
+                        ),
+                    )
                 own_lines.append(
                     (
-                        score,
-                        f"“{skill.name}” — yours, built for "
-                        f"“{skill.description}” (node {node.node_id[:8]})",
+                        rank,
+                        f"“{face['title']}” — yours, built for "
+                        f"“{face['goal']}” (node {face['node_id'][:8]})",
                     )
                 )
         own_lines.sort(key=lambda pair: -pair[0])
@@ -20266,6 +20254,21 @@ class GatewayApp:
         if not goal.want:
             raise GatewayError(400, "invalid_request", "goal.want must not be empty")
 
+        explore = bool(body.get("explore", False))
+        beam = self._beam_width(body)
+        seed = self._assembly_seed(body)
+        # The desk doctrine reaches assembly (V5): a sampled reading rides
+        # a RECORDED seed and replays exactly. An explicit seed always
+        # seeds; an energy reading (beam > 1) under explore mints one;
+        # plain explore keeps the app's standing rng, exactly as before.
+        rng = None
+        if seed is not None:
+            rng = random.Random(seed)
+        elif explore and beam > 1:
+            seed = self._draw_seed()
+            rng = random.Random(seed)
+        elif explore:
+            rng = self._rng
         preview = preview_assembly(
             assembler,
             book,
@@ -20278,7 +20281,7 @@ class GatewayApp:
             trace_context=session.tenant_id,
             # explore: Thompson-sample producer picks from those posteriors
             # instead of taking the greedy best — opt-in per request.
-            rng=self._rng if bool(body.get("explore", False)) else None,
+            rng=rng,
             # A model's opinion enters picks as a prior; what the advice
             # cost rides the preview and the budget verdict below.
             proposal_model=self._proposal_model_for(session),
@@ -20286,8 +20289,79 @@ class GatewayApp:
             budget=self._budget_policy(body),
             spend_lookup=lambda goal_class: self._spend_history(session, goal_class),
             wallet_balance=self._wallet_balance(session),
+            # The energy reading (V5): weigh alternative webs on one
+            # additive scalar, cohesion read from the stores that watched
+            # nodes actually run together.
+            beam_width=beam,
+            cohesion=(
+                cohesion_lookup(self._trace_store, self._attribution)
+                if beam > 1
+                else None
+            ),
+            seed=seed,
         )
+        if beam > 1 and preview.energy is not None:
+            # Recorded and replayable: the reading lands on the audit
+            # chain with its seed, so any later reader can re-run the
+            # exact same draw and get the exact same web.
+            self._durable.audit.append(
+                "assembly.energy",
+                {
+                    "goal": goal.name,
+                    "tenant": session.tenant_id,
+                    "seed": seed,
+                    "energy": preview.energy,
+                    "selected": list(preview.selected),
+                    "alternatives": len(preview.alternatives),
+                },
+            )
         return json_response(200, preview.model_dump(mode="json"))
+
+    def _market_links(self, request, session, params) -> Response:
+        """The one candidate graph (V5): discovery's versions as nodes,
+        the three STORED link dimensions as typed edges — usage
+        co-occurrence (which versions ran together, at what outcome),
+        lineage, and market class. Read-only and bounded. The embedding
+        dimension is deliberately absent: models advise ranking, they
+        never mint edges (law 4)."""
+        if self._nodeplace is None:
+            raise GatewayError(404, "not_found", "nodes are not enabled")
+        from ..nodeplace.links import candidate_graph
+
+        graph = candidate_graph(
+            self._nodeplace,
+            traces=self._trace_store,
+            attribution=self._attribution,
+            query=request.query.get("q", ""),
+        )
+        return json_response(200, graph.model_dump(mode="json"))
+
+    @staticmethod
+    def _beam_width(body: dict) -> int:
+        raw = body.get("beam", 1)
+        try:
+            beam = int(raw)
+        except (TypeError, ValueError):
+            raise GatewayError(
+                400, "invalid_request", "beam must be an integer"
+            ) from None
+        if beam < 1 or beam > 5:
+            raise GatewayError(
+                400, "invalid_request", "beam must be between 1 and 5"
+            )
+        return beam
+
+    @staticmethod
+    def _assembly_seed(body: dict) -> int | None:
+        raw = body.get("seed")
+        if raw is None:
+            return None
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            raise GatewayError(
+                400, "invalid_request", "seed must be an integer"
+            ) from None
 
     # ------------------------------------------------------------------ #
     # Budget signals: what the caller declared, what the user has done,   #
