@@ -225,6 +225,19 @@ SETTINGS_CATALOG: tuple[SettingField, ...] = (
         "account. Off by default: when a task has no existing path, OoLu "
         "asks you to turn this on before building anything new.",
     ),
+    SettingField(
+        key="account.task_delegation",
+        group="account",
+        label="Build and run under my budget",
+        kind=SettingKind.BOOL,
+        default=False,
+        description="One ask, at most one confirmation: OoLu builds what's "
+        "missing and keeps a task moving on its own — mechanical retries, "
+        "repairs, and one model rebuild — bounded by the task budget "
+        "below. Reserved actions still need their explicit approval, "
+        "always. Implies auto-build. Asked once on your first buildable "
+        "task if you never set it.",
+    ),
     # --- subscription: DISPLAY-ONLY here. The plan is a commitment with
     # money attached, not a preference — changing it takes the account
     # console's cancel-first flow, never a settings knob.
@@ -363,6 +376,20 @@ SETTINGS_CATALOG: tuple[SettingField, ...] = (
         "in your spending currency (0 = off).",
     ),
     SettingField(
+        key="budget.task_cap",
+        group="budget",
+        label="Task budget per ask",
+        kind=SettingKind.NUMBER,
+        default=0.0,
+        minimum=0.0,
+        maximum=100_000_000.0,
+        unit="currency",
+        description="How much model spending one ask may draw across its "
+        "retries, repairs, and rebuild in your spending currency (0 = the "
+        "safety floors alone). The loop stops and says what it spent the "
+        "moment this is reached.",
+    ),
+    SettingField(
         key="budget.monthly_limit",
         group="budget",
         label="Monthly limit",
@@ -497,6 +524,19 @@ class SettingsNode:
                 item["unit"] = code
             out.append(item)
         return out
+
+    def answered(
+        self, tenant: str, key: str, principal: str | None = None
+    ) -> bool:
+        """Whether this setting was ever EXPLICITLY set — as opposed to
+        merely reading its catalog default. The V3 first-run question
+        rides on this: a consent nobody answered is a question to ask,
+        never a silent no."""
+        if key in self._store.get_raw(tenant):
+            return True
+        if principal:
+            return key in self._store.get_raw(personal_scope(tenant, principal))
+        return False
 
     def set(
         self, tenant: str, key: str, value: Any, principal: str | None = None

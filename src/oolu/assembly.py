@@ -913,11 +913,14 @@ def build_host_runtime(
 
     def _autobuild_consent(tenant: str, principal: str = "") -> bool:
         # Personal-first: the submitting account's own consent, with the
-        # tenant layer as the shared default.
-        return bool(
-            settings_node.effective(tenant or home_tenant, principal or None).get(
-                AUTOBUILD_CONSENT_KEY, False
-            )
+        # tenant layer as the shared default. The V3 task delegation
+        # ("build and run under my budget") is the stronger consent and
+        # implies it — the rebuild is exactly the repair it delegates.
+        values = settings_node.effective(
+            tenant or home_tenant, principal or None
+        )
+        return bool(values.get(AUTOBUILD_CONSENT_KEY, False)) or bool(
+            values.get("account.task_delegation", False)
         )
 
     rebuilder = LLMRouteRebuilder(

@@ -4,6 +4,44 @@ All notable changes to Workflow-GPS are documented here.
 
 ## Unreleased
 
+V3 landed — one ask earns its finish
+(docs/node-vitality-plan.md, phase V3): reply → execute → retry →
+repair → review → report inside one ask, bounded by the task budget.
+
+- **The delegation, asked once.** Two new settings: "Build and run
+  under my budget" (account.task_delegation — implies auto-build) and
+  the per-ask task budget (budget.task_cap, in your currency; 0 = the
+  safety floors alone). The consent surfaces as a first-run question
+  on the first buildable task ask — yes builds and runs straight
+  through, no is recorded, and the question is asked exactly once,
+  ever — instead of a buried default found after three failures.
+- **The loop.** Under the delegation the worker presses Retry itself
+  on mechanical incidents — never a blocked gate, a reserved or
+  irreversible action, or anything that moves money; those always
+  pause for the human — bounded by the engine's own ladder (two
+  retries, then the one model rebuild, which still re-earns the
+  human's ONE confirmation) and by the task budget, read before every
+  retry from the ask's meter mark. Each machine retry is audited
+  (run.auto_retry), and the report is withheld while the loop works.
+- **The floors scaled, the budget real.** Chat tool rounds 4→12 for a
+  delegated account; author steps 12→24 with a budget reading before
+  every consultation ("the seat's spend cap — not a small constant —
+  is the real budget on a build", finally true); birth repairs 2→4,
+  budget-checked. Exhaustion always refuses in words naming the
+  spend.
+- **The report reviews and prices.** A finished ask's report now
+  CHECKS what the result promised — the file in the drawer, the
+  reminder standing, the rows landed — and says MISSING plainly when
+  a promise didn't land; states what the whole ask drew (≈tokens and
+  dollars from the ask's meter window); and on a failure the loop
+  accounts for itself: how many times it retried, and — when the
+  budget is what stopped it — the spend, named.
+
+Pinned by tests/test_task_loop.py (the question asked once, yes/no
+recorded, the ladder walked under delegation, judgment shapes never
+auto-retried, the spent budget stopping the loop in words, the review
+checking real stores, the scaled floors).
+
 V2 landed — birth without lies
 (docs/node-vitality-plan.md, phase V2): a node that publishes is a
 node whose contract, code, and run were proven to agree — and a build

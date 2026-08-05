@@ -130,6 +130,11 @@ class NodeAuthorAgent:
         # cycle costs two steps, and the seat's spend cap — not a small
         # constant — is the real budget on a build.
         max_steps: int = 12,
+        # The comment above, made real (V3): when the caller hands a
+        # budget reading (remaining task spend, in USD), the loop checks
+        # it before every consultation and stops in words the moment it
+        # runs dry — max_steps stays the safety floor against loops.
+        budget_left: Callable[[], float] | None = None,
     ) -> None:
         self._model = model
         self._catalog = catalog
@@ -137,6 +142,7 @@ class NodeAuthorAgent:
         self._read_file = read_file
         self._verify = verify
         self._max_steps = max_steps
+        self._budget_left = budget_left
 
     # ------------------------------------------------------------------ #
     def author(
@@ -165,6 +171,20 @@ class NodeAuthorAgent:
         ]
         consultations = 0
         for _step in range(self._max_steps):
+            if self._budget_left is not None and self._budget_left() <= 0:
+                # The budget, not the step count, ended it — said so, with
+                # nothing published (a half-built function is worth $0).
+                return AuthoredFunction(
+                    None,
+                    refusal=(
+                        "the build reached your task budget before the "
+                        "function was finished, so nothing was built — "
+                        "raise the task budget in Settings to let a build "
+                        "work longer"
+                    ),
+                    transcript=tuple(transcript),
+                    consultations=consultations,
+                )
             try:
                 reply = self._model.consult(transcript, tools=router.specs())
             except Exception as exc:  # noqa: BLE001 - a dead model builds nothing

@@ -46,6 +46,7 @@ from ..billing.subscription import SubscriptionError, SubscriptionService
 from ..billing.tax import InvoiceBook, JurisdictionModule, TaxRegistry
 from ..chat import (
     BUILDER_OFFER_NOTE,
+    DELEGATED_TOOL_ROUNDS,
     GROWTH_BUILD_INSTEAD,
     GROWTH_OFFER,
     GROWTH_REUSE_OFFER,
@@ -283,6 +284,11 @@ _PRESS_BOUNDARY = "press_boundary"
 # no reply is a turn the host lost mid-work — swept into the note below
 # so the thread never shows a working bubble for work that died. V1's
 # re-drive will finish the work instead of apologizing for it.
+# The V3 delegation pair: the standing "build and run under my budget"
+# switch, and the per-ask spend allowance the loop is bounded by.
+TASK_DELEGATION_KEY = "account.task_delegation"
+TASK_CAP_KEY = "budget.task_cap"
+
 _WORKING_STALE_MINUTES = 15
 _WORKING_INTERRUPTED_NOTE = (
     "— that ask was interrupted mid-work (the host stopped before the "
@@ -2516,6 +2522,38 @@ class GatewayApp:
                     turn, run = self._run_with_handoff(
                         session, offered_goal, bind=answer == "yes"
                     )
+                elif answer is not None and kind == "delegation":
+                    # The first-run question answered (V3): yes stores the
+                    # standing delegation (which implies auto-build) and
+                    # takes the goal straight through build-and-run — one
+                    # ask, at most one confirmation. No is recorded too,
+                    # so the question is asked exactly once, ever.
+                    if self._settings is not None:
+                        self._settings.set(
+                            session.tenant_id,
+                            TASK_DELEGATION_KEY,
+                            answer == "yes",
+                            session.principal_id,
+                        )
+                    if answer == "yes":
+                        turn, run = self._grow_node_and_run(
+                            session, offered_goal
+                        )
+                        if turn is not None and turn.say:
+                            turn = ChatTurn(
+                                say="Delegation is on — I'll build and run "
+                                "under your budget from here. "
+                                + turn.say,
+                                source=turn.source,
+                                actions=turn.actions,
+                            )
+                    else:
+                        turn = ChatTurn(
+                            say="Okay — I'll ask each time instead. Ask me "
+                            f"again and I'll take “{offered_goal}” the "
+                            "step-by-step way.",
+                            source="tool",
+                        )
                 elif answer is not None and kind == "task_reminder":
                     # The offered reminder (P2): yes files the row into
                     # the standing store; no leaves the task alone.
@@ -2626,6 +2664,17 @@ class GatewayApp:
                     "window, the user said (oldest first): "
                     + " | ".join(d[:160] for d in dropped[:3])
                 )
+            # The delegated ceiling (V3): under "build and run under my
+            # budget" a turn may work its tools longer before it must
+            # speak — the floor stays for everyone else, and the task
+            # budget is the real bound.
+            rounds = (
+                DELEGATED_TOOL_ROUNDS
+                if self._task_delegated(
+                    session.tenant_id, session.principal_id
+                )
+                else None
+            )
             if emit is not None:
                 # Stream the model's reasoning to the client as it thinks;
                 # the finalized turn is still built from the complete text.
@@ -2639,6 +2688,7 @@ class GatewayApp:
                     on_reasoning=lambda delta: emit(
                         {"type": "reasoning", "delta": delta}
                     ),
+                    tool_rounds=rounds,
                 )
             else:
                 turn = self._chat.respond(
@@ -2648,6 +2698,7 @@ class GatewayApp:
                     tools=tools,
                     model=router,
                     context=context_note,
+                    tool_rounds=rounds,
                 )
         say = turn.say
         actions = turn.actions
@@ -2684,8 +2735,33 @@ class GatewayApp:
                     if not in_node
                     else None
                 )
+                # The first-run question (V3): a buildable task with the
+                # delegation NEVER answered becomes the question itself —
+                # consent surfaces on the first ask that needs it, not as
+                # a buried default the user finds after three failures.
+                first_ask = (
+                    handoff is None
+                    and not in_node
+                    and self._delegation_unanswered(session)
+                    and self._goal_buildable(session, turn.task)
+                )
                 if handoff is not None:
                     say = f"{say} {handoff}".strip()
+                elif first_ask:
+                    self._growth_offers.put(
+                        session.tenant_id,
+                        session.principal_id,
+                        kind="delegation",
+                        goal=turn.task,
+                        original_goal=turn.task,
+                    )
+                    say = (
+                        f"{say} Before I start: this needs a node built. "
+                        "Want me to build and run what's needed under "
+                        "your budget from now on — one ask, at most one "
+                        "confirmation? (yes / no — changeable in "
+                        "Settings any time)"
+                    ).strip()
                 else:
                     # With standing consent, the missing node is built
                     # BEFORE the run — function written, node on the desk,
@@ -2716,12 +2792,18 @@ class GatewayApp:
                         # finally true.
                         run = self._enqueue_intent_run(session, turn.task)
                         self._metrics["chat_runs"] += 1
+                        meter = getattr(self, "_model_meter", None)
                         self._run_reports.file(
                             run_id=str(run["run_id"]),
                             tenant=session.tenant_id,
                             principal=session.principal_id,
                             agent=thread_agent,
                             intent=str(turn.task),
+                            # The ask's meter mark (V3): the report says
+                            # what the WHOLE ask drew from here on.
+                            charges_before=(
+                                len(meter.charges()) if meter is not None else 0
+                            ),
                         )
             except GatewayError as exc:
                 if exc.code not in ("cannot_execute", "release_revoked"):
@@ -7732,14 +7814,104 @@ class GatewayApp:
     ) -> bool:
         """The ACCOUNT's 'Auto-build nodes on my paths' switch (personal-
         first, tenant layer as the shared default), honestly defaulted:
-        no settings node means no consent was ever given."""
+        no settings node means no consent was ever given. The V3 task
+        delegation is the STRONGER consent — 'build and run under my
+        budget' includes the building — so it implies this one."""
+        if self._settings is None:
+            return False
+        values = self._settings.effective(tenant, principal)
+        return bool(values.get(AUTOBUILD_CONSENT_KEY, False)) or bool(
+            values.get(TASK_DELEGATION_KEY, False)
+        )
+
+    def _task_delegated(
+        self, tenant: str, principal: str | None = None
+    ) -> bool:
+        """The V3 standing delegation: one ask, at most one confirmation,
+        the loop's mechanical retries and repairs under the task budget."""
         if self._settings is None:
             return False
         return bool(
             self._settings.effective(tenant, principal).get(
-                AUTOBUILD_CONSENT_KEY, False
+                TASK_DELEGATION_KEY, False
             )
         )
+
+    def _task_cap_usd(self, tenant: str) -> float:
+        """The per-ask spend allowance in USD — 0 means no cap was set
+        and the safety floors alone bound the loop. The user sets it in
+        their regional currency; the meter counts USD."""
+        if self._settings is None:
+            return 0.0
+        values = self._settings.effective(tenant)
+        cap = float(values.get(TASK_CAP_KEY, 0.0) or 0.0)
+        if cap <= 0:
+            return 0.0
+        from ..currency import to_usd
+
+        code = str(values.get("account.currency", "USD") or "USD")
+        return to_usd(cap, code)
+
+    def _ask_spend(self, charges_before: int) -> tuple[int, float]:
+        """``(tokens, usd)`` this ask has drawn since its meter mark —
+        the length-delta window the build receipt already uses; on a
+        busy shared host concurrent charges land inside it, so the
+        number is an honest approximation, never an invoice."""
+        meter = getattr(self, "_model_meter", None)
+        if meter is None:
+            return 0, 0.0
+        spent = meter.charges()[max(0, int(charges_before)) :]
+        tokens = sum(c.prompt_tokens + c.completion_tokens for c in spent)
+        return tokens, sum(c.cost for c in spent)
+
+    def _delegation_unanswered(self, session) -> bool:
+        """Whether the first-run question is still OWED: neither the
+        delegation nor the auto-build consent was ever explicitly set —
+        a defaulted False is a question nobody asked, not an answer."""
+        if self._settings is None:
+            return False
+        answered = getattr(self._settings, "answered", None)
+        if not callable(answered):
+            return False
+        return not (
+            answered(
+                session.tenant_id,
+                TASK_DELEGATION_KEY,
+                session.principal_id,
+            )
+            or answered(
+                session.tenant_id,
+                AUTOBUILD_CONSENT_KEY,
+                session.principal_id,
+            )
+        )
+
+    def _goal_buildable(self, session, goal: str) -> bool:
+        """Whether this ask would NEED a build — the same gates the
+        growth offer walks: real work, no standing node answering, and a
+        model seated to write the function."""
+        goal = (goal or "").strip()
+        return (
+            bool(goal)
+            and not obviously_chat(goal)
+            and not messaging_intent(goal)
+            and self._nodeplace is not None
+            and self._desk is not None
+            and self._tenant_model(session.tenant_id) is not None
+            and self._resolve_node_function(session, goal) is None
+        )
+
+    def _ask_budget_left(
+        self, tenant: str, charges_before: int
+    ) -> float | None:
+        """Remaining task budget in USD — None when no cap was set (the
+        floors alone bound the loop), never negative words: the caller
+        stops at <= 0 and says what was spent."""
+        cap = self._task_cap_usd(tenant)
+        if cap <= 0:
+            return None
+        _tokens, usd = self._ask_spend(charges_before)
+        return cap - usd
 
     def _autobuild_before_run(self, session, goal: str) -> str | None:
         """The nodes and the route, built TOGETHER before the run — with
@@ -8335,6 +8507,15 @@ class GatewayApp:
         # transaction states land on the audit log with the publish.
         transaction: list[str] = ["proposed", "generated"]
         repair_rounds = 0
+        # The repair floor and the delegated ceiling (V3): more rounds
+        # under "build and run under my budget", each one budget-checked
+        # when a task cap stands — the constant is the safety wall, the
+        # budget is the bound.
+        repair_cap = (
+            4
+            if self._task_delegated(session.tenant_id, session.principal_id)
+            else 2
+        )
         while True:
             problem = self._birth_problem(script, io)
             validated = "validated-static"
@@ -8372,7 +8553,24 @@ class GatewayApp:
             if problem is None:
                 transaction.append(validated)
                 break
-            if repair_rounds >= 2:
+            budget_left = self._ask_budget_left(
+                session.tenant_id, spent_before
+            )
+            if repair_rounds >= repair_cap or (
+                repair_rounds >= 2
+                and budget_left is not None
+                and budget_left <= 0
+            ):
+                exhausted = (
+                    budget_left is not None and budget_left <= 0
+                )
+                _tokens, usd = self._ask_spend(spent_before)
+                spend_note = (
+                    f" — the build reached your task budget (≈${usd:.4f} "
+                    "spent)"
+                    if exhausted
+                    else ""
+                )
                 self._ledger_note(
                     session.tenant_id,
                     skill_id,
@@ -8385,8 +8583,8 @@ class GatewayApp:
                 )
                 return (
                     "error: the function failed birth verification — "
-                    f"{problem} — and repair could not close the gap, so "
-                    "nothing was published"
+                    f"{problem} — and repair could not close the gap"
+                    f"{spend_note}, so nothing was published"
                 )
             repair_rounds += 1
             transaction.append(f"repair:{problem[:120]}")
@@ -11721,12 +11919,27 @@ class GatewayApp:
             )
             return script, io, refusal, False
         verify = self._author_verifier()
+        # The budget-scaled floor (V3): a delegated account's build may
+        # work twice as long — and when a task cap is set, the BUDGET is
+        # the real bound, read before every consultation.
+        delegated = self._task_delegated(
+            session.tenant_id, session.principal_id
+        )
+        budget_left = None
+        if delegated and self._task_cap_usd(session.tenant_id) > 0:
+            meter = getattr(self, "_model_meter", None)
+            mark = len(meter.charges()) if meter is not None else 0
+            budget_left = lambda: (  # noqa: E731 - a reading, not a def
+                self._ask_budget_left(session.tenant_id, mark) or 0.0
+            )
         agent = NodeAuthorAgent(
             author,
             catalog=lambda: self._author_catalog(session),
             outputs=lambda node_id: self._author_node_outputs(session, node_id),
             read_file=read_file,
             verify=verify,
+            max_steps=24 if delegated else 12,
+            budget_left=budget_left,
         )
         authored = agent.author(
             goal, demonstrated=demonstrated, context=context
@@ -15559,8 +15772,103 @@ class GatewayApp:
                 logging.getLogger("oolu.gateway").exception(
                     "post-run bookkeeping failed for %s", state.run_id
                 )
+            if self._auto_retry_incident(state):
+                # The task loop (V3): a mechanical incident under the
+                # standing delegation is the loop's job, not the human's
+                # — the retry is queued and THIS drain picks it up next.
+                continue
             self._report_run_outcome(state)
         return driven
+
+    # ------------------------------------------------------------------ #
+    # The task loop (V3): mechanical retries under the standing           #
+    # delegation, bounded by the ladder and the task budget.              #
+    # ------------------------------------------------------------------ #
+    def _auto_retry_incident(self, state: RunState) -> bool:
+        """The worker's own hand on the Retry button — exactly the hand
+        the delegation put there. True = retried (queued again, report
+        withheld). The engine's own ladder bounds it: two retries, then
+        the one rebuild (which re-earns the human's confirmation), then
+        the human. Judgment-shaped incidents and a spent task budget
+        always pause for the human, in words."""
+        if state.pause is None or state.pause.kind is not PauseKind.INCIDENT:
+            return False
+        binding = self._run_reports.get(state.run_id)
+        if binding is None:
+            return False  # only a conversation-born ask carries the loop
+        tenant = str(state.contract.metadata.get("tenant_id", ""))
+        principal = state.contract.submitted_by or binding["principal"]
+        if not self._task_delegated(tenant, principal):
+            return False
+        # The ladder's bound: after two retries the engine's rebuild has
+        # had its shot — the next stop is the human.
+        if state.user_retries >= 2 or state.rebuild_attempts > 0:
+            return False
+        if (state.pause.payload or {}).get("rebuild_refusal"):
+            return False
+        if not self._incident_is_mechanical(state):
+            return False
+        left = self._ask_budget_left(
+            tenant, int(binding.get("charges_before") or 0)
+        )
+        if left is not None and left <= 0:
+            return False  # the report names the spend instead
+        try:
+            self._durable.resume_async(
+                state.run_id,
+                ResumeInput(
+                    kind=PauseKind.INCIDENT,
+                    incident_decision="retry",
+                    principal=principal,
+                ),
+            )
+        except (OrchestratorError, KeyError):
+            return False
+        self._durable.audit.append(
+            "run.auto_retry",
+            {
+                "run_id": state.run_id,
+                "tenant": tenant,
+                "principal": principal,
+                "retry": state.user_retries + 1,
+                "reason": str((state.pause.payload or {}).get("reason", ""))[
+                    :200
+                ],
+            },
+        )
+        return True
+
+    @staticmethod
+    def _incident_is_mechanical(state: RunState) -> bool:
+        """Whether this incident is the loop's to retry: a plain failed
+        execution — never a blocked gate (deterministic, a retry changes
+        nothing), never a reserved or irreversible action, never one
+        that moves money. Those need a HUMAN's judgment, always."""
+        monitoring = state.monitoring
+        if monitoring is not None and monitoring.status is ExecutionStatus.BLOCKED:
+            return False
+        route = state.route
+        if route is None:
+            return True
+        failed_id = (
+            state.execution.failed_action_id
+            if state.execution is not None
+            else None
+        )
+        actions = [
+            item
+            for item in route.chosen.actions
+            if failed_id is None or item.action.id == failed_id
+        ] or list(route.chosen.actions)
+        for item in actions:
+            if item.reserved or item.risk == "irreversible":
+                return False
+            if all(
+                marker in item.action.parameters
+                for marker in ("merchant", "amount_micros")
+            ):
+                return False
+        return True
 
     def _report_run_outcome(self, state: RunState) -> None:
         """The finish reports to the thread that asked (V1), exactly
@@ -15581,7 +15889,7 @@ class GatewayApp:
             return
         try:
             run = self._run_dict(state)
-            say, ping = self._compose_run_report(binding, run)
+            say, ping = self._compose_run_report(binding, run, state)
             if self._assistant_history is not None:
                 self._assistant_history.append(
                     tenant=binding["tenant_id"],
@@ -15607,12 +15915,15 @@ class GatewayApp:
             )
 
     def _compose_run_report(
-        self, binding: dict, run: dict
+        self, binding: dict, run: dict, state: RunState | None = None
     ) -> tuple[str, str | None]:
         """The report's words, from the run as it settled — the same
         vocabulary the synchronous reply used to carry (the failing
         node's name, the growth offer, the P2 reminder offer), now told
-        AFTER the work instead of promised before it."""
+        AFTER the work instead of promised before it. V3 adds the
+        REVIEW (the promised artifacts, actually checked), the COST
+        (what the whole ask drew), and — under the delegation — the
+        loop's own account of its retries and its budget."""
         from types import SimpleNamespace
 
         title = concise_name(str(binding["intent"] or run.get("intent") or ""))
@@ -15621,18 +15932,177 @@ class GatewayApp:
         )
         in_node = str(binding["agent"] or "").startswith("node:")
         phase = run.get("phase")
+        cost_note = self._ask_cost_note(binding)
         if phase == "completed":
             say = f"Done — “{title}” finished."
+            say += self._review_note(state)
             say = self._offer_task_reminder(say, session, run)
-            return say, f"✅ “{title}” is done — the report is in the chat."
+            return (
+                say + cost_note,
+                f"✅ “{title}” is done — the report is in the chat.",
+            )
         if phase == "cancelled":
             reason = run.get("failure_reason") or "stopped before execution"
             return f"“{title}” was cancelled — {reason}.", None
         say = f"“{title}” didn't make it."
+        say += self._loop_note(binding, run)
         say = self._describe_run_failure(say, run, autobuild_hint=in_node)
         if not in_node:
             say = self._offer_growth(say, session, str(binding["intent"]), run=run)
-        return say, f"⚠️ “{title}” hit a problem — the details are in the chat."
+        return (
+            say + cost_note,
+            f"⚠️ “{title}” hit a problem — the details are in the chat.",
+        )
+
+    def _ask_cost_note(self, binding: dict) -> str:
+        """What the whole ask drew since its meter mark — retries,
+        repairs, and rebuild included. An approximation on a busy shared
+        host (concurrent charges land in the window), honest words on a
+        personal one; silence when nothing was metered."""
+        meter = getattr(self, "_model_meter", None)
+        if meter is None:
+            return ""
+        tokens, usd = self._ask_spend(int(binding.get("charges_before") or 0))
+        if tokens <= 0:
+            return ""
+        drew = (
+            "free — your own local model"
+            if usd <= 0
+            else f"about ${usd:.4f} of model compute"
+        )
+        return f" The whole ask drew ≈{tokens:,} tokens ({drew})."
+
+    def _loop_note(self, binding: dict, run: dict) -> str:
+        """The loop's own account on a failure it could not close (V3):
+        how many times it retried on the standing delegation, and — when
+        the task budget is what stopped it — the spend, named."""
+        if not self._task_delegated(
+            binding["tenant_id"], binding["principal"]
+        ):
+            return ""
+        note = ""
+        retries = int(run.get("user_retries") or 0)
+        if retries:
+            times = "time" if retries == 1 else "times"
+            note += (
+                f" I retried {retries} {times} on your standing "
+                "delegation first."
+            )
+        left = self._ask_budget_left(
+            binding["tenant_id"], int(binding.get("charges_before") or 0)
+        )
+        if left is not None and left <= 0:
+            _tokens, usd = self._ask_spend(
+                int(binding.get("charges_before") or 0)
+            )
+            note += (
+                f" I stopped there: the ask reached your task budget "
+                f"(≈${usd:.4f} spent)."
+            )
+        return note
+
+    def _review_note(self, state: RunState | None) -> str:
+        """The REVIEW step (V3): the artifacts the run's own result
+        PROMISED, checked against the stores they land in — the file in
+        the drawer, the reminder standing — so 'done' means checked,
+        not narrated. Silence when the result promised nothing."""
+        if state is None:
+            return ""
+        result = self._completed_result(state)
+        if not result:
+            return ""
+        function = (state.contract.metadata or {}).get("node_function") or {}
+        node_id = str(function.get("node_id") or "")
+        tenant = str(state.contract.metadata.get("tenant_id", ""))
+        checks: list[str] = []
+        promised_files = result.get("files")
+        if isinstance(promised_files, dict) and promised_files and node_id:
+            names = [
+                str(raw).replace("/", "_").replace("\\", "_")
+                for raw in list(promised_files)[:5]
+            ]
+            landed: set[str] = set()
+            if self._files is not None:
+                try:
+                    landed = {
+                        f.name
+                        for f in self._files.list(
+                            tenant=tenant, node_id=node_id
+                        )
+                        if f.folder == "records"
+                    }
+                except Exception:  # noqa: BLE001 - a broken check says so below
+                    landed = set()
+            there = [n for n in names if n in landed]
+            missing = [n for n in names if n not in landed]
+            if there:
+                checks.append(
+                    "checked: "
+                    + ", ".join(there)
+                    + (" is" if len(there) == 1 else " are")
+                    + " in the node's drawer"
+                )
+            if missing:
+                checks.append(
+                    "checked and MISSING from the drawer: "
+                    + ", ".join(missing)
+                )
+        if isinstance(result.get("reminder"), dict):
+            checks.append(self._reminder_check(state.run_id))
+        if isinstance(result.get("records"), list) and node_id:
+            standing = False
+            if self._files is not None:
+                try:
+                    standing = any(
+                        f.folder == "records" and f.name == "rows.json"
+                        for f in self._files.list(
+                            tenant=tenant, node_id=node_id
+                        )
+                    )
+                except Exception:  # noqa: BLE001 - the words below stay honest
+                    standing = False
+            checks.append(
+                "checked: the rows landed in records/rows.json"
+                if standing
+                else "checked and MISSING: the rows never landed"
+            )
+        if not checks:
+            return ""
+        return " I reviewed the result — " + "; ".join(checks) + "."
+
+    def _reminder_check(self, run_id: str) -> str:
+        """Whether the reminder this run promised actually STANDS —
+        read back from the store through the filing audit, never from
+        the run's own claim."""
+        if self._reminders is None:
+            return "checked: this host keeps no reminder store"
+        try:
+            for record in self._durable.audit.records():
+                if (
+                    record.event_type == "reminder.filed"
+                    and record.payload.get("run_id") == run_id
+                ):
+                    standing = self._reminders.get(
+                        str(record.payload.get("reminder_id", "")),
+                        tenant=str(record.payload.get("tenant", "")),
+                        principal=str(record.payload.get("principal", "")),
+                    )
+                    if standing is not None and standing.delivered_at is None:
+                        due = standing.due_at.strftime("%Y-%m-%d %H:%M")
+                        return f"checked: the reminder stands for {due}"
+                    break
+                if (
+                    record.event_type == "reminder.not_filed"
+                    and record.payload.get("run_id") == run_id
+                ):
+                    reason = str(record.payload.get("reason", ""))
+                    return (
+                        "checked and MISSING: the reminder was not filed"
+                        + (f" ({reason})" if reason else "")
+                    )
+        except Exception:  # noqa: BLE001 - a broken check is named, not hidden
+            pass
+        return "checked and MISSING: the reminder was not filed"
 
     def _recover_owed_runs(self) -> None:
         """Restart re-drive (V1): on boot, expired leases go back to the

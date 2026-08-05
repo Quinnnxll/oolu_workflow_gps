@@ -462,6 +462,43 @@ it" and "set up a reminder" each complete in ONE ask with an honest
 report turn; budget exhaustion still refuses in words naming the
 spend; nothing retries past the budget or the user's scope.
 
+**Status: LANDED.** The delegation pair joined the settings catalog:
+`account.task_delegation` ("Build and run under my budget", personal,
+implies auto-build — the gateway's consent read and the rebuilder's
+both honor the implication) and `budget.task_cap` (the per-ask spend
+allowance, in the user's currency; 0 = the safety floors alone). The
+consent surfaces as a FIRST-RUN question: the first buildable task ask
+with neither consent ever answered becomes the question itself (a
+`delegation` growth offer; yes stores both consents and builds-and-runs
+straight through; no is recorded so the question is asked exactly once,
+ever — `SettingsNode.answered` tells a stored no from a defaulted
+silence). The loop: the worker's drain now presses Retry itself
+(`_auto_retry_incident` → `resume_async(INCIDENT, retry)`, audited as
+`run.auto_retry`, the report withheld while the loop works) on
+MECHANICAL incidents under the delegation — never a blocked gate, a
+reserved or irreversible action, or one carrying money markers
+(`_incident_is_mechanical`) — bounded by the engine's own ladder (two
+retries, then the one rebuild, which re-earns the human's ONE
+confirmation; the ladder's counters were built for exactly this) and by
+the task budget, read per retry from the ask's meter mark
+(`run_reports.charges_before`). The floors scaled: tool rounds 4→12
+for a delegated account (`tool_rounds` threaded through both chat
+loops), author steps 12→24 plus a `budget_left` hand the loop reads
+before every consultation, birth repairs 2→4 budget-checked. The
+REPORT grew the REVIEW (the artifacts the result promised, checked
+against the stores they land in — the file in the drawer, the
+reminder standing, the rows landed — MISSING said plainly), the COST
+("The whole ask drew ≈N tokens (about $X)", from the ask's meter
+window — an honest approximation on a shared host), and the loop's
+own account on failures ("I retried N times on your standing
+delegation first"; "I stopped there: the ask reached your task budget
+(≈$X spent)"). Pinned by tests/test_task_loop.py. (Noted honestly:
+worker retries count into `user_retries` — under the delegation the
+standing consent IS the user's hand on the Retry button, and the
+ladder's rebuild threshold is exactly the escalation the plan wants;
+the run-time script-repair caps in script_node.py stay fixed, being
+per-execution, inside the ladder's outer loop.)
+
 ### V4 — find the standing node first (report 4, reach)
 
 Goal: an ask reaches the right existing node before anything builds.

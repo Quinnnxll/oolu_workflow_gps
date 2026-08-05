@@ -486,7 +486,8 @@ _RUN_REPORTS_SCHEMA = """CREATE TABLE IF NOT EXISTS run_reports (
     agent TEXT NOT NULL,
     intent TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    reported_at TEXT
+    reported_at TEXT,
+    charges_before INTEGER NOT NULL DEFAULT 0
 )"""
 
 
@@ -503,6 +504,22 @@ class RunReportStore:
         self._clock = clock or (lambda: datetime.now(UTC))
         with self._conn.transaction() as db:
             db.execute(_RUN_REPORTS_SCHEMA)
+        self._migrate_charges_column()
+
+    def _migrate_charges_column(self) -> None:
+        # Tables born before the V3 meter mark lack the column; old rows
+        # read as mark 0 — their reports simply skip the cost line.
+        try:
+            with self._conn.transaction() as db:
+                db.execute("SELECT charges_before FROM run_reports LIMIT 1")
+            return
+        except Exception:
+            pass
+        with self._conn.transaction() as db:
+            db.execute(
+                "ALTER TABLE run_reports"
+                " ADD COLUMN charges_before INTEGER NOT NULL DEFAULT 0"
+            )
 
     def file(
         self,
@@ -512,20 +529,26 @@ class RunReportStore:
         principal: str,
         agent: str,
         intent: str,
+        charges_before: int = 0,
     ) -> None:
+        # ``charges_before`` (V3) marks the model meter at the ask, so
+        # the report can say what the whole ask drew — retries, repairs,
+        # and rebuild included. A re-filed (revived) run re-marks: the
+        # new ask's window starts fresh.
         with self._conn.transaction() as db:
             db.execute(
                 """INSERT INTO run_reports
                      (run_id, tenant_id, principal, agent, intent,
-                      created_at, reported_at)
-                   VALUES (?, ?, ?, ?, ?, ?, NULL)
+                      created_at, reported_at, charges_before)
+                   VALUES (?, ?, ?, ?, ?, ?, NULL, ?)
                    ON CONFLICT(run_id) DO UPDATE SET
                      tenant_id = excluded.tenant_id,
                      principal = excluded.principal,
                      agent = excluded.agent,
                      intent = excluded.intent,
                      created_at = excluded.created_at,
-                     reported_at = NULL""",
+                     reported_at = NULL,
+                     charges_before = excluded.charges_before""",
                 (
                     str(run_id),
                     tenant,
@@ -533,6 +556,7 @@ class RunReportStore:
                     str(agent),
                     str(intent),
                     self._clock().isoformat(),
+                    max(0, int(charges_before)),
                 ),
             )
 
@@ -574,6 +598,10 @@ class RunReportStore:
 
     @staticmethod
     def _row(row) -> dict:
+        try:
+            charges_before = int(row["charges_before"])
+        except (KeyError, IndexError, TypeError, ValueError):
+            charges_before = 0
         return {
             "run_id": row["run_id"],
             "tenant_id": row["tenant_id"],
@@ -582,6 +610,7 @@ class RunReportStore:
             "intent": row["intent"],
             "created_at": row["created_at"],
             "reported_at": row["reported_at"],
+            "charges_before": charges_before,
         }
 
 

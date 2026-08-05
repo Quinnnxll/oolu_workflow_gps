@@ -332,6 +332,11 @@ class _ToolCall:
 
 # The model may use at most this many tools per turn; then it must speak.
 MAX_TOOL_ROUNDS = 4
+# The delegated ceiling (V3): under "build and run under my budget" a
+# turn may work its tools three times as long before it must speak — the
+# floor stays the safety wall for everyone else, and the task budget
+# (not this constant) is the real bound on a delegated ask.
+DELEGATED_TOOL_ROUNDS = 12
 
 # Reasoning models (qwen3 and friends) prefix the answer with their
 # monologue. It is split off — never spoken, never parsed as the turn.
@@ -2815,10 +2820,13 @@ class ChatAssistant:
         tools: ChatTools | None = None,
         model: ChatModel | None = None,
         context: str | None = None,
+        tool_rounds: int | None = None,
     ) -> ChatTurn:
         """``context`` scopes the turn (e.g. one node's interact window):
         an extra system note for the model describing where the assistant
-        is standing and which extra tools apply there."""
+        is standing and which extra tools apply there. ``tool_rounds``
+        (V3) raises the tool-loop floor for a delegated account — the
+        caller's budget decision, never the model's."""
         envelope = MessageEnvelope(
             channel=self._channel,
             conversation_id=sender,
@@ -2865,7 +2873,12 @@ class ChatAssistant:
         if active is not None:
             try:
                 return self._model_turn(
-                    active, message, history, tools, context=context
+                    active,
+                    message,
+                    history,
+                    tools,
+                    context=context,
+                    tool_rounds=tool_rounds,
                 )
             except ModelBudgetExceeded as exc:
                 return ChatTurn(say=str(exc), task=None, source="model")
@@ -2888,6 +2901,7 @@ class ChatAssistant:
         tools: ChatTools | None,
         *,
         context: str | None = None,
+        tool_rounds: int | None = None,
     ) -> ChatTurn:
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         if context:
@@ -2900,7 +2914,7 @@ class ChatAssistant:
         messages.append({"role": "user", "content": message})
         actions: list[dict] = []
         thoughts: list[str] = []
-        for _ in range(MAX_TOOL_ROUNDS):
+        for _ in range(max(tool_rounds or 0, MAX_TOOL_ROUNDS)):
             raw = model.reply(messages)
             # Thinking accumulates across tool rounds — the whole chain of
             # thought behind the final answer, not just its last step.
@@ -2954,6 +2968,7 @@ class ChatAssistant:
         model: ChatModel | None = None,
         context: str | None = None,
         on_reasoning: "Callable[[str], None] | None" = None,
+        tool_rounds: int | None = None,
     ) -> ChatTurn:
         """Same turn as :meth:`respond`, but the model's ⟨think⟩ monologue is
         streamed to ``on_reasoning`` as it is generated (when the model can
@@ -2969,6 +2984,7 @@ class ChatAssistant:
             tools=tools,
             model=model,
             context=context,
+            tool_rounds=tool_rounds,
         ):
             if event["type"] == "reasoning":
                 if on_reasoning is not None and event["delta"]:
@@ -2987,6 +3003,7 @@ class ChatAssistant:
         tools: ChatTools | None = None,
         model: ChatModel | None = None,
         context: str | None = None,
+        tool_rounds: int | None = None,
     ) -> "Iterator[dict]":
         """Yield ``{"type": "reasoning", "delta": str}`` events as the model
         thinks, then exactly one terminal ``{"type": "turn", "turn": ChatTurn}``.
@@ -3027,7 +3044,12 @@ class ChatAssistant:
         if active is not None:
             try:
                 yield from self._model_turn_stream(
-                    active, message, history, tools, context=context
+                    active,
+                    message,
+                    history,
+                    tools,
+                    context=context,
+                    tool_rounds=tool_rounds,
                 )
                 return
             except ModelBudgetExceeded as exc:
@@ -3054,6 +3076,7 @@ class ChatAssistant:
         tools: ChatTools | None,
         *,
         context: str | None = None,
+        tool_rounds: int | None = None,
     ) -> "Iterator[dict]":
         """The streaming twin of :meth:`_model_turn`: identical loop and turn
         construction, but each round's ⟨think⟩ content is emitted as it
@@ -3071,7 +3094,7 @@ class ChatAssistant:
         stream = getattr(model, "reply_stream", None)
         actions: list[dict] = []
         thoughts: list[str] = []
-        for _ in range(MAX_TOOL_ROUNDS):
+        for _ in range(max(tool_rounds or 0, MAX_TOOL_ROUNDS)):
             if callable(stream):
                 parts: list[str] = []
                 emitted = 0

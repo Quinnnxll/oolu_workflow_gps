@@ -53,6 +53,8 @@ def test_settings_declare_the_currency_choice_and_stamp_money_units():
         "budget.hard_cap",
         "budget.review_threshold",
         "budget.monthly_limit",
+        # V3: the per-ask allowance the task loop is bounded by.
+        "budget.task_cap",
     }
 
 
